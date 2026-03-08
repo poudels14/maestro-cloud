@@ -9,33 +9,33 @@ export default defineConfig(({ mode }) => {
 
   return {
     define: {
-      "import.meta.env.VITE_MAESTRO_CONTROLLER_HOST": JSON.stringify(controllerHost),
+      "import.meta.env.VITE_MAESTRO_CONTROLLER_HOST": JSON.stringify(controllerHost)
     },
     server: {
       proxy: {
         "/api": {
           target: controllerHost,
-          changeOrigin: true,
-        },
-      },
+          changeOrigin: true
+        }
+      }
     },
     plugins: [
       tailwindcss(),
       tanstackStart({
         srcDirectory: "app",
         router: {
-          routeFileIgnorePrefix: "-",
+          routeFileIgnorePrefix: "-"
         },
         prerender: {
-          enabled: false,
+          enabled: false
         },
         spa: {
-          enabled: true,
-        },
+          enabled: true
+        }
       }),
       viteSolid({
-        ssr: true,
-      }),
-    ],
+        ssr: true
+      })
+    ]
   };
 });
