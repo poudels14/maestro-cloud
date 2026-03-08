@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::error::{Error, Result};
 use crate::service::DeploymentStatus;
 
 #[derive(Debug, Deserialize)]
@@ -11,15 +12,15 @@ struct CancelDeploymentResponse {
     status: DeploymentStatus,
 }
 
-pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<(), String> {
+pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<()> {
     let service_id = service_id.trim();
     let deployment_id = deployment_id.trim();
 
     if service_id.is_empty() {
-        return Err("service id cannot be empty".to_string());
+        return Err(Error::invalid_input("service id cannot be empty"));
     }
     if deployment_id.is_empty() {
-        return Err("deployment id cannot be empty".to_string());
+        return Err(Error::invalid_input("deployment id cannot be empty"));
     }
 
     let endpoint = cancel_endpoint(host, service_id, deployment_id)?;
@@ -27,18 +28,20 @@ pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Re
         .patch(&endpoint)
         .send()
         .await
-        .map_err(|err| format!("failed to call cancel endpoint: {err}"))?;
+        .map_err(|err| Error::external(format!("failed to call cancel endpoint: {err}")))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("cancel failed with status {status}: {body}"));
+        return Err(Error::external(format!(
+            "cancel failed with status {status}: {body}"
+        )));
     }
 
     let payload = response
         .json::<CancelDeploymentResponse>()
         .await
-        .map_err(|err| format!("failed to decode cancel response: {err}"))?;
+        .map_err(|err| Error::external(format!("failed to decode cancel response: {err}")))?;
 
     if payload.canceled {
         println!(
@@ -55,10 +58,10 @@ pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Re
     Ok(())
 }
 
-fn normalize_base_url(host: &str) -> Result<String, String> {
+fn normalize_base_url(host: &str) -> Result<String> {
     let host = host.trim();
     if host.is_empty() {
-        return Err("host cannot be empty".to_string());
+        return Err(Error::invalid_input("host cannot be empty"));
     }
 
     let base = if host.starts_with("http://") || host.starts_with("https://") {
@@ -70,7 +73,7 @@ fn normalize_base_url(host: &str) -> Result<String, String> {
     Ok(base.trim_end_matches('/').to_string())
 }
 
-fn cancel_endpoint(host: &str, service_id: &str, deployment_id: &str) -> Result<String, String> {
+fn cancel_endpoint(host: &str, service_id: &str, deployment_id: &str) -> Result<String> {
     let base = normalize_base_url(host)?;
     Ok(format!(
         "{base}/api/services/{service_id}/deployments/{deployment_id}/cancel"
@@ -78,16 +81,5 @@ fn cancel_endpoint(host: &str, service_id: &str, deployment_id: &str) -> Result<
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cancel_endpoint_adds_http_when_missing() {
-        let endpoint =
-            cancel_endpoint("127.0.0.1:3000", "svc-1", "dep-1").expect("should build endpoint");
-        assert_eq!(
-            endpoint,
-            "http://127.0.0.1:3000/api/services/svc-1/deployments/dep-1/cancel"
-        );
-    }
-}
+#[path = "../tests/cli/cancel.rs"]
+mod tests;
