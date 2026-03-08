@@ -17,8 +17,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::service::{
-    DeploymentStatus, SERVICES_ROOT, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, service_config_key, service_deployment_history_key,
+    ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceBuildConfig, ServiceConfig,
+    ServiceDeployConfig, ServiceDeployment, service_active_deployment_key, service_config_key,
+    service_deployment_history_key,
 };
 use crate::supervisor;
 
@@ -53,6 +54,14 @@ struct PatchServiceResponse {
     service_id: String,
     status: Option<DeploymentStatus>,
     version: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceListItem {
+    #[serde(flatten)]
+    service: ServiceConfig,
+    status: Option<DeploymentStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,7 +162,10 @@ pub async fn run_server(bind_addr: &str, etcd_endpoint: &str) -> Result<(), Stri
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .map_err(|err| format!("failed to bind {bind_addr}: {err}"))?;
-    println!("[maestro]: server listening on http://{bind_addr}");
+    println!(
+        "[maestro]: server listening on http://{bind_addr} [pid={}]",
+        std::process::id()
+    );
     println!("[maestro]: etcd endpoint {etcd_endpoint}");
 
     let server_future = axum::serve(listener, app);
@@ -214,14 +226,24 @@ async fn patch_service(
 
 async fn list_services(
     State(state): State<AppState>,
-) -> Result<Json<Vec<ServiceConfig>>, (StatusCode, String)> {
+) -> Result<Json<Vec<ServiceListItem>>, (StatusCode, String)> {
     let services = state
         .etcd
         .list_services()
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
-    Ok(Json(services))
+    let mut items = Vec::with_capacity(services.len());
+    for service in services {
+        let status = state
+            .etcd
+            .latest_service_status(&service.id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
+        items.push(ServiceListItem { service, status });
+    }
+
+    Ok(Json(items))
 }
 
 async fn list_deployments(
@@ -300,6 +322,9 @@ async fn upsert_config_and_maybe_queue(
         let existing_config = etcd.read_service_config(&config_key).await?;
         if let Some(snapshot) = existing_config.as_ref()
             && snapshot.config.version == service_version
+            && etcd
+                .is_service_active_with_version(&service_id, &service_version)
+                .await?
         {
             return Ok(PatchServiceOutcome::Unchanged {
                 service_id: service_id.clone(),
@@ -457,6 +482,51 @@ impl EtcdV3HttpClient {
         }))
     }
 
+    async fn read_active_deployment(
+        &self,
+        service_id: &str,
+    ) -> Result<Option<ActiveDeployment>, String> {
+        let key = service_active_deployment_key(service_id);
+        let response = self.range(json!({ "key": encode(key.as_bytes()) })).await?;
+        let Some(kv) = response.kvs.first() else {
+            return Ok(None);
+        };
+
+        let bytes = decode_to_bytes(&kv.value, &key)?;
+        let active = serde_json::from_slice::<ActiveDeployment>(&bytes)
+            .map_err(|err| format!("invalid active deployment JSON at key `{key}`: {err}"))?;
+        Ok(Some(active))
+    }
+
+    async fn is_service_active_with_version(
+        &self,
+        service_id: &str,
+        service_version: &str,
+    ) -> Result<bool, String> {
+        let Some(active) = self.read_active_deployment(service_id).await? else {
+            return Ok(false);
+        };
+
+        if let Some(active_version) = active.version.as_deref()
+            && active_version != service_version
+        {
+            return Ok(false);
+        }
+
+        let Some(snapshot) = self
+            .find_service_deployment_by_id(service_id, &active.deployment_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if snapshot.deployment.config.version != service_version {
+            return Ok(false);
+        }
+
+        Ok(is_active_deployment_status(&snapshot.deployment.status))
+    }
+
     async fn find_service_deployment_by_id(
         &self,
         service_id: &str,
@@ -551,6 +621,14 @@ impl EtcdV3HttpClient {
             .await?;
 
         extract_service_configs(response.kvs)
+    }
+
+    async fn latest_service_status(
+        &self,
+        service_id: &str,
+    ) -> Result<Option<DeploymentStatus>, String> {
+        let mut deployments = self.list_service_deployments(service_id, 1).await?;
+        Ok(deployments.pop().map(|deployment| deployment.status))
     }
 
     async fn txn(&self, compare: Vec<Value>, success: Vec<Value>) -> Result<bool, String> {
@@ -766,6 +844,13 @@ fn is_url_safe_service_id(service_id: &str) -> bool {
     service_id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+fn is_active_deployment_status(status: &DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Queued | DeploymentStatus::Building | DeploymentStatus::Ready
+    )
 }
 
 fn service_history_next_index_key(service_id: &str) -> String {
@@ -1024,5 +1109,16 @@ mod tests {
 
         let space = validate_service_id("service 1", "id").expect_err("space must be rejected");
         assert!(space.contains("URL-safe"));
+    }
+
+    #[test]
+    fn active_deployment_status_matches_runtime_states() {
+        assert!(is_active_deployment_status(&DeploymentStatus::Queued));
+        assert!(is_active_deployment_status(&DeploymentStatus::Building));
+        assert!(is_active_deployment_status(&DeploymentStatus::Ready));
+        assert!(!is_active_deployment_status(&DeploymentStatus::Crashed));
+        assert!(!is_active_deployment_status(&DeploymentStatus::Stopped));
+        assert!(!is_active_deployment_status(&DeploymentStatus::Terminated));
+        assert!(!is_active_deployment_status(&DeploymentStatus::Canceled));
     }
 }

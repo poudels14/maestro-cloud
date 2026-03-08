@@ -10,13 +10,18 @@ use tokio::{
 use crate::supervisor::{
     config_source::ServiceConfigSource,
     model::{NamedServiceConfig, ServiceRuntimeConfig},
-    worker::run_managed_service,
+    worker::{WorkerExitStatus, run_managed_service},
 };
 
 struct ManagedService {
     config: ServiceRuntimeConfig,
     shutdown_tx: watch::Sender<bool>,
-    task: JoinHandle<()>,
+    task: JoinHandle<WorkerExitStatus>,
+}
+
+enum ShutdownSignal {
+    CtrlC,
+    Terminate(&'static str),
 }
 
 impl ManagedService {
@@ -53,35 +58,70 @@ impl<S: ServiceConfigSource + Send> ServiceController<S> {
     pub async fn run(&mut self) {
         const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
         let mut first_ctrl_c_at: Option<Instant> = None;
-        let (ctrl_c_tx, mut ctrl_c_rx) = mpsc::unbounded_channel();
+        let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigquit = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::quit())
+            .expect("failed to install SIGQUIT handler");
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to install SIGHUP handler");
 
         let signal_task = tokio::spawn(async move {
             loop {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    break;
-                }
-                if ctrl_c_tx.send(()).is_err() {
-                    break;
+                tokio::select! {
+                    ctrl_c = tokio::signal::ctrl_c() => {
+                        if ctrl_c.is_err() {
+                            break;
+                        }
+                        if signal_tx.send(ShutdownSignal::CtrlC).is_err() {
+                            break;
+                        }
+                    }
+                    _ = sigterm.recv() => {
+                        if signal_tx.send(ShutdownSignal::Terminate("SIGTERM")).is_err() {
+                            break;
+                        }
+                    }
+                    _ = sigquit.recv() => {
+                        if signal_tx.send(ShutdownSignal::Terminate("SIGQUIT")).is_err() {
+                            break;
+                        }
+                    }
+                    _ = sighup.recv() => {
+                        if signal_tx.send(ShutdownSignal::Terminate("SIGHUP")).is_err() {
+                            break;
+                        }
+                    }
                 }
             }
         });
 
         loop {
             tokio::select! {
-                Some(()) = ctrl_c_rx.recv() => {
-                    let now = Instant::now();
-                    let should_shutdown = first_ctrl_c_at
-                        .is_some_and(|first| now.duration_since(first) <= CTRL_C_CONFIRM_WINDOW);
+                Some(signal) = signal_rx.recv() => {
+                    match signal {
+                        ShutdownSignal::CtrlC => {
+                            let now = Instant::now();
+                            let should_shutdown = first_ctrl_c_at
+                                .is_some_and(|first| now.duration_since(first) <= CTRL_C_CONFIRM_WINDOW);
 
-                    if should_shutdown {
-                        eprintln!("[maestro]: stopping all jobs and terminate cleanly.");
-                        self.shutdown_all().await;
-                        signal_task.abort();
-                        break;
+                            if should_shutdown {
+                                eprintln!("[maestro]: stopping all jobs and terminate cleanly.");
+                                self.shutdown_all().await;
+                                signal_task.abort();
+                                break;
+                            }
+
+                            first_ctrl_c_at = Some(now);
+                            eprintln!("[maestro]: press ctrl+c again to stop.");
+                        }
+                        ShutdownSignal::Terminate(signal_name) => {
+                            eprintln!("[maestro]: received {signal_name}; stopping all jobs and terminate cleanly.");
+                            self.shutdown_all().await;
+                            signal_task.abort();
+                            break;
+                        }
                     }
-
-                    first_ctrl_c_at = Some(now);
-                    eprintln!("[maestro]: press ctrl+c again to stop.");
                 }
                 snapshot = self.source.next_snapshot() => {
                     match snapshot {

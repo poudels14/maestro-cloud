@@ -13,11 +13,19 @@ use watchexec_supervisor::{
 
 use super::model::ServiceRuntimeConfig;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerExitStatus {
+    Stopped,
+    Completed,
+    Crashed,
+}
+
 pub async fn run_managed_service(
     name: String,
     config: ServiceRuntimeConfig,
     mut shutdown_rx: watch::Receiver<bool>,
-) {
+) -> WorkerExitStatus {
+    let force_stop_on_shutdown = is_docker_run_command(&config.command);
     let command = Arc::new(Command {
         program: shell_program(config.command.clone()),
         options: SpawnOptions {
@@ -33,6 +41,7 @@ pub async fn run_managed_service(
     let (job, supervisor_task) = start_job(command);
     let mut supervisor_task = supervisor_task;
     let mut restart_count = 0_u32;
+    let mut exit_status = WorkerExitStatus::Completed;
 
     loop {
         job.start().await;
@@ -45,7 +54,12 @@ pub async fn run_managed_service(
 
         match outcome {
             WorkerOutcome::Shutdown => {
-                graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                if force_stop_on_shutdown {
+                    stop_docker_run_and_delete(&job).await;
+                } else {
+                    graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                }
+                exit_status = WorkerExitStatus::Stopped;
                 break;
             }
             WorkerOutcome::Exited(Some(status)) => {
@@ -55,6 +69,7 @@ pub async fn run_managed_service(
                             "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={} (stopping)",
                             config.max_restarts
                         );
+                        exit_status = WorkerExitStatus::Crashed;
                         break;
                     }
 
@@ -70,7 +85,11 @@ pub async fn run_managed_service(
                     };
 
                     if let WorkerOutcome::Shutdown = delay_outcome {
-                        graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                        if force_stop_on_shutdown {
+                            stop_docker_run_and_delete(&job).await;
+                        } else {
+                            graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                        }
                         break;
                     }
 
@@ -82,6 +101,7 @@ pub async fn run_managed_service(
             }
             WorkerOutcome::Exited(None) => {
                 eprintln!("[maestro]: service '{name}' ended without an exit status");
+                exit_status = WorkerExitStatus::Crashed;
                 break;
             }
             WorkerOutcome::DelayElapsed => {
@@ -92,6 +112,7 @@ pub async fn run_managed_service(
 
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
     await_supervisor_shutdown(&mut supervisor_task).await;
+    exit_status
 }
 
 enum WorkerOutcome {
@@ -116,13 +137,42 @@ async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: 
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
 }
 
+async fn stop_docker_run_and_delete(job: &Job) {
+    // `docker run` usually handles SIGINT/SIGTERM and stops the container.
+    let interrupt_stopped = timeout(
+        Duration::from_secs(3),
+        job.stop_with_signal(Signal::Interrupt, Duration::from_millis(500)),
+    )
+    .await
+    .is_ok();
+    if interrupt_stopped {
+        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        return;
+    }
+
+    let terminate_stopped = timeout(
+        Duration::from_secs(3),
+        job.stop_with_signal(Signal::Terminate, Duration::from_millis(500)),
+    )
+    .await
+    .is_ok();
+    if terminate_stopped {
+        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        return;
+    }
+
+    let _ = timeout(Duration::from_secs(1), job.signal(Signal::ForceStop)).await;
+    let _ = timeout(Duration::from_secs(2), job.stop()).await;
+    let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+}
+
 async fn await_supervisor_shutdown(supervisor_task: &mut JoinHandle<()>) {
     if timeout(Duration::from_secs(3), &mut *supervisor_task)
         .await
         .is_err()
     {
-        eprintln!("[maestro]: supervisor task did not stop in time; aborting");
-        supervisor_task.abort();
+        eprintln!("[maestro]: supervisor task did not stop in time; waiting for cleanup");
+        let _ = supervisor_task.await;
     }
 }
 
@@ -147,6 +197,14 @@ fn is_failure(status: ProcessEnd) -> bool {
     !matches!(status, ProcessEnd::Success)
 }
 
+fn is_docker_run_command(command: &str) -> bool {
+    let cmd = command.trim_start();
+    cmd.starts_with("docker run ")
+        || cmd.starts_with("exec docker run ")
+        || cmd.starts_with("docker run\t")
+        || cmd.starts_with("exec docker run\t")
+}
+
 async fn log_service_process_ids(name: &str, job: &Job) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     job.run(move |ctx| {
@@ -155,34 +213,21 @@ async fn log_service_process_ids(name: &str, job: &Job) {
             _ => None,
         };
 
-        #[cfg(unix)]
         let pgid = pid.and_then(get_pgid_for_pid);
-        #[cfg(not(unix))]
-        let pgid: Option<u32> = None;
 
         let _ = tx.send((pid, pgid));
     })
     .await;
 
     if let Ok((Some(pid), pgid)) = rx.await {
-        #[cfg(unix)]
-        {
-            if let Some(pgid) = pgid {
-                eprintln!("[maestro]: service '{name}' started: pid={pid} pgid={pgid}");
-            } else {
-                eprintln!("[maestro]: service '{name}' started: pid={pid} pgid=unknown");
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = pgid;
-            eprintln!("[maestro]: service '{name}' started: pid={pid}");
+        if let Some(pgid) = pgid {
+            eprintln!("[maestro]: service '{name}' started: pid={pid} pgid={pgid}");
+        } else {
+            eprintln!("[maestro]: service '{name}' started: pid={pid} pgid=unknown");
         }
     }
 }
 
-#[cfg(unix)]
 fn get_pgid_for_pid(pid: u32) -> Option<u32> {
     let pid = i32::try_from(pid).ok()?;
     // SAFETY: `getpgid` is called with a PID obtained from the spawned child process.
@@ -194,19 +239,9 @@ fn get_pgid_for_pid(pid: u32) -> Option<u32> {
     }
 }
 
-#[cfg(unix)]
 fn shell_program(command: String) -> Program {
     Program::Shell {
         shell: Shell::new("sh"),
-        command,
-        args: Vec::new(),
-    }
-}
-
-#[cfg(windows)]
-fn shell_program(command: String) -> Program {
-    Program::Shell {
-        shell: Shell::cmd(),
         command,
         args: Vec::new(),
     }
