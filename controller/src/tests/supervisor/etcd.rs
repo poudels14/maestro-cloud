@@ -13,6 +13,7 @@ fn deployment_with_source(
     ServiceDeployment {
         id: "dep-1".to_string(),
         created_at: 1,
+        deployed_at: None,
         status: DeploymentStatus::Queued,
         config: ServiceConfig {
             id: "svc-1".to_string(),
@@ -106,6 +107,7 @@ impl InMemoryStore {
                 let deployment = ServiceDeployment {
                     id: format!("dep-{service_id}-{dep_idx}"),
                     created_at,
+                    deployed_at: None,
                     status: DeploymentStatus::Queued,
                     config: config.clone(),
                     git_commit: None,
@@ -246,6 +248,7 @@ impl DeploymentStore for InMemoryStore {
                 return Ok(());
             }
             deployment.status = DeploymentStatus::Ready;
+            deployment.deployed_at = Some(1);
             deployment.id.clone()
         };
         state

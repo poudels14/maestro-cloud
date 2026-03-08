@@ -25,6 +25,7 @@ export interface Service {
 
 export interface Deployment {
   id: string;
+  createdAt: number;
   status: string;
   config: Service;
   gitCommit: string | null;

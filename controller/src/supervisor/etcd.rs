@@ -673,6 +673,7 @@ impl EtcdV3HttpClient {
             let queued = ServiceDeployment {
                 id: generate_deployment_id(),
                 created_at: current_time_millis()?,
+                deployed_at: None,
                 status: DeploymentStatus::Queued,
                 config: config_snapshot.config.clone(),
                 git_commit: None,
@@ -770,6 +771,9 @@ impl EtcdV3HttpClient {
 
             let mut updated = snapshot.deployment.clone();
             updated.status = DeploymentStatus::Ready;
+            if updated.deployed_at.is_none() {
+                updated.deployed_at = Some(current_time_millis()?);
+            }
             let deployment_json = serde_json::to_string(&updated)
                 .map_err(|err| format!("failed to serialize ready deployment: {err}"))?;
 
