@@ -21,8 +21,8 @@ use sha2::{Digest, Sha256};
 
 use crate::service::{
     ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceBuildConfig, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment, service_active_deployment_key, service_config_key,
-    service_deployment_history_key,
+    ServiceDeployConfig, ServiceDeployment, ServiceInfo, service_active_deployment_key,
+    service_deployment_history_key, service_info_key,
 };
 use crate::supervisor;
 
@@ -85,8 +85,8 @@ struct CounterSnapshot {
 }
 
 #[derive(Debug, Clone)]
-struct ConfigSnapshot {
-    config: ServiceConfig,
+struct InfoSnapshot {
+    info: ServiceInfo,
     mod_revision: u64,
 }
 
@@ -214,21 +214,19 @@ async fn patch_service(
 async fn list_services(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ServiceListItem>>, (StatusCode, String)> {
-    let services = state
+    let infos = state
         .etcd
-        .list_services()
+        .list_service_infos()
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
-    let mut items = Vec::with_capacity(services.len());
-    for service in services {
-        let status = state
-            .etcd
-            .latest_service_status(&service.id)
-            .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
-        items.push(ServiceListItem { service, status });
-    }
+    let items = infos
+        .into_iter()
+        .map(|info| ServiceListItem {
+            service: info.config,
+            status: info.status,
+        })
+        .collect();
 
     Ok(Json(items))
 }
@@ -295,21 +293,21 @@ async fn redeploy_service(
     let service_id = service_id.trim().to_string();
     validate_service_id(&service_id, "serviceId").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
-    let config_key = service_config_key(&service_id);
-    let config_snapshot = state
+    let info_key = service_info_key(&service_id);
+    let info_snapshot = state
         .etcd
-        .read_service_config(&config_key)
+        .read_service_info(&info_key)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
-    let Some(snapshot) = config_snapshot else {
+    let Some(snapshot) = info_snapshot else {
         return Err((
             StatusCode::NOT_FOUND,
             format!("service `{service_id}` not found"),
         ));
     };
 
-    let outcome = force_queue_deployment(&state.etcd, snapshot.config)
+    let outcome = force_queue_deployment(&state.etcd, snapshot.info.config)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
@@ -334,9 +332,11 @@ async fn force_queue_deployment(
 ) -> Result<ForceQueueOutcome, String> {
     let service_id = &service_config.id;
     let service_counter_key = service_history_next_index_key(service_id);
+    let info_key = service_info_key(service_id);
 
     for _attempt in 0..MAX_TXN_RETRIES {
         let service_counter = etcd.read_counter(&service_counter_key).await?;
+        let existing_info = etcd.read_service_info(&info_key).await?;
 
         let deployment_index_u64 = service_counter.next_index;
         let deployment_index = usize::try_from(deployment_index_u64)
@@ -355,15 +355,29 @@ async fn force_queue_deployment(
         let deployment_json = serde_json::to_string(&deployment)
             .map_err(|err| format!("failed to serialize deployment: {err}"))?;
 
+        let info = ServiceInfo {
+            config: service_config.clone(),
+            status: Some(DeploymentStatus::Queued),
+        };
+        let info_json = serde_json::to_string(&info)
+            .map_err(|err| format!("failed to serialize service info: {err}"))?;
+
         let service_history_key = service_deployment_history_key(service_id, deployment_index);
 
-        let compare = vec![compare_counter(&service_counter_key, &service_counter)];
+        let compare = vec![
+            compare_counter(&service_counter_key, &service_counter),
+            compare_mod_revision_or_absent(
+                &info_key,
+                existing_info.as_ref().map(|s| s.mod_revision),
+            ),
+        ];
         let success = vec![
             request_put(
                 &service_counter_key,
                 &(deployment_index_u64 + 1).to_string(),
             ),
             request_put(&service_history_key, &deployment_json),
+            request_put(&info_key, &info_json),
         ];
 
         let committed = etcd.txn(compare, success).await?;
@@ -390,15 +404,13 @@ async fn upsert_config_and_maybe_queue(
         return Err("service version cannot be empty".to_string());
     }
 
-    let config_key = service_config_key(&service_id);
+    let info_key = service_info_key(&service_id);
     let service_counter_key = service_history_next_index_key(&service_id);
-    let service_config_json = serde_json::to_string(&service_config)
-        .map_err(|err| format!("failed to serialize service config: {err}"))?;
 
     for _attempt in 0..MAX_TXN_RETRIES {
-        let existing_config = etcd.read_service_config(&config_key).await?;
-        if let Some(snapshot) = existing_config.as_ref()
-            && snapshot.config.version == service_version
+        let existing_info = etcd.read_service_info(&info_key).await?;
+        if let Some(snapshot) = existing_info.as_ref()
+            && snapshot.info.config.version == service_version
             && etcd
                 .is_service_active_with_version(&service_id, &service_version)
                 .await?
@@ -428,20 +440,25 @@ async fn upsert_config_and_maybe_queue(
         let deployment_json = serde_json::to_string(&deployment)
             .map_err(|err| format!("failed to serialize deployment: {err}"))?;
 
+        let info = ServiceInfo {
+            config: service_config.clone(),
+            status: Some(DeploymentStatus::Queued),
+        };
+        let info_json = serde_json::to_string(&info)
+            .map_err(|err| format!("failed to serialize service info: {err}"))?;
+
         let service_history_key = service_deployment_history_key(&service_id, deployment_index);
 
         let compare = vec![
             compare_mod_revision_or_absent(
-                &config_key,
-                existing_config
-                    .as_ref()
-                    .map(|snapshot| snapshot.mod_revision),
+                &info_key,
+                existing_info.as_ref().map(|snapshot| snapshot.mod_revision),
             ),
             compare_counter(&service_counter_key, &service_counter),
         ];
 
         let success = vec![
-            request_put(&config_key, &service_config_json),
+            request_put(&info_key, &info_json),
             request_put(
                 &service_counter_key,
                 &(deployment_index_u64 + 1).to_string(),
@@ -560,20 +577,17 @@ impl EtcdV3HttpClient {
         })
     }
 
-    async fn read_service_config(&self, key: &str) -> Result<Option<ConfigSnapshot>, String> {
+    async fn read_service_info(&self, key: &str) -> Result<Option<InfoSnapshot>, String> {
         let response = self.get(key.as_bytes().to_vec(), None).await?;
         let Some(kv) = response.kvs().first() else {
             return Ok(None);
         };
 
-        let config = serde_json::from_slice::<ServiceConfig>(kv.value())
-            .map_err(|err| format!("invalid service config JSON at key `{key}`: {err}"))?;
+        let info = serde_json::from_slice::<ServiceInfo>(kv.value())
+            .map_err(|err| format!("invalid service info JSON at key `{key}`: {err}"))?;
         let mod_revision = decode_mod_revision(kv.mod_revision(), key)?;
 
-        Ok(Some(ConfigSnapshot {
-            config,
-            mod_revision,
-        }))
+        Ok(Some(InfoSnapshot { info, mod_revision }))
     }
 
     async fn read_active_deployment(
@@ -683,7 +697,7 @@ impl EtcdV3HttpClient {
         Ok(deployments)
     }
 
-    async fn list_services(&self) -> Result<Vec<ServiceConfig>, String> {
+    async fn list_service_infos(&self) -> Result<Vec<ServiceInfo>, String> {
         let prefix = SERVICES_PREFIX.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| "failed to compute range end for services prefix".to_string())?;
@@ -692,29 +706,21 @@ impl EtcdV3HttpClient {
             .with_sort(SortTarget::Key, SortOrder::Ascend);
         let response = self.get(prefix.to_vec(), Some(options)).await?;
 
-        let mut services = Vec::new();
+        let mut infos = Vec::new();
         for kv in response.kvs() {
             let key = String::from_utf8(kv.key().to_vec()).map_err(|err| {
                 format!("service key is not utf8 for prefix `{SERVICES_PREFIX}`: {err}")
             })?;
-            if !key.ends_with("/config") {
+            if !key.ends_with("/info") {
                 continue;
             }
 
-            let config = serde_json::from_slice::<ServiceConfig>(kv.value())
-                .map_err(|err| format!("failed to parse service config at key `{key}`: {err}"))?;
-            services.push(config);
+            let info = serde_json::from_slice::<ServiceInfo>(kv.value())
+                .map_err(|err| format!("failed to parse service info at key `{key}`: {err}"))?;
+            infos.push(info);
         }
-        services.sort_by(|a, b| a.id.cmp(&b.id));
-        Ok(services)
-    }
-
-    async fn latest_service_status(
-        &self,
-        service_id: &str,
-    ) -> Result<Option<DeploymentStatus>, String> {
-        let mut deployments = self.list_service_deployments(service_id, 1).await?;
-        Ok(deployments.pop().map(|deployment| deployment.status))
+        infos.sort_by(|a, b| a.config.id.cmp(&b.config.id));
+        Ok(infos)
     }
 }
 
@@ -869,7 +875,7 @@ fn service_history_next_index_key(service_id: &str) -> String {
 }
 
 fn generate_deployment_id() -> String {
-    format!("dep-{}", nanoid!(20, &URL_SAFE_ALPHABET))
+    nanoid!(24, &URL_SAFE_ALPHABET)
 }
 
 fn current_time_millis() -> Result<u64, String> {
