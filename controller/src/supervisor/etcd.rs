@@ -1,8 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nanoid::nanoid;
 use serde::Deserialize;
@@ -104,22 +106,123 @@ struct TxnResponse {
     succeeded: bool,
 }
 
-pub async fn run(etcd_endpoint: &str) -> Result<(), String> {
-    let mut supervisor = EtcdQueueSupervisor::new(etcd_endpoint)?;
-    supervisor.run().await
+#[async_trait]
+trait DeploymentStore: Send + Sync {
+    async fn list_service_ids(&self) -> Result<Vec<String>, String>;
+    async fn queue_terminated_deployment(&self, service_id: &str) -> Result<bool, String>;
+    async fn list_queued_deployments(&self) -> Result<Vec<QueuedDeployment>, String>;
+    async fn claim_deployment_building(
+        &self,
+        queued_deployment: &QueuedDeployment,
+    ) -> Result<bool, String>;
+    async fn mark_deployment_ready(
+        &self,
+        deployment_key: &str,
+        deployment_id: &str,
+    ) -> Result<(), String>;
+    async fn mark_deployment_crashed(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<(), String>;
+    async fn mark_deployment_terminated(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<(), String>;
 }
 
-struct EtcdQueueSupervisor {
-    etcd: EtcdV3HttpClient,
+trait ServiceCommandPlanner: Send + Sync {
+    fn build_command(&self, deployment: &ServiceDeployment) -> Option<String>;
+    fn deploy_command(&self, deployment: &ServiceDeployment) -> Option<String>;
+}
+
+trait WorkerRunner: Send + Sync {
+    fn spawn(
+        &self,
+        service_name: String,
+        config: ServiceRuntimeConfig,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> JoinHandle<WorkerExitStatus>;
+}
+
+struct DefaultServiceCommandPlanner;
+
+impl ServiceCommandPlanner for DefaultServiceCommandPlanner {
+    fn build_command(&self, deployment: &ServiceDeployment) -> Option<String> {
+        let build = deployment.config.build.as_ref()?;
+        Some(format!(
+            "git clone {} && docker build -f {} .",
+            build.repo, build.dockerfile_path
+        ))
+    }
+
+    fn deploy_command(&self, deployment: &ServiceDeployment) -> Option<String> {
+        if let Some(image) = deployment
+            .config
+            .image
+            .as_deref()
+            .map(str::trim)
+            .filter(|image| !image.is_empty())
+        {
+            Some(docker_run_command(image))
+        } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
+            Some(to_shell_command(
+                &deploy_command.command,
+                &deploy_command.args,
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+struct DefaultWorkerRunner;
+
+impl WorkerRunner for DefaultWorkerRunner {
+    fn spawn(
+        &self,
+        service_name: String,
+        config: ServiceRuntimeConfig,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> JoinHandle<WorkerExitStatus> {
+        tokio::spawn(run_managed_service(service_name, config, shutdown_rx))
+    }
+}
+
+pub async fn run(etcd_endpoint: &str) -> crate::error::Result<()> {
+    let mut supervisor = QueueSupervisor::new(etcd_endpoint)?;
+    supervisor.run().await.map_err(Into::into)
+}
+
+struct QueueSupervisor {
+    store: Arc<dyn DeploymentStore>,
+    command_planner: Arc<dyn ServiceCommandPlanner>,
+    worker_runner: Arc<dyn WorkerRunner>,
     running: HashMap<String, RunningService>,
 }
 
-impl EtcdQueueSupervisor {
+impl QueueSupervisor {
     fn new(etcd_endpoint: &str) -> Result<Self, String> {
-        Ok(Self {
-            etcd: EtcdV3HttpClient::new(etcd_endpoint)?,
+        let store = Arc::new(EtcdV3HttpClient::new(etcd_endpoint)?);
+        Ok(Self::with_parts(
+            store,
+            Arc::new(DefaultServiceCommandPlanner),
+            Arc::new(DefaultWorkerRunner),
+        ))
+    }
+
+    fn with_parts(
+        store: Arc<dyn DeploymentStore>,
+        command_planner: Arc<dyn ServiceCommandPlanner>,
+        worker_runner: Arc<dyn WorkerRunner>,
+    ) -> Self {
+        Self {
+            store,
+            command_planner,
+            worker_runner,
             running: HashMap::new(),
-        })
+        }
     }
 
     async fn run(&mut self) -> Result<(), String> {
@@ -205,13 +308,18 @@ impl EtcdQueueSupervisor {
     }
 
     async fn process_queued_deployments(&mut self) -> Result<(), String> {
-        let queued = self.etcd.list_queued_deployments().await?;
+        let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
             if self.running.contains_key(&queued_deployment.service_id) {
                 continue;
             }
 
-            let Some(worker_config) = runtime_config_from_deployment(&queued_deployment.deployment)
+            let _build_command = self
+                .command_planner
+                .build_command(&queued_deployment.deployment);
+            let Some(deploy_command) = self
+                .command_planner
+                .deploy_command(&queued_deployment.deployment)
             else {
                 eprintln!(
                     "[maestro]: skipping queued deployment `{}` for service `{}`: no image or deploy command",
@@ -219,9 +327,15 @@ impl EtcdQueueSupervisor {
                 );
                 continue;
             };
+            let worker_config = ServiceRuntimeConfig {
+                command: deploy_command,
+                restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
+                max_restarts: DEFAULT_MAX_RESTARTS,
+                shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
+            };
 
             let claimed = self
-                .etcd
+                .store
                 .claim_deployment_building(&queued_deployment)
                 .await?;
             if !claimed {
@@ -233,11 +347,9 @@ impl EtcdQueueSupervisor {
                 queued_deployment.service_id, queued_deployment.deployment.id
             );
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            let task = tokio::spawn(run_managed_service(
-                service_name,
-                worker_config,
-                shutdown_rx,
-            ));
+            let task = self
+                .worker_runner
+                .spawn(service_name, worker_config, shutdown_rx);
             self.running.insert(
                 queued_deployment.service_id.clone(),
                 RunningService {
@@ -248,7 +360,7 @@ impl EtcdQueueSupervisor {
             );
 
             if let Err(err) = self
-                .etcd
+                .store
                 .mark_deployment_ready(&queued_deployment.key, &queued_deployment.deployment.id)
                 .await
             {
@@ -263,9 +375,9 @@ impl EtcdQueueSupervisor {
     }
 
     async fn queue_terminated_active_deployments(&self) -> Result<(), String> {
-        let service_ids = self.etcd.list_service_ids().await?;
+        let service_ids = self.store.list_service_ids().await?;
         for service_id in service_ids {
-            let queued = self.etcd.queue_terminated_deployment(&service_id).await?;
+            let queued = self.store.queue_terminated_deployment(&service_id).await?;
             let _ = queued;
         }
 
@@ -304,7 +416,7 @@ impl EtcdQueueSupervisor {
 
                 if outcome == WorkerExitStatus::Crashed
                     && let Err(err) = self
-                        .etcd
+                        .store
                         .mark_deployment_crashed(&service_id, &deployment_id)
                         .await
                 {
@@ -314,7 +426,7 @@ impl EtcdQueueSupervisor {
                 }
                 if outcome == WorkerExitStatus::Stopped
                     && let Err(err) = self
-                        .etcd
+                        .store
                         .mark_deployment_terminated(&service_id, &deployment_id)
                         .await
                 {
@@ -358,7 +470,7 @@ impl EtcdQueueSupervisor {
 
             if outcome == WorkerExitStatus::Stopped
                 && let Err(err) = self
-                    .etcd
+                    .store
                     .mark_deployment_terminated(&service_id, &deployment_id)
                     .await
             {
@@ -369,7 +481,7 @@ impl EtcdQueueSupervisor {
 
             if outcome == WorkerExitStatus::Crashed
                 && let Err(err) = self
-                    .etcd
+                    .store
                     .mark_deployment_crashed(&service_id, &deployment_id)
                     .await
             {
@@ -395,8 +507,8 @@ impl EtcdV3HttpClient {
 
         let response = self
             .range(json!({
-                "key": encode(prefix),
-                "range_end": encode(&range_end),
+                "key": STANDARD.encode(prefix),
+                "range_end": STANDARD.encode(&range_end),
             }))
             .await?;
 
@@ -451,8 +563,8 @@ impl EtcdV3HttpClient {
 
         let response = self
             .range(json!({
-                "key": encode(prefix),
-                "range_end": encode(&range_end),
+                "key": STANDARD.encode(prefix),
+                "range_end": STANDARD.encode(&range_end),
                 "sort_order": "ASCEND",
                 "sort_target": "KEY"
             }))
@@ -482,7 +594,9 @@ impl EtcdV3HttpClient {
         service_id: &str,
     ) -> Result<Option<ActiveDeploymentSnapshot>, String> {
         let key = service_active_deployment_key(service_id);
-        let response = self.range(json!({ "key": encode(key.as_bytes()) })).await?;
+        let response = self
+            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
+            .await?;
         let Some(kv) = response.kvs.first() else {
             return Ok(None);
         };
@@ -503,7 +617,9 @@ impl EtcdV3HttpClient {
     }
 
     async fn read_counter(&self, key: &str) -> Result<CounterSnapshot, String> {
-        let response = self.range(json!({ "key": encode(key.as_bytes()) })).await?;
+        let response = self
+            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
+            .await?;
 
         let Some(kv) = response.kvs.first() else {
             return Ok(CounterSnapshot {
@@ -535,7 +651,9 @@ impl EtcdV3HttpClient {
         service_id: &str,
     ) -> Result<Option<ConfigSnapshot>, String> {
         let key = service_config_key(service_id);
-        let response = self.range(json!({ "key": encode(key.as_bytes()) })).await?;
+        let response = self
+            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
+            .await?;
         let Some(kv) = response.kvs.first() else {
             return Ok(None);
         };
@@ -801,7 +919,7 @@ impl EtcdV3HttpClient {
     ) -> Result<Option<DeploymentSnapshot>, String> {
         let response = self
             .range(json!({
-                "key": encode(deployment_key.as_bytes()),
+                "key": STANDARD.encode(deployment_key.as_bytes()),
             }))
             .await?;
 
@@ -836,8 +954,8 @@ impl EtcdV3HttpClient {
 
         let response = self
             .range(json!({
-                "key": encode(prefix),
-                "range_end": encode(&range_end),
+                "key": STANDARD.encode(prefix),
+                "range_end": STANDARD.encode(&range_end),
             }))
             .await?;
 
@@ -917,27 +1035,50 @@ impl EtcdV3HttpClient {
     }
 }
 
-fn runtime_config_from_deployment(deployment: &ServiceDeployment) -> Option<ServiceRuntimeConfig> {
-    let command = if let Some(image) = deployment
-        .config
-        .image
-        .as_deref()
-        .map(str::trim)
-        .filter(|image| !image.is_empty())
-    {
-        docker_run_command(image)
-    } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
-        to_shell_command(&deploy_command.command, &deploy_command.args)
-    } else {
-        return None;
-    };
+#[async_trait]
+impl DeploymentStore for EtcdV3HttpClient {
+    async fn list_service_ids(&self) -> Result<Vec<String>, String> {
+        EtcdV3HttpClient::list_service_ids(self).await
+    }
 
-    Some(ServiceRuntimeConfig {
-        command,
-        restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-        max_restarts: DEFAULT_MAX_RESTARTS,
-        shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-    })
+    async fn queue_terminated_deployment(&self, service_id: &str) -> Result<bool, String> {
+        EtcdV3HttpClient::queue_terminated_deployment(self, service_id).await
+    }
+
+    async fn list_queued_deployments(&self) -> Result<Vec<QueuedDeployment>, String> {
+        EtcdV3HttpClient::list_queued_deployments(self).await
+    }
+
+    async fn claim_deployment_building(
+        &self,
+        queued_deployment: &QueuedDeployment,
+    ) -> Result<bool, String> {
+        EtcdV3HttpClient::claim_deployment_building(self, queued_deployment).await
+    }
+
+    async fn mark_deployment_ready(
+        &self,
+        deployment_key: &str,
+        deployment_id: &str,
+    ) -> Result<(), String> {
+        EtcdV3HttpClient::mark_deployment_ready(self, deployment_key, deployment_id).await
+    }
+
+    async fn mark_deployment_crashed(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<(), String> {
+        EtcdV3HttpClient::mark_deployment_crashed(self, service_id, deployment_id).await
+    }
+
+    async fn mark_deployment_terminated(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<(), String> {
+        EtcdV3HttpClient::mark_deployment_terminated(self, service_id, deployment_id).await
+    }
 }
 
 fn to_shell_command(command: &str, args: &[String]) -> String {
@@ -1006,12 +1147,12 @@ fn current_time_millis() -> Result<u64, String> {
 fn compare_mod_revision_or_absent(key: &str, mod_revision: Option<u64>) -> Value {
     match mod_revision {
         Some(rev) => json!({
-            "key": encode(key.as_bytes()),
+            "key": STANDARD.encode(key.as_bytes()),
             "target": "MOD",
             "mod_revision": rev.to_string(),
         }),
         None => json!({
-            "key": encode(key.as_bytes()),
+            "key": STANDARD.encode(key.as_bytes()),
             "target": "VERSION",
             "version": "0",
         }),
@@ -1021,14 +1162,10 @@ fn compare_mod_revision_or_absent(key: &str, mod_revision: Option<u64>) -> Value
 fn request_put(key: &str, value: &str) -> Value {
     json!({
         "request_put": {
-            "key": encode(key.as_bytes()),
-            "value": encode(value.as_bytes()),
+            "key": STANDARD.encode(key.as_bytes()),
+            "value": STANDARD.encode(value.as_bytes()),
         }
     })
-}
-
-fn encode(input: &[u8]) -> String {
-    STANDARD.encode(input)
 }
 
 fn decode_to_bytes(encoded: &str, key_hint: &str) -> Result<Vec<u8>, String> {
@@ -1050,67 +1187,5 @@ fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::service::{
-        ArcCommand, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
-    };
-
-    fn deployment_with_source(
-        build: Option<ServiceBuildConfig>,
-        image: Option<&str>,
-        deploy_command: Option<ArcCommand>,
-    ) -> ServiceDeployment {
-        ServiceDeployment {
-            id: "dep-1".to_string(),
-            created_at: 1,
-            status: DeploymentStatus::Queued,
-            config: ServiceConfig {
-                id: "svc-1".to_string(),
-                name: "service-1".to_string(),
-                version: "cfg-1".to_string(),
-                build,
-                image: image.map(str::to_string),
-                deploy: ServiceDeployConfig {
-                    command: deploy_command,
-                    healthcheck_path: "/_healthy".to_string(),
-                },
-            },
-            git_commit: None,
-            build: None,
-        }
-    }
-
-    #[test]
-    fn runtime_config_uses_image_deploy_command_when_present() {
-        let deployment = deployment_with_source(
-            None,
-            Some("traefik/whoami"),
-            Some(ArcCommand {
-                command: "arc-deploy".to_string(),
-                args: vec!["--prod".to_string()],
-            }),
-        );
-
-        let config = runtime_config_from_deployment(&deployment).expect("config should exist");
-        assert_eq!(config.command, "exec docker run --rm traefik/whoami");
-    }
-
-    #[test]
-    fn runtime_config_falls_back_to_deploy_command_without_image() {
-        let deployment = deployment_with_source(
-            Some(ServiceBuildConfig {
-                repo: "https://example.com/repo.git".to_string(),
-                dockerfile_path: "Dockerfile".to_string(),
-            }),
-            None,
-            Some(ArcCommand {
-                command: "arc deploy".to_string(),
-                args: vec!["--service".to_string(), "svc-1".to_string()],
-            }),
-        );
-
-        let config = runtime_config_from_deployment(&deployment).expect("config should exist");
-        assert_eq!(config.command, "arc deploy --service svc-1");
-    }
-}
+#[path = "../tests/supervisor/etcd.rs"]
+mod tests;

@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Error, Result};
 use crate::service::{ServiceBuildConfig, ServiceDeployConfig};
 
 #[derive(Debug, Deserialize)]
@@ -41,16 +42,21 @@ struct PatchServiceResponse {
     version: String,
 }
 
-pub async fn run_rollout(config_path: &Path, host: &str) -> Result<(), String> {
-    let raw = std::fs::read_to_string(config_path)
-        .map_err(|err| format!("failed to read {}: {err}", config_path.display()))?;
+pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(config_path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            Error::not_found(format!("{} does not exist", config_path.display()))
+        } else {
+            Error::invalid_config(format!("failed to read {}: {err}", config_path.display()))
+        }
+    })?;
     let cluster = parse_config(&raw)?;
 
     if cluster.services.is_empty() {
-        return Err(format!(
+        return Err(Error::invalid_config(format!(
             "no services configured in {}",
             config_path.display()
-        ));
+        )));
     }
 
     let patch_url = patch_endpoint(host)?;
@@ -83,39 +89,47 @@ async fn call_patch_endpoint(
     endpoint: &str,
     payload: &PatchServiceRequest,
     service_id: &str,
-) -> Result<PatchServiceResponse, String> {
+) -> Result<PatchServiceResponse> {
     let response = client
         .patch(endpoint)
         .json(payload)
         .send()
         .await
         .map_err(|err| {
-            format!("failed to call patch endpoint for service `{service_id}`: {err}")
+            Error::external(format!(
+                "failed to call patch endpoint for service `{service_id}`: {err}"
+            ))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!(
+        return Err(Error::external(format!(
             "patch failed for service `{service_id}` with status {status}: {body}"
-        ));
+        )));
     }
 
-    response
+    let payload = response
         .json::<PatchServiceResponse>()
         .await
-        .map_err(|err| format!("failed to decode patch response for service `{service_id}`: {err}"))
+        .map_err(|err| {
+            Error::external(format!(
+                "failed to decode patch response for service `{service_id}`: {err}"
+            ))
+        })?;
+    Ok(payload)
 }
 
-fn parse_config(raw: &str) -> Result<ClusterConfig, String> {
-    let json = strip_jsonc_comments(raw)?;
-    serde_json::from_str(&json).map_err(|err| format!("failed to parse maestro.jsonc: {err}"))
+fn parse_config(raw: &str) -> Result<ClusterConfig> {
+    let parsed = json5::from_str(raw)
+        .map_err(|err| Error::invalid_config(format!("failed to parse maestro.jsonc: {err}")))?;
+    Ok(parsed)
 }
 
-fn normalize_base_url(host: &str) -> Result<String, String> {
+fn normalize_base_url(host: &str) -> Result<String> {
     let host = host.trim();
     if host.is_empty() {
-        return Err("host cannot be empty".to_string());
+        return Err(Error::invalid_input("host cannot be empty"));
     }
 
     let base = if host.starts_with("http://") || host.starts_with("https://") {
@@ -127,25 +141,27 @@ fn normalize_base_url(host: &str) -> Result<String, String> {
     Ok(base.trim_end_matches('/').to_string())
 }
 
-fn patch_endpoint(host: &str) -> Result<String, String> {
+fn patch_endpoint(host: &str) -> Result<String> {
     Ok(format!("{}/api/services/patch", normalize_base_url(host)?))
 }
 
 fn service_payload(
     service_id: &str,
     service_template: &ServiceTemplate,
-) -> Result<PatchServiceRequest, String> {
+) -> Result<PatchServiceRequest> {
     let id = service_id.trim();
     if id.is_empty() {
-        return Err("service id cannot be empty".to_string());
+        return Err(Error::invalid_config("service id cannot be empty"));
     }
 
     let name = service_template.name.trim();
     if name.is_empty() {
-        return Err(format!("service `{service_id}` has empty name"));
+        return Err(Error::invalid_config(format!(
+            "service `{service_id}` has empty name"
+        )));
     }
     let (build, image) = normalize_build_or_image(&service_template.build, &service_template.image)
-        .map_err(|err| format!("service `{service_id}` {err}"))?;
+        .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
 
     Ok(PatchServiceRequest {
         id: id.to_string(),
@@ -159,7 +175,7 @@ fn service_payload(
 fn normalize_build_or_image(
     build: &Option<ServiceBuildConfig>,
     image: &Option<String>,
-) -> Result<(Option<ServiceBuildConfig>, Option<String>), String> {
+) -> std::result::Result<(Option<ServiceBuildConfig>, Option<String>), String> {
     match (build, image) {
         (Some(build), None) => {
             if build.repo.trim().is_empty() {
@@ -181,126 +197,6 @@ fn normalize_build_or_image(
     }
 }
 
-fn strip_jsonc_comments(input: &str) -> Result<String, String> {
-    enum State {
-        Normal,
-        InString(char),
-        InLineComment,
-        InBlockComment,
-    }
-
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    let mut state = State::Normal;
-    let mut escaped = false;
-
-    while let Some(ch) = chars.next() {
-        match state {
-            State::Normal => {
-                if ch == '"' || ch == '\'' {
-                    state = State::InString(ch);
-                    output.push(ch);
-                    escaped = false;
-                    continue;
-                }
-
-                if ch == '/' {
-                    match chars.peek().copied() {
-                        Some('/') => {
-                            chars.next();
-                            state = State::InLineComment;
-                            continue;
-                        }
-                        Some('*') => {
-                            chars.next();
-                            state = State::InBlockComment;
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                output.push(ch);
-            }
-            State::InString(quote) => {
-                output.push(ch);
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == quote {
-                    state = State::Normal;
-                }
-            }
-            State::InLineComment => {
-                if ch == '\n' {
-                    output.push('\n');
-                    state = State::Normal;
-                }
-            }
-            State::InBlockComment => {
-                if ch == '*' && matches!(chars.peek(), Some('/')) {
-                    chars.next();
-                    state = State::Normal;
-                } else if ch == '\n' {
-                    output.push('\n');
-                }
-            }
-        }
-    }
-
-    match state {
-        State::InBlockComment => Err("unterminated block comment in maestro.jsonc".to_string()),
-        _ => Ok(output),
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_config() -> &'static str {
-        r#"{
-          "services": {
-            "service-1": {
-              "name": "Service One",
-              "build": {
-                "repo": "https://example.com/org/repo.git",
-                "dockerfilePath": "Dockerfile"
-              },
-              "deploy": {
-                "healthcheckPath": "/_healthy"
-              }
-            }
-          }
-        }"#
-    }
-
-    #[test]
-    fn parse_config_supports_jsonc() {
-        let parsed = parse_config(sample_config()).expect("should parse");
-        assert_eq!(parsed.services.len(), 1);
-    }
-
-    #[test]
-    fn patch_endpoint_adds_http_when_missing() {
-        let endpoint = patch_endpoint("127.0.0.1:3000").expect("should build endpoint");
-        assert_eq!(endpoint, "http://127.0.0.1:3000/api/services/patch");
-    }
-
-    #[test]
-    fn service_payload_uses_map_key_as_service_id() {
-        let parsed = parse_config(sample_config()).expect("should parse");
-        let template = parsed
-            .services
-            .get("service-1")
-            .expect("service should exist");
-        let payload = service_payload("service-1", template).expect("payload should build");
-        assert_eq!(payload.id, "service-1");
-        assert_eq!(payload.name, "Service One");
-        assert_eq!(
-            payload.build.as_ref().map(|build| build.repo.as_str()),
-            Some("https://example.com/org/repo.git"),
-        );
-    }
-}
+#[path = "../tests/cli/rollout.rs"]
+mod tests;
