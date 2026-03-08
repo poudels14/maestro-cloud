@@ -526,7 +526,7 @@ impl EtcdV3HttpClient {
         let endpoint = normalize_base_url(endpoint)?;
         let client = EtcdClient::connect([endpoint.as_str()], None)
             .await
-            .map_err(|err| format!("failed to connect etcd client: {err}"))?;
+            .map_err(|_| "failed to connect etcd client".to_string())?;
         Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
         })
@@ -541,7 +541,7 @@ impl EtcdV3HttpClient {
         client
             .get(key, options)
             .await
-            .map_err(|err| format!("failed etcd get request: {err}"))
+            .map_err(|_| "failed etcd get request".to_string())
     }
 
     async fn txn(&self, compare: Vec<Compare>, success: Vec<TxnOp>) -> Result<bool, String> {
@@ -550,7 +550,7 @@ impl EtcdV3HttpClient {
         let response = client
             .txn(txn)
             .await
-            .map_err(|err| format!("failed etcd txn request: {err}"))?;
+            .map_err(|_| "failed etcd txn request".to_string())?;
         Ok(response.succeeded())
     }
 
