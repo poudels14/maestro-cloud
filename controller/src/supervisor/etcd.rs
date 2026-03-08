@@ -5,10 +5,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use etcd_client::{
+    Client as EtcdClient, Compare, CompareOp, GetOptions, SortOrder, SortTarget, Txn, TxnOp,
+};
 use nanoid::nanoid;
-use serde::Deserialize;
-use serde_json::{Value, json};
 use tokio::{
     sync::{mpsc, watch},
     task::JoinHandle,
@@ -40,8 +40,7 @@ const URL_SAFE_ALPHABET: [char; 62] = [
 
 #[derive(Clone)]
 struct EtcdV3HttpClient {
-    client: reqwest::Client,
-    base_url: String,
+    client: Arc<tokio::sync::Mutex<EtcdClient>>,
 }
 
 struct RunningService {
@@ -86,24 +85,6 @@ struct ConfigSnapshot {
 enum ShutdownSignal {
     CtrlC,
     Terminate(&'static str),
-}
-
-#[derive(Debug, Deserialize)]
-struct RangeResponse {
-    #[serde(default)]
-    kvs: Vec<RangeKv>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RangeKv {
-    key: String,
-    value: String,
-    mod_revision: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TxnResponse {
-    succeeded: bool,
 }
 
 #[async_trait]
@@ -191,7 +172,7 @@ impl WorkerRunner for DefaultWorkerRunner {
 }
 
 pub async fn run(etcd_endpoint: &str) -> crate::error::Result<()> {
-    let mut supervisor = QueueSupervisor::new(etcd_endpoint)?;
+    let mut supervisor = QueueSupervisor::new(etcd_endpoint).await?;
     supervisor.run().await.map_err(Into::into)
 }
 
@@ -203,8 +184,8 @@ struct QueueSupervisor {
 }
 
 impl QueueSupervisor {
-    fn new(etcd_endpoint: &str) -> Result<Self, String> {
-        let store = Arc::new(EtcdV3HttpClient::new(etcd_endpoint)?);
+    async fn new(etcd_endpoint: &str) -> Result<Self, String> {
+        let store = Arc::new(EtcdV3HttpClient::new(etcd_endpoint).await?);
         Ok(Self::with_parts(
             store,
             Arc::new(DefaultServiceCommandPlanner),
@@ -492,11 +473,36 @@ impl QueueSupervisor {
 }
 
 impl EtcdV3HttpClient {
-    fn new(endpoint: &str) -> Result<Self, String> {
+    async fn new(endpoint: &str) -> Result<Self, String> {
+        let endpoint = normalize_base_url(endpoint)?;
+        let client = EtcdClient::connect([endpoint.as_str()], None)
+            .await
+            .map_err(|err| format!("failed to connect etcd client: {err}"))?;
         Ok(Self {
-            client: reqwest::Client::new(),
-            base_url: normalize_base_url(endpoint)?,
+            client: Arc::new(tokio::sync::Mutex::new(client)),
         })
+    }
+
+    async fn get(
+        &self,
+        key: Vec<u8>,
+        options: Option<GetOptions>,
+    ) -> Result<etcd_client::GetResponse, String> {
+        let mut client = self.client.lock().await;
+        client
+            .get(key, options)
+            .await
+            .map_err(|err| format!("failed etcd get request: {err}"))
+    }
+
+    async fn txn(&self, compare: Vec<Compare>, success: Vec<TxnOp>) -> Result<bool, String> {
+        let txn = Txn::new().when(compare).and_then(success);
+        let mut client = self.client.lock().await;
+        let response = client
+            .txn(txn)
+            .await
+            .map_err(|err| format!("failed etcd txn request: {err}"))?;
+        Ok(response.succeeded())
     }
 
     async fn list_queued_deployments(&self) -> Result<Vec<QueuedDeployment>, String> {
@@ -504,18 +510,12 @@ impl EtcdV3HttpClient {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| "failed to compute range end for services prefix".to_string())?;
-
-        let response = self
-            .range(json!({
-                "key": STANDARD.encode(prefix),
-                "range_end": STANDARD.encode(&range_end),
-            }))
-            .await?;
+        let options = GetOptions::new().with_range(range_end);
+        let response = self.get(prefix.to_vec(), Some(options)).await?;
 
         let mut queued = Vec::new();
-        for kv in response.kvs {
-            let key_bytes = decode_to_bytes(&kv.key, &prefix_key)?;
-            let key = String::from_utf8(key_bytes)
+        for kv in response.kvs() {
+            let key = String::from_utf8(kv.key().to_vec())
                 .map_err(|err| format!("deployment key for `{prefix_key}` is not utf8: {err}"))?;
             if !key.contains("/deployments/history/") {
                 continue;
@@ -525,17 +525,13 @@ impl EtcdV3HttpClient {
                 continue;
             };
 
-            let value_bytes = decode_to_bytes(&kv.value, &key)?;
-            let deployment = serde_json::from_slice::<ServiceDeployment>(&value_bytes)
+            let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
                 .map_err(|err| format!("invalid deployment JSON at key `{key}`: {err}"))?;
             if deployment.status != DeploymentStatus::Queued {
                 continue;
             }
 
-            let mod_revision = kv
-                .mod_revision
-                .parse::<u64>()
-                .map_err(|err| format!("invalid mod_revision for key `{key}`: {err}"))?;
+            let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
             queued.push(QueuedDeployment {
                 service_id,
@@ -560,20 +556,14 @@ impl EtcdV3HttpClient {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| "failed to compute range end for services prefix".to_string())?;
-
-        let response = self
-            .range(json!({
-                "key": STANDARD.encode(prefix),
-                "range_end": STANDARD.encode(&range_end),
-                "sort_order": "ASCEND",
-                "sort_target": "KEY"
-            }))
-            .await?;
+        let options = GetOptions::new()
+            .with_range(range_end)
+            .with_sort(SortTarget::Key, SortOrder::Ascend);
+        let response = self.get(prefix.to_vec(), Some(options)).await?;
 
         let mut ids = HashSet::new();
-        for kv in response.kvs {
-            let key_bytes = decode_to_bytes(&kv.key, &prefix_key)?;
-            let key = String::from_utf8(key_bytes)
+        for kv in response.kvs() {
+            let key = String::from_utf8(kv.key().to_vec())
                 .map_err(|err| format!("service key for `{prefix_key}` is not utf8: {err}"))?;
             if !key.ends_with("/config") {
                 continue;
@@ -594,20 +584,14 @@ impl EtcdV3HttpClient {
         service_id: &str,
     ) -> Result<Option<ActiveDeploymentSnapshot>, String> {
         let key = service_active_deployment_key(service_id);
-        let response = self
-            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
-            .await?;
-        let Some(kv) = response.kvs.first() else {
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let Some(kv) = response.kvs().first() else {
             return Ok(None);
         };
 
-        let bytes = decode_to_bytes(&kv.value, &key)?;
-        let deployment = serde_json::from_slice::<ActiveDeployment>(&bytes)
+        let deployment = serde_json::from_slice::<ActiveDeployment>(kv.value())
             .map_err(|err| format!("invalid active deployment JSON at key `{key}`: {err}"))?;
-        let mod_revision = kv
-            .mod_revision
-            .parse::<u64>()
-            .map_err(|err| format!("invalid mod_revision for key `{key}`: {err}"))?;
+        let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
         Ok(Some(ActiveDeploymentSnapshot {
             key,
@@ -617,28 +601,21 @@ impl EtcdV3HttpClient {
     }
 
     async fn read_counter(&self, key: &str) -> Result<CounterSnapshot, String> {
-        let response = self
-            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
-            .await?;
-
-        let Some(kv) = response.kvs.first() else {
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let Some(kv) = response.kvs().first() else {
             return Ok(CounterSnapshot {
                 next_index: 0,
                 mod_revision: None,
             });
         };
 
-        let decoded = decode_to_bytes(&kv.value, key)?;
-        let text = String::from_utf8(decoded)
+        let text = String::from_utf8(kv.value().to_vec())
             .map_err(|err| format!("counter value for key `{key}` is not utf8: {err}"))?;
         let next_index = text
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("counter value for key `{key}` is not u64: {err}"))?;
-        let mod_revision = kv
-            .mod_revision
-            .parse::<u64>()
-            .map_err(|err| format!("invalid mod_revision for key `{key}`: {err}"))?;
+        let mod_revision = decode_mod_revision(kv.mod_revision(), key)?;
 
         Ok(CounterSnapshot {
             next_index,
@@ -651,20 +628,14 @@ impl EtcdV3HttpClient {
         service_id: &str,
     ) -> Result<Option<ConfigSnapshot>, String> {
         let key = service_config_key(service_id);
-        let response = self
-            .range(json!({ "key": STANDARD.encode(key.as_bytes()) }))
-            .await?;
-        let Some(kv) = response.kvs.first() else {
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let Some(kv) = response.kvs().first() else {
             return Ok(None);
         };
 
-        let bytes = decode_to_bytes(&kv.value, &key)?;
-        let config = serde_json::from_slice::<ServiceConfig>(&bytes)
+        let config = serde_json::from_slice::<ServiceConfig>(kv.value())
             .map_err(|err| format!("invalid service config JSON at key `{key}`: {err}"))?;
-        let mod_revision = kv
-            .mod_revision
-            .parse::<u64>()
-            .map_err(|err| format!("invalid mod_revision for key `{key}`: {err}"))?;
+        let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
         Ok(Some(ConfigSnapshot {
             key,
@@ -917,23 +888,14 @@ impl EtcdV3HttpClient {
         &self,
         deployment_key: &str,
     ) -> Result<Option<DeploymentSnapshot>, String> {
-        let response = self
-            .range(json!({
-                "key": STANDARD.encode(deployment_key.as_bytes()),
-            }))
-            .await?;
-
-        let Some(kv) = response.kvs.first() else {
+        let response = self.get(deployment_key.as_bytes().to_vec(), None).await?;
+        let Some(kv) = response.kvs().first() else {
             return Ok(None);
         };
 
-        let value_bytes = decode_to_bytes(&kv.value, deployment_key)?;
-        let deployment = serde_json::from_slice::<ServiceDeployment>(&value_bytes)
+        let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
             .map_err(|err| format!("invalid deployment JSON at key `{deployment_key}`: {err}"))?;
-        let mod_revision = kv
-            .mod_revision
-            .parse::<u64>()
-            .map_err(|err| format!("invalid mod_revision for key `{deployment_key}`: {err}"))?;
+        let mod_revision = decode_mod_revision(kv.mod_revision(), deployment_key)?;
 
         Ok(Some(DeploymentSnapshot {
             key: deployment_key.to_string(),
@@ -951,29 +913,19 @@ impl EtcdV3HttpClient {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| "failed to compute range end for deployment lookup".to_string())?;
+        let options = GetOptions::new().with_range(range_end);
+        let response = self.get(prefix.to_vec(), Some(options)).await?;
 
-        let response = self
-            .range(json!({
-                "key": STANDARD.encode(prefix),
-                "range_end": STANDARD.encode(&range_end),
-            }))
-            .await?;
-
-        for kv in response.kvs {
-            let value_bytes = decode_to_bytes(&kv.value, &prefix_key)?;
-            let deployment = serde_json::from_slice::<ServiceDeployment>(&value_bytes)
+        for kv in response.kvs() {
+            let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
                 .map_err(|err| format!("invalid deployment JSON under `{prefix_key}`: {err}"))?;
             if deployment.id != deployment_id {
                 continue;
             }
 
-            let key_bytes = decode_to_bytes(&kv.key, &prefix_key)?;
-            let key = String::from_utf8(key_bytes)
+            let key = String::from_utf8(kv.key().to_vec())
                 .map_err(|err| format!("deployment key for `{prefix_key}` is not utf8: {err}"))?;
-            let mod_revision = kv
-                .mod_revision
-                .parse::<u64>()
-                .map_err(|err| format!("invalid mod_revision for deployment key `{key}`: {err}"))?;
+            let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
             return Ok(Some(DeploymentSnapshot {
                 key,
@@ -983,55 +935,6 @@ impl EtcdV3HttpClient {
         }
 
         Ok(None)
-    }
-
-    async fn txn(&self, compare: Vec<Value>, success: Vec<Value>) -> Result<bool, String> {
-        let body = json!({
-            "compare": compare,
-            "success": success,
-            "failure": [],
-        });
-
-        let response = self
-            .client
-            .post(format!("{}/v3/kv/txn", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|err| format!("failed etcd txn request: {err}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let raw = response.text().await.unwrap_or_default();
-            return Err(format!("etcd txn failed with status {status}: {raw}"));
-        }
-
-        let parsed = response
-            .json::<TxnResponse>()
-            .await
-            .map_err(|err| format!("failed to decode etcd txn response: {err}"))?;
-        Ok(parsed.succeeded)
-    }
-
-    async fn range(&self, body: Value) -> Result<RangeResponse, String> {
-        let response = self
-            .client
-            .post(format!("{}/v3/kv/range", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|err| format!("failed etcd range request: {err}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let raw = response.text().await.unwrap_or_default();
-            return Err(format!("etcd range failed with status {status}: {raw}"));
-        }
-
-        response
-            .json::<RangeResponse>()
-            .await
-            .map_err(|err| format!("failed to decode etcd range response: {err}"))
     }
 }
 
@@ -1124,7 +1027,7 @@ fn service_id_from_config_key(key: &str) -> Option<String> {
     }
 }
 
-fn compare_counter(key: &str, snapshot: &CounterSnapshot) -> Value {
+fn compare_counter(key: &str, snapshot: &CounterSnapshot) -> Compare {
     compare_mod_revision_or_absent(key, snapshot.mod_revision)
 }
 
@@ -1144,34 +1047,24 @@ fn current_time_millis() -> Result<u64, String> {
         .map_err(|_| "system time milliseconds overflowed u64".to_string())
 }
 
-fn compare_mod_revision_or_absent(key: &str, mod_revision: Option<u64>) -> Value {
+fn compare_mod_revision_or_absent(key: &str, mod_revision: Option<u64>) -> Compare {
     match mod_revision {
-        Some(rev) => json!({
-            "key": STANDARD.encode(key.as_bytes()),
-            "target": "MOD",
-            "mod_revision": rev.to_string(),
-        }),
-        None => json!({
-            "key": STANDARD.encode(key.as_bytes()),
-            "target": "VERSION",
-            "version": "0",
-        }),
+        Some(rev) => Compare::mod_revision(
+            key.as_bytes().to_vec(),
+            CompareOp::Equal,
+            i64::try_from(rev).expect("mod_revision from etcd must fit i64"),
+        ),
+        None => Compare::version(key.as_bytes().to_vec(), CompareOp::Equal, 0),
     }
 }
 
-fn request_put(key: &str, value: &str) -> Value {
-    json!({
-        "request_put": {
-            "key": STANDARD.encode(key.as_bytes()),
-            "value": STANDARD.encode(value.as_bytes()),
-        }
-    })
+fn request_put(key: &str, value: &str) -> TxnOp {
+    TxnOp::put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
 }
 
-fn decode_to_bytes(encoded: &str, key_hint: &str) -> Result<Vec<u8>, String> {
-    STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|err| format!("invalid base64 value in etcd for `{key_hint}`: {err}"))
+fn decode_mod_revision(mod_revision: i64, key: &str) -> Result<u64, String> {
+    u64::try_from(mod_revision)
+        .map_err(|err| format!("invalid mod_revision `{mod_revision}` for key `{key}`: {err}"))
 }
 
 fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
