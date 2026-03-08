@@ -17,6 +17,7 @@ export interface Service {
   id: string;
   name: string;
   version: string;
+  status?: string | null;
   build?: Build | null;
   image?: string | null;
   deploy: Deploy;

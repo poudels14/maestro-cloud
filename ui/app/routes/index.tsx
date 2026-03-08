@@ -39,9 +39,15 @@ async function cancelDeployment(serviceId: string, deploymentId: string) {
 const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
   QUEUED: { dot: "bg-amber-400", bg: "bg-amber-50", text: "text-amber-700" },
   BUILDING: { dot: "bg-blue-400", bg: "bg-blue-50", text: "text-blue-700" },
+  READY: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
   DEPLOYING: { dot: "bg-indigo-400", bg: "bg-indigo-50", text: "text-indigo-700" },
   RUNNING: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
   FAILED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  CRASHED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  TERMINATED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  CANCELLED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  CANCELED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  IDLE: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" },
   STOPPED: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" }
 };
 
@@ -293,6 +299,7 @@ function ServiceSheet(props: { service: Service; onClose: () => void }) {
 
 function ServiceCard(props: { service: Service; onClick: () => void }) {
   const s = props.service;
+  const status = s.status ?? "IDLE";
   const sourceName =
     s.build != null
       ? s.build.repo
@@ -318,10 +325,7 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
           <p class="text-sm text-gray-500 truncate">{sourceName}</p>
         </div>
         <div class="shrink-0">
-          <span class="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
-            <span class="size-1.5 rounded-full bg-gray-400 inline-block" />
-            idle
-          </span>
+          <StatusBadge status={status} />
         </div>
       </div>
 

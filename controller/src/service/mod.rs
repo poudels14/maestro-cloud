@@ -62,6 +62,10 @@ pub enum DeploymentStatus {
     Queued,
     Building,
     Ready,
+    Crashed,
+    Stopped,
+    Terminated,
+    #[serde(alias = "CANCELLED")]
     Canceled,
 }
 
