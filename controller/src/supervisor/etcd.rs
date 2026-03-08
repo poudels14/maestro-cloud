@@ -15,20 +15,20 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-use crate::service::{
+use crate::supervisor::service::{
     ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceDeployment, ServiceInfo,
     service_active_deployment_key, service_deployment_history_key, service_info_key,
 };
 
 use super::{
     model::ServiceRuntimeConfig,
-    worker::{WorkerExitStatus, run_managed_service},
+    worker::{ShutdownRequest, WorkerExitStatus, run_managed_service},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_RESTART_DELAY_MS: u64 = 1_000;
 const DEFAULT_MAX_RESTARTS: u32 = 5;
-const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 5_000;
+const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 const MAX_STATUS_TXN_RETRIES: usize = 8;
 const SERVICE_HISTORY_NEXT_INDEX_SUFFIX: &str = "/deployments/history-next-index";
 const URL_SAFE_ALPHABET: [char; 62] = [
@@ -45,7 +45,7 @@ struct EtcdV3HttpClient {
 
 struct RunningService {
     deployment_id: String,
-    shutdown_tx: watch::Sender<bool>,
+    shutdown_tx: watch::Sender<ShutdownRequest>,
     task: JoinHandle<WorkerExitStatus>,
 }
 
@@ -124,7 +124,7 @@ trait WorkerRunner: Send + Sync {
         &self,
         service_name: String,
         config: ServiceRuntimeConfig,
-        shutdown_rx: watch::Receiver<bool>,
+        shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> JoinHandle<WorkerExitStatus>;
 }
 
@@ -172,7 +172,7 @@ impl WorkerRunner for DefaultWorkerRunner {
         &self,
         service_name: String,
         config: ServiceRuntimeConfig,
-        shutdown_rx: watch::Receiver<bool>,
+        shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> JoinHandle<WorkerExitStatus> {
         tokio::spawn(run_managed_service(service_name, config, shutdown_rx))
     }
@@ -214,8 +214,8 @@ impl QueueSupervisor {
     }
 
     async fn run(&mut self) -> Result<(), String> {
-        const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
-        let mut first_ctrl_c_at: Option<std::time::Instant> = None;
+        let mut ctrl_c_count: u8 = 0;
+        let mut shutdown_started = false;
         let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .map_err(|err| format!("failed to install SIGTERM handler: {err}"))?;
@@ -263,23 +263,30 @@ impl QueueSupervisor {
                 Some(signal) = signal_rx.recv() => {
                     match signal {
                         ShutdownSignal::CtrlC => {
-                            let now = std::time::Instant::now();
-                            let should_shutdown = first_ctrl_c_at
-                                .is_some_and(|first| now.duration_since(first) <= CTRL_C_CONFIRM_WINDOW);
+                            ctrl_c_count = ctrl_c_count.saturating_add(1);
 
-                            if should_shutdown {
-                                eprintln!("[maestro]: stopping all jobs and terminate cleanly.");
-                                self.shutdown_all().await;
-                                signal_task.abort();
-                                return Ok(());
+                            match ctrl_c_count {
+                                1 => {
+                                    eprintln!("[maestro]: press ctrl+c again to stop gracefully (third ctrl+c will force shutdown).");
+                                }
+                                2 => {
+                                    if !shutdown_started {
+                                        eprintln!("[maestro]: stopping all jobs gracefully.");
+                                        self.request_shutdown_all(ShutdownRequest::Graceful);
+                                        shutdown_started = true;
+                                    }
+                                }
+                                _ => {
+                                    eprintln!("[maestro]: forcing shutdown.");
+                                    self.shutdown_all(ShutdownRequest::Force).await;
+                                    signal_task.abort();
+                                    return Ok(());
+                                }
                             }
-
-                            first_ctrl_c_at = Some(now);
-                            eprintln!("[maestro]: press ctrl+c again to stop.");
                         }
                         ShutdownSignal::Terminate(signal_name) => {
                             eprintln!("[maestro]: received {signal_name}; stopping all jobs and terminate cleanly.");
-                            self.shutdown_all().await;
+                            self.shutdown_all(ShutdownRequest::Graceful).await;
                             signal_task.abort();
                             return Ok(());
                         }
@@ -287,6 +294,13 @@ impl QueueSupervisor {
                 }
                 _ = sleep(POLL_INTERVAL) => {
                     self.reap_finished_tasks().await;
+                    if shutdown_started {
+                        if self.running.is_empty() {
+                            signal_task.abort();
+                            return Ok(());
+                        }
+                        continue;
+                    }
                     if let Err(err) = self.process_queued_deployments().await {
                         eprintln!("[maestro]: supervisor queue scan error: {err}");
                     }
@@ -334,7 +348,7 @@ impl QueueSupervisor {
                 "{}/{}",
                 queued_deployment.service_id, queued_deployment.deployment.id
             );
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownRequest::None);
             let task = self
                 .worker_runner
                 .spawn(service_name, worker_config, shutdown_rx);
@@ -430,11 +444,17 @@ impl QueueSupervisor {
         }
     }
 
-    async fn shutdown_all(&mut self) {
+    fn request_shutdown_all(&self, request: ShutdownRequest) {
+        for running in self.running.values() {
+            let _ = running.shutdown_tx.send(request);
+        }
+    }
+
+    async fn shutdown_all(&mut self, request: ShutdownRequest) {
         let running = self.running.drain().collect::<Vec<_>>();
 
         for (_, running) in &running {
-            let _ = running.shutdown_tx.send(true);
+            let _ = running.shutdown_tx.send(request);
         }
 
         for (service_id, mut running) in running {

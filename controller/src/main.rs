@@ -1,8 +1,6 @@
 mod cli;
 mod error;
 mod server;
-#[allow(dead_code)]
-mod service;
 mod supervisor;
 
 use std::path::Path;
