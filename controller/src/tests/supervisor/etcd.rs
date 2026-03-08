@@ -11,7 +11,7 @@ fn deployment_with_source(
     deploy_command: Option<ArcCommand>,
 ) -> ServiceDeployment {
     ServiceDeployment {
-        id: "dep-1".to_string(),
+        id: "A1B2C3D4E5".to_string(),
         created_at: 1,
         deployed_at: None,
         status: DeploymentStatus::Queued,
@@ -22,6 +22,8 @@ fn deployment_with_source(
             build,
             image: image.map(str::to_string),
             deploy: ServiceDeployConfig {
+                flags: vec![],
+                ports: vec![],
                 command: deploy_command,
                 healthcheck_path: "/_healthy".to_string(),
             },
@@ -46,7 +48,32 @@ fn command_planner_uses_image_for_deploy_when_present() {
     let deploy = planner
         .deploy_command(&deployment)
         .expect("deploy command should exist");
-    assert_eq!(deploy, "exec docker run --rm traefik/whoami");
+    assert_eq!(
+        deploy,
+        "exec docker run --rm --name svc-1-A1B2C3 traefik/whoami"
+    );
+}
+
+#[test]
+fn command_planner_appends_deploy_flags_to_docker_run() {
+    let mut deployment = deployment_with_source(None, Some("traefik/whoami"), None);
+    deployment.id = "ABCDEF123456".to_string();
+    deployment.config.deploy.ports = vec!["8080:80".to_string(), "8443:443".to_string()];
+    deployment.config.deploy.flags = vec![
+        "--network=host".to_string(),
+        "--label".to_string(),
+        "env=test".to_string(),
+    ];
+
+    let planner = DefaultServiceCommandPlanner;
+    let deploy = planner
+        .deploy_command(&deployment)
+        .expect("deploy command should exist");
+
+    assert_eq!(
+        deploy,
+        "exec docker run --rm --name svc-1-ABCDEF -p 8080:80 -p 8443:443 traefik/whoami --network=host --label env=test",
+    );
 }
 
 #[test]
@@ -96,6 +123,8 @@ impl InMemoryStore {
                 build: None,
                 image: Some("traefik/whoami".to_string()),
                 deploy: ServiceDeployConfig {
+                    flags: vec![],
+                    ports: vec![],
                     command: None,
                     healthcheck_path: "/_healthy".to_string(),
                 },
@@ -105,7 +134,7 @@ impl InMemoryStore {
             let mut deployments = Vec::with_capacity(deployments_per_service);
             for dep_idx in 0..deployments_per_service {
                 let deployment = ServiceDeployment {
-                    id: format!("dep-{service_id}-{dep_idx}"),
+                    id: format!("{service_id}-{dep_idx}"),
                     created_at,
                     deployed_at: None,
                     status: DeploymentStatus::Queued,
@@ -227,6 +256,7 @@ impl DeploymentStore for InMemoryStore {
 
     async fn mark_deployment_ready(
         &self,
+        _service_id: &str,
         deployment_key: &str,
         deployment_id: &str,
     ) -> Result<(), String> {

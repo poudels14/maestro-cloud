@@ -4,6 +4,8 @@
       "name": "Service 1",
       "image": "traefik/whoami",
       "deploy": {
+        "ports": [],
+        "flags": [],
         "command": {
           "command": "arc deploy",
           "args": []

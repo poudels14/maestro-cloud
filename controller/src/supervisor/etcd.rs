@@ -16,8 +16,8 @@ use tokio::{
 };
 
 use crate::service::{
-    ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceConfig, ServiceDeployment,
-    service_active_deployment_key, service_config_key, service_deployment_history_key,
+    ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceDeployment, ServiceInfo,
+    service_active_deployment_key, service_deployment_history_key, service_info_key,
 };
 
 use super::{
@@ -76,10 +76,10 @@ struct CounterSnapshot {
 }
 
 #[derive(Debug, Clone)]
-struct ConfigSnapshot {
+struct InfoSnapshot {
     key: String,
     mod_revision: u64,
-    config: ServiceConfig,
+    info: ServiceInfo,
 }
 
 enum ShutdownSignal {
@@ -98,6 +98,7 @@ trait DeploymentStore: Send + Sync {
     ) -> Result<bool, String>;
     async fn mark_deployment_ready(
         &self,
+        service_id: &str,
         deployment_key: &str,
         deployment_id: &str,
     ) -> Result<(), String>;
@@ -146,7 +147,13 @@ impl ServiceCommandPlanner for DefaultServiceCommandPlanner {
             .map(str::trim)
             .filter(|image| !image.is_empty())
         {
-            Some(docker_run_command(image))
+            Some(docker_run_command(
+                &deployment.config.id,
+                &deployment.id,
+                image,
+                &deployment.config.deploy.ports,
+                &deployment.config.deploy.flags,
+            ))
         } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
             Some(to_shell_command(
                 &deploy_command.command,
@@ -342,7 +349,11 @@ impl QueueSupervisor {
 
             if let Err(err) = self
                 .store
-                .mark_deployment_ready(&queued_deployment.key, &queued_deployment.deployment.id)
+                .mark_deployment_ready(
+                    &queued_deployment.service_id,
+                    &queued_deployment.key,
+                    &queued_deployment.deployment.id,
+                )
                 .await
             {
                 eprintln!(
@@ -565,10 +576,10 @@ impl EtcdV3HttpClient {
         for kv in response.kvs() {
             let key = String::from_utf8(kv.key().to_vec())
                 .map_err(|err| format!("service key for `{prefix_key}` is not utf8: {err}"))?;
-            if !key.ends_with("/config") {
+            if !key.ends_with("/info") {
                 continue;
             }
-            let Some(service_id) = service_id_from_config_key(&key) else {
+            let Some(service_id) = service_id_from_info_key(&key) else {
                 continue;
             };
             ids.insert(service_id);
@@ -623,25 +634,57 @@ impl EtcdV3HttpClient {
         })
     }
 
-    async fn read_service_config(
-        &self,
-        service_id: &str,
-    ) -> Result<Option<ConfigSnapshot>, String> {
-        let key = service_config_key(service_id);
+    async fn read_service_info(&self, service_id: &str) -> Result<Option<InfoSnapshot>, String> {
+        let key = service_info_key(service_id);
         let response = self.get(key.as_bytes().to_vec(), None).await?;
         let Some(kv) = response.kvs().first() else {
             return Ok(None);
         };
 
-        let config = serde_json::from_slice::<ServiceConfig>(kv.value())
-            .map_err(|err| format!("invalid service config JSON at key `{key}`: {err}"))?;
+        let info = serde_json::from_slice::<ServiceInfo>(kv.value())
+            .map_err(|err| format!("invalid service info JSON at key `{key}`: {err}"))?;
         let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
-        Ok(Some(ConfigSnapshot {
+        Ok(Some(InfoSnapshot {
             key,
             mod_revision,
-            config,
+            info,
         }))
+    }
+
+    async fn update_service_info_status(
+        &self,
+        service_id: &str,
+        status: DeploymentStatus,
+    ) -> Result<(), String> {
+        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
+            let Some(info_snapshot) = self.read_service_info(service_id).await? else {
+                return Ok(());
+            };
+
+            let mut updated_info = info_snapshot.info.clone();
+            updated_info.status = Some(status.clone());
+            let info_json = serde_json::to_string(&updated_info)
+                .map_err(|err| format!("failed to serialize service info: {err}"))?;
+
+            let committed = self
+                .txn(
+                    vec![compare_mod_revision_or_absent(
+                        &info_snapshot.key,
+                        Some(info_snapshot.mod_revision),
+                    )],
+                    vec![request_put(&info_snapshot.key, &info_json)],
+                )
+                .await?;
+
+            if committed {
+                return Ok(());
+            }
+        }
+
+        Err(format!(
+            "failed to update service info status for `{service_id}` due to concurrent updates"
+        ))
     }
 
     async fn queue_terminated_deployment(&self, service_id: &str) -> Result<bool, String> {
@@ -660,7 +703,7 @@ impl EtcdV3HttpClient {
                 return Ok(false);
             }
 
-            let Some(config_snapshot) = self.read_service_config(service_id).await? else {
+            let Some(info_snapshot) = self.read_service_info(service_id).await? else {
                 return Ok(false);
             };
 
@@ -675,7 +718,7 @@ impl EtcdV3HttpClient {
                 created_at: current_time_millis()?,
                 deployed_at: None,
                 status: DeploymentStatus::Queued,
-                config: config_snapshot.config.clone(),
+                config: info_snapshot.info.config.clone(),
                 git_commit: None,
                 build: None,
             };
@@ -688,14 +731,21 @@ impl EtcdV3HttpClient {
             })
             .map_err(|err| format!("failed to serialize active deployment: {err}"))?;
 
+            let updated_info = ServiceInfo {
+                config: info_snapshot.info.config.clone(),
+                status: Some(DeploymentStatus::Queued),
+            };
+            let info_json = serde_json::to_string(&updated_info)
+                .map_err(|err| format!("failed to serialize service info: {err}"))?;
+
             let committed = self
                 .txn(
                     vec![
                         compare_mod_revision_or_absent(&active.key, Some(active.mod_revision)),
                         compare_mod_revision_or_absent(&snapshot.key, Some(snapshot.mod_revision)),
                         compare_mod_revision_or_absent(
-                            &config_snapshot.key,
-                            Some(config_snapshot.mod_revision),
+                            &info_snapshot.key,
+                            Some(info_snapshot.mod_revision),
                         ),
                         compare_counter(&counter_key, &counter),
                     ],
@@ -703,6 +753,7 @@ impl EtcdV3HttpClient {
                         request_put(&counter_key, &(counter.next_index + 1).to_string()),
                         request_put(&deployment_key, &deployment_json),
                         request_put(&active.key, &active_json),
+                        request_put(&info_snapshot.key, &info_json),
                     ],
                 )
                 .await?;
@@ -733,14 +784,33 @@ impl EtcdV3HttpClient {
             .map_err(|err| format!("failed to serialize active deployment: {err}"))?;
         let active_key = service_active_deployment_key(&queued_deployment.service_id);
 
+        let info_key = service_info_key(&queued_deployment.service_id);
+        let existing_info = self
+            .read_service_info(&queued_deployment.service_id)
+            .await?;
+
+        let updated_info = ServiceInfo {
+            config: queued_deployment.deployment.config.clone(),
+            status: Some(DeploymentStatus::Building),
+        };
+        let info_json = serde_json::to_string(&updated_info)
+            .map_err(|err| format!("failed to serialize service info: {err}"))?;
+
         self.txn(
-            vec![compare_mod_revision_or_absent(
-                &queued_deployment.key,
-                Some(queued_deployment.mod_revision),
-            )],
+            vec![
+                compare_mod_revision_or_absent(
+                    &queued_deployment.key,
+                    Some(queued_deployment.mod_revision),
+                ),
+                compare_mod_revision_or_absent(
+                    &info_key,
+                    existing_info.as_ref().map(|s| s.mod_revision),
+                ),
+            ],
             vec![
                 request_put(&queued_deployment.key, &deployment_json),
                 request_put(&active_key, &active_json),
+                request_put(&info_key, &info_json),
             ],
         )
         .await
@@ -748,6 +818,7 @@ impl EtcdV3HttpClient {
 
     async fn mark_deployment_ready(
         &self,
+        service_id: &str,
         deployment_key: &str,
         deployment_id: &str,
     ) -> Result<(), String> {
@@ -788,6 +859,9 @@ impl EtcdV3HttpClient {
                 .await?;
 
             if committed {
+                let _ = self
+                    .update_service_info_status(service_id, DeploymentStatus::Ready)
+                    .await;
                 return Ok(());
             }
         }
@@ -835,6 +909,9 @@ impl EtcdV3HttpClient {
                 .await?;
 
             if committed {
+                let _ = self
+                    .update_service_info_status(service_id, DeploymentStatus::Crashed)
+                    .await;
                 return Ok(());
             }
         }
@@ -879,6 +956,9 @@ impl EtcdV3HttpClient {
                 .await?;
 
             if committed {
+                let _ = self
+                    .update_service_info_status(service_id, DeploymentStatus::Terminated)
+                    .await;
                 return Ok(());
             }
         }
@@ -965,10 +1045,12 @@ impl DeploymentStore for EtcdV3HttpClient {
 
     async fn mark_deployment_ready(
         &self,
+        service_id: &str,
         deployment_key: &str,
         deployment_id: &str,
     ) -> Result<(), String> {
-        EtcdV3HttpClient::mark_deployment_ready(self, deployment_key, deployment_id).await
+        EtcdV3HttpClient::mark_deployment_ready(self, service_id, deployment_key, deployment_id)
+            .await
     }
 
     async fn mark_deployment_crashed(
@@ -996,8 +1078,39 @@ fn to_shell_command(command: &str, args: &[String]) -> String {
     }
 }
 
-fn docker_run_command(image: &str) -> String {
-    format!("exec docker run --rm {image}")
+fn docker_run_command(
+    service_id: &str,
+    deployment_id: &str,
+    image: &str,
+    ports: &[String],
+    flags: &[String],
+) -> String {
+    let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
+    let container_name = format!("{service_id}-{short_deployment_id}");
+    let docker_port_flags = ports
+        .iter()
+        .map(|port| format!("-p {port}"))
+        .collect::<Vec<_>>();
+
+    if docker_port_flags.is_empty() && flags.is_empty() {
+        format!("exec docker run --rm --name {container_name} {image}")
+    } else if flags.is_empty() {
+        format!(
+            "exec docker run --rm --name {container_name} {} {image}",
+            docker_port_flags.join(" ")
+        )
+    } else if docker_port_flags.is_empty() {
+        format!(
+            "exec docker run --rm --name {container_name} {image} {}",
+            flags.join(" ")
+        )
+    } else {
+        format!(
+            "exec docker run --rm --name {container_name} {} {image} {}",
+            docker_port_flags.join(" "),
+            flags.join(" "),
+        )
+    }
 }
 
 fn normalize_base_url(host: &str) -> Result<String, String> {
@@ -1021,10 +1134,10 @@ fn service_id_from_history_key(key: &str) -> Option<String> {
     Some(service_id.to_string())
 }
 
-fn service_id_from_config_key(key: &str) -> Option<String> {
+fn service_id_from_info_key(key: &str) -> Option<String> {
     let remainder = key.strip_prefix(&format!("{SERVICES_ROOT}/"))?;
     let (service_id, suffix) = remainder.split_once('/')?;
-    if suffix == "config" {
+    if suffix == "info" {
         Some(service_id.to_string())
     } else {
         None
@@ -1040,7 +1153,7 @@ fn service_history_next_index_key(service_id: &str) -> String {
 }
 
 fn generate_deployment_id() -> String {
-    format!("dep-{}", nanoid!(24, &URL_SAFE_ALPHABET))
+    nanoid!(24, &URL_SAFE_ALPHABET)
 }
 
 fn current_time_millis() -> Result<u64, String> {

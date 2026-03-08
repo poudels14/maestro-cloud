@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub const SERVICES_ROOT: &str = "/maetro/services";
 
-pub fn service_config_key(service_id: &str) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/config")
+pub fn service_info_key(service_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/info")
 }
 
 pub fn service_active_deployment_key(service_id: &str) -> String {
@@ -37,6 +37,10 @@ pub struct ServiceBuildConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceDeployConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
     pub command: Option<ArcCommand>,
     pub healthcheck_path: String,
 }
@@ -94,4 +98,12 @@ pub struct GitCommitInfo {
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentBuildInfo {
     pub docker_image_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceInfo {
+    pub config: ServiceConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<DeploymentStatus>,
 }
