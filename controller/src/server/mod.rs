@@ -9,7 +9,7 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use etcd_client::{
     Client as EtcdClient, Compare, CompareOp, GetOptions, SortOrder, SortTarget, Txn, TxnOp,
@@ -140,6 +140,7 @@ pub async fn run_server(bind_addr: &str, etcd_endpoint: &str) -> crate::error::R
             "/api/services/{serviceId}/deployments/{deploymentId}/cancel",
             patch(cancel_deployment),
         )
+        .route("/api/services/{serviceId}/redeploy", post(redeploy_service))
         .with_state(state)
         .layer(middleware::from_fn(log_http));
 
@@ -287,6 +288,96 @@ async fn cancel_deployment(
     }
 }
 
+async fn redeploy_service(
+    Path(service_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<PatchServiceResponse>, (StatusCode, String)> {
+    let service_id = service_id.trim().to_string();
+    validate_service_id(&service_id, "serviceId").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+    let config_key = service_config_key(&service_id);
+    let config_snapshot = state
+        .etcd
+        .read_service_config(&config_key)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
+
+    let Some(snapshot) = config_snapshot else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("service `{service_id}` not found"),
+        ));
+    };
+
+    let outcome = force_queue_deployment(&state.etcd, snapshot.config)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))?;
+
+    Ok(Json(PatchServiceResponse {
+        queued: true,
+        deployment_id: Some(outcome.deployment.id.clone()),
+        deployment_index: Some(outcome.deployment_index),
+        service_id: outcome.deployment.config.id.clone(),
+        status: Some(outcome.deployment.status),
+        version: outcome.deployment.config.version.clone(),
+    }))
+}
+
+struct ForceQueueOutcome {
+    deployment_index: usize,
+    deployment: ServiceDeployment,
+}
+
+async fn force_queue_deployment(
+    etcd: &EtcdV3HttpClient,
+    service_config: ServiceConfig,
+) -> Result<ForceQueueOutcome, String> {
+    let service_id = &service_config.id;
+    let service_counter_key = service_history_next_index_key(service_id);
+
+    for _attempt in 0..MAX_TXN_RETRIES {
+        let service_counter = etcd.read_counter(&service_counter_key).await?;
+
+        let deployment_index_u64 = service_counter.next_index;
+        let deployment_index = usize::try_from(deployment_index_u64)
+            .map_err(|_| "deployment index overflowed usize".to_string())?;
+
+        let deployment = ServiceDeployment {
+            id: generate_deployment_id(),
+            created_at: current_time_millis()?,
+            deployed_at: None,
+            status: DeploymentStatus::Queued,
+            config: service_config.clone(),
+            git_commit: None,
+            build: None,
+        };
+
+        let deployment_json = serde_json::to_string(&deployment)
+            .map_err(|err| format!("failed to serialize deployment: {err}"))?;
+
+        let service_history_key = service_deployment_history_key(service_id, deployment_index);
+
+        let compare = vec![compare_counter(&service_counter_key, &service_counter)];
+        let success = vec![
+            request_put(
+                &service_counter_key,
+                &(deployment_index_u64 + 1).to_string(),
+            ),
+            request_put(&service_history_key, &deployment_json),
+        ];
+
+        let committed = etcd.txn(compare, success).await?;
+        if committed {
+            return Ok(ForceQueueOutcome {
+                deployment_index,
+                deployment,
+            });
+        }
+    }
+
+    Err("failed to queue deployment due to concurrent updates; retry".to_string())
+}
+
 async fn upsert_config_and_maybe_queue(
     etcd: &EtcdV3HttpClient,
     service_config: ServiceConfig,
@@ -327,6 +418,7 @@ async fn upsert_config_and_maybe_queue(
         let deployment = ServiceDeployment {
             id: generate_deployment_id(),
             created_at: current_time_millis()?,
+            deployed_at: None,
             status: DeploymentStatus::Queued,
             config: service_config.clone(),
             git_commit: None,

@@ -8,9 +8,22 @@ import {
   FileText,
   HeartPulse,
   Ban,
-  Rocket
+  Rocket,
+  Clock,
+  RotateCw
 } from "lucide-solid";
 import type { Deployment, Service } from "../lib/types";
+
+function timeAgo(ms: number): string {
+  const seconds = Math.floor((Date.now() - ms) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 export const Route = createFileRoute("/")({
   component: ServicesPage
@@ -27,6 +40,11 @@ async function getDeployments(serviceId: string): Promise<Deployment[]> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch deployments: ${res.statusText}`);
   return res.json();
+}
+
+async function redeployService(serviceId: string) {
+  const res = await fetch(`/api/services/${serviceId}/redeploy`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to redeploy: ${res.statusText}`);
 }
 
 async function cancelDeployment(serviceId: string, deploymentId: string) {
@@ -86,7 +104,9 @@ function TabButton(props: { active: boolean; label: string; count?: number; onCl
   );
 }
 
-function DeploymentMenu(props: { onCancel: () => void }) {
+const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING", "DEPLOYING"]);
+
+function DeploymentMenu(props: { status: string; onCancel: () => void; onRedeploy: () => void }) {
   const [open, setOpen] = createSignal(false);
   let menuRef: HTMLDivElement | undefined;
 
@@ -98,6 +118,8 @@ function DeploymentMenu(props: { onCancel: () => void }) {
 
   onMount(() => document.addEventListener("click", handleClickOutside));
   onCleanup(() => document.removeEventListener("click", handleClickOutside));
+
+  const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
 
   return (
     <div class="relative" ref={menuRef}>
@@ -113,17 +135,32 @@ function DeploymentMenu(props: { onCancel: () => void }) {
       </button>
       <Show when={open()}>
         <div class="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              props.onCancel();
-            }}
-            class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 outline-none"
-          >
-            <Ban class="size-4" />
-            Cancel deployment
-          </button>
+          <Show when={canCancel()}>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onCancel();
+              }}
+              class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 outline-none"
+            >
+              <Ban class="size-3" />
+              Cancel deployment
+            </button>
+          </Show>
+          <Show when={!canCancel()}>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onRedeploy();
+              }}
+              class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 outline-none"
+            >
+              <RotateCw class="size-3" />
+              Redeploy
+            </button>
+          </Show>
         </div>
       </Show>
     </div>
@@ -165,8 +202,13 @@ function DeploymentsTab(props: { serviceId: string }) {
                     <div class="flex items-center gap-2 shrink-0">
                       <StatusBadge status={d.status} />
                       <DeploymentMenu
+                        status={d.status}
                         onCancel={async () => {
                           await cancelDeployment(props.serviceId, d.id);
+                          refetch();
+                        }}
+                        onRedeploy={async () => {
+                          await redeployService(props.serviceId);
                           refetch();
                         }}
                       />
@@ -180,6 +222,10 @@ function DeploymentsTab(props: { serviceId: string }) {
                         <span class="font-mono truncate">{d.gitCommit}</span>
                       </span>
                     </Show>
+                    <span class="flex items-center gap-1 ml-auto">
+                      <Clock class="size-3" />
+                      {timeAgo(d.createdAt)}
+                    </span>
                   </div>
                 </div>
               );
@@ -327,19 +373,6 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
         <div class="shrink-0">
           <StatusBadge status={status} />
         </div>
-      </div>
-
-      <div class="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs text-gray-400">
-        <span class="flex items-center gap-1.5">
-          <FileText class="size-3.5" />
-          <span class="font-mono">
-            {s.build != null ? s.build.dockerfilePath : (s.image ?? "(not set)")}
-          </span>
-        </span>
-        <span class="flex items-center gap-1.5">
-          <HeartPulse class="size-3.5" />
-          <span class="font-mono">{s.deploy.healthcheckPath}</span>
-        </span>
       </div>
     </button>
   );

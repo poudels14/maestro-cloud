@@ -75,6 +75,8 @@ pub struct ServiceDeployment {
     pub id: String,
     #[serde(default)]
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployed_at: Option<u64>,
     pub status: DeploymentStatus,
     pub config: ServiceConfig,
     pub git_commit: Option<GitCommitInfo>,
