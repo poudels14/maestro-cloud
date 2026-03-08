@@ -1,5 +1,5 @@
 use super::*;
-use crate::service::{ArcCommand, ServiceBuildConfig, ServiceDeployConfig};
+use crate::supervisor::service::{ArcCommand, ServiceBuildConfig, ServiceDeployConfig};
 
 fn sample_patch_request(id: &str, name: &str) -> PatchServiceRequest {
     PatchServiceRequest {

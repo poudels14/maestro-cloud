@@ -20,14 +20,24 @@ pub enum WorkerExitStatus {
     Crashed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownRequest {
+    None,
+    Graceful,
+    Force,
+}
+
 pub async fn run_managed_service(
     name: String,
     config: ServiceRuntimeConfig,
-    mut shutdown_rx: watch::Receiver<bool>,
+    mut shutdown_rx: watch::Receiver<ShutdownRequest>,
 ) -> WorkerExitStatus {
-    let force_stop_on_shutdown = is_docker_run_command(&config.command);
     let command = Arc::new(Command {
-        program: shell_program(config.command.clone()),
+        program: Program::Shell {
+            shell: Shell::new("sh"),
+            command: config.command.clone(),
+            args: Vec::new(),
+        },
         options: SpawnOptions {
             grouped: true,
             ..Default::default()
@@ -48,16 +58,18 @@ pub async fn run_managed_service(
         log_service_process_ids(&name, &job).await;
 
         let outcome = tokio::select! {
-            _ = shutdown_rx.changed() => WorkerOutcome::Shutdown,
+            _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
             status = wait_for_job_exit(&job) => WorkerOutcome::Exited(status),
         };
 
         match outcome {
-            WorkerOutcome::Shutdown => {
-                if force_stop_on_shutdown {
-                    stop_docker_run_and_delete(&job).await;
-                } else {
-                    graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+            WorkerOutcome::Shutdown(shutdown_request) => {
+                match shutdown_request {
+                    ShutdownRequest::Force => force_stop_and_delete(&job).await,
+                    ShutdownRequest::Graceful => {
+                        graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                    }
+                    ShutdownRequest::None => continue,
                 }
                 exit_status = WorkerExitStatus::Stopped;
                 break;
@@ -80,16 +92,20 @@ pub async fn run_managed_service(
                     );
 
                     let delay_outcome = tokio::select! {
-                        _ = shutdown_rx.changed() => WorkerOutcome::Shutdown,
+                        _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
                         _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
                     };
 
-                    if let WorkerOutcome::Shutdown = delay_outcome {
-                        if force_stop_on_shutdown {
-                            stop_docker_run_and_delete(&job).await;
-                        } else {
-                            graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                    if let WorkerOutcome::Shutdown(shutdown_request) = delay_outcome {
+                        match shutdown_request {
+                            ShutdownRequest::Force => force_stop_and_delete(&job).await,
+                            ShutdownRequest::Graceful => {
+                                graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout)
+                                    .await;
+                            }
+                            ShutdownRequest::None => continue,
                         }
+                        exit_status = WorkerExitStatus::Stopped;
                         break;
                     }
 
@@ -116,7 +132,7 @@ pub async fn run_managed_service(
 }
 
 enum WorkerOutcome {
-    Shutdown,
+    Shutdown(ShutdownRequest),
     Exited(Option<ProcessEnd>),
     DelayElapsed,
 }
@@ -137,30 +153,7 @@ async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: 
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
 }
 
-async fn stop_docker_run_and_delete(job: &Job) {
-    // `docker run` usually handles SIGINT/SIGTERM and stops the container.
-    let interrupt_stopped = timeout(
-        Duration::from_secs(3),
-        job.stop_with_signal(Signal::Interrupt, Duration::from_millis(500)),
-    )
-    .await
-    .is_ok();
-    if interrupt_stopped {
-        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-        return;
-    }
-
-    let terminate_stopped = timeout(
-        Duration::from_secs(3),
-        job.stop_with_signal(Signal::Terminate, Duration::from_millis(500)),
-    )
-    .await
-    .is_ok();
-    if terminate_stopped {
-        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-        return;
-    }
-
+async fn force_stop_and_delete(job: &Job) {
     let _ = timeout(Duration::from_secs(1), job.signal(Signal::ForceStop)).await;
     let _ = timeout(Duration::from_secs(2), job.stop()).await;
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
@@ -197,14 +190,6 @@ fn is_failure(status: ProcessEnd) -> bool {
     !matches!(status, ProcessEnd::Success)
 }
 
-fn is_docker_run_command(command: &str) -> bool {
-    let cmd = command.trim_start();
-    cmd.starts_with("docker run ")
-        || cmd.starts_with("exec docker run ")
-        || cmd.starts_with("docker run\t")
-        || cmd.starts_with("exec docker run\t")
-}
-
 async fn log_service_process_ids(name: &str, job: &Job) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     job.run(move |ctx| {
@@ -236,13 +221,5 @@ fn get_pgid_for_pid(pid: u32) -> Option<u32> {
         None
     } else {
         u32::try_from(pgid).ok()
-    }
-}
-
-fn shell_program(command: String) -> Program {
-    Program::Shell {
-        shell: Shell::new("sh"),
-        command,
-        args: Vec::new(),
     }
 }

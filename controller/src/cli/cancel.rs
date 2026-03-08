@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
-use crate::service::DeploymentStatus;
+use crate::supervisor::service::DeploymentStatus;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

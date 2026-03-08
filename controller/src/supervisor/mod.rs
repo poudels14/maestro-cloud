@@ -6,6 +6,7 @@ pub mod config_source;
 pub mod controller;
 pub mod etcd;
 pub mod model;
+pub mod service;
 pub mod worker;
 
 pub async fn run(etcd_endpoint: &str) -> Result<()> {

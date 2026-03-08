@@ -1,5 +1,5 @@
 use super::*;
-use crate::service::{
+use crate::supervisor::service::{
     ArcCommand, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
 };
 use std::sync::Mutex;
@@ -357,7 +357,7 @@ impl WorkerRunner for DummyWorkerRunner {
         &self,
         _service_name: String,
         _config: ServiceRuntimeConfig,
-        _shutdown_rx: watch::Receiver<bool>,
+        _shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> JoinHandle<WorkerExitStatus> {
         let delay = self.delay;
         let outcome = self.outcome;

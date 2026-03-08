@@ -19,12 +19,12 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::service::{
+use crate::supervisor;
+use crate::supervisor::service::{
     ActiveDeployment, DeploymentStatus, SERVICES_ROOT, ServiceBuildConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment, ServiceInfo, service_active_deployment_key,
     service_deployment_history_key, service_info_key,
 };
-use crate::supervisor;
 
 const SERVICE_HISTORY_NEXT_INDEX_SUFFIX: &str = "/deployments/history-next-index";
 const SERVICES_PREFIX: &str = "/maetro/services/";
