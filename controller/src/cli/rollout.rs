@@ -14,7 +14,10 @@ struct ClusterConfig {
 #[serde(rename_all = "camelCase")]
 struct ServiceTemplate {
     name: String,
-    build: ServiceBuildConfig,
+    #[serde(default)]
+    build: Option<ServiceBuildConfig>,
+    #[serde(default)]
+    image: Option<String>,
     deploy: ServiceDeployConfig,
 }
 
@@ -23,7 +26,10 @@ struct ServiceTemplate {
 struct PatchServiceRequest {
     id: String,
     name: String,
-    build: ServiceBuildConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<ServiceBuildConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
     deploy: ServiceDeployConfig,
 }
 
@@ -138,16 +144,41 @@ fn service_payload(
     if name.is_empty() {
         return Err(format!("service `{service_id}` has empty name"));
     }
-    if service_template.build.repo.trim().is_empty() {
-        return Err(format!("service `{service_id}` has empty repo"));
-    }
+    let (build, image) = normalize_build_or_image(&service_template.build, &service_template.image)
+        .map_err(|err| format!("service `{service_id}` {err}"))?;
 
     Ok(PatchServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
-        build: service_template.build.clone(),
+        build,
+        image,
         deploy: service_template.deploy.clone(),
     })
+}
+
+fn normalize_build_or_image(
+    build: &Option<ServiceBuildConfig>,
+    image: &Option<String>,
+) -> Result<(Option<ServiceBuildConfig>, Option<String>), String> {
+    match (build, image) {
+        (Some(build), None) => {
+            if build.repo.trim().is_empty() {
+                return Err("has empty build.repo".to_string());
+            }
+            if build.dockerfile_path.trim().is_empty() {
+                return Err("has empty build.dockerfilePath".to_string());
+            }
+            Ok((Some(build.clone()), None))
+        }
+        (None, Some(image)) => {
+            if image.trim().is_empty() {
+                return Err("has empty image".to_string());
+            }
+            Ok((None, Some(image.clone())))
+        }
+        (Some(_), Some(_)) => Err("must set either `build` or `image`, not both".to_string()),
+        (None, None) => Err("must set either `build` or `image`".to_string()),
+    }
 }
 
 fn strip_jsonc_comments(input: &str) -> Result<String, String> {
@@ -267,6 +298,9 @@ mod tests {
         let payload = service_payload("service-1", template).expect("payload should build");
         assert_eq!(payload.id, "service-1");
         assert_eq!(payload.name, "Service One");
-        assert_eq!(payload.build.repo, "https://example.com/org/repo.git");
+        assert_eq!(
+            payload.build.as_ref().map(|build| build.repo.as_str()),
+            Some("https://example.com/org/repo.git"),
+        );
     }
 }

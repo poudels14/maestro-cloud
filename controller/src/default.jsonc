@@ -2,10 +2,7 @@
   "services": {
     "service-1": {
       "name": "Service 1",
-      "build": {
-        "repo": "https://example.com/org/repo.git",
-        "dockerfilePath": "Dockerfile"
-      },
+      "image": "traefik/whoami",
       "deploy": {
         "command": {
           "command": "arc deploy",
