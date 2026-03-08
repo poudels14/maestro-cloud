@@ -67,6 +67,8 @@ pub enum DeploymentStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceDeployment {
     pub id: String,
+    #[serde(default)]
+    pub created_at: u64,
     pub status: DeploymentStatus,
     pub config: ServiceConfig,
     pub git_commit: Option<GitCommitInfo>,

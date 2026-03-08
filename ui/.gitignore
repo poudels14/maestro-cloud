@@ -1,6 +1,7 @@
 node_modules/
 .output/
 .vinxi/
+routeTree.gen.ts
 dist/
 .env.local
 .env

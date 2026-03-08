@@ -16,29 +16,23 @@ export const Route = createFileRoute("/")({
   component: ServicesPage,
 });
 
-const controllerHost = import.meta.env.VITE_MAESTRO_CONTROLLER_HOST;
-
 async function getServices(): Promise<Service[]> {
-  const url = import.meta.env.SSR ? `${controllerHost}/api/services` : "/api/services";
-  const res = await fetch(url);
+  const res = await fetch("/api/services");
   if (!res.ok) throw new Error(`Failed to fetch services: ${res.statusText}`);
   return res.json();
 }
 
 async function getDeployments(serviceId: string): Promise<Deployment[]> {
-  const url = import.meta.env.SSR
-    ? `${controllerHost}/api/service/${serviceId}/deployments`
-    : `/api/service/${serviceId}/deployments`;
+  const url = `/api/services/${serviceId}/deployments`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch deployments: ${res.statusText}`);
   return res.json();
 }
 
 async function cancelDeployment(serviceId: string, deploymentId: string) {
-  const url = import.meta.env.SSR
-    ? `${controllerHost}/api/service/${serviceId}/deployment/${deploymentId}/cancel`
-    : `/api/service/${serviceId}/deployment/${deploymentId}/cancel`;
-  const res = await fetch(url, { method: "POST" });
+  const encodedDeploymentId = encodeURIComponent(deploymentId);
+  const url = `/api/services/${serviceId}/deployments/${encodedDeploymentId}/cancel`;
+  const res = await fetch(url, { method: "PATCH" });
   if (!res.ok) throw new Error(`Failed to cancel deployment: ${res.statusText}`);
 }
 
@@ -152,20 +146,10 @@ function DeploymentsTab(props: { serviceId: string }) {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
               const isLatest = i() === 0;
               return (
-                <div
-                  class={`rounded-lg border p-4 transition-colors ${
-                    isLatest
-                      ? "border-indigo-200 bg-indigo-50/30"
-                      : "border-gray-200 bg-white hover:bg-gray-50/50"
-                  }`}
-                >
+                <div class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:bg-gray-50/50">
                   <div class="flex items-center justify-between gap-3 mb-2">
                     <div class="flex items-center gap-2.5 min-w-0">
-                      <span
-                        class={`text-sm font-semibold font-mono ${isLatest ? "text-indigo-700" : "text-gray-900"}`}
-                      >
-                        #{shortId}
-                      </span>
+                      <span class="text-sm font-semibold font-mono text-gray-900">#{shortId}</span>
                       <Show when={isLatest}>
                         <span class="text-[10px] font-medium uppercase tracking-wider text-indigo-500 bg-indigo-100 px-1.5 py-0.5 rounded">
                           latest
@@ -183,7 +167,7 @@ function DeploymentsTab(props: { serviceId: string }) {
                     </div>
                   </div>
                   <div class="flex items-center gap-3 text-xs text-gray-400">
-                    <span class="font-mono">{d.config.version}</span>
+                    <span class="font-mono">{d.config.version.slice(0, 12)}</span>
                     <Show when={d.gitCommit}>
                       <span class="flex items-center gap-1">
                         <GitCommitHorizontal class="size-3" />
@@ -266,7 +250,7 @@ function ServiceSheet(props: { service: Service; onClose: () => void }) {
           <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2.5 min-w-0">
               <h2 class="text-base font-semibold text-gray-900 truncate">{s.name}</h2>
-              <span class="text-xs font-mono bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">
+              <span class="text-xs font-mono bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded truncate max-w-48">
                 {s.version}
               </span>
             </div>
@@ -325,9 +309,6 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
             <span class="text-base font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
               {s.name}
             </span>
-            <span class="text-xs font-mono bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded group-hover:bg-indigo-50 group-hover:text-indigo-500 transition-colors">
-              {s.version}
-            </span>
           </div>
           <p class="text-sm text-gray-500 truncate">{repoName}</p>
         </div>
@@ -354,7 +335,7 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
 }
 
 function ServicesPage() {
-  const [services] = createResource(getServices);
+  const [services] = createResource(() => (import.meta.env.SSR ? null : true), getServices);
   const [selected, setSelected] = createSignal<Service | null>(null);
 
   return (
@@ -371,37 +352,42 @@ function ServicesPage() {
       </header>
 
       <main class="max-w-5xl mx-auto px-6 py-8">
-        <Suspense
+        <Show
+          when={!import.meta.env.SSR}
           fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
         >
-          <Show when={services()}>
-            {(list) => (
-              <>
-                <div class="flex items-baseline gap-2 mb-6">
-                  <h1 class="text-xl font-semibold text-gray-900">Services</h1>
-                  <span class="text-sm text-gray-400">{list().length}</span>
-                </div>
-                <Show
-                  when={list().length > 0}
-                  fallback={
-                    <div class="text-center py-20">
-                      <Rocket class="size-10 text-gray-300 mx-auto mb-3" />
-                      <p class="text-sm text-gray-400">No services configured yet.</p>
-                    </div>
-                  }
-                >
-                  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    <For each={list()}>
-                      {(service) => (
-                        <ServiceCard service={service} onClick={() => setSelected(service)} />
-                      )}
-                    </For>
+          <Suspense
+            fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
+          >
+            <Show when={services()}>
+              {(list) => (
+                <>
+                  <div class="flex items-baseline gap-2 mb-6">
+                    <h1 class="text-xl font-semibold text-gray-900">Services</h1>
+                    <span class="text-sm text-gray-400">{list().length}</span>
                   </div>
-                </Show>
-              </>
-            )}
-          </Show>
-        </Suspense>
+                  <Show
+                    when={list().length > 0}
+                    fallback={
+                      <div class="text-center py-20">
+                        <Rocket class="size-10 text-gray-300 mx-auto mb-3" />
+                        <p class="text-sm text-gray-400">No services configured yet.</p>
+                      </div>
+                    }
+                  >
+                    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <For each={list()}>
+                        {(service) => (
+                          <ServiceCard service={service} onClick={() => setSelected(service)} />
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </>
+              )}
+            </Show>
+          </Suspense>
+        </Show>
       </main>
 
       <Show when={selected()}>
