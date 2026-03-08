@@ -73,7 +73,7 @@ fn normalize_base_url(host: &str) -> Result<String, String> {
 fn cancel_endpoint(host: &str, service_id: &str, deployment_id: &str) -> Result<String, String> {
     let base = normalize_base_url(host)?;
     Ok(format!(
-        "{base}/api/service/{service_id}/deployments/{deployment_id}/cancel"
+        "{base}/api/services/{service_id}/deployments/{deployment_id}/cancel"
     ))
 }
 
@@ -87,7 +87,7 @@ mod tests {
             cancel_endpoint("127.0.0.1:3000", "svc-1", "dep-1").expect("should build endpoint");
         assert_eq!(
             endpoint,
-            "http://127.0.0.1:3000/api/service/svc-1/deployments/dep-1/cancel"
+            "http://127.0.0.1:3000/api/services/svc-1/deployments/dep-1/cancel"
         );
     }
 }

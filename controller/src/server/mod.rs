@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Json, Router,
@@ -10,6 +11,7 @@ use axum::{
     routing::{get, patch},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use nanoid::nanoid;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -19,12 +21,16 @@ use crate::service::{
     ServiceDeployment, service_config_key, service_deployment_history_key,
 };
 
-const GLOBAL_DEPLOYMENTS_PREFIX: &str = "/maetro/deployments/history/";
-const GLOBAL_DEPLOYMENTS_NEXT_INDEX_KEY: &str = "/maetro/deployments/meta/next-index";
 const SERVICE_HISTORY_NEXT_INDEX_SUFFIX: &str = "/deployments/history-next-index";
 const SERVICES_PREFIX: &str = "/maetro/services/";
 const LIST_DEPLOYMENTS_LIMIT: i64 = 25;
 const MAX_TXN_RETRIES: usize = 16;
+const URL_SAFE_ALPHABET: [char; 62] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
+    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',
+    'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
+    'V', 'W', 'X', 'Y', 'Z',
+];
 
 #[derive(Clone)]
 struct AppState {
@@ -130,11 +136,11 @@ pub async fn run_server(bind_addr: &str, etcd_endpoint: &str) -> Result<(), Stri
         .route("/api/services", get(list_services))
         .route("/api/services/patch", patch(patch_service))
         .route(
-            "/api/service/{serviceId}/deployments",
+            "/api/services/{serviceId}/deployments",
             get(list_deployments),
         )
         .route(
-            "/api/service/{serviceId}/deployments/{deploymentId}/cancel",
+            "/api/services/{serviceId}/deployments/{deploymentId}/cancel",
             patch(cancel_deployment),
         )
         .with_state(state)
@@ -215,12 +221,7 @@ async fn list_deployments(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ServiceDeployment>>, (StatusCode, String)> {
     let service_id = service_id.trim();
-    if service_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "serviceId cannot be empty".to_string(),
-        ));
-    }
+    validate_service_id(service_id, "serviceId").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
     let deployments = state
         .etcd
@@ -237,12 +238,7 @@ async fn cancel_deployment(
 ) -> Result<Json<CancelDeploymentResponse>, (StatusCode, String)> {
     let service_id = service_id.trim().to_string();
     let deployment_id = deployment_id.trim().to_string();
-    if service_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "serviceId cannot be empty".to_string(),
-        ));
-    }
+    validate_service_id(&service_id, "serviceId").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
     if deployment_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -280,9 +276,7 @@ async fn upsert_config_and_maybe_queue(
     service_config: ServiceConfig,
 ) -> Result<PatchServiceOutcome, String> {
     let service_id = service_config.id.trim().to_string();
-    if service_id.is_empty() {
-        return Err("service id cannot be empty".to_string());
-    }
+    validate_service_id(&service_id, "service id")?;
 
     let service_version = service_config.version.trim().to_string();
     if service_version.is_empty() {
@@ -305,16 +299,15 @@ async fn upsert_config_and_maybe_queue(
             });
         }
 
-        let global_counter = etcd.read_counter(GLOBAL_DEPLOYMENTS_NEXT_INDEX_KEY).await?;
         let service_counter = etcd.read_counter(&service_counter_key).await?;
 
-        let global_index = global_counter.next_index;
         let deployment_index_u64 = service_counter.next_index;
         let deployment_index = usize::try_from(deployment_index_u64)
             .map_err(|_| "deployment index overflowed usize".to_string())?;
 
         let deployment = ServiceDeployment {
-            id: generate_deployment_id(&service_id, global_index),
+            id: generate_deployment_id(),
+            created_at: current_time_millis()?,
             status: DeploymentStatus::Queued,
             config: service_config.clone(),
             git_commit: None,
@@ -325,7 +318,6 @@ async fn upsert_config_and_maybe_queue(
             .map_err(|err| format!("failed to serialize deployment: {err}"))?;
 
         let service_history_key = service_deployment_history_key(&service_id, deployment_index);
-        let global_history_key = global_deployment_history_key(global_index);
 
         let compare = vec![
             compare_mod_revision_or_absent(
@@ -334,22 +326,16 @@ async fn upsert_config_and_maybe_queue(
                     .as_ref()
                     .map(|snapshot| snapshot.mod_revision),
             ),
-            compare_counter(GLOBAL_DEPLOYMENTS_NEXT_INDEX_KEY, &global_counter),
             compare_counter(&service_counter_key, &service_counter),
         ];
 
         let success = vec![
             request_put(&config_key, &service_config_json),
             request_put(
-                GLOBAL_DEPLOYMENTS_NEXT_INDEX_KEY,
-                &(global_index + 1).to_string(),
-            ),
-            request_put(
                 &service_counter_key,
                 &(deployment_index_u64 + 1).to_string(),
             ),
             request_put(&service_history_key, &deployment_json),
-            request_put(&global_history_key, &deployment_json),
         ];
 
         let committed = etcd.txn(compare, success).await?;
@@ -392,25 +378,11 @@ async fn cancel_service_deployment(
         let updated_json = serde_json::to_string(&updated)
             .map_err(|err| format!("failed to serialize canceled deployment: {err}"))?;
 
-        let mut compare = vec![compare_mod_revision_or_absent(
+        let compare = vec![compare_mod_revision_or_absent(
             &snapshot.key,
             Some(snapshot.mod_revision),
         )];
-        let mut success = vec![request_put(&snapshot.key, &updated_json)];
-
-        let global_index = parse_global_index_from_deployment_id(service_id, deployment_id)
-            .ok_or_else(|| {
-                format!(
-                    "deployment id `{deployment_id}` has invalid format for service `{service_id}`"
-                )
-            })?;
-        let global_key = global_deployment_history_key(global_index);
-        let global_snapshot = etcd.read_deployment_by_key(&global_key).await?;
-        compare.push(compare_mod_revision_or_absent(
-            &global_key,
-            global_snapshot.as_ref().map(|s| s.mod_revision),
-        ));
-        success.push(request_put(&global_key, &updated_json));
+        let success = vec![request_put(&snapshot.key, &updated_json)];
 
         let committed = etcd.txn(compare, success).await?;
         if committed {
@@ -474,30 +446,6 @@ impl EtcdV3HttpClient {
         Ok(Some(ConfigSnapshot {
             config,
             mod_revision,
-        }))
-    }
-
-    async fn read_deployment_by_key(
-        &self,
-        key: &str,
-    ) -> Result<Option<DeploymentSnapshot>, String> {
-        let response = self.range(json!({ "key": encode(key.as_bytes()) })).await?;
-        let Some(kv) = response.kvs.first() else {
-            return Ok(None);
-        };
-
-        let bytes = decode_to_bytes(&kv.value, key)?;
-        let deployment = serde_json::from_slice::<ServiceDeployment>(&bytes)
-            .map_err(|err| format!("invalid deployment JSON at key `{key}`: {err}"))?;
-        let mod_revision = kv
-            .mod_revision
-            .parse::<u64>()
-            .map_err(|err| format!("invalid mod_revision for key `{key}`: {err}"))?;
-
-        Ok(Some(DeploymentSnapshot {
-            key: key.to_string(),
-            mod_revision,
-            deployment,
         }))
     }
 
@@ -721,9 +669,7 @@ fn build_hashed_service_config(request: PatchServiceRequest) -> Result<ServiceCo
     } = request;
 
     let service_id = id.trim().to_string();
-    if service_id.is_empty() {
-        return Err("id cannot be empty".to_string());
-    }
+    validate_service_id(&service_id, "id")?;
 
     let service_name = name.trim().to_string();
     if service_name.is_empty() {
@@ -758,22 +704,38 @@ fn hex_lower(bytes: &[u8]) -> String {
     output
 }
 
-fn global_deployment_history_key(index: u64) -> String {
-    format!("{GLOBAL_DEPLOYMENTS_PREFIX}{index:020}")
+fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
+    if service_id.is_empty() {
+        return Err(format!("{field_name} cannot be empty"));
+    }
+    if !is_url_safe_service_id(service_id) {
+        return Err(format!(
+            "{field_name} must be URL-safe and contain only letters, numbers, '-' or '_'"
+        ));
+    }
+    Ok(())
+}
+
+fn is_url_safe_service_id(service_id: &str) -> bool {
+    service_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn service_history_next_index_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}{SERVICE_HISTORY_NEXT_INDEX_SUFFIX}",)
 }
 
-fn generate_deployment_id(service_id: &str, global_index: u64) -> String {
-    format!("deployment-{service_id}-{global_index:020}")
+fn generate_deployment_id() -> String {
+    format!("dep-{}", nanoid!(20, &URL_SAFE_ALPHABET))
 }
 
-fn parse_global_index_from_deployment_id(service_id: &str, deployment_id: &str) -> Option<u64> {
-    let prefix = format!("deployment-{service_id}-");
-    let suffix = deployment_id.strip_prefix(&prefix)?;
-    suffix.parse::<u64>().ok()
+fn current_time_millis() -> Result<u64, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before unix epoch: {err}"))?;
+    u64::try_from(now.as_millis())
+        .map_err(|_| "system time milliseconds overflowed u64".to_string())
 }
 
 fn encode(input: &[u8]) -> String {
@@ -861,23 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn global_deployment_history_key_is_zero_padded() {
-        let key = global_deployment_history_key(42);
-        assert_eq!(key, "/maetro/deployments/history/00000000000000000042");
-    }
-
-    #[test]
-    fn parse_global_index_from_deployment_id_parses_expected_suffix() {
-        let id = "deployment-svc-1-00000000000000000042";
-        assert_eq!(parse_global_index_from_deployment_id("svc-1", id), Some(42));
-        assert_eq!(
-            parse_global_index_from_deployment_id("svc-2", id),
-            None,
-            "service id prefix must match"
-        );
-    }
-
-    #[test]
     fn compare_counter_for_missing_uses_version_check() {
         let compare = compare_counter(
             "/maetro/services/svc-1/deployments/history-next-index",
@@ -894,7 +839,7 @@ mod tests {
     #[test]
     fn compare_counter_for_existing_uses_mod_revision_check() {
         let compare = compare_counter(
-            "/maetro/deployments/meta/next-index",
+            "/maetro/services/svc-1/deployments/history-next-index",
             &CounterSnapshot {
                 next_index: 12,
                 mod_revision: Some(99),
@@ -907,7 +852,7 @@ mod tests {
 
     #[test]
     fn prefix_range_end_advances_prefix() {
-        let prefix = b"/maetro/deployments/history/";
+        let prefix = b"/maetro/services/svc-1/deployments/history/";
         let end = prefix_range_end(prefix).expect("should compute range end");
         assert!(end.as_slice() > prefix.as_slice());
     }
@@ -975,5 +920,21 @@ mod tests {
                 .expect("hash should succeed");
 
         assert_ne!(original.version, changed.version);
+    }
+
+    #[test]
+    fn validate_service_id_accepts_url_safe_chars() {
+        assert!(validate_service_id("service-1", "id").is_ok());
+        assert!(validate_service_id("service_2", "id").is_ok());
+        assert!(validate_service_id("serviceABC123", "id").is_ok());
+    }
+
+    #[test]
+    fn validate_service_id_rejects_non_url_safe_chars() {
+        let slash = validate_service_id("service/1", "id").expect_err("slash must be rejected");
+        assert!(slash.contains("URL-safe"));
+
+        let space = validate_service_id("service 1", "id").expect_err("space must be rejected");
+        assert!(space.contains("URL-safe"));
     }
 }
