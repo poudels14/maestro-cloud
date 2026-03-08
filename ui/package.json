@@ -1,0 +1,29 @@
+{
+  "name": "maestro-ui",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "start": "vite preview",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check ."
+  },
+  "dependencies": {
+    "@solidjs/meta": "^0.29.4",
+    "@tanstack/solid-router": "^1.166.2",
+    "@tanstack/solid-start": "^1.166.2",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "^1.9.11",
+    "vite": "^7.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.8",
+    "@types/node": "^22.0.0",
+    "oxfmt": "^0.36.0",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3",
+    "vite-plugin-solid": "^2.11.6"
+  },
+  "packageManager": "pnpm@10.11.1"
+}
