@@ -1,11 +1,9 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "trailingComma": "none",
-  "ignorePatterns": [],
   "overrides": [
     {
-      "files": ["**/*.jsonc"],
-      "options": {}
+      "files": ["**/*.jsonc"]
     }
   ]
 }

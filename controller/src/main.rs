@@ -2,6 +2,7 @@ mod cli;
 mod server;
 #[allow(dead_code)]
 mod service;
+mod supervisor;
 
 use std::path::Path;
 
@@ -21,7 +22,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
-    Up {
+    Start {
         #[arg(long = "etcd", default_value = DEFAULT_ETCD_ENDPOINT)]
         etcd: String,
         #[arg(long = "port", default_value_t = DEFAULT_BIND_PORT)]
@@ -56,7 +57,7 @@ async fn run() -> Result<(), String> {
             print!("{}", help_text());
             Ok(())
         }
-        Some(CliCommand::Up { etcd, port }) => {
+        Some(CliCommand::Start { etcd, port }) => {
             let bind_addr = format!("127.0.0.1:{port}");
             server::run_server(&bind_addr, &etcd).await
         }
@@ -101,27 +102,33 @@ mod tests {
     }
 
     #[test]
-    fn up_accepts_defaults() {
-        let cli = parse_for_test(&["up"]).expect("should parse");
+    fn start_accepts_defaults() {
+        let cli = parse_for_test(&["start"]).expect("should parse");
         match cli.command {
-            Some(CliCommand::Up { etcd, port }) => {
+            Some(CliCommand::Start { etcd, port }) => {
                 assert_eq!(etcd, DEFAULT_ETCD_ENDPOINT);
                 assert_eq!(port, DEFAULT_BIND_PORT);
             }
-            _ => panic!("expected up command"),
+            _ => panic!("expected start command"),
         }
     }
 
     #[test]
-    fn up_accepts_custom_etcd_endpoint_and_port() {
-        let cli = parse_for_test(&["up", "--etcd", "https://some-host:2379/", "--port", "6500"])
-            .expect("should parse");
+    fn start_accepts_custom_etcd_endpoint_and_port() {
+        let cli = parse_for_test(&[
+            "start",
+            "--etcd",
+            "https://some-host:2379/",
+            "--port",
+            "6500",
+        ])
+        .expect("should parse");
         match cli.command {
-            Some(CliCommand::Up { etcd, port }) => {
+            Some(CliCommand::Start { etcd, port }) => {
                 assert_eq!(etcd, "https://some-host:2379/");
                 assert_eq!(port, 6500);
             }
-            _ => panic!("expected up command"),
+            _ => panic!("expected start command"),
         }
     }
 
@@ -163,8 +170,8 @@ mod tests {
     }
 
     #[test]
-    fn up_rejects_config_flag() {
-        let err = parse_for_test(&["up", "--config", "maestro.jsonc"]).expect_err("should fail");
+    fn start_rejects_config_flag() {
+        let err = parse_for_test(&["start", "--config", "maestro.jsonc"]).expect_err("should fail");
         assert!(err.contains("--config"));
     }
 }

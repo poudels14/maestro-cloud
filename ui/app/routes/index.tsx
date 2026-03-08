@@ -194,18 +194,17 @@ function OverviewTab(props: { service: Service }) {
   ];
 
   const buildItems = [
-    { label: "Git repository", value: s.build.gitRepo },
-    { label: "Dockerfile", value: s.build.dockerfilePath },
-    {
-      label: "Build command",
-      value: `${s.build.command.command} ${s.build.command.args.join(" ")}`.trim()
-    }
+    { label: "Git repository", value: s.build.repo },
+    { label: "Dockerfile", value: s.build.dockerfilePath }
   ];
 
+  const deployCommand = s.deploy.command
+    ? `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
+    : "(not set)";
   const deployItems = [
     {
       label: "Deploy command",
-      value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
+      value: deployCommand
     },
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
@@ -291,7 +290,7 @@ function ServiceSheet(props: { service: Service; onClose: () => void }) {
 
 function ServiceCard(props: { service: Service; onClick: () => void }) {
   const s = props.service;
-  const repoName = s.build.gitRepo
+  const repoName = s.build.repo
     .replace(/\.git$/, "")
     .split("/")
     .slice(-2)

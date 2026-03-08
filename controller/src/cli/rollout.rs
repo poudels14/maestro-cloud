@@ -138,6 +138,9 @@ fn service_payload(
     if name.is_empty() {
         return Err(format!("service `{service_id}` has empty name"));
     }
+    if service_template.build.repo.trim().is_empty() {
+        return Err(format!("service `{service_id}` has empty repo"));
+    }
 
     Ok(PatchServiceRequest {
         id: id.to_string(),
@@ -231,12 +234,10 @@ mod tests {
             "service-1": {
               "name": "Service One",
               "build": {
-                "gitRepo": "https://example.com/org/repo.git",
-                "dockerfilePath": "Dockerfile",
-                "command": { "command": "arc build", "args": [] }
+                "repo": "https://example.com/org/repo.git",
+                "dockerfilePath": "Dockerfile"
               },
               "deploy": {
-                "command": { "command": "arc deploy", "args": [] },
                 "healthcheckPath": "/_healthy"
               }
             }
@@ -266,5 +267,6 @@ mod tests {
         let payload = service_payload("service-1", template).expect("payload should build");
         assert_eq!(payload.id, "service-1");
         assert_eq!(payload.name, "Service One");
+        assert_eq!(payload.build.repo, "https://example.com/org/repo.git");
     }
 }

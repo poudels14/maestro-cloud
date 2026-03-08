@@ -27,15 +27,14 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceBuildConfig {
-    pub git_repo: String,
+    pub repo: String,
     pub dockerfile_path: String,
-    pub command: ArcCommand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceDeployConfig {
-    pub command: ArcCommand,
+    pub command: Option<ArcCommand>,
     pub healthcheck_path: String,
 }
 

@@ -3,12 +3,8 @@
     "service-1": {
       "name": "Service 1",
       "build": {
-        "gitRepo": "https://example.com/org/repo.git",
-        "dockerfilePath": "Dockerfile",
-        "command": {
-          "command": "arc build",
-          "args": []
-        }
+        "repo": "https://example.com/org/repo.git",
+        "dockerfilePath": "Dockerfile"
       },
       "deploy": {
         "command": {
