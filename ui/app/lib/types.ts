@@ -4,13 +4,12 @@ export interface BuildCommand {
 }
 
 export interface Build {
-  gitRepo: string;
+  repo: string;
   dockerfilePath: string;
-  command: BuildCommand;
 }
 
 export interface Deploy {
-  command: BuildCommand;
+  command?: BuildCommand | null;
   healthcheckPath: string;
 }
 

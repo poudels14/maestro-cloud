@@ -20,6 +20,7 @@ use crate::service::{
     DeploymentStatus, SERVICES_ROOT, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
     ServiceDeployment, service_config_key, service_deployment_history_key,
 };
+use crate::supervisor;
 
 const SERVICE_HISTORY_NEXT_INDEX_SUFFIX: &str = "/deployments/history-next-index";
 const SERVICES_PREFIX: &str = "/maetro/services/";
@@ -152,9 +153,13 @@ pub async fn run_server(bind_addr: &str, etcd_endpoint: &str) -> Result<(), Stri
     println!("[maestro]: server listening on http://{bind_addr}");
     println!("[maestro]: etcd endpoint {etcd_endpoint}");
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|err| format!("server error: {err}"))
+    let server_future = axum::serve(listener, app);
+    let supervisor_future = supervisor::run(etcd_endpoint);
+
+    tokio::select! {
+        result = server_future => result.map_err(|err| format!("server error: {err}")),
+        result = supervisor_future => result,
+    }
 }
 
 async fn healthy() -> &'static str {
@@ -675,6 +680,9 @@ fn build_hashed_service_config(request: PatchServiceRequest) -> Result<ServiceCo
     if service_name.is_empty() {
         return Err("name cannot be empty".to_string());
     }
+    if build.repo.trim().is_empty() {
+        return Err("repo cannot be empty".to_string());
+    }
 
     let version_payload = json!({
         "id": &service_id,
@@ -782,18 +790,14 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             build: ServiceBuildConfig {
-                git_repo: "https://example.com/repo.git".to_string(),
+                repo: "https://example.com/repo.git".to_string(),
                 dockerfile_path: "./Dockerfile".to_string(),
-                command: ArcCommand {
-                    command: "arc-build".to_string(),
-                    args: vec!["--release".to_string()],
-                },
             },
             deploy: ServiceDeployConfig {
-                command: ArcCommand {
+                command: Some(ArcCommand {
                     command: "arc-deploy".to_string(),
                     args: vec!["--prod".to_string()],
-                },
+                }),
                 healthcheck_path: "/_healthy".to_string(),
             },
         }
@@ -805,18 +809,14 @@ mod tests {
             name: format!("{id}-name"),
             version: "v1".to_string(),
             build: ServiceBuildConfig {
-                git_repo: "https://example.com/repo.git".to_string(),
+                repo: "https://example.com/repo.git".to_string(),
                 dockerfile_path: "./Dockerfile".to_string(),
-                command: ArcCommand {
-                    command: "arc-build".to_string(),
-                    args: vec!["--release".to_string()],
-                },
             },
             deploy: ServiceDeployConfig {
-                command: ArcCommand {
+                command: Some(ArcCommand {
                     command: "arc-deploy".to_string(),
                     args: vec!["--prod".to_string()],
-                },
+                }),
                 healthcheck_path: "/_healthy".to_string(),
             },
         }
