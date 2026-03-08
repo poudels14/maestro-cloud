@@ -20,7 +20,10 @@ pub struct ServiceConfig {
     pub id: String,
     pub name: String,
     pub version: String,
-    pub build: ServiceBuildConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<ServiceBuildConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     pub deploy: ServiceDeployConfig,
 }
 

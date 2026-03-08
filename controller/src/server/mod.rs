@@ -60,7 +60,10 @@ struct PatchServiceResponse {
 struct PatchServiceRequest {
     id: String,
     name: String,
-    build: ServiceBuildConfig,
+    #[serde(default)]
+    build: Option<ServiceBuildConfig>,
+    #[serde(default)]
+    image: Option<String>,
     deploy: ServiceDeployConfig,
 }
 
@@ -670,6 +673,7 @@ fn build_hashed_service_config(request: PatchServiceRequest) -> Result<ServiceCo
         id,
         name,
         build,
+        image,
         deploy,
     } = request;
 
@@ -680,14 +684,13 @@ fn build_hashed_service_config(request: PatchServiceRequest) -> Result<ServiceCo
     if service_name.is_empty() {
         return Err("name cannot be empty".to_string());
     }
-    if build.repo.trim().is_empty() {
-        return Err("repo cannot be empty".to_string());
-    }
+    let (build, image) = normalize_build_or_image(build, image)?;
 
     let version_payload = json!({
         "id": &service_id,
         "name": &service_name,
         "build": &build,
+        "image": &image,
         "deploy": &deploy
     });
     let version_bytes = serde_json::to_vec(&version_payload)
@@ -699,8 +702,43 @@ fn build_hashed_service_config(request: PatchServiceRequest) -> Result<ServiceCo
         name: service_name,
         version,
         build,
+        image,
         deploy,
     })
+}
+
+fn normalize_build_or_image(
+    build: Option<ServiceBuildConfig>,
+    image: Option<String>,
+) -> Result<(Option<ServiceBuildConfig>, Option<String>), String> {
+    match (build, image) {
+        (Some(build), None) => {
+            let repo = build.repo.trim().to_string();
+            if repo.is_empty() {
+                return Err("build.repo cannot be empty".to_string());
+            }
+            let dockerfile_path = build.dockerfile_path.trim().to_string();
+            if dockerfile_path.is_empty() {
+                return Err("build.dockerfilePath cannot be empty".to_string());
+            }
+            Ok((
+                Some(ServiceBuildConfig {
+                    repo,
+                    dockerfile_path,
+                }),
+                None,
+            ))
+        }
+        (None, Some(image)) => {
+            let image = image.trim().to_string();
+            if image.is_empty() {
+                return Err("image cannot be empty".to_string());
+            }
+            Ok((None, Some(image)))
+        }
+        (Some(_), Some(_)) => Err("set either `build` or `image`, not both".to_string()),
+        (None, None) => Err("set either `build` or `image`".to_string()),
+    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -789,10 +827,27 @@ mod tests {
         PatchServiceRequest {
             id: id.to_string(),
             name: name.to_string(),
-            build: ServiceBuildConfig {
+            build: Some(ServiceBuildConfig {
                 repo: "https://example.com/repo.git".to_string(),
                 dockerfile_path: "./Dockerfile".to_string(),
+            }),
+            image: None,
+            deploy: ServiceDeployConfig {
+                command: Some(ArcCommand {
+                    command: "arc-deploy".to_string(),
+                    args: vec!["--prod".to_string()],
+                }),
+                healthcheck_path: "/_healthy".to_string(),
             },
+        }
+    }
+
+    fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> PatchServiceRequest {
+        PatchServiceRequest {
+            id: id.to_string(),
+            name: name.to_string(),
+            build: None,
+            image: Some(image.to_string()),
             deploy: ServiceDeployConfig {
                 command: Some(ArcCommand {
                     command: "arc-deploy".to_string(),
@@ -808,10 +863,11 @@ mod tests {
             id: id.to_string(),
             name: format!("{id}-name"),
             version: "v1".to_string(),
-            build: ServiceBuildConfig {
+            build: Some(ServiceBuildConfig {
                 repo: "https://example.com/repo.git".to_string(),
                 dockerfile_path: "./Dockerfile".to_string(),
-            },
+            }),
+            image: None,
             deploy: ServiceDeployConfig {
                 command: Some(ArcCommand {
                     command: "arc-deploy".to_string(),
@@ -920,6 +976,38 @@ mod tests {
                 .expect("hash should succeed");
 
         assert_ne!(original.version, changed.version);
+    }
+
+    #[test]
+    fn build_hashed_service_config_accepts_image_without_build() {
+        let config = build_hashed_service_config(sample_patch_request_with_image(
+            "svc-1",
+            "Service 1",
+            "ghcr.io/org/service:1.2.3",
+        ))
+        .expect("hash should succeed");
+
+        assert!(config.build.is_none());
+        assert_eq!(config.image.as_deref(), Some("ghcr.io/org/service:1.2.3"),);
+    }
+
+    #[test]
+    fn build_hashed_service_config_rejects_missing_build_and_image() {
+        let mut request = sample_patch_request("svc-1", "Service 1");
+        request.build = None;
+        request.image = None;
+
+        let err = build_hashed_service_config(request).expect_err("should reject");
+        assert!(err.contains("either `build` or `image`"));
+    }
+
+    #[test]
+    fn build_hashed_service_config_rejects_build_and_image_together() {
+        let mut request = sample_patch_request("svc-1", "Service 1");
+        request.image = Some("ghcr.io/org/service:1.2.3".to_string());
+
+        let err = build_hashed_service_config(request).expect_err("should reject");
+        assert!(err.contains("either `build` or `image`"));
     }
 
     #[test]

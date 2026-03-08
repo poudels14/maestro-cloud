@@ -193,10 +193,13 @@ function OverviewTab(props: { service: Service }) {
     { label: "Version", value: s.version }
   ];
 
-  const buildItems = [
-    { label: "Git repository", value: s.build.repo },
-    { label: "Dockerfile", value: s.build.dockerfilePath }
-  ];
+  const sourceItems =
+    s.build != null
+      ? [
+          { label: "Git repository", value: s.build.repo },
+          { label: "Dockerfile", value: s.build.dockerfilePath }
+        ]
+      : [{ label: "Image", value: s.image ?? "(not set)" }];
 
   const deployCommand = s.deploy.command
     ? `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
@@ -212,7 +215,7 @@ function OverviewTab(props: { service: Service }) {
   return (
     <div class="space-y-6">
       <ConfigSection title="General" items={configItems} />
-      <ConfigSection title="Build" items={buildItems} />
+      <ConfigSection title="Source" items={sourceItems} />
       <ConfigSection title="Deploy" items={deployItems} />
     </div>
   );
@@ -290,11 +293,14 @@ function ServiceSheet(props: { service: Service; onClose: () => void }) {
 
 function ServiceCard(props: { service: Service; onClick: () => void }) {
   const s = props.service;
-  const repoName = s.build.repo
-    .replace(/\.git$/, "")
-    .split("/")
-    .slice(-2)
-    .join("/");
+  const sourceName =
+    s.build != null
+      ? s.build.repo
+          .replace(/\.git$/, "")
+          .split("/")
+          .slice(-2)
+          .join("/")
+      : (s.image ?? "(no source)");
 
   return (
     <button
@@ -309,7 +315,7 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
               {s.name}
             </span>
           </div>
-          <p class="text-sm text-gray-500 truncate">{repoName}</p>
+          <p class="text-sm text-gray-500 truncate">{sourceName}</p>
         </div>
         <div class="shrink-0">
           <span class="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
@@ -322,7 +328,9 @@ function ServiceCard(props: { service: Service; onClick: () => void }) {
       <div class="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs text-gray-400">
         <span class="flex items-center gap-1.5">
           <FileText class="size-3.5" />
-          <span class="font-mono">{s.build.dockerfilePath}</span>
+          <span class="font-mono">
+            {s.build != null ? s.build.dockerfilePath : (s.image ?? "(not set)")}
+          </span>
         </span>
         <span class="flex items-center gap-1.5">
           <HeartPulse class="size-3.5" />
