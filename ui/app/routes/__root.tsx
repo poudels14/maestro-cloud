@@ -13,18 +13,18 @@ export const Route = createRootRoute({
       {
         rel: "preconnect",
         href: "https://fonts.gstatic.com",
-        crossorigin: "anonymous",
+        crossorigin: "anonymous"
       },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
-      },
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      }
     ],
     meta: [
       { charset: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Maestro" },
-    ],
+      { title: "Maestro" }
+    ]
   }),
   component: RootComponent,
   notFoundComponent: () => (
@@ -34,7 +34,7 @@ export const Route = createRootRoute({
         <p class="text-sm text-gray-500 mt-1">This page doesn't exist.</p>
       </div>
     </div>
-  ),
+  )
 });
 
 function RootComponent() {

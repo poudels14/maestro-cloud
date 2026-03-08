@@ -8,12 +8,12 @@ import {
   FileText,
   HeartPulse,
   Ban,
-  Rocket,
+  Rocket
 } from "lucide-solid";
 import type { Deployment, Service } from "../lib/types";
 
 export const Route = createFileRoute("/")({
-  component: ServicesPage,
+  component: ServicesPage
 });
 
 async function getServices(): Promise<Service[]> {
@@ -42,7 +42,7 @@ const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> =
   DEPLOYING: { dot: "bg-indigo-400", bg: "bg-indigo-50", text: "text-indigo-700" },
   RUNNING: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
   FAILED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  STOPPED: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" },
+  STOPPED: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" }
 };
 
 function StatusBadge(props: { status: string }) {
@@ -190,7 +190,7 @@ function OverviewTab(props: { service: Service }) {
 
   const configItems = [
     { label: "Service ID", value: s.id },
-    { label: "Version", value: s.version },
+    { label: "Version", value: s.version }
   ];
 
   const buildItems = [
@@ -198,16 +198,16 @@ function OverviewTab(props: { service: Service }) {
     { label: "Dockerfile", value: s.build.dockerfilePath },
     {
       label: "Build command",
-      value: `${s.build.command.command} ${s.build.command.args.join(" ")}`.trim(),
-    },
+      value: `${s.build.command.command} ${s.build.command.args.join(" ")}`.trim()
+    }
   ];
 
   const deployItems = [
     {
       label: "Deploy command",
-      value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim(),
+      value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
     },
-    { label: "Healthcheck path", value: s.deploy.healthcheckPath },
+    { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
 
   return (
