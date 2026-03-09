@@ -168,11 +168,17 @@ impl Server {
         validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
-        let deployments = state
+        let mut deployments = state
             .store
             .list_service_deployments(service_id)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        deployments.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
 
         Ok(Json(deployments))
     }
