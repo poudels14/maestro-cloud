@@ -1,7 +1,54 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::utils;
+
+#[derive(Debug, Clone)]
+pub struct DeploymentConfig {
+    pub data_dir: PathBuf,
+    pub etcd_port: u16,
+}
+
+impl DeploymentConfig {
+    #[inline]
+    pub fn deployment_logs_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
+    }
+
+    #[inline]
+    pub fn etcd_dir(&self) -> PathBuf {
+        self.data_dir.join("system/etcd/")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Deployment {
+    pub id: String,
+    pub service_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueuedDeployment {
+    pub service_id: String,
+    pub key: String,
+    pub mod_revision: u64,
+    pub deployment: ServiceDeployment,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForceQueueOutcome {
+    pub deployment_index: usize,
+    pub deployment: ServiceDeployment,
+}
+
+#[derive(Debug, Clone)]
+pub enum CancelDeploymentOutcome {
+    Canceled(ServiceDeployment),
+    NotCancelable(ServiceDeployment),
+    NotFound,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -54,14 +101,6 @@ pub struct Command {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct ActiveDeployment {
-    pub deployment_id: String,
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DeploymentStatus {
     Queued,
@@ -72,6 +111,23 @@ pub enum DeploymentStatus {
     Removed,
     #[serde(alias = "CANCELLED")]
     Canceled,
+}
+
+impl DeploymentStatus {
+    /// Whether a transition from `self` to `target` is allowed.
+    pub fn can_transition_to(&self, target: &DeploymentStatus) -> bool {
+        match target {
+            DeploymentStatus::Ready => matches!(self, DeploymentStatus::Building),
+            DeploymentStatus::Crashed => !matches!(
+                self,
+                DeploymentStatus::Crashed
+                    | DeploymentStatus::Canceled
+                    | DeploymentStatus::Terminated
+            ),
+            DeploymentStatus::Terminated => !matches!(self, DeploymentStatus::Terminated),
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

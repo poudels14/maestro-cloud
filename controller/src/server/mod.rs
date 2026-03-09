@@ -17,9 +17,10 @@ use self::types::{
     CancelDeploymentResponse, PatchServiceRequest, PatchServiceResponse, RemoveDeploymentResponse,
     ServiceListItem,
 };
-use crate::deployment::store::{CancelDeploymentOutcome, ClusterStore, UpsertServiceOutcome};
+use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
-    ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    CancelDeploymentOutcome, Deployment, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceDeployment, ServiceProvider,
 };
 use crate::signal::ShutdownEvent;
 
@@ -198,9 +199,13 @@ impl Server {
             ));
         }
 
+        let deployment = Deployment {
+            service_id: service_id.clone(),
+            id: deployment_id.clone(),
+        };
         let outcome = state
             .store
-            .cancel_service_deployment(&service_id, &deployment_id)
+            .cancel_service_deployment(&deployment)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
@@ -279,9 +284,13 @@ impl Server {
             ));
         }
 
+        let deployment = Deployment {
+            service_id: service_id.clone(),
+            id: deployment_id.clone(),
+        };
         let outcome = state
             .store
-            .stop_service_deployment(&service_id, &deployment_id)
+            .stop_service_deployment(&deployment)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 

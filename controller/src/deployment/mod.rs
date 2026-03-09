@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::supervisor::{SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor};
 
 pub mod controller;
@@ -9,23 +7,7 @@ pub mod provider;
 pub mod store;
 pub mod types;
 
-#[derive(Debug, Clone)]
-pub struct DeploymentConfig {
-    pub data_dir: PathBuf,
-    pub etcd_port: u16,
-}
-
-impl DeploymentConfig {
-    #[inline]
-    pub fn deployment_logs_dir(&self) -> PathBuf {
-        self.data_dir.join("logs")
-    }
-
-    #[inline]
-    pub fn etcd_dir(&self) -> PathBuf {
-        self.data_dir.join("system/etcd/")
-    }
-}
+pub use types::DeploymentConfig;
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
     let etcd_data_dir = config.etcd_dir().join("data");
