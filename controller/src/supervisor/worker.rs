@@ -90,6 +90,11 @@ impl SupervisedJob {
     }
 
     #[inline]
+    pub fn abort(&mut self) {
+        self.handle.abort();
+    }
+
+    #[inline]
     pub fn shutdown(&self, request: ShutdownRequest) {
         let _ = self.shutdown_tx.send(request);
     }
@@ -205,8 +210,9 @@ impl SupervisedJobRunner {
             log_service_process_ids(&name, &job).await;
 
             let outcome = tokio::select! {
-                _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
+                biased;
                 status = wait_for_job_exit(&job) => WorkerOutcome::Exited(status),
+                _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
             };
 
             match outcome {
@@ -282,8 +288,11 @@ impl SupervisedJobRunner {
             .await
             .is_err()
         {
-            eprintln!("[maestro]: supervisor job did not stop in time; waiting for cleanup");
-            let _ = job_handle.await;
+            eprintln!(
+                "[maestro]: supervisor job did not stop in time; aborting worker cleanup task"
+            );
+            job_handle.abort();
+            let _ = timeout(Duration::from_secs(1), &mut job_handle).await;
         }
         exit_status
     }
@@ -296,13 +305,20 @@ enum WorkerOutcome {
 }
 
 async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: Duration) {
-    if timeout(
-        shutdown_timeout,
-        job.stop_with_signal(Signal::Terminate, grace),
-    )
-    .await
-    .is_err()
-    {
+    if !is_job_running(job).await {
+        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        return;
+    }
+
+    let graceful_completed = tokio::select! {
+        _ = wait_for_job_exit(job) => true,
+        result = timeout(
+            shutdown_timeout,
+            job.stop_with_signal(Signal::Terminate, grace),
+        ) => result.is_ok(),
+    };
+
+    if !graceful_completed && is_job_running(job).await {
         eprintln!("[maestro]: graceful stop timed out; forcing stop");
         let _ = timeout(Duration::from_secs(2), job.signal(Signal::ForceStop)).await;
         let _ = timeout(Duration::from_secs(2), job.stop()).await;
@@ -312,9 +328,25 @@ async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: 
 }
 
 async fn force_stop_and_delete(job: &Job) {
+    if !is_job_running(job).await {
+        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        return;
+    }
+
     let _ = timeout(Duration::from_secs(1), job.signal(Signal::ForceStop)).await;
     let _ = timeout(Duration::from_secs(2), job.stop()).await;
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+}
+
+async fn is_job_running(job: &Job) -> bool {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    job.run(move |ctx| {
+        let running = matches!(ctx.current, CommandState::Running { .. });
+        let _ = tx.send(running);
+    })
+    .await;
+
+    rx.await.unwrap_or(false)
 }
 
 async fn wait_for_job_exit(job: &Job) -> Option<ProcessEnd> {

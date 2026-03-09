@@ -102,28 +102,38 @@ impl JobSupervisor {
         let mut finished = Vec::with_capacity(draining.len());
 
         for (id, mut job) in draining {
-            let join_result = match timeout(FORCE_JOIN_WAIT, job.join()).await {
-                Ok(result) => result,
+            let status = match timeout(FORCE_JOIN_WAIT, job.join()).await {
+                Ok(result) => match result {
+                    Ok(status) => status,
+                    Err(err) => {
+                        eprintln!(
+                            "[maestro]: job `{id}` join error during shutdown: {err}; marking crashed"
+                        );
+                        SupervisedJobStatus::Crashed
+                    }
+                },
                 Err(_) => {
-                    eprintln!(
-                        "[maestro]: job `{id}` did not stop in time; waiting for worker cleanup"
-                    );
-                    job.join().await
-                }
-            };
-
-            let status = match join_result {
-                Ok(status) => status,
-                Err(err) => {
-                    eprintln!(
-                        "[maestro]: job `{id}` join error during shutdown: {err}; marking crashed"
-                    );
-                    SupervisedJobStatus::Crashed
+                    eprintln!("[maestro]: job `{id}` did not stop in time; aborting worker task");
+                    job.abort();
+                    match timeout(Duration::from_secs(1), job.join()).await {
+                        Ok(Ok(status)) => status,
+                        Ok(Err(err)) => {
+                            eprintln!(
+                                "[maestro]: job `{id}` join error after abort: {err}; marking crashed"
+                            );
+                            SupervisedJobStatus::Crashed
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "[maestro]: job `{id}` still did not stop after abort; marking crashed"
+                            );
+                            SupervisedJobStatus::Crashed
+                        }
+                    }
                 }
             };
             finished.push(FinishedJob { id, status });
         }
-
         finished
     }
 }
