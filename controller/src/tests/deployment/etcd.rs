@@ -1,6 +1,9 @@
+use crate::deployment::DeploymentConfig;
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
-use crate::deployment::provider::{DockerDeploymentProvider, ServiceCommandPlanner};
+use crate::deployment::provider::{
+    DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
+};
 use crate::deployment::store::{ClusterStore, QueuedDeployment};
 use crate::deployment::types::{
     ActiveDeployment, Command, DeploymentStatus, ServiceBuildConfig, ServiceConfig,
@@ -12,7 +15,7 @@ use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     sync::broadcast,
@@ -110,6 +113,41 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
         .deploy(&deployment)
         .expect("deploy command should exist");
     assert_eq!(deploy, "arc deploy --service svc-1");
+}
+
+#[test]
+fn shell_command_planner_uses_explicit_deploy_command() {
+    let deployment = ServiceDeployment {
+        id: "ZXCVBN1234".to_string(),
+        created_at: 1,
+        deployed_at: None,
+        status: DeploymentStatus::Queued,
+        config: ServiceConfig {
+            id: "svc-shell".to_string(),
+            name: "service-shell".to_string(),
+            version: "cfg-shell".to_string(),
+            provider: ServiceProvider::Shell,
+            build: None,
+            image: None,
+            deploy: ServiceDeployConfig {
+                flags: vec![],
+                ports: vec![],
+                command: Some(Command {
+                    command: "echo".to_string(),
+                    args: vec!["ok".to_string()],
+                }),
+                healthcheck_path: "/_healthy".to_string(),
+            },
+        },
+        git_commit: None,
+        build: None,
+    };
+
+    let planner = ShellDeploymentProvider;
+    let deploy = planner
+        .deploy(&deployment)
+        .expect("deploy command should exist");
+    assert_eq!(deploy, "echo ok");
 }
 
 #[derive(Default)]
@@ -359,12 +397,26 @@ impl ClusterStore for InMemoryStore {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stress_supervisor_updates_deployment_statuses() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-{now_millis}"));
+
     let store = Arc::new(InMemoryStore::default());
     store.seed_queued_deployments(12, 15);
     let (signal_tx, _) = broadcast::channel(4);
     let signal_rx = signal_tx.subscribe();
 
-    let mut controller = DeploymentController::new(store.clone(), JobSupervisor::new(), signal_rx);
+    let mut controller = DeploymentController::new(
+        DeploymentConfig {
+            data_dir: data_dir.clone(),
+            etcd_port: 0,
+        },
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+    );
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while store.queued_count() > 0 || controller.has_running_services() {
@@ -395,6 +447,8 @@ async fn stress_supervisor_updates_deployment_statuses() {
             ]
         );
     }
+
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 fn parse_history_key(key: &str) -> Option<(String, usize)> {

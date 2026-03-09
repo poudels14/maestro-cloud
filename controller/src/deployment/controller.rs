@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use anyhow::Result;
 use tokio::{sync::broadcast, time::sleep};
 
+use crate::deployment::DeploymentConfig;
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::{
@@ -26,9 +27,12 @@ struct PendingDeployment {
 }
 
 pub struct DeploymentController {
+    config: DeploymentConfig,
     store: Arc<dyn ClusterStore>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     supervisor: JobSupervisor,
+    docker_provider: DockerDeploymentProvider,
+    shell_provider: ShellDeploymentProvider,
     running_deployments: HashMap<String, String>,
     pending_claims: HashMap<String, PendingDeployment>,
     event_queue: DeploymentEventQueue,
@@ -36,14 +40,18 @@ pub struct DeploymentController {
 
 impl DeploymentController {
     pub fn new(
+        config: DeploymentConfig,
         store: Arc<dyn ClusterStore>,
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
     ) -> Self {
         Self {
+            config,
             store,
             signal_rx,
             supervisor,
+            docker_provider: DockerDeploymentProvider,
+            shell_provider: ShellDeploymentProvider,
             running_deployments: HashMap::new(),
             pending_claims: HashMap::new(),
             event_queue: DeploymentEventQueue::default(),
@@ -145,19 +153,15 @@ impl DeploymentController {
 
             let _build_command = match queued_deployment.deployment.config.provider {
                 ServiceProvider::Docker => {
-                    DockerDeploymentProvider.build(&queued_deployment.deployment)
+                    self.docker_provider.build(&queued_deployment.deployment)
                 }
-                ServiceProvider::Shell => {
-                    ShellDeploymentProvider.build(&queued_deployment.deployment)
-                }
+                ServiceProvider::Shell => self.shell_provider.build(&queued_deployment.deployment),
             };
             let deploy_command = match queued_deployment.deployment.config.provider {
                 ServiceProvider::Docker => {
-                    DockerDeploymentProvider.deploy(&queued_deployment.deployment)
+                    self.docker_provider.deploy(&queued_deployment.deployment)
                 }
-                ServiceProvider::Shell => {
-                    ShellDeploymentProvider.deploy(&queued_deployment.deployment)
-                }
+                ServiceProvider::Shell => self.shell_provider.deploy(&queued_deployment.deployment),
             };
             let Some(deploy_command) = deploy_command else {
                 eprintln!(
@@ -177,6 +181,14 @@ impl DeploymentController {
                 restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
                 max_restarts: DEFAULT_MAX_RESTARTS,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
+                logs_dir: Some(
+                    self.config
+                        .logs_dir()
+                        .join("services")
+                        .join(&queued_deployment.service_id)
+                        .join("deployments")
+                        .join(&queued_deployment.deployment.id),
+                ),
             };
 
             self.pending_claims.insert(

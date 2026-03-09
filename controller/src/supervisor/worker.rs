@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{fs::OpenOptions, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{oneshot, watch},
@@ -19,6 +19,7 @@ pub struct SupervisedJobConfig {
     pub restart_delay_ms: u64,
     pub max_restarts: u32,
     pub shutdown_grace_period_ms: u64,
+    pub logs_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +119,7 @@ impl SupervisedJobRunner {
         let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownRequest::None);
         let handle =
             tokio::spawn(
-                async move { Self::start_job(config, run_job, job_handle, shutdown_rx).await },
+                async move { Self::run_job(config, run_job, job_handle, shutdown_rx).await },
             );
 
         SupervisedJob {
@@ -128,12 +129,68 @@ impl SupervisedJobRunner {
         }
     }
 
-    pub async fn start_job(
+    async fn setup_job(job: &Job, config: &SupervisedJobConfig) {
+        let (stdout_path, stderr_path) = match config.logs_dir.as_ref() {
+            Some(logs_dir) => match std::fs::create_dir_all(&logs_dir) {
+                Ok(_) => (
+                    Some(logs_dir.join("stdout.log")),
+                    Some(logs_dir.join("stderr.log")),
+                ),
+                Err(err) => {
+                    eprint!("Error creating logs dir: {:?}", err);
+                    (None, None)
+                }
+            },
+            _ => (None, None),
+        };
+
+        job.set_spawn_hook(move |command, _| {
+            if let Some(stdout_path) = &stdout_path {
+                match OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(stdout_path)
+                {
+                    Ok(file) => {
+                        command.command_mut().stdout(Stdio::from(file));
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[maestro]: failed to open stdout log file {}: {err}",
+                            stdout_path.display()
+                        );
+                    }
+                };
+            }
+
+            if let Some(stderr_path) = &stderr_path {
+                match OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(stderr_path)
+                {
+                    Ok(file) => {
+                        command.command_mut().stderr(Stdio::from(file));
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[maestro]: failed to open stderr log file {}: {err}",
+                            stderr_path.display()
+                        );
+                    }
+                };
+            }
+        })
+        .await;
+    }
+
+    async fn run_job(
         config: SupervisedJobConfig,
         job: Job,
         mut job_handle: JoinHandle<()>,
         mut shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> SupervisedJobStatus {
+        Self::setup_job(&job, &config).await;
         let name = config.name.clone();
 
         let shutdown_grace = Duration::from_millis(config.shutdown_grace_period_ms);
