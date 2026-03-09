@@ -76,7 +76,7 @@ impl DeploymentController {
                                 shutdown_started = true;
                             }
                         }
-                        Ok(ShutdownEvent::Force) |Err(broadcast::error::RecvError::Closed)=> {
+                        Ok(ShutdownEvent::Force) | Err(broadcast::error::RecvError::Closed)=> {
                             self.shutdown_all(ShutdownRequest::Force).await;
                             return Ok(());
                         }
@@ -132,8 +132,7 @@ impl DeploymentController {
             self.shutdown_in_progress = true;
             self.mark_deployments_terminated().await;
         }
-        let finished = self.supervisor.shutdown_all(request).await;
-        self.update_jobs_status(finished).await;
+        let _ = self.supervisor.shutdown_all(request).await;
     }
 
     pub(crate) fn has_running_services(&self) -> bool {
@@ -226,6 +225,10 @@ impl DeploymentController {
             eprintln!(
                 "[maestro]: service `{service_id}` deployment `{deployment_id}` worker finished"
             );
+
+            if self.shutdown_in_progress {
+                continue;
+            }
 
             let deployment_status = match self
                 .store
