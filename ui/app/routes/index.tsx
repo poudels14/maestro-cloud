@@ -215,17 +215,11 @@ function DeploymentsTab(props: { serviceId: string }) {
           <For each={deployments()}>
             {(d, i) => {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
-              const isActive = d.status === "READY" || d.status === "RUNNING";
               return (
                 <div class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:bg-gray-50/50">
                   <div class="flex items-center justify-between gap-3 mb-2">
                     <div class="flex items-center gap-2.5 min-w-0">
                       <span class="text-sm font-semibold font-mono text-gray-900">#{shortId}</span>
-                      <Show when={isActive}>
-                        <span class="text-[10px] font-medium uppercase tracking-wider text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                          active
-                        </span>
-                      </Show>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
                       <StatusBadge status={d.status} />

@@ -12,10 +12,11 @@ use crate::deployment::keys::{
     service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
     service_id_from_info_key, service_info_key,
 };
-use crate::deployment::store::{
-    CancelDeploymentOutcome, ClusterStore, ForceQueueOutcome, QueuedDeployment,
+use crate::deployment::store::ClusterStore;
+use crate::deployment::types::{
+    CancelDeploymentOutcome, Deployment, DeploymentStatus, ForceQueueOutcome, QueuedDeployment,
+    ServiceDeployment, ServiceInfo,
 };
-use crate::deployment::types::{DeploymentStatus, ServiceDeployment, ServiceInfo};
 use crate::utils::time::current_time_millis;
 
 const MAX_STATUS_TXN_RETRIES: usize = 8;
@@ -163,32 +164,11 @@ impl EtcdStateStore {
         ))
     }
 
-    async fn read_deployment_snapshot(
+    async fn find_deployment_snapshot(
         &self,
-        deployment_key: &str,
+        deployment: &Deployment,
     ) -> Result<Option<DeploymentSnapshot>> {
-        let response = self.get(deployment_key.as_bytes().to_vec(), None).await?;
-        let Some(kv) = response.kvs().first() else {
-            return Ok(None);
-        };
-
-        let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
-            .map_err(|err| anyhow!("invalid deployment JSON at key `{deployment_key}`: {err}"))?;
-        let mod_revision = decode_mod_revision(kv.mod_revision(), deployment_key)?;
-
-        Ok(Some(DeploymentSnapshot {
-            key: deployment_key.to_string(),
-            mod_revision,
-            deployment,
-        }))
-    }
-
-    async fn find_deployment_snapshot_by_id(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-    ) -> Result<Option<DeploymentSnapshot>> {
-        let prefix_key = service_deployment_history_prefix(service_id);
+        let prefix_key = service_deployment_history_prefix(&deployment.service_id);
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| anyhow!("failed to compute range end for deployment lookup"))?;
@@ -196,9 +176,9 @@ impl EtcdStateStore {
         let response = self.get(prefix.to_vec(), Some(options)).await?;
 
         for kv in response.kvs() {
-            let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
+            let d = serde_json::from_slice::<ServiceDeployment>(kv.value())
                 .map_err(|err| anyhow!("invalid deployment JSON under `{prefix_key}`: {err}"))?;
-            if deployment.id != deployment_id {
+            if d.id != deployment.id {
                 continue;
             }
 
@@ -209,7 +189,7 @@ impl EtcdStateStore {
             return Ok(Some(DeploymentSnapshot {
                 key,
                 mod_revision,
-                deployment,
+                deployment: d,
             }));
         }
 
@@ -333,37 +313,32 @@ impl ClusterStore for EtcdStateStore {
         .await
     }
 
-    async fn mark_deployment_ready(
+    async fn update_deployment_status(
         &self,
-        service_id: &str,
-        deployment_key: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
+        status: DeploymentStatus,
     ) -> anyhow::Result<()> {
         for _attempt in 0..MAX_STATUS_TXN_RETRIES {
-            let Some(snapshot) = self.read_deployment_snapshot(deployment_key).await? else {
-                return Err(anyhow!("deployment key `{deployment_key}` not found"));
+            let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+                return Err(anyhow!(
+                    "deployment `{}` for service `{}` not found",
+                    deployment.id,
+                    deployment.service_id,
+                ));
             };
 
-            if snapshot.deployment.id != deployment_id {
-                return Err(anyhow!(
-                    "deployment key `{deployment_key}` does not match deployment id `{deployment_id}`",
-                ));
-            }
-
-            if snapshot.deployment.status == DeploymentStatus::Ready {
-                return Ok(());
-            }
-            if snapshot.deployment.status != DeploymentStatus::Building {
+            if !snapshot.deployment.status.can_transition_to(&status) {
                 return Ok(());
             }
 
             let mut updated = snapshot.deployment.clone();
-            updated.status = DeploymentStatus::Ready;
-            if updated.deployed_at.is_none() {
+            updated.status = status.clone();
+            if status == DeploymentStatus::Ready && updated.deployed_at.is_none() {
                 updated.deployed_at = Some(current_time_millis()?);
             }
+
             let deployment_json = serde_json::to_string(&updated)
-                .map_err(|err| anyhow!("failed to serialize ready deployment: {err}"))?;
+                .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
             let committed = self
                 .txn(
@@ -377,111 +352,15 @@ impl ClusterStore for EtcdStateStore {
 
             if committed {
                 let _ = self
-                    .update_service_info_status(service_id, DeploymentStatus::Ready)
+                    .update_service_info_status(&deployment.service_id, status)
                     .await;
                 return Ok(());
             }
         }
 
         Err(anyhow!(
-            "failed to mark deployment `{deployment_id}` ready due to concurrent updates"
-        ))
-    }
-
-    async fn mark_deployment_crashed(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-    ) -> anyhow::Result<()> {
-        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
-            let Some(snapshot) = self
-                .find_deployment_snapshot_by_id(service_id, deployment_id)
-                .await?
-            else {
-                return Err(anyhow!(
-                    "deployment `{deployment_id}` for service `{service_id}` not found",
-                ));
-            };
-
-            if snapshot.deployment.status == DeploymentStatus::Crashed
-                || snapshot.deployment.status == DeploymentStatus::Canceled
-                || snapshot.deployment.status == DeploymentStatus::Terminated
-            {
-                return Ok(());
-            }
-
-            let mut updated = snapshot.deployment.clone();
-            updated.status = DeploymentStatus::Crashed;
-            let deployment_json = serde_json::to_string(&updated)
-                .map_err(|err| anyhow!("failed to serialize crashed deployment: {err}"))?;
-
-            let committed = self
-                .txn(
-                    vec![compare_mod_revision_or_absent(
-                        &snapshot.key,
-                        Some(snapshot.mod_revision),
-                    )],
-                    vec![request_put(&snapshot.key, &deployment_json)],
-                )
-                .await?;
-
-            if committed {
-                let _ = self
-                    .update_service_info_status(service_id, DeploymentStatus::Crashed)
-                    .await;
-                return Ok(());
-            }
-        }
-
-        Err(anyhow!(
-            "failed to mark deployment `{deployment_id}` crashed due to concurrent updates"
-        ))
-    }
-
-    async fn mark_deployment_terminated(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-    ) -> anyhow::Result<()> {
-        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
-            let Some(snapshot) = self
-                .find_deployment_snapshot_by_id(service_id, deployment_id)
-                .await?
-            else {
-                return Err(anyhow!(
-                    "deployment `{deployment_id}` for service `{service_id}` not found",
-                ));
-            };
-
-            if snapshot.deployment.status == DeploymentStatus::Terminated {
-                return Ok(());
-            }
-
-            let mut updated = snapshot.deployment.clone();
-            updated.status = DeploymentStatus::Terminated;
-            let deployment_json = serde_json::to_string(&updated)
-                .map_err(|err| anyhow!("failed to serialize terminated deployment: {err}"))?;
-
-            let committed = self
-                .txn(
-                    vec![compare_mod_revision_or_absent(
-                        &snapshot.key,
-                        Some(snapshot.mod_revision),
-                    )],
-                    vec![request_put(&snapshot.key, &deployment_json)],
-                )
-                .await?;
-
-            if committed {
-                let _ = self
-                    .update_service_info_status(service_id, DeploymentStatus::Terminated)
-                    .await;
-                return Ok(());
-            }
-        }
-
-        Err(anyhow!(
-            "failed to mark deployment `{deployment_id}` terminated due to concurrent updates"
+            "failed to update deployment `{}` to {status:?} due to concurrent updates",
+            deployment.id,
         ))
     }
 
@@ -548,11 +427,10 @@ impl ClusterStore for EtcdStateStore {
 
     async fn read_service_deployment(
         &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
     ) -> anyhow::Result<Option<ServiceDeployment>> {
         Ok(self
-            .find_deployment_snapshot_by_id(service_id, deployment_id)
+            .find_deployment_snapshot(deployment)
             .await?
             .map(|snapshot| snapshot.deployment))
     }
@@ -623,14 +501,10 @@ impl ClusterStore for EtcdStateStore {
 
     async fn cancel_service_deployment(
         &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
     ) -> anyhow::Result<CancelDeploymentOutcome> {
         for _attempt in 0..MAX_TXN_RETRIES {
-            let Some(snapshot) = self
-                .find_deployment_snapshot_by_id(service_id, deployment_id)
-                .await?
-            else {
+            let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
                 return Ok(CancelDeploymentOutcome::NotFound);
             };
 
@@ -668,14 +542,10 @@ impl ClusterStore for EtcdStateStore {
 
     async fn stop_service_deployment(
         &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
     ) -> anyhow::Result<Option<ServiceDeployment>> {
         for _attempt in 0..MAX_TXN_RETRIES {
-            let Some(snapshot) = self
-                .find_deployment_snapshot_by_id(service_id, deployment_id)
-                .await?
-            else {
+            let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
                 return Ok(None);
             };
 
@@ -703,7 +573,7 @@ impl ClusterStore for EtcdStateStore {
             let committed = self.txn(compare, success).await?;
             if committed {
                 let _ = self
-                    .update_service_info_status(service_id, DeploymentStatus::Removed)
+                    .update_service_info_status(&deployment.service_id, DeploymentStatus::Removed)
                     .await;
                 return Ok(Some(updated));
             }

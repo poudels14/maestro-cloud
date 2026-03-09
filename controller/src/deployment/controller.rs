@@ -3,14 +3,16 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use anyhow::Result;
 use tokio::{sync::broadcast, time::sleep};
 
-use crate::deployment::DeploymentConfig;
+use crate::deployment::store::ClusterStore;
+use crate::deployment::types::{
+    Deployment, DeploymentConfig, DeploymentStatus, QueuedDeployment, ServiceDeployment,
+    ServiceProvider,
+};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::{
-    deployment::{
-        provider::{DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider},
-        store::{ClusterStore, QueuedDeployment},
-        types::{DeploymentStatus, ServiceDeployment, ServiceProvider},
+    deployment::provider::{
+        DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
     },
     supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus},
 };
@@ -22,11 +24,6 @@ const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 #[cfg(test)]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 200;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-struct Deployment {
-    id: String,
-    service_id: String,
-}
 
 pub struct DeploymentController {
     config: DeploymentConfig,
@@ -168,7 +165,6 @@ impl DeploymentController {
         }
 
         let service_id = queued_deployment.service_id;
-        let deployment_key = queued_deployment.key;
         let deployment_id = queued_deployment.deployment.id;
         let job = SupervisedJobConfig {
             id: deployment_id.clone(),
@@ -194,21 +190,23 @@ impl DeploymentController {
             return Ok(());
         };
 
-        self.deployments.insert(
-            task_id,
-            Deployment {
-                service_id: service_id.clone(),
-                id: deployment_id.clone(),
-            },
-        );
+        let deployment = Deployment {
+            service_id,
+            id: deployment_id,
+        };
 
         if let Err(err) = self
             .store
-            .mark_deployment_ready(&service_id, &deployment_key, &deployment_id)
+            .update_deployment_status(&deployment, DeploymentStatus::Ready)
             .await
         {
-            eprintln!("[maestro]: failed to mark deployment `{deployment_id}` ready: {err}");
+            eprintln!(
+                "[maestro]: failed to mark deployment `{}` ready: {err}",
+                deployment.id
+            );
         }
+
+        self.deployments.insert(task_id, deployment);
 
         Ok(())
     }
@@ -216,63 +214,53 @@ impl DeploymentController {
     async fn update_jobs_status(&mut self, finished: Vec<FinishedJob>) {
         for finished_task in finished {
             let job_id = finished_task.id;
-            let Some(running) = self.deployments.remove(&job_id) else {
+            let Some(deployment) = self.deployments.remove(&job_id) else {
                 continue;
             };
-            let service_id = running.service_id;
-            let deployment_id = running.id;
 
             eprintln!(
-                "[maestro]: service `{service_id}` deployment `{deployment_id}` worker finished"
+                "[maestro]: service `{}` deployment `{}` worker finished",
+                deployment.service_id, deployment.id
             );
 
             if self.shutdown_in_progress {
                 continue;
             }
 
-            let deployment_status = match self
-                .store
-                .read_service_deployment(&service_id, &deployment_id)
-                .await
-            {
-                Ok(Some(deployment)) => Some(deployment.status),
+            let deployment_status = match self.store.read_service_deployment(&deployment).await {
+                Ok(Some(d)) => Some(d.status),
                 Ok(None) => None,
                 Err(err) => {
                     eprintln!(
-                        "[maestro]: failed to read deployment `{deployment_id}` remove state: {err}"
+                        "[maestro]: failed to read deployment `{}` remove state: {err}",
+                        deployment.id
                     );
                     None
                 }
             };
 
-            match deployment_status {
-                Some(status) => match status {
-                    DeploymentStatus::Ready | DeploymentStatus::Building => {
-                        if finished_task.status == SupervisedJobStatus::Crashed {
-                            if let Err(err) = self
-                                .store
-                                .mark_deployment_crashed(&service_id, &deployment_id)
-                                .await
-                            {
-                                eprintln!(
-                                    "[maestro]: failed to mark deployment `{deployment_id}` crashed: {err}"
-                                );
-                            }
-                        } else if finished_task.status == SupervisedJobStatus::Stopped {
-                            if let Err(err) = self
-                                .store
-                                .mark_deployment_terminated(&service_id, &deployment_id)
-                                .await
-                            {
-                                eprintln!(
-                                    "[maestro]: failed to mark deployment `{deployment_id}` terminated: {err}"
-                                );
-                            }
-                        }
+            let new_status = match deployment_status {
+                Some(DeploymentStatus::Ready | DeploymentStatus::Building) => {
+                    match finished_task.status {
+                        SupervisedJobStatus::Crashed => Some(DeploymentStatus::Crashed),
+                        SupervisedJobStatus::Stopped => Some(DeploymentStatus::Terminated),
+                        _ => None,
                     }
-                    _ => {}
-                },
-                _ => {}
+                }
+                _ => None,
+            };
+
+            if let Some(new_status) = new_status {
+                if let Err(err) = self
+                    .store
+                    .update_deployment_status(&deployment, new_status.clone())
+                    .await
+                {
+                    eprintln!(
+                        "[maestro]: failed to update deployment `{}` to {new_status:?}: {err}",
+                        deployment.id
+                    );
+                }
             }
         }
     }
@@ -281,7 +269,7 @@ impl DeploymentController {
         for deployment in self.deployments.values() {
             if let Err(err) = self
                 .store
-                .mark_deployment_terminated(&deployment.service_id, &deployment.id)
+                .update_deployment_status(deployment, DeploymentStatus::Terminated)
                 .await
             {
                 eprintln!(
@@ -295,29 +283,26 @@ impl DeploymentController {
     async fn stop_removed_deployments(&mut self) {
         let running_job_ids = self.deployments.keys().cloned().collect::<Vec<_>>();
         for job_id in running_job_ids {
-            if let Some(job) = self.deployments.get(&job_id) {
-                let deployment = self
-                    .store
-                    .read_service_deployment(&job.service_id, &job.id)
-                    .await;
+            let Some(deployment) = self.deployments.get(&job_id) else {
+                continue;
+            };
 
-                let should_stop = match deployment {
-                    Ok(Some(deployment)) => deployment.status == DeploymentStatus::Removed,
-                    Ok(None) => false,
-                    Err(err) => {
-                        eprintln!(
-                            "[maestro]: failed to read deployment `{}` stop state: {err}",
-                            job.id
-                        );
-                        false
-                    }
-                };
-                if should_stop {
-                    let _ = self
-                        .supervisor
-                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+            let should_stop = match self.store.read_service_deployment(deployment).await {
+                Ok(Some(d)) => d.status == DeploymentStatus::Removed,
+                Ok(None) => false,
+                Err(err) => {
+                    eprintln!(
+                        "[maestro]: failed to read deployment `{}` stop state: {err}",
+                        deployment.id
+                    );
+                    false
                 }
             };
+            if should_stop {
+                let _ = self
+                    .supervisor
+                    .shutdown_job(&job_id, ShutdownRequest::Graceful);
+            }
         }
     }
 }

@@ -1,13 +1,12 @@
-use crate::deployment::DeploymentConfig;
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::{
     DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
 };
-use crate::deployment::store::{ClusterStore, QueuedDeployment};
+use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Command, DeploymentStatus, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, ServiceProvider,
+    Command, Deployment, DeploymentConfig, DeploymentStatus, QueuedDeployment, ServiceBuildConfig,
+    ServiceConfig, ServiceDeployConfig, ServiceDeployment, ServiceProvider,
 };
 use crate::supervisor::controller::JobSupervisor;
 use anyhow::Result;
@@ -356,134 +355,69 @@ impl ClusterStore for InMemoryStore {
         Ok(true)
     }
 
-    async fn mark_deployment_ready(
+    async fn update_deployment_status(
         &self,
-        _service_id: &str,
-        deployment_key: &str,
-        deployment_id: &str,
-    ) -> Result<()> {
-        let Some((service_id, index)) = parse_history_key(deployment_key) else {
-            return Ok(());
-        };
-        let mut state = self.state.lock().expect("state lock");
-        let updated_id = {
-            let Some(deployments) = state.history.get_mut(&service_id) else {
-                return Ok(());
-            };
-            let Some(deployment) = deployments.get_mut(index) else {
-                return Ok(());
-            };
-            if deployment.id != deployment_id {
-                return Ok(());
-            }
-            if deployment.status != DeploymentStatus::Building {
-                return Ok(());
-            }
-            deployment.status = DeploymentStatus::Ready;
-            deployment.deployed_at = Some(1);
-            deployment.id.clone()
-        };
-        state
-            .transitions
-            .entry(updated_id)
-            .or_default()
-            .push(DeploymentStatus::Ready);
-        Ok(())
-    }
-
-    async fn mark_deployment_crashed(&self, service_id: &str, deployment_id: &str) -> Result<()> {
-        let mut state = self.state.lock().expect("state lock");
-        let updated_id = {
-            let Some(deployments) = state.history.get_mut(service_id) else {
-                return Ok(());
-            };
-            let Some(deployment) = deployments.iter_mut().find(|item| item.id == deployment_id)
-            else {
-                return Ok(());
-            };
-            if deployment.status == DeploymentStatus::Crashed {
-                return Ok(());
-            }
-            deployment.status = DeploymentStatus::Crashed;
-            deployment.id.clone()
-        };
-        state
-            .transitions
-            .entry(updated_id)
-            .or_default()
-            .push(DeploymentStatus::Crashed);
-        Ok(())
-    }
-
-    async fn mark_deployment_terminated(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
+        status: DeploymentStatus,
     ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
         let updated_id = {
-            let Some(deployments) = state.history.get_mut(service_id) else {
+            let Some(deployments) = state.history.get_mut(&deployment.service_id) else {
                 return Ok(());
             };
-            let Some(deployment) = deployments.iter_mut().find(|item| item.id == deployment_id)
-            else {
+            let Some(d) = deployments.iter_mut().find(|item| item.id == deployment.id) else {
                 return Ok(());
             };
-            if deployment.status == DeploymentStatus::Terminated {
+            if !d.status.can_transition_to(&status) {
                 return Ok(());
             }
-            deployment.status = DeploymentStatus::Terminated;
-            deployment.id.clone()
+            d.status = status.clone();
+            if status == DeploymentStatus::Ready {
+                d.deployed_at = Some(1);
+            }
+            d.id.clone()
         };
         state
             .transitions
             .entry(updated_id)
             .or_default()
-            .push(DeploymentStatus::Terminated);
+            .push(status);
         Ok(())
     }
 
     async fn read_service_deployment(
         &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
     ) -> Result<Option<ServiceDeployment>> {
         let state = self.state.lock().expect("state lock");
-        let deployment = state
+        let found = state
             .history
-            .get(service_id)
-            .and_then(|deployments| deployments.iter().find(|item| item.id == deployment_id))
+            .get(&deployment.service_id)
+            .and_then(|deployments| deployments.iter().find(|item| item.id == deployment.id))
             .cloned();
-        Ok(deployment)
+        Ok(found)
     }
 
     async fn stop_service_deployment(
         &self,
-        service_id: &str,
-        deployment_id: &str,
+        deployment: &Deployment,
     ) -> Result<Option<ServiceDeployment>> {
         let mut state = self.state.lock().expect("state lock");
         let updated = {
-            let Some(deployments) = state.history.get_mut(service_id) else {
+            let Some(deployments) = state.history.get_mut(&deployment.service_id) else {
                 return Ok(None);
             };
-            let Some(deployment) = deployments.iter_mut().find(|item| item.id == deployment_id)
-            else {
+            let Some(d) = deployments.iter_mut().find(|item| item.id == deployment.id) else {
                 return Ok(None);
             };
 
-            match deployment.status {
+            match d.status {
                 DeploymentStatus::Ready | DeploymentStatus::Building => {}
-                DeploymentStatus::Removed => {
-                    return Ok(Some(deployment.clone()));
-                }
-                _ => {
-                    return Ok(Some(deployment.clone()));
-                }
+                _ => return Ok(Some(d.clone())),
             }
 
-            deployment.status = DeploymentStatus::Removed;
-            deployment.clone()
+            d.status = DeploymentStatus::Removed;
+            d.clone()
         };
 
         state
@@ -708,7 +642,10 @@ async fn stop_requested_active_deployment_is_marked_removed() {
     }
 
     let outcome = store
-        .stop_service_deployment("svc-0", "svc-0-0")
+        .stop_service_deployment(&Deployment {
+            service_id: "svc-0".to_string(),
+            id: "svc-0-0".to_string(),
+        })
         .await
         .expect("stop request should succeed");
     assert!(matches!(outcome, Some(_)));
