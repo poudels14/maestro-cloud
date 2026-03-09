@@ -6,6 +6,7 @@ pub fn service_info_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/info")
 }
 
+#[allow(dead_code)]
 pub fn service_active_deployment_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/deployments/active")
 }

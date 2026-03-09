@@ -7,16 +7,14 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, service_active_deployment_key, service_deployment_history_key,
+    SERVICES_PREFIX, SERVICES_ROOT, service_deployment_history_key,
     service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
     service_id_from_info_key, service_info_key,
 };
 use crate::deployment::store::{
     CancelDeploymentOutcome, ClusterStore, ForceQueueOutcome, QueuedDeployment,
 };
-use crate::deployment::types::{
-    ActiveDeployment, DeploymentStatus, ServiceDeployment, ServiceInfo,
-};
+use crate::deployment::types::{DeploymentStatus, ServiceDeployment, ServiceInfo};
 use crate::utils::time::current_time_millis;
 
 const MAX_STATUS_TXN_RETRIES: usize = 8;
@@ -293,14 +291,6 @@ impl ClusterStore for EtcdStateStore {
 
         let deployment_json = serde_json::to_string(&building)
             .map_err(|err| anyhow!("failed to serialize building deployment: {err}"))?;
-        let active = ActiveDeployment {
-            deployment_id: building.id.clone(),
-            version: Some(building.config.version.clone()),
-        };
-        let active_json = serde_json::to_string(&active)
-            .map_err(|err| anyhow!("failed to serialize active deployment: {err}"))?;
-        let active_key = service_active_deployment_key(&queued_deployment.service_id);
-
         let info_key = service_info_key(&queued_deployment.service_id);
         let existing_info = self
             .read_service_info_snapshot(&queued_deployment.service_id)
@@ -326,7 +316,6 @@ impl ClusterStore for EtcdStateStore {
             ],
             vec![
                 request_put(&queued_deployment.key, &deployment_json),
-                request_put(&active_key, &active_json),
                 request_put(&info_key, &info_json),
             ],
         )

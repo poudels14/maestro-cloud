@@ -6,8 +6,8 @@ use crate::deployment::provider::{
 };
 use crate::deployment::store::{ClusterStore, QueuedDeployment};
 use crate::deployment::types::{
-    ActiveDeployment, Command, DeploymentStatus, ServiceBuildConfig, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    Command, DeploymentStatus, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceDeployment, ServiceProvider,
 };
 use crate::supervisor::controller::JobSupervisor;
 use anyhow::Result;
@@ -43,7 +43,7 @@ fn deployment_with_source(
                 flags: vec![],
                 ports: vec![],
                 command: deploy_command,
-                healthcheck_path: "/_healthy".to_string(),
+                healthcheck_path: Some("/_healthy".to_string()),
             },
         },
         git_commit: None,
@@ -136,7 +136,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                     command: "echo".to_string(),
                     args: vec!["ok".to_string()],
                 }),
-                healthcheck_path: "/_healthy".to_string(),
+                healthcheck_path: Some("/_healthy".to_string()),
             },
         },
         git_commit: None,
@@ -159,12 +159,27 @@ struct InMemoryStore {
 struct InMemoryStoreState {
     configs: HashMap<String, ServiceConfig>,
     history: HashMap<String, Vec<ServiceDeployment>>,
-    active: HashMap<String, ActiveDeployment>,
     transitions: HashMap<String, Vec<DeploymentStatus>>,
 }
 
 impl InMemoryStore {
     fn seed_queued_deployments(&self, services: usize, deployments_per_service: usize) {
+        self.seed_queued_deployments_with_command(
+            services,
+            deployments_per_service,
+            Command {
+                command: "true".to_string(),
+                args: vec![],
+            },
+        );
+    }
+
+    fn seed_queued_deployments_with_command(
+        &self,
+        services: usize,
+        deployments_per_service: usize,
+        deploy_command: Command,
+    ) {
         let mut state = self.state.lock().expect("state lock");
         let mut created_at = 1_u64;
         for svc_idx in 0..services {
@@ -179,11 +194,8 @@ impl InMemoryStore {
                 deploy: ServiceDeployConfig {
                     flags: vec![],
                     ports: vec![],
-                    command: Some(Command {
-                        command: "true".to_string(),
-                        args: vec![],
-                    }),
-                    healthcheck_path: "/_healthy".to_string(),
+                    command: Some(deploy_command.clone()),
+                    healthcheck_path: Some("/_healthy".to_string()),
                 },
             };
             state.configs.insert(service_id.clone(), config.clone());
@@ -207,6 +219,50 @@ impl InMemoryStore {
             }
             state.history.insert(service_id, deployments);
         }
+    }
+
+    fn seed_service_with_deploy_commands(&self, service_id: &str, deploy_commands: Vec<Command>) {
+        let mut state = self.state.lock().expect("state lock");
+        let mut created_at = 1_u64;
+        let mut deployments = Vec::with_capacity(deploy_commands.len());
+
+        for (dep_idx, deploy_command) in deploy_commands.into_iter().enumerate() {
+            let config = ServiceConfig {
+                id: service_id.to_string(),
+                name: format!("service-{service_id}"),
+                version: format!("cfg-{service_id}-{dep_idx}"),
+                provider: ServiceProvider::Shell,
+                build: None,
+                image: None,
+                deploy: ServiceDeployConfig {
+                    flags: vec![],
+                    ports: vec![],
+                    command: Some(deploy_command),
+                    healthcheck_path: Some("/_healthy".to_string()),
+                },
+            };
+
+            if dep_idx == 0 {
+                state.configs.insert(service_id.to_string(), config.clone());
+            }
+
+            let deployment = ServiceDeployment {
+                id: format!("{service_id}-{dep_idx}"),
+                created_at,
+                deployed_at: None,
+                status: DeploymentStatus::Queued,
+                config,
+                git_commit: None,
+                build: None,
+            };
+            created_at += 1;
+            state
+                .transitions
+                .insert(deployment.id.clone(), vec![DeploymentStatus::Queued]);
+            deployments.push(deployment);
+        }
+
+        state.history.insert(service_id.to_string(), deployments);
     }
 
     fn queued_count(&self) -> usize {
@@ -276,7 +332,7 @@ impl ClusterStore for InMemoryStore {
             return Ok(false);
         };
         let mut state = self.state.lock().expect("state lock");
-        let (deployment_id, deployment_version) = {
+        let deployment_id = {
             let Some(deployments) = state.history.get_mut(&service_id) else {
                 return Ok(false);
             };
@@ -290,20 +346,13 @@ impl ClusterStore for InMemoryStore {
                 return Ok(false);
             }
             deployment.status = DeploymentStatus::Building;
-            (deployment.id.clone(), deployment.config.version.clone())
+            deployment.id.clone()
         };
         state
             .transitions
             .entry(deployment_id.clone())
             .or_default()
             .push(DeploymentStatus::Building);
-        state.active.insert(
-            service_id,
-            ActiveDeployment {
-                deployment_id,
-                version: Some(deployment_version),
-            },
-        );
         Ok(true)
     }
 
@@ -447,6 +496,108 @@ async fn stress_supervisor_updates_deployment_statuses() {
             ]
         );
     }
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_deployment_starts_even_with_running_job_for_same_service() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-concurrent-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    store.seed_service_with_deploy_commands(
+        "svc-0",
+        vec![
+            Command {
+                command: "sleep".to_string(),
+                args: vec!["3".to_string()],
+            },
+            Command {
+                command: "true".to_string(),
+                args: vec![],
+            },
+        ],
+    );
+
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+
+    let mut controller = DeploymentController::new(
+        DeploymentConfig {
+            data_dir: data_dir.clone(),
+            etcd_port: 0,
+        },
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+    );
+
+    let start_deadline = Instant::now() + Duration::from_secs(2);
+    let mut second_ready = false;
+    while Instant::now() < start_deadline {
+        controller
+            .process_queued_deployments()
+            .await
+            .expect("queue processing should succeed");
+        sleep(Duration::from_millis(25)).await;
+        controller.reap_finished_tasks().await;
+
+        let deployments = store.all_deployments();
+        let first = deployments
+            .iter()
+            .find(|deployment| deployment.id == "svc-0-0")
+            .expect("first deployment should exist");
+        let second = deployments
+            .iter()
+            .find(|deployment| deployment.id == "svc-0-1")
+            .expect("second deployment should exist");
+
+        if second.status == DeploymentStatus::Ready {
+            assert_ne!(first.status, DeploymentStatus::Terminated);
+            second_ready = true;
+            break;
+        }
+    }
+    assert!(
+        second_ready,
+        "queued deployment was not started while another deployment for the service was still running"
+    );
+
+    let drain_deadline = Instant::now() + Duration::from_secs(5);
+    while controller.has_running_services() {
+        sleep(Duration::from_millis(25)).await;
+        controller.reap_finished_tasks().await;
+        assert!(
+            Instant::now() < drain_deadline,
+            "running jobs did not drain in time"
+        );
+    }
+
+    let transitions = store.transition_history();
+    assert_eq!(
+        transitions.get("svc-0-0").map(Vec::as_slice),
+        Some(
+            &[
+                DeploymentStatus::Queued,
+                DeploymentStatus::Building,
+                DeploymentStatus::Ready,
+            ][..]
+        )
+    );
+    assert_eq!(
+        transitions.get("svc-0-1").map(Vec::as_slice),
+        Some(
+            &[
+                DeploymentStatus::Queued,
+                DeploymentStatus::Building,
+                DeploymentStatus::Ready,
+            ][..]
+        )
+    );
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }

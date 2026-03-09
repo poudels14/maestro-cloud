@@ -41,7 +41,8 @@ pub struct ServiceDeployConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
     pub command: Option<Command>,
-    pub healthcheck_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthcheck_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +55,7 @@ pub struct Command {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ActiveDeployment {
     pub deployment_id: String,
     pub version: Option<String>,
