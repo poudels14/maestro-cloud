@@ -73,6 +73,7 @@ impl FileServiceConfigSource {
                     restart_delay_ms: service.config.restart_delay_ms,
                     max_restarts: service.config.max_restarts,
                     shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
+                    logs_dir: None,
                 })
                 .collect::<Vec<_>>(),
             RawConfigFile::NamedListInObject { services } => services
@@ -84,6 +85,7 @@ impl FileServiceConfigSource {
                     restart_delay_ms: service.config.restart_delay_ms,
                     max_restarts: service.config.max_restarts,
                     shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
+                    logs_dir: None,
                 })
                 .collect::<Vec<_>>(),
             RawConfigFile::NamedMap { services } | RawConfigFile::FlatNamedMap(services) => {
@@ -96,6 +98,7 @@ impl FileServiceConfigSource {
                         restart_delay_ms: config.restart_delay_ms,
                         max_restarts: config.max_restarts,
                         shutdown_grace_period_ms: config.shutdown_grace_period_ms,
+                        logs_dir: None,
                     })
                     .collect::<Vec<_>>()
             }
