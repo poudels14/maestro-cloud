@@ -16,7 +16,7 @@ use crate::{
 };
 
 const DEFAULT_RESTART_DELAY_MS: u64 = 1_000;
-const DEFAULT_MAX_RESTARTS: u32 = 5;
+const DEFAULT_MAX_RESTARTS: Option<u32> = Some(5);
 #[cfg(not(test))]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 #[cfg(test)]

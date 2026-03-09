@@ -35,8 +35,22 @@ impl FileServiceConfigSource {
         struct RawTaskConfig {
             command: String,
             restart_delay_ms: u64,
-            max_restarts: u32,
+            max_restarts: Option<u32>,
             shutdown_grace_period_ms: u64,
+        }
+
+        impl RawTaskConfig {
+            fn to_job_config(self, name: String) -> SupervisedJobConfig {
+                SupervisedJobConfig {
+                    id: name.clone(),
+                    name,
+                    command: self.command,
+                    restart_delay_ms: self.restart_delay_ms,
+                    max_restarts: self.max_restarts,
+                    shutdown_grace_period_ms: self.shutdown_grace_period_ms,
+                    logs_dir: None,
+                }
+            }
         }
 
         #[derive(Debug, Deserialize)]
@@ -64,43 +78,16 @@ impl FileServiceConfigSource {
             .map_err(|err| format!("failed to parse JSON/JSONC config: {err}"))?;
 
         let services = match parsed {
-            RawConfigFile::NamedList(list) => list
+            RawConfigFile::NamedList(list)
+            | RawConfigFile::NamedListInObject { services: list } => list
                 .into_iter()
-                .map(|service| SupervisedJobConfig {
-                    id: service.name.clone(),
-                    name: service.name,
-                    command: service.config.command,
-                    restart_delay_ms: service.config.restart_delay_ms,
-                    max_restarts: service.config.max_restarts,
-                    shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
-                    logs_dir: None,
-                })
-                .collect::<Vec<_>>(),
-            RawConfigFile::NamedListInObject { services } => services
-                .into_iter()
-                .map(|service| SupervisedJobConfig {
-                    id: service.name.clone(),
-                    name: service.name,
-                    command: service.config.command,
-                    restart_delay_ms: service.config.restart_delay_ms,
-                    max_restarts: service.config.max_restarts,
-                    shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
-                    logs_dir: None,
-                })
-                .collect::<Vec<_>>(),
+                .map(|s| s.config.to_job_config(s.name))
+                .collect(),
             RawConfigFile::NamedMap { services } | RawConfigFile::FlatNamedMap(services) => {
                 services
                     .into_iter()
-                    .map(|(name, config)| SupervisedJobConfig {
-                        id: name.clone(),
-                        name,
-                        command: config.command,
-                        restart_delay_ms: config.restart_delay_ms,
-                        max_restarts: config.max_restarts,
-                        shutdown_grace_period_ms: config.shutdown_grace_period_ms,
-                        logs_dir: None,
-                    })
-                    .collect::<Vec<_>>()
+                    .map(|(name, config)| config.to_job_config(name))
+                    .collect()
             }
         };
 

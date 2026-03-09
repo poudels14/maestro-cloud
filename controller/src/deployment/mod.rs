@@ -44,7 +44,7 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
             "--advertise-client-urls=http://127.0.0.1:6479"
         ),
         name: "maestro-etcd".to_string(),
-        max_restarts: 100,
+        max_restarts: None,
         restart_delay_ms: 100,
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(config.etcd_dir().join("logs/")),

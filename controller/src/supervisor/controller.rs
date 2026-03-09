@@ -48,17 +48,14 @@ impl JobSupervisor {
     }
 
     pub async fn job_status(&self, job_id: &str) -> Option<SupervisedJobStatus> {
-        match self.jobs.get(job_id) {
-            Some(job) => Some(job.status().await),
-            _ => None,
-        }
+        let job = self.jobs.get(job_id)?;
+        Some(job.status().await)
     }
 
     pub async fn reap_finished_jobs(&mut self) -> Vec<FinishedJob> {
         let mut done = Vec::new();
         for (id, job) in &self.jobs {
-            let status = job.status().await;
-            if job.is_finished() && status.finished() {
+            if job.is_finished() && job.status().await.finished() {
                 done.push(id.clone());
             }
         }
@@ -66,15 +63,7 @@ impl JobSupervisor {
         let mut finished = Vec::with_capacity(done.len());
         for id in done {
             if let Some(mut job) = self.jobs.remove(&id) {
-                let status = match job.join().await {
-                    Ok(status) => status,
-                    Err(err) => {
-                        eprintln!(
-                            "[maestro]: job `{id}` join error while reaping: {err}; marking crashed"
-                        );
-                        SupervisedJobStatus::Crashed
-                    }
-                };
+                let status = join_or_crashed(&mut job, &id, "while reaping").await;
                 finished.push(FinishedJob { id, status });
             }
         }
@@ -103,26 +92,12 @@ impl JobSupervisor {
 
         for (id, mut job) in draining {
             let status = match timeout(FORCE_JOIN_WAIT, job.join()).await {
-                Ok(result) => match result {
-                    Ok(status) => status,
-                    Err(err) => {
-                        eprintln!(
-                            "[maestro]: job `{id}` join error during shutdown: {err}; marking crashed"
-                        );
-                        SupervisedJobStatus::Crashed
-                    }
-                },
+                Ok(result) => join_result_or_crashed(result, &id, "during shutdown"),
                 Err(_) => {
                     eprintln!("[maestro]: job `{id}` did not stop in time; aborting worker task");
                     job.abort();
                     match timeout(Duration::from_secs(1), job.join()).await {
-                        Ok(Ok(status)) => status,
-                        Ok(Err(err)) => {
-                            eprintln!(
-                                "[maestro]: job `{id}` join error after abort: {err}; marking crashed"
-                            );
-                            SupervisedJobStatus::Crashed
-                        }
+                        Ok(result) => join_result_or_crashed(result, &id, "after abort"),
                         Err(_) => {
                             eprintln!(
                                 "[maestro]: job `{id}` still did not stop after abort; marking crashed"
@@ -135,5 +110,23 @@ impl JobSupervisor {
             finished.push(FinishedJob { id, status });
         }
         finished
+    }
+}
+
+async fn join_or_crashed(job: &mut SupervisedJob, id: &str, context: &str) -> SupervisedJobStatus {
+    join_result_or_crashed(job.join().await, id, context)
+}
+
+fn join_result_or_crashed(
+    result: Result<SupervisedJobStatus, tokio::task::JoinError>,
+    id: &str,
+    context: &str,
+) -> SupervisedJobStatus {
+    match result {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("[maestro]: job `{id}` join error {context}: {err}; marking crashed");
+            SupervisedJobStatus::Crashed
+        }
     }
 }

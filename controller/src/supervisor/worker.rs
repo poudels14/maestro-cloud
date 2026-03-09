@@ -17,7 +17,7 @@ pub struct SupervisedJobConfig {
     pub name: String,
     pub command: String,
     pub restart_delay_ms: u64,
-    pub max_restarts: u32,
+    pub max_restarts: Option<u32>,
     pub shutdown_grace_period_ms: u64,
     pub logs_dir: Option<PathBuf>,
 }
@@ -33,10 +33,7 @@ pub enum SupervisedJobStatus {
 
 impl SupervisedJobStatus {
     pub fn finished(&self) -> bool {
-        match self {
-            Self::Completed | Self::Stopped | Self::Crashed => true,
-            _ => false,
-        }
+        matches!(self, Self::Completed | Self::Stopped | Self::Crashed)
     }
 }
 
@@ -45,6 +42,12 @@ pub enum ShutdownRequest {
     None,
     Graceful,
     Force,
+}
+
+enum WorkerOutcome {
+    Shutdown(ShutdownRequest),
+    Exited(Option<ProcessEnd>),
+    DelayElapsed,
 }
 
 pub struct SupervisedJob {
@@ -56,7 +59,7 @@ pub struct SupervisedJob {
 impl SupervisedJob {
     #[inline]
     pub fn is_finished(&self) -> bool {
-        return self.handle.is_finished();
+        self.handle.is_finished()
     }
 
     pub async fn status(&self) -> SupervisedJobStatus {
@@ -136,7 +139,7 @@ impl SupervisedJobRunner {
 
     async fn setup_job(job: &Job, config: &SupervisedJobConfig) {
         let (stdout_path, stderr_path) = match config.logs_dir.as_ref() {
-            Some(logs_dir) => match std::fs::create_dir_all(&logs_dir) {
+            Some(logs_dir) => match std::fs::create_dir_all(logs_dir) {
                 Ok(_) => (
                     Some(logs_dir.join("stdout.log")),
                     Some(logs_dir.join("stderr.log")),
@@ -150,40 +153,15 @@ impl SupervisedJobRunner {
         };
 
         job.set_spawn_hook(move |command, _| {
-            if let Some(stdout_path) = &stdout_path {
-                match OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(stdout_path)
-                {
-                    Ok(file) => {
-                        command.command_mut().stdout(Stdio::from(file));
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "[maestro]: failed to open stdout log file {}: {err}",
-                            stdout_path.display()
-                        );
-                    }
-                };
+            if let Some(path) = &stdout_path {
+                redirect_to_log_file(path, |file| {
+                    command.command_mut().stdout(Stdio::from(file));
+                });
             }
-
-            if let Some(stderr_path) = &stderr_path {
-                match OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(stderr_path)
-                {
-                    Ok(file) => {
-                        command.command_mut().stderr(Stdio::from(file));
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "[maestro]: failed to open stderr log file {}: {err}",
-                            stderr_path.display()
-                        );
-                    }
-                };
+            if let Some(path) = &stderr_path {
+                redirect_to_log_file(path, |file| {
+                    command.command_mut().stderr(Stdio::from(file));
+                });
             }
         })
         .await;
@@ -205,6 +183,23 @@ impl SupervisedJobRunner {
         let mut restart_count = 0_u32;
         let mut exit_status = SupervisedJobStatus::Completed;
 
+        /// Handle a shutdown request; returns `true` if the job should stop, `false` to continue.
+        async fn handle_shutdown(
+            request: ShutdownRequest,
+            job: &Job,
+            grace: Duration,
+            shutdown_timeout: Duration,
+        ) -> bool {
+            match request {
+                ShutdownRequest::Force => force_stop_and_delete(job).await,
+                ShutdownRequest::Graceful => {
+                    graceful_stop_and_delete(job, grace, shutdown_timeout).await;
+                }
+                ShutdownRequest::None => return false,
+            }
+            true
+        }
+
         loop {
             job.start().await;
             log_service_process_ids(&name, &job).await;
@@ -216,59 +211,48 @@ impl SupervisedJobRunner {
             };
 
             match outcome {
-                WorkerOutcome::Shutdown(shutdown_request) => {
-                    match shutdown_request {
-                        ShutdownRequest::Force => force_stop_and_delete(&job).await,
-                        ShutdownRequest::Graceful => {
-                            graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
-                        }
-                        ShutdownRequest::None => continue,
+                WorkerOutcome::Shutdown(request) => {
+                    if handle_shutdown(request, &job, shutdown_grace, shutdown_timeout).await {
+                        exit_status = SupervisedJobStatus::Stopped;
+                        break;
                     }
-                    exit_status = SupervisedJobStatus::Stopped;
-                    break;
                 }
-                WorkerOutcome::Exited(Some(status)) => {
-                    if !matches!(status, ProcessEnd::Success) {
-                        if restart_count >= config.max_restarts {
+                WorkerOutcome::Exited(Some(status)) if !matches!(status, ProcessEnd::Success) => {
+                    if let Some(max) = config.max_restarts {
+                        if restart_count >= max {
                             eprintln!(
-                                "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={} (stopping)",
-                                config.max_restarts
+                                "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={max} (stopping)"
                             );
                             exit_status = SupervisedJobStatus::Crashed;
                             break;
                         }
+                    }
 
-                        restart_count += 1;
-                        eprintln!(
-                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{} in {}ms",
-                            config.max_restarts, config.restart_delay_ms
-                        );
+                    restart_count += 1;
+                    match config.max_restarts {
+                        Some(max) => eprintln!(
+                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{max} in {}ms",
+                            config.restart_delay_ms
+                        ),
+                        None => eprintln!(
+                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count} in {}ms",
+                            config.restart_delay_ms
+                        ),
+                    }
 
-                        let delay_outcome = tokio::select! {
-                            _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
-                            _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
-                        };
+                    let delay_outcome = tokio::select! {
+                        _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
+                        _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
+                    };
 
-                        if let WorkerOutcome::Shutdown(shutdown_request) = delay_outcome {
-                            match shutdown_request {
-                                ShutdownRequest::Force => force_stop_and_delete(&job).await,
-                                ShutdownRequest::Graceful => {
-                                    graceful_stop_and_delete(
-                                        &job,
-                                        shutdown_grace,
-                                        shutdown_timeout,
-                                    )
-                                    .await;
-                                }
-                                ShutdownRequest::None => continue,
-                            }
+                    if let WorkerOutcome::Shutdown(request) = delay_outcome {
+                        if handle_shutdown(request, &job, shutdown_grace, shutdown_timeout).await {
                             exit_status = SupervisedJobStatus::Stopped;
                             break;
                         }
-
-                        continue;
                     }
-
+                }
+                WorkerOutcome::Exited(Some(_)) => {
                     eprintln!("[maestro]: service '{name}' exited successfully (not restarting)");
                     break;
                 }
@@ -277,9 +261,7 @@ impl SupervisedJobRunner {
                     exit_status = SupervisedJobStatus::Crashed;
                     break;
                 }
-                WorkerOutcome::DelayElapsed => {
-                    continue;
-                }
+                WorkerOutcome::DelayElapsed => {}
             }
         }
 
@@ -298,10 +280,14 @@ impl SupervisedJobRunner {
     }
 }
 
-enum WorkerOutcome {
-    Shutdown(ShutdownRequest),
-    Exited(Option<ProcessEnd>),
-    DelayElapsed,
+fn redirect_to_log_file(path: &PathBuf, apply: impl FnOnce(std::fs::File)) {
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => apply(file),
+        Err(err) => eprintln!(
+            "[maestro]: failed to open log file {}: {err}",
+            path.display()
+        ),
+    }
 }
 
 async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: Duration) {
@@ -379,11 +365,8 @@ async fn log_service_process_ids(name: &str, job: &Job) {
     .await;
 
     if let Ok((Some(pid), pgid)) = rx.await {
-        if let Some(pgid) = pgid {
-            eprintln!("[maestro]: service '{name}' started: pid={pid} pgid={pgid}");
-        } else {
-            eprintln!("[maestro]: service '{name}' started: pid={pid} pgid=unknown");
-        }
+        let pgid_str = pgid.map_or("unknown".to_string(), |g| g.to_string());
+        eprintln!("[maestro]: service '{name}' started: pid={pid} pgid={pgid_str}");
     }
 }
 

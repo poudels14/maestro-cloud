@@ -75,6 +75,7 @@ async fn run() -> crate::error::Result<()> {
             expose_etcd,
             data_dir,
         }) => {
+            let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
                     "failed to create data directory {}: {err}",
@@ -96,7 +97,6 @@ async fn run() -> crate::error::Result<()> {
             let store: Arc<dyn deployment::store::ClusterStore> =
                 Arc::new(EtcdStateStore::new(&etcd_endpoint).await?);
             let server = server::Server::new(store.clone());
-            let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             let server_signal_rx = signal_tx.subscribe();
             let deployment_signal_rx = signal_tx.subscribe();
 
