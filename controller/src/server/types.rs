@@ -43,3 +43,12 @@ pub(crate) struct CancelDeploymentResponse {
     pub(crate) deployment_id: String,
     pub(crate) status: DeploymentStatus,
 }
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoveDeploymentResponse {
+    pub(crate) removed: bool,
+    pub(crate) service_id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) status: DeploymentStatus,
+}

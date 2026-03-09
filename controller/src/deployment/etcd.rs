@@ -1,7 +1,8 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use backon::{ConstantBuilder, Retryable};
 use etcd_client::{
     Client as EtcdClient, Compare, CompareOp, GetOptions, SortOrder, SortTarget, Txn, TxnOp,
 };
@@ -46,9 +47,19 @@ struct InfoSnapshot {
 
 impl EtcdStateStore {
     pub async fn new(endpoint: &str) -> Result<Self> {
-        let client = EtcdClient::connect([endpoint], None)
-            .await
-            .map_err(|err| anyhow!("failed to connect etcd client: {err}"))?;
+        let backoff = ConstantBuilder::default()
+            .with_delay(Duration::from_secs(1))
+            .with_max_times(15);
+
+        let client: EtcdClient = (|| async {
+            let mut client = EtcdClient::connect([endpoint], None).await?;
+            client.status().await?;
+            Ok::<EtcdClient, anyhow::Error>(client)
+        })
+        .retry(backoff)
+        .await
+        .map_err(|err: anyhow::Error| anyhow!("failed to connect to etcd: {err}"))?;
+
         Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
         })
@@ -535,6 +546,17 @@ impl ClusterStore for EtcdStateStore {
             .map(|snapshot| snapshot.info))
     }
 
+    async fn read_service_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> anyhow::Result<Option<ServiceDeployment>> {
+        Ok(self
+            .find_deployment_snapshot_by_id(service_id, deployment_id)
+            .await?
+            .map(|snapshot| snapshot.deployment))
+    }
+
     async fn queue_deployment(
         &self,
         deployment: ServiceDeployment,
@@ -641,6 +663,54 @@ impl ClusterStore for EtcdStateStore {
 
         Err(anyhow!(
             "failed to cancel deployment due to concurrent updates; retry"
+        ))
+    }
+
+    async fn stop_service_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> anyhow::Result<Option<ServiceDeployment>> {
+        for _attempt in 0..MAX_TXN_RETRIES {
+            let Some(snapshot) = self
+                .find_deployment_snapshot_by_id(service_id, deployment_id)
+                .await?
+            else {
+                return Ok(None);
+            };
+
+            match snapshot.deployment.status {
+                DeploymentStatus::Ready | DeploymentStatus::Building => {}
+                DeploymentStatus::Removed => {
+                    return Ok(Some(snapshot.deployment));
+                }
+                _ => {
+                    return Ok(Some(snapshot.deployment));
+                }
+            }
+
+            let mut updated = snapshot.deployment.clone();
+            updated.status = DeploymentStatus::Removed;
+            let updated_json = serde_json::to_string(&updated)
+                .map_err(|err| anyhow!("failed to serialize remove-requested deployment: {err}"))?;
+
+            let compare = vec![compare_mod_revision_or_absent(
+                &snapshot.key,
+                Some(snapshot.mod_revision),
+            )];
+            let success = vec![request_put(&snapshot.key, &updated_json)];
+
+            let committed = self.txn(compare, success).await?;
+            if committed {
+                let _ = self
+                    .update_service_info_status(service_id, DeploymentStatus::Removed)
+                    .await;
+                return Ok(Some(updated));
+            }
+        }
+
+        Err(anyhow!(
+            "failed to request stop due to concurrent updates; retry"
         ))
     }
 }

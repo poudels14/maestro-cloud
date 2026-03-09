@@ -12,6 +12,7 @@ anyhow = "1.0.102"
 arc = { version = "0.1.0", path = "../../arc" }
 async-trait = "0.1"
 axum = "0.8"
+backon = "1.6.0"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 etcd-client = "0.14"
