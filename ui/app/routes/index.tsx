@@ -10,7 +10,8 @@ import {
   Ban,
   Rocket,
   Clock,
-  RotateCw
+  RotateCw,
+  Square
 } from "lucide-solid";
 import type { Deployment, Service } from "../lib/types";
 
@@ -52,6 +53,13 @@ async function cancelDeployment(serviceId: string, deploymentId: string) {
   const url = `/api/services/${serviceId}/deployments/${encodedDeploymentId}/cancel`;
   const res = await fetch(url, { method: "PATCH" });
   if (!res.ok) throw new Error(`Failed to cancel deployment: ${res.statusText}`);
+}
+
+async function stopDeployment(serviceId: string, deploymentId: string) {
+  const encodedDeploymentId = encodeURIComponent(deploymentId);
+  const url = `/api/services/${serviceId}/deployments/${encodedDeploymentId}/remove`;
+  const res = await fetch(url, { method: "PATCH" });
+  if (!res.ok) throw new Error(`Failed to stop deployment: ${res.statusText}`);
 }
 
 const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
@@ -105,8 +113,14 @@ function TabButton(props: { active: boolean; label: string; count?: number; onCl
 }
 
 const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING", "DEPLOYING"]);
+const STOPPABLE_STATUSES = new Set(["READY", "RUNNING"]);
 
-function DeploymentMenu(props: { status: string; onCancel: () => void; onRedeploy: () => void }) {
+function DeploymentMenu(props: {
+  status: string;
+  onCancel: () => void;
+  onStop: () => void;
+  onRedeploy: () => void;
+}) {
   const [open, setOpen] = createSignal(false);
   let menuRef: HTMLDivElement | undefined;
 
@@ -120,6 +134,7 @@ function DeploymentMenu(props: { status: string; onCancel: () => void; onRedeplo
   onCleanup(() => document.removeEventListener("click", handleClickOutside));
 
   const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
+  const canStop = () => STOPPABLE_STATUSES.has(props.status);
 
   return (
     <div class="relative" ref={menuRef}>
@@ -146,6 +161,19 @@ function DeploymentMenu(props: { status: string; onCancel: () => void; onRedeplo
             >
               <Ban class="size-3" />
               Cancel deployment
+            </button>
+          </Show>
+          <Show when={canStop()}>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onStop();
+              }}
+              class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 outline-none"
+            >
+              <Square class="size-3" />
+              Stop deployment
             </button>
           </Show>
           <Show when={!canCancel()}>
@@ -205,6 +233,10 @@ function DeploymentsTab(props: { serviceId: string }) {
                         status={d.status}
                         onCancel={async () => {
                           await cancelDeployment(props.serviceId, d.id);
+                          refetch();
+                        }}
+                        onStop={async () => {
+                          await stopDeployment(props.serviceId, d.id);
                           refetch();
                         }}
                         onRedeploy={async () => {

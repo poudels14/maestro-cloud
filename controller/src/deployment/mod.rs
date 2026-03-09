@@ -17,25 +17,39 @@ pub struct DeploymentConfig {
 
 impl DeploymentConfig {
     #[inline]
-    pub fn logs_dir(&self) -> PathBuf {
+    pub fn deployment_logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
+    }
+
+    #[inline]
+    pub fn etcd_dir(&self) -> PathBuf {
+        self.data_dir.join("system/etcd/")
     }
 }
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
-    let job_id = supervisor.start_job(SupervisedJobConfig {
+    let etcd_data_dir = config.etcd_dir().join("data");
+    std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
+    let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
         command: format!(
-            "docker run --name maestro-etcd -p {}:2379 --rm quay.io/coreos/etcd:v3.6.8 etcd {}",
+            "docker run --name maestro-etcd -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
             config.etcd_port,
-            "--listen-client-urls=http://0.0.0.0:2379 --advertise-client-urls=http://127.0.0.1:6479"
+            std::fs::canonicalize(etcd_data_dir)
+                .expect("error canonicalizing etcd data dir")
+                .to_str()
+                .expect("error getting etcd data dir"),
+            "--data-dir=/data",
+            " --listen-client-urls=http://0.0.0.0:2379",
+            "--advertise-client-urls=http://127.0.0.1:6479"
         ),
         name: "maestro-etcd".to_string(),
         max_restarts: 100,
         restart_delay_ms: 100,
         shutdown_grace_period_ms: 10_000,
-        logs_dir: Some(config.logs_dir().join("system/etcd/logs/")),
-    });
+        logs_dir: Some(config.etcd_dir().join("logs/")),
+    };
+    let job_id = supervisor.start_job(etcd_job_config);
     if let Some(job_id) = job_id {
         loop {
             let status = supervisor.job_status(&job_id).await;

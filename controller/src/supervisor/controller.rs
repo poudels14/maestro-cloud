@@ -81,6 +81,14 @@ impl JobSupervisor {
         finished
     }
 
+    pub fn shutdown_job(&self, job_id: &str, request: ShutdownRequest) -> bool {
+        let Some(job) = self.jobs.get(job_id) else {
+            return false;
+        };
+        job.shutdown(request);
+        true
+    }
+
     pub async fn shutdown_all(&mut self, request: ShutdownRequest) -> Vec<FinishedJob> {
         for job in self.jobs.values() {
             let _ = job.shutdown(request);

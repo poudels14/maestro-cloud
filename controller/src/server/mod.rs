@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use self::types::{
-    CancelDeploymentResponse, PatchServiceRequest, PatchServiceResponse, ServiceListItem,
+    CancelDeploymentResponse, PatchServiceRequest, PatchServiceResponse, RemoveDeploymentResponse,
+    ServiceListItem,
 };
 use crate::deployment::store::{CancelDeploymentOutcome, ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -52,6 +53,10 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}/cancel",
                 patch(Self::cancel_deployment),
+            )
+            .route(
+                "/api/services/{serviceId}/deployments/{deploymentId}/remove",
+                patch(Self::remove_deployment),
             )
             .route(
                 "/api/services/{serviceId}/redeploy",
@@ -251,6 +256,52 @@ impl Server {
             status: Some(outcome.deployment.status),
             version: outcome.deployment.config.version.clone(),
         }))
+    }
+
+    async fn remove_deployment(
+        Path((service_id, deployment_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Json<RemoveDeploymentResponse>, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        let deployment_id = deployment_id.trim().to_string();
+        validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        if deployment_id.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "deploymentId cannot be empty".to_string(),
+            ));
+        }
+
+        let outcome = state
+            .store
+            .stop_service_deployment(&service_id, &deployment_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        match outcome {
+            Some(updated)
+                if updated.status == crate::deployment::types::DeploymentStatus::Removed =>
+            {
+                Ok(Json(RemoveDeploymentResponse {
+                    removed: true,
+                    service_id,
+                    deployment_id,
+                    status: updated.status,
+                }))
+            }
+            Some(existing) => Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "deployment `{deployment_id}` cannot be removed from status {:?}",
+                    existing.status
+                ),
+            )),
+            None => Err((
+                StatusCode::NOT_FOUND,
+                format!("deployment `{deployment_id}` was not found for service `{service_id}`"),
+            )),
+        }
     }
 }
 

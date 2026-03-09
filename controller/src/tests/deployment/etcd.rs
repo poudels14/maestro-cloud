@@ -442,6 +442,57 @@ impl ClusterStore for InMemoryStore {
             .push(DeploymentStatus::Terminated);
         Ok(())
     }
+
+    async fn read_service_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<Option<ServiceDeployment>> {
+        let state = self.state.lock().expect("state lock");
+        let deployment = state
+            .history
+            .get(service_id)
+            .and_then(|deployments| deployments.iter().find(|item| item.id == deployment_id))
+            .cloned();
+        Ok(deployment)
+    }
+
+    async fn stop_service_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<Option<ServiceDeployment>> {
+        let mut state = self.state.lock().expect("state lock");
+        let updated = {
+            let Some(deployments) = state.history.get_mut(service_id) else {
+                return Ok(None);
+            };
+            let Some(deployment) = deployments.iter_mut().find(|item| item.id == deployment_id)
+            else {
+                return Ok(None);
+            };
+
+            match deployment.status {
+                DeploymentStatus::Ready | DeploymentStatus::Building => {}
+                DeploymentStatus::Removed => {
+                    return Ok(Some(deployment.clone()));
+                }
+                _ => {
+                    return Ok(Some(deployment.clone()));
+                }
+            }
+
+            deployment.status = DeploymentStatus::Removed;
+            deployment.clone()
+        };
+
+        state
+            .transitions
+            .entry(updated.id.clone())
+            .or_default()
+            .push(DeploymentStatus::Removed);
+        Ok(Some(updated))
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -470,7 +521,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while store.queued_count() > 0 || controller.has_running_services() {
         controller
-            .process_queued_deployments()
+            .reconcile_deployments()
             .await
             .expect("queue processing should succeed");
         sleep(Duration::from_millis(3)).await;
@@ -540,7 +591,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
     let mut second_ready = false;
     while Instant::now() < start_deadline {
         controller
-            .process_queued_deployments()
+            .reconcile_deployments()
             .await
             .expect("queue processing should succeed");
         sleep(Duration::from_millis(25)).await;
@@ -595,6 +646,105 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
                 DeploymentStatus::Queued,
                 DeploymentStatus::Building,
                 DeploymentStatus::Ready,
+            ][..]
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_requested_active_deployment_is_marked_removed() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-stop-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    store.seed_service_with_deploy_commands(
+        "svc-0",
+        vec![Command {
+            command: "sleep".to_string(),
+            args: vec!["3".to_string()],
+        }],
+    );
+
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+
+    let mut controller = DeploymentController::new(
+        DeploymentConfig {
+            data_dir: data_dir.clone(),
+            etcd_port: 0,
+        },
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+    );
+
+    let ready_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        controller
+            .reconcile_deployments()
+            .await
+            .expect("queue processing should succeed");
+        sleep(Duration::from_millis(25)).await;
+        controller.reap_finished_tasks().await;
+
+        let deployment = store
+            .all_deployments()
+            .into_iter()
+            .find(|item| item.id == "svc-0-0")
+            .expect("deployment should exist");
+        if deployment.status == DeploymentStatus::Ready {
+            break;
+        }
+
+        assert!(
+            Instant::now() < ready_deadline,
+            "deployment did not reach ready in time"
+        );
+    }
+
+    let outcome = store
+        .stop_service_deployment("svc-0", "svc-0-0")
+        .await
+        .expect("stop request should succeed");
+    assert!(matches!(outcome, Some(_)));
+
+    let removed_deadline = Instant::now() + Duration::from_secs(22);
+    loop {
+        controller
+            .reconcile_deployments()
+            .await
+            .expect("queue processing should succeed");
+        sleep(Duration::from_millis(25)).await;
+        controller.reap_finished_tasks().await;
+
+        let deployment = store
+            .all_deployments()
+            .into_iter()
+            .find(|item| item.id == "svc-0-0")
+            .expect("deployment should exist");
+        if deployment.status == DeploymentStatus::Removed && !controller.has_running_services() {
+            break;
+        }
+
+        assert!(
+            Instant::now() < removed_deadline,
+            "deployment stop request was not applied in time"
+        );
+    }
+
+    assert_eq!(
+        store.transition_history().get("svc-0-0").map(Vec::as_slice),
+        Some(
+            &[
+                DeploymentStatus::Queued,
+                DeploymentStatus::Building,
+                DeploymentStatus::Ready,
+                DeploymentStatus::Removed,
             ][..]
         )
     );

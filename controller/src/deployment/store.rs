@@ -64,6 +64,14 @@ pub trait ClusterStore: Send + Sync {
         bail!("read_service_info not implemented")
     }
 
+    async fn read_service_deployment(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+    ) -> Result<Option<ServiceDeployment>> {
+        bail!("read_service_deployment not implemented")
+    }
+
     async fn queue_deployment(&self, _deployment: ServiceDeployment) -> Result<ForceQueueOutcome> {
         bail!("queue_deployment not implemented")
     }
@@ -74,5 +82,13 @@ pub trait ClusterStore: Send + Sync {
         _deployment_id: &str,
     ) -> Result<CancelDeploymentOutcome> {
         bail!("cancel_service_deployment not implemented")
+    }
+
+    async fn stop_service_deployment(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+    ) -> Result<Option<ServiceDeployment>> {
+        bail!("stop_service_deployment not implemented")
     }
 }
