@@ -113,4 +113,10 @@ impl From<&str> for Error {
     }
 }
 
+impl From<anyhow::Error> for Error {
+    fn from(value: anyhow::Error) -> Self {
+        Self::Message(value.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

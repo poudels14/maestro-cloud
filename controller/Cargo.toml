@@ -8,6 +8,7 @@ name = "maestro"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.102"
 arc = { version = "0.1.0", path = "../../arc" }
 async-trait = "0.1"
 axum = "0.8"

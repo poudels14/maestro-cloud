@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::time::sleep;
 
-use crate::supervisor::model::{NamedServiceConfig, ServiceRuntimeConfig};
+use crate::supervisor::SupervisedJobConfig;
 
 use super::ServiceConfigSource;
 
@@ -29,13 +29,22 @@ impl FileServiceConfigSource {
         }
     }
 
-    fn parse_config(contents: &str) -> Result<Vec<NamedServiceConfig>, String> {
+    fn parse_config(contents: &str) -> Result<Vec<SupervisedJobConfig>, String> {
+        #[derive(Debug, Clone, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawTaskConfig {
+            command: String,
+            restart_delay_ms: u64,
+            max_restarts: u32,
+            shutdown_grace_period_ms: u64,
+        }
+
         #[derive(Debug, Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct ServiceConfigWithName {
             name: String,
             #[serde(flatten)]
-            config: ServiceRuntimeConfig,
+            config: RawTaskConfig,
         }
 
         #[derive(Debug, Deserialize)]
@@ -46,9 +55,9 @@ impl FileServiceConfigSource {
                 services: Vec<ServiceConfigWithName>,
             },
             NamedMap {
-                services: BTreeMap<String, ServiceRuntimeConfig>,
+                services: BTreeMap<String, RawTaskConfig>,
             },
-            FlatNamedMap(BTreeMap<String, ServiceRuntimeConfig>),
+            FlatNamedMap(BTreeMap<String, RawTaskConfig>),
         }
 
         let parsed = json5::from_str::<RawConfigFile>(contents)
@@ -57,22 +66,37 @@ impl FileServiceConfigSource {
         let services = match parsed {
             RawConfigFile::NamedList(list) => list
                 .into_iter()
-                .map(|service| NamedServiceConfig {
+                .map(|service| SupervisedJobConfig {
+                    id: service.name.clone(),
                     name: service.name,
-                    config: service.config,
+                    command: service.config.command,
+                    restart_delay_ms: service.config.restart_delay_ms,
+                    max_restarts: service.config.max_restarts,
+                    shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
                 })
                 .collect::<Vec<_>>(),
             RawConfigFile::NamedListInObject { services } => services
                 .into_iter()
-                .map(|service| NamedServiceConfig {
+                .map(|service| SupervisedJobConfig {
+                    id: service.name.clone(),
                     name: service.name,
-                    config: service.config,
+                    command: service.config.command,
+                    restart_delay_ms: service.config.restart_delay_ms,
+                    max_restarts: service.config.max_restarts,
+                    shutdown_grace_period_ms: service.config.shutdown_grace_period_ms,
                 })
                 .collect::<Vec<_>>(),
             RawConfigFile::NamedMap { services } | RawConfigFile::FlatNamedMap(services) => {
                 services
                     .into_iter()
-                    .map(|(name, config)| NamedServiceConfig { name, config })
+                    .map(|(name, config)| SupervisedJobConfig {
+                        id: name.clone(),
+                        name,
+                        command: config.command,
+                        restart_delay_ms: config.restart_delay_ms,
+                        max_restarts: config.max_restarts,
+                        shutdown_grace_period_ms: config.shutdown_grace_period_ms,
+                    })
                     .collect::<Vec<_>>()
             }
         };
@@ -89,7 +113,7 @@ impl FileServiceConfigSource {
 
 #[async_trait]
 impl ServiceConfigSource for FileServiceConfigSource {
-    async fn next_snapshot(&mut self) -> Result<Vec<NamedServiceConfig>, String> {
+    async fn next_snapshot(&mut self) -> Result<Vec<SupervisedJobConfig>, String> {
         const MISSING_FILE_HASH: u64 = u64::MAX;
 
         loop {

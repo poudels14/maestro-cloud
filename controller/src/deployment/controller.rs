@@ -1,0 +1,314 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use anyhow::Result;
+use tokio::{sync::broadcast, time::sleep};
+
+use crate::signal::ShutdownEvent;
+use crate::supervisor::controller::{FinishedJob, JobSupervisor};
+use crate::{
+    deployment::{
+        events::{DeploymentEvent, DeploymentEventQueue},
+        provider::{DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider},
+        store::{ClusterStore, QueuedDeployment},
+        types::{DeploymentStatus, ServiceDeployment, ServiceProvider},
+    },
+    supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus},
+};
+
+const DEFAULT_RESTART_DELAY_MS: u64 = 1_000;
+const DEFAULT_MAX_RESTARTS: u32 = 5;
+const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+struct PendingDeployment {
+    queued: QueuedDeployment,
+    job: SupervisedJobConfig,
+}
+
+pub struct DeploymentController {
+    store: Arc<dyn ClusterStore>,
+    signal_rx: broadcast::Receiver<ShutdownEvent>,
+    supervisor: JobSupervisor,
+    running_deployments: HashMap<String, String>,
+    pending_claims: HashMap<String, PendingDeployment>,
+    event_queue: DeploymentEventQueue,
+}
+
+impl DeploymentController {
+    pub fn new(
+        store: Arc<dyn ClusterStore>,
+        supervisor: JobSupervisor,
+        signal_rx: broadcast::Receiver<ShutdownEvent>,
+    ) -> Self {
+        Self {
+            store,
+            signal_rx,
+            supervisor,
+            running_deployments: HashMap::new(),
+            pending_claims: HashMap::new(),
+            event_queue: DeploymentEventQueue::default(),
+        }
+    }
+
+    pub(crate) async fn run(&mut self) -> Result<()> {
+        let mut shutdown_started = false;
+        let mut signal_rx = self.signal_rx.resubscribe();
+
+        if let Err(err) = self.queue_terminated_active_deployments().await {
+            eprintln!("[maestro]: failed to queue terminated deployments on startup: {err}");
+        }
+
+        loop {
+            tokio::select! {
+                signal = signal_rx.recv() => {
+                    match signal {
+                        Ok(ShutdownEvent::Graceful) => {
+                            if !shutdown_started {
+                                self.shutdown_all(ShutdownRequest::Graceful).await;
+                                shutdown_started = true;
+                            }
+                        }
+                        Ok(ShutdownEvent::Force) |Err(broadcast::error::RecvError::Closed)=> {
+                            self.shutdown_all(ShutdownRequest::Force).await;
+                            return Ok(());
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    }
+                }
+                _ = sleep(POLL_INTERVAL) => {
+                    self.reap_finished_tasks().await;
+                    if shutdown_started {
+                        if !self.has_running_services() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    if let Err(err) = self.process_queued_deployments().await {
+                        eprintln!("[maestro]: controller queue scan error: {err}");
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn process_queued_deployments(&mut self) -> Result<()> {
+        let queued = self.store.list_queued_deployments().await?;
+        self.queue_queued_deployments(queued);
+        self.apply_deployment_events().await
+    }
+
+    async fn queue_terminated_active_deployments(&self) -> Result<()> {
+        let service_ids = self.store.list_service_ids().await?;
+        for service_id in service_ids {
+            let Some(info) = self.store.read_service_info(&service_id).await? else {
+                continue;
+            };
+            if info.status != Some(DeploymentStatus::Terminated) {
+                continue;
+            }
+            let deployment = ServiceDeployment::new(info.config)?;
+            let _ = self.store.queue_deployment(deployment).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn reap_finished_tasks(&mut self) {
+        let finished = self.supervisor.reap_finished_jobs().await;
+        self.queue_finished_events(finished);
+        if let Err(err) = self.apply_deployment_events().await {
+            eprintln!("[maestro]: failed to apply deployment events: {err}");
+        }
+    }
+
+    async fn shutdown_all(&mut self, request: ShutdownRequest) {
+        let finished = self.supervisor.shutdown_all(request).await;
+        self.queue_finished_events(finished);
+        if let Err(err) = self.apply_deployment_events().await {
+            eprintln!("[maestro]: failed to apply deployment events during shutdown: {err}");
+        }
+    }
+
+    pub(crate) fn has_running_services(&self) -> bool {
+        self.supervisor.has_jobs()
+    }
+
+    fn queue_queued_deployments(&mut self, queued: Vec<QueuedDeployment>) {
+        for queued_deployment in queued {
+            if self.supervisor.contains_job(&queued_deployment.service_id)
+                || self
+                    .pending_claims
+                    .contains_key(&queued_deployment.service_id)
+            {
+                continue;
+            }
+
+            let _build_command = match queued_deployment.deployment.config.provider {
+                ServiceProvider::Docker => {
+                    DockerDeploymentProvider.build(&queued_deployment.deployment)
+                }
+                ServiceProvider::Shell => {
+                    ShellDeploymentProvider.build(&queued_deployment.deployment)
+                }
+            };
+            let deploy_command = match queued_deployment.deployment.config.provider {
+                ServiceProvider::Docker => {
+                    DockerDeploymentProvider.deploy(&queued_deployment.deployment)
+                }
+                ServiceProvider::Shell => {
+                    ShellDeploymentProvider.deploy(&queued_deployment.deployment)
+                }
+            };
+            let Some(deploy_command) = deploy_command else {
+                eprintln!(
+                    "[maestro]: skipping queued deployment `{}` for service `{}`: no image or deploy command",
+                    queued_deployment.deployment.id, queued_deployment.service_id
+                );
+                continue;
+            };
+
+            let job = SupervisedJobConfig {
+                id: queued_deployment.service_id.clone(),
+                name: format!(
+                    "{}/{}",
+                    queued_deployment.service_id, queued_deployment.deployment.id
+                ),
+                command: deploy_command,
+                restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
+                max_restarts: DEFAULT_MAX_RESTARTS,
+                shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
+            };
+
+            self.pending_claims.insert(
+                queued_deployment.service_id.clone(),
+                PendingDeployment {
+                    queued: queued_deployment.clone(),
+                    job,
+                },
+            );
+            self.event_queue
+                .push(DeploymentEvent::ClaimQueuedDeployment(queued_deployment));
+        }
+    }
+
+    fn on_claim_processed(&mut self, queued_deployment: QueuedDeployment, claimed: bool) {
+        let service_id = queued_deployment.service_id;
+        let Some(pending) = self.pending_claims.remove(&service_id) else {
+            return;
+        };
+
+        if pending.queued.deployment.id != queued_deployment.deployment.id {
+            return;
+        }
+
+        if !claimed {
+            return;
+        }
+
+        let deployment_id = pending.queued.deployment.id;
+        let task_id = self.supervisor.start_job(pending.job);
+
+        if task_id.is_none() {
+            return;
+        }
+
+        self.running_deployments
+            .insert(service_id.clone(), deployment_id.clone());
+        self.event_queue.push(DeploymentEvent::MarkDeploymentReady {
+            service_id,
+            deployment_key: pending.queued.key,
+            deployment_id,
+        });
+    }
+
+    fn queue_finished_events(&mut self, finished: Vec<FinishedJob>) {
+        for finished_task in finished {
+            let service_id = finished_task.id;
+            let Some(deployment_id) = self.running_deployments.remove(&service_id) else {
+                continue;
+            };
+
+            eprintln!(
+                "[maestro]: service `{service_id}` deployment `{deployment_id}` worker finished"
+            );
+
+            if finished_task.status == SupervisedJobStatus::Crashed {
+                self.event_queue
+                    .push(DeploymentEvent::MarkDeploymentCrashed {
+                        service_id,
+                        deployment_id,
+                    });
+            } else if finished_task.status == SupervisedJobStatus::Stopped {
+                self.event_queue
+                    .push(DeploymentEvent::MarkDeploymentTerminated {
+                        service_id,
+                        deployment_id,
+                    });
+            }
+        }
+    }
+
+    async fn apply_deployment_events(&mut self) -> Result<()> {
+        loop {
+            let events = self.event_queue.drain();
+            if events.is_empty() {
+                return Ok(());
+            }
+
+            for event in events {
+                match event {
+                    DeploymentEvent::ClaimQueuedDeployment(queued_deployment) => {
+                        let claimed = self
+                            .store
+                            .claim_deployment_building(&queued_deployment)
+                            .await?;
+                        self.on_claim_processed(queued_deployment, claimed);
+                    }
+                    DeploymentEvent::MarkDeploymentReady {
+                        service_id,
+                        deployment_key,
+                        deployment_id,
+                    } => {
+                        if let Err(err) = self
+                            .store
+                            .mark_deployment_ready(&service_id, &deployment_key, &deployment_id)
+                            .await
+                        {
+                            eprintln!(
+                                "[maestro]: failed to mark deployment `{deployment_id}` ready: {err}",
+                            );
+                        }
+                    }
+                    DeploymentEvent::MarkDeploymentCrashed {
+                        service_id,
+                        deployment_id,
+                    } => {
+                        if let Err(err) = self
+                            .store
+                            .mark_deployment_crashed(&service_id, &deployment_id)
+                            .await
+                        {
+                            eprintln!(
+                                "[maestro]: failed to mark deployment `{deployment_id}` crashed: {err}",
+                            );
+                        }
+                    }
+                    DeploymentEvent::MarkDeploymentTerminated {
+                        service_id,
+                        deployment_id,
+                    } => {
+                        if let Err(err) = self
+                            .store
+                            .mark_deployment_terminated(&service_id, &deployment_id)
+                            .await
+                        {
+                            eprintln!(
+                                "[maestro]: failed to mark deployment `{deployment_id}` terminated: {err}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

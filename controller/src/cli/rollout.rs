@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+use crate::deployment::types::{ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
 use crate::error::{Error, Result};
-use crate::supervisor::service::{ServiceBuildConfig, ServiceDeployConfig};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,8 @@ struct ClusterConfig {
 struct ServiceTemplate {
     name: String,
     #[serde(default)]
+    provider: ServiceProvider,
+    #[serde(default)]
     build: Option<ServiceBuildConfig>,
     #[serde(default)]
     image: Option<String>,
@@ -27,6 +29,7 @@ struct ServiceTemplate {
 struct PatchServiceRequest {
     id: String,
     name: String,
+    provider: ServiceProvider,
     #[serde(skip_serializing_if = "Option::is_none")]
     build: Option<ServiceBuildConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,19 +163,25 @@ fn service_payload(
             "service `{service_id}` has empty name"
         )));
     }
-    let (build, image) = normalize_build_or_image(&service_template.build, &service_template.image)
-        .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+    let (build, image, deploy) = validate_service_provider_config(
+        service_template.provider,
+        &service_template.build,
+        &service_template.image,
+        &service_template.deploy,
+    )
+    .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
 
     Ok(PatchServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
+        provider: service_template.provider,
         build,
         image,
-        deploy: service_template.deploy.clone(),
+        deploy,
     })
 }
 
-fn normalize_build_or_image(
+fn validate_build_config(
     build: &Option<ServiceBuildConfig>,
     image: &Option<String>,
 ) -> std::result::Result<(Option<ServiceBuildConfig>, Option<String>), String> {
@@ -194,6 +203,42 @@ fn normalize_build_or_image(
         }
         (Some(_), Some(_)) => Err("must set either `build` or `image`, not both".to_string()),
         (None, None) => Err("must set either `build` or `image`".to_string()),
+    }
+}
+
+fn validate_service_provider_config(
+    provider: ServiceProvider,
+    build: &Option<ServiceBuildConfig>,
+    image: &Option<String>,
+    deploy: &ServiceDeployConfig,
+) -> std::result::Result<
+    (
+        Option<ServiceBuildConfig>,
+        Option<String>,
+        ServiceDeployConfig,
+    ),
+    String,
+> {
+    match provider {
+        ServiceProvider::Docker => {
+            let (build, image) = validate_build_config(build, image)?;
+            Ok((build, image, deploy.clone()))
+        }
+        ServiceProvider::Shell => {
+            if build.is_some() || image.is_some() {
+                return Err("must not set `build` or `image` when provider is `shell`".to_string());
+            }
+            let Some(command) = deploy.command.as_ref() else {
+                return Err("must set deploy.command when provider is `shell`".to_string());
+            };
+            if command.command.trim().is_empty() {
+                return Err(
+                    "must set non-empty deploy.command.command when provider is `shell`"
+                        .to_string(),
+                );
+            }
+            Ok((None, None, deploy.clone()))
+        }
     }
 }
 

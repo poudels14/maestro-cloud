@@ -1,14 +1,28 @@
-use super::*;
-use crate::supervisor::service::{
-    ArcCommand, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
+use crate::deployment::controller::DeploymentController;
+use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
+use crate::deployment::provider::{DockerDeploymentProvider, ServiceCommandPlanner};
+use crate::deployment::store::{ClusterStore, QueuedDeployment};
+use crate::deployment::types::{
+    ActiveDeployment, Command, DeploymentStatus, ServiceBuildConfig, ServiceConfig,
+    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
 };
-use std::sync::Mutex;
-use tokio::time::Instant;
+use crate::supervisor::controller::JobSupervisor;
+use anyhow::Result;
+use async_trait::async_trait;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{
+    sync::broadcast,
+    time::{Instant, sleep},
+};
 
 fn deployment_with_source(
     build: Option<ServiceBuildConfig>,
     image: Option<&str>,
-    deploy_command: Option<ArcCommand>,
+    deploy_command: Option<Command>,
 ) -> ServiceDeployment {
     ServiceDeployment {
         id: "A1B2C3D4E5".to_string(),
@@ -19,6 +33,7 @@ fn deployment_with_source(
             id: "svc-1".to_string(),
             name: "service-1".to_string(),
             version: "cfg-1".to_string(),
+            provider: ServiceProvider::Docker,
             build,
             image: image.map(str::to_string),
             deploy: ServiceDeployConfig {
@@ -38,15 +53,15 @@ fn command_planner_uses_image_for_deploy_when_present() {
     let deployment = deployment_with_source(
         None,
         Some("traefik/whoami"),
-        Some(ArcCommand {
+        Some(Command {
             command: "arc-deploy".to_string(),
             args: vec!["--prod".to_string()],
         }),
     );
 
-    let planner = DefaultServiceCommandPlanner;
+    let planner = DockerDeploymentProvider;
     let deploy = planner
-        .deploy_command(&deployment)
+        .deploy(&deployment)
         .expect("deploy command should exist");
     assert_eq!(
         deploy,
@@ -65,9 +80,9 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
         "env=test".to_string(),
     ];
 
-    let planner = DefaultServiceCommandPlanner;
+    let planner = DockerDeploymentProvider;
     let deploy = planner
-        .deploy_command(&deployment)
+        .deploy(&deployment)
         .expect("deploy command should exist");
 
     assert_eq!(
@@ -84,15 +99,15 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
             dockerfile_path: "Dockerfile".to_string(),
         }),
         None,
-        Some(ArcCommand {
+        Some(Command {
             command: "arc deploy".to_string(),
             args: vec!["--service".to_string(), "svc-1".to_string()],
         }),
     );
 
-    let planner = DefaultServiceCommandPlanner;
+    let planner = DockerDeploymentProvider;
     let deploy = planner
-        .deploy_command(&deployment)
+        .deploy(&deployment)
         .expect("deploy command should exist");
     assert_eq!(deploy, "arc deploy --service svc-1");
 }
@@ -120,12 +135,16 @@ impl InMemoryStore {
                 id: service_id.clone(),
                 name: format!("service-{svc_idx}"),
                 version: format!("cfg-{svc_idx}"),
+                provider: ServiceProvider::Shell,
                 build: None,
-                image: Some("traefik/whoami".to_string()),
+                image: None,
                 deploy: ServiceDeployConfig {
                     flags: vec![],
                     ports: vec![],
-                    command: None,
+                    command: Some(Command {
+                        command: "true".to_string(),
+                        args: vec![],
+                    }),
                     healthcheck_path: "/_healthy".to_string(),
                 },
             };
@@ -178,19 +197,15 @@ impl InMemoryStore {
 }
 
 #[async_trait]
-impl DeploymentStore for InMemoryStore {
-    async fn list_service_ids(&self) -> Result<Vec<String>, String> {
+impl ClusterStore for InMemoryStore {
+    async fn list_service_ids(&self) -> Result<Vec<String>> {
         let state = self.state.lock().expect("state lock");
         let mut ids = state.configs.keys().cloned().collect::<Vec<_>>();
         ids.sort();
         Ok(ids)
     }
 
-    async fn queue_terminated_deployment(&self, _service_id: &str) -> Result<bool, String> {
-        Ok(false)
-    }
-
-    async fn list_queued_deployments(&self) -> Result<Vec<QueuedDeployment>, String> {
+    async fn list_queued_deployments(&self) -> Result<Vec<QueuedDeployment>> {
         let state = self.state.lock().expect("state lock");
         let mut queued = Vec::new();
         for (service_id, deployments) in &state.history {
@@ -218,7 +233,7 @@ impl DeploymentStore for InMemoryStore {
     async fn claim_deployment_building(
         &self,
         queued_deployment: &QueuedDeployment,
-    ) -> Result<bool, String> {
+    ) -> Result<bool> {
         let Some((service_id, index)) = parse_history_key(&queued_deployment.key) else {
             return Ok(false);
         };
@@ -259,7 +274,7 @@ impl DeploymentStore for InMemoryStore {
         _service_id: &str,
         deployment_key: &str,
         deployment_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let Some((service_id, index)) = parse_history_key(deployment_key) else {
             return Ok(());
         };
@@ -289,11 +304,7 @@ impl DeploymentStore for InMemoryStore {
         Ok(())
     }
 
-    async fn mark_deployment_crashed(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-    ) -> Result<(), String> {
+    async fn mark_deployment_crashed(&self, service_id: &str, deployment_id: &str) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
         let updated_id = {
             let Some(deployments) = state.history.get_mut(service_id) else {
@@ -321,7 +332,7 @@ impl DeploymentStore for InMemoryStore {
         &self,
         service_id: &str,
         deployment_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
         let updated_id = {
             let Some(deployments) = state.history.get_mut(service_id) else {
@@ -346,50 +357,23 @@ impl DeploymentStore for InMemoryStore {
     }
 }
 
-#[derive(Clone, Copy)]
-struct DummyWorkerRunner {
-    delay: Duration,
-    outcome: WorkerExitStatus,
-}
-
-impl WorkerRunner for DummyWorkerRunner {
-    fn spawn(
-        &self,
-        _service_name: String,
-        _config: ServiceRuntimeConfig,
-        _shutdown_rx: watch::Receiver<ShutdownRequest>,
-    ) -> JoinHandle<WorkerExitStatus> {
-        let delay = self.delay;
-        let outcome = self.outcome;
-        tokio::spawn(async move {
-            sleep(delay).await;
-            outcome
-        })
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stress_supervisor_updates_deployment_statuses() {
     let store = Arc::new(InMemoryStore::default());
     store.seed_queued_deployments(12, 15);
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
 
-    let mut supervisor = QueueSupervisor::with_parts(
-        store.clone(),
-        Arc::new(DefaultServiceCommandPlanner),
-        Arc::new(DummyWorkerRunner {
-            delay: Duration::from_millis(2),
-            outcome: WorkerExitStatus::Crashed,
-        }),
-    );
+    let mut controller = DeploymentController::new(store.clone(), JobSupervisor::new(), signal_rx);
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    while store.queued_count() > 0 || !supervisor.running.is_empty() {
-        supervisor
+    while store.queued_count() > 0 || controller.has_running_services() {
+        controller
             .process_queued_deployments()
             .await
             .expect("queue processing should succeed");
         sleep(Duration::from_millis(3)).await;
-        supervisor.reap_finished_tasks().await;
+        controller.reap_finished_tasks().await;
         assert!(Instant::now() < deadline, "stress run timed out");
     }
 
@@ -398,7 +382,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
     assert!(
         deployments
             .iter()
-            .all(|deployment| deployment.status == DeploymentStatus::Crashed)
+            .all(|deployment| deployment.status == DeploymentStatus::Ready)
     );
 
     for history in store.transition_history().values() {
@@ -408,7 +392,6 @@ async fn stress_supervisor_updates_deployment_statuses() {
                 DeploymentStatus::Queued,
                 DeploymentStatus::Building,
                 DeploymentStatus::Ready,
-                DeploymentStatus::Crashed,
             ]
         );
     }
