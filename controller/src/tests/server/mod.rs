@@ -18,7 +18,7 @@ fn sample_patch_request(id: &str, name: &str) -> PatchServiceRequest {
                 command: "arc-deploy".to_string(),
                 args: vec!["--prod".to_string()],
             }),
-            healthcheck_path: "/_healthy".to_string(),
+            healthcheck_path: Some("/_healthy".to_string()),
         },
     }
 }
@@ -37,7 +37,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> PatchSe
                 command: "arc-deploy".to_string(),
                 args: vec!["--prod".to_string()],
             }),
-            healthcheck_path: "/_healthy".to_string(),
+            healthcheck_path: Some("/_healthy".to_string()),
         },
     }
 }
