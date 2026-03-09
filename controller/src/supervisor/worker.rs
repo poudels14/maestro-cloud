@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::{
-    sync::watch,
+    sync::{oneshot, watch},
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -11,13 +11,32 @@ use watchexec_supervisor::{
     job::{CommandState, Job, start_job},
 };
 
-use super::model::ServiceRuntimeConfig;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisedJobConfig {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub restart_delay_ms: u64,
+    pub max_restarts: u32,
+    pub shutdown_grace_period_ms: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkerExitStatus {
+pub enum SupervisedJobStatus {
+    Pending,
+    Running,
     Stopped,
     Completed,
     Crashed,
+}
+
+impl SupervisedJobStatus {
+    pub fn finished(&self) -> bool {
+        match self {
+            Self::Completed | Self::Stopped | Self::Crashed => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,108 +46,190 @@ pub enum ShutdownRequest {
     Force,
 }
 
-pub async fn run_managed_service(
-    name: String,
-    config: ServiceRuntimeConfig,
-    mut shutdown_rx: watch::Receiver<ShutdownRequest>,
-) -> WorkerExitStatus {
-    let command = Arc::new(Command {
-        program: Program::Shell {
-            shell: Shell::new("sh"),
-            command: config.command.clone(),
-            args: Vec::new(),
-        },
-        options: SpawnOptions {
-            grouped: true,
-            ..Default::default()
-        },
-    });
+pub struct SupervisedJob {
+    job: Job,
+    handle: JoinHandle<SupervisedJobStatus>,
+    shutdown_tx: watch::Sender<ShutdownRequest>,
+}
 
-    let shutdown_grace = Duration::from_millis(config.shutdown_grace_period_ms);
-    let restart_delay = Duration::from_millis(config.restart_delay_ms);
-    let shutdown_timeout = shutdown_grace.saturating_add(Duration::from_secs(3));
+impl SupervisedJob {
+    #[inline]
+    pub fn is_finished(&self) -> bool {
+        return self.handle.is_finished();
+    }
 
-    let (job, supervisor_task) = start_job(command);
-    let mut supervisor_task = supervisor_task;
-    let mut restart_count = 0_u32;
-    let mut exit_status = WorkerExitStatus::Completed;
+    pub async fn status(&self) -> SupervisedJobStatus {
+        let (tx, rx) = oneshot::channel();
+        self.job
+            .run(move |ctx| {
+                let status = match ctx.current {
+                    CommandState::Pending => SupervisedJobStatus::Pending,
+                    CommandState::Running { .. } => SupervisedJobStatus::Running,
+                    CommandState::Finished { status, .. } => match status {
+                        ProcessEnd::Success => SupervisedJobStatus::Completed,
+                        _ => SupervisedJobStatus::Stopped,
+                    },
+                };
+                let _ = tx.send(status);
+            })
+            .await;
 
-    loop {
-        job.start().await;
-        log_service_process_ids(&name, &job).await;
-
-        let outcome = tokio::select! {
-            _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
-            status = wait_for_job_exit(&job) => WorkerOutcome::Exited(status),
-        };
-
-        match outcome {
-            WorkerOutcome::Shutdown(shutdown_request) => {
-                match shutdown_request {
-                    ShutdownRequest::Force => force_stop_and_delete(&job).await,
-                    ShutdownRequest::Graceful => {
-                        graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
-                    }
-                    ShutdownRequest::None => continue,
-                }
-                exit_status = WorkerExitStatus::Stopped;
-                break;
+        rx.await.unwrap_or_else(|_| {
+            if self.handle.is_finished() {
+                SupervisedJobStatus::Stopped
+            } else {
+                SupervisedJobStatus::Running
             }
-            WorkerOutcome::Exited(Some(status)) => {
-                if is_failure(status) {
-                    if restart_count >= config.max_restarts {
-                        eprintln!(
-                            "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={} (stopping)",
-                            config.max_restarts
-                        );
-                        exit_status = WorkerExitStatus::Crashed;
-                        break;
-                    }
+        })
+    }
 
-                    restart_count += 1;
-                    eprintln!(
-                        "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{} in {}ms",
-                        config.max_restarts, config.restart_delay_ms
-                    );
+    #[inline]
+    pub async fn join(&mut self) -> Result<SupervisedJobStatus, tokio::task::JoinError> {
+        (&mut self.handle).await
+    }
 
-                    let delay_outcome = tokio::select! {
-                        _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
-                        _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
-                    };
+    #[inline]
+    pub fn shutdown(&self, request: ShutdownRequest) {
+        let _ = self.shutdown_tx.send(request);
+    }
+}
 
-                    if let WorkerOutcome::Shutdown(shutdown_request) = delay_outcome {
-                        match shutdown_request {
-                            ShutdownRequest::Force => force_stop_and_delete(&job).await,
-                            ShutdownRequest::Graceful => {
-                                graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout)
-                                    .await;
-                            }
-                            ShutdownRequest::None => continue,
-                        }
-                        exit_status = WorkerExitStatus::Stopped;
-                        break;
-                    }
+pub struct SupervisedJobRunner;
 
-                    continue;
-                }
+impl SupervisedJobRunner {
+    pub fn new() -> Self {
+        Self
+    }
 
-                eprintln!("[maestro]: service '{name}' exited successfully (not restarting)");
-                break;
-            }
-            WorkerOutcome::Exited(None) => {
-                eprintln!("[maestro]: service '{name}' ended without an exit status");
-                exit_status = WorkerExitStatus::Crashed;
-                break;
-            }
-            WorkerOutcome::DelayElapsed => {
-                continue;
-            }
+    pub fn spawn(&self, config: SupervisedJobConfig) -> SupervisedJob {
+        let command = Arc::new(Command {
+            program: Program::Shell {
+                shell: Shell::new("sh"),
+                command: config.command.clone(),
+                args: Vec::new(),
+            },
+            options: SpawnOptions {
+                grouped: true,
+                ..Default::default()
+            },
+        });
+        let (job, job_handle) = start_job(command);
+        let run_job = job.clone();
+        let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownRequest::None);
+        let handle =
+            tokio::spawn(
+                async move { Self::start_job(config, run_job, job_handle, shutdown_rx).await },
+            );
+
+        SupervisedJob {
+            job,
+            handle,
+            shutdown_tx,
         }
     }
 
-    let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-    await_supervisor_shutdown(&mut supervisor_task).await;
-    exit_status
+    pub async fn start_job(
+        config: SupervisedJobConfig,
+        job: Job,
+        mut job_handle: JoinHandle<()>,
+        mut shutdown_rx: watch::Receiver<ShutdownRequest>,
+    ) -> SupervisedJobStatus {
+        let name = config.name.clone();
+
+        let shutdown_grace = Duration::from_millis(config.shutdown_grace_period_ms);
+        let restart_delay = Duration::from_millis(config.restart_delay_ms);
+        let shutdown_timeout = shutdown_grace.saturating_add(Duration::from_secs(3));
+
+        let mut restart_count = 0_u32;
+        let mut exit_status = SupervisedJobStatus::Completed;
+
+        loop {
+            job.start().await;
+            log_service_process_ids(&name, &job).await;
+
+            let outcome = tokio::select! {
+                _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
+                status = wait_for_job_exit(&job) => WorkerOutcome::Exited(status),
+            };
+
+            match outcome {
+                WorkerOutcome::Shutdown(shutdown_request) => {
+                    match shutdown_request {
+                        ShutdownRequest::Force => force_stop_and_delete(&job).await,
+                        ShutdownRequest::Graceful => {
+                            graceful_stop_and_delete(&job, shutdown_grace, shutdown_timeout).await;
+                        }
+                        ShutdownRequest::None => continue,
+                    }
+                    exit_status = SupervisedJobStatus::Stopped;
+                    break;
+                }
+                WorkerOutcome::Exited(Some(status)) => {
+                    if !matches!(status, ProcessEnd::Success) {
+                        if restart_count >= config.max_restarts {
+                            eprintln!(
+                                "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={} (stopping)",
+                                config.max_restarts
+                            );
+                            exit_status = SupervisedJobStatus::Crashed;
+                            break;
+                        }
+
+                        restart_count += 1;
+                        eprintln!(
+                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{} in {}ms",
+                            config.max_restarts, config.restart_delay_ms
+                        );
+
+                        let delay_outcome = tokio::select! {
+                            _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
+                            _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
+                        };
+
+                        if let WorkerOutcome::Shutdown(shutdown_request) = delay_outcome {
+                            match shutdown_request {
+                                ShutdownRequest::Force => force_stop_and_delete(&job).await,
+                                ShutdownRequest::Graceful => {
+                                    graceful_stop_and_delete(
+                                        &job,
+                                        shutdown_grace,
+                                        shutdown_timeout,
+                                    )
+                                    .await;
+                                }
+                                ShutdownRequest::None => continue,
+                            }
+                            exit_status = SupervisedJobStatus::Stopped;
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    eprintln!("[maestro]: service '{name}' exited successfully (not restarting)");
+                    break;
+                }
+                WorkerOutcome::Exited(None) => {
+                    eprintln!("[maestro]: service '{name}' ended without an exit status");
+                    exit_status = SupervisedJobStatus::Crashed;
+                    break;
+                }
+                WorkerOutcome::DelayElapsed => {
+                    continue;
+                }
+            }
+        }
+
+        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        if timeout(Duration::from_secs(3), &mut job_handle)
+            .await
+            .is_err()
+        {
+            eprintln!("[maestro]: supervisor job did not stop in time; waiting for cleanup");
+            let _ = job_handle.await;
+        }
+        exit_status
+    }
 }
 
 enum WorkerOutcome {
@@ -159,16 +260,6 @@ async fn force_stop_and_delete(job: &Job) {
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
 }
 
-async fn await_supervisor_shutdown(supervisor_task: &mut JoinHandle<()>) {
-    if timeout(Duration::from_secs(3), &mut *supervisor_task)
-        .await
-        .is_err()
-    {
-        eprintln!("[maestro]: supervisor task did not stop in time; waiting for cleanup");
-        let _ = supervisor_task.await;
-    }
-}
-
 async fn wait_for_job_exit(job: &Job) -> Option<ProcessEnd> {
     job.to_wait().await;
 
@@ -186,10 +277,6 @@ async fn wait_for_job_exit(job: &Job) -> Option<ProcessEnd> {
     rx.await.ok().flatten()
 }
 
-fn is_failure(status: ProcessEnd) -> bool {
-    !matches!(status, ProcessEnd::Success)
-}
-
 async fn log_service_process_ids(name: &str, job: &Job) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     job.run(move |ctx| {
@@ -197,9 +284,7 @@ async fn log_service_process_ids(name: &str, job: &Job) {
             CommandState::Running { child, .. } => child.id(),
             _ => None,
         };
-
         let pgid = pid.and_then(get_pgid_for_pid);
-
         let _ = tx.send((pid, pgid));
     })
     .await;

@@ -1,18 +1,7 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-pub const SERVICES_ROOT: &str = "/maetro/services";
-
-pub fn service_info_key(service_id: &str) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/info")
-}
-
-pub fn service_active_deployment_key(service_id: &str) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/deployments/active")
-}
-
-pub fn service_deployment_history_key(service_id: &str, index: usize) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/deployments/history/{index}")
-}
+use crate::utils;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -20,11 +9,21 @@ pub struct ServiceConfig {
     pub id: String,
     pub name: String,
     pub version: String,
+    #[serde(default)]
+    pub provider: ServiceProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<ServiceBuildConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub deploy: ServiceDeployConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceProvider {
+    #[default]
+    Docker,
+    Shell,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,13 +40,13 @@ pub struct ServiceDeployConfig {
     pub flags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
-    pub command: Option<ArcCommand>,
+    pub command: Option<Command>,
     pub healthcheck_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ArcCommand {
+pub struct Command {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -85,6 +84,20 @@ pub struct ServiceDeployment {
     pub config: ServiceConfig,
     pub git_commit: Option<GitCommitInfo>,
     pub build: Option<DeploymentBuildInfo>,
+}
+
+impl ServiceDeployment {
+    pub fn new(config: ServiceConfig) -> Result<Self> {
+        Ok(ServiceDeployment {
+            id: utils::nanoid::unique_id(),
+            created_at: utils::time::current_time_millis()?,
+            deployed_at: None,
+            status: DeploymentStatus::Queued,
+            config,
+            git_commit: None,
+            build: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
