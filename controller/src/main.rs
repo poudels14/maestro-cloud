@@ -35,6 +35,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum CliCommand {
     Start {
+        #[arg(long = "cluster-name")]
+        cluster_name: String,
         #[arg(long = "expose_etcd")]
         expose_etcd: Option<u16>,
         #[arg(long = "port", default_value_t = DEFAULT_BIND_PORT)]
@@ -82,11 +84,13 @@ async fn run() -> crate::error::Result<()> {
             Ok(())
         }
         Some(CliCommand::Start {
+            cluster_name,
             port,
             expose_etcd,
             data_dir,
             network,
         }) => {
+            let cluster_name = cluster_name.to_lowercase();
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
@@ -105,6 +109,7 @@ async fn run() -> crate::error::Result<()> {
                 .expect("failed to get parent dir")
                 .to_path_buf();
             let deployment_config = DeploymentConfig {
+                cluster_name,
                 data_dir,
                 etcd_port,
                 project_dir,
