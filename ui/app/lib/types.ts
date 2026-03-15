@@ -32,3 +32,9 @@ export interface Deployment {
   gitCommit: string | null;
   build: unknown | null;
 }
+
+export interface LogEntry {
+  ts: number;
+  stream: "stdout" | "stderr";
+  text: string;
+}

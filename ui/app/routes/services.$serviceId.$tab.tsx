@@ -1,10 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createResource, For, Show, Suspense } from "solid-js";
-import { ArrowLeft, Clock, GitCommitHorizontal, Rocket } from "lucide-solid";
-import type { Service } from "../lib/types";
+import { createEffect, createResource, createSignal, For, Show, Suspense, on, onCleanup } from "solid-js";
+import { ArrowLeft, ChevronDown, Clock, GitCommitHorizontal, Rocket } from "lucide-solid";
+import { Select } from "@kobalte/core/select";
+import type { LogEntry, Service } from "../lib/types";
 import {
   getServices,
   getDeployments,
+  getLogs,
+  getSystemLogs,
   redeployService,
   cancelDeployment,
   stopDeployment
@@ -272,46 +275,188 @@ function DeploymentsTab(props: { serviceId: string }) {
   );
 }
 
-function LogsTab(props: { service: Service }) {
-  const DUMMY_LOGS = [
-    { ts: "2026-03-09T10:00:01Z", level: "INFO", msg: `[${props.service.id}] Service starting...` },
-    { ts: "2026-03-09T10:00:02Z", level: "INFO", msg: `[${props.service.id}] Listening on :8080` },
-    { ts: "2026-03-09T10:00:05Z", level: "INFO", msg: `[${props.service.id}] Health check passed` },
-    { ts: "2026-03-09T10:00:12Z", level: "INFO", msg: `[${props.service.id}] GET / 200 3ms` },
-    {
-      ts: "2026-03-09T10:00:14Z",
-      level: "INFO",
-      msg: `[${props.service.id}] GET /api/status 200 1ms`
-    },
-    {
-      ts: "2026-03-09T10:00:20Z",
-      level: "WARN",
-      msg: `[${props.service.id}] Slow query detected (254ms)`
-    },
-    { ts: "2026-03-09T10:00:25Z", level: "INFO", msg: `[${props.service.id}] GET / 200 2ms` },
-    { ts: "2026-03-09T10:00:30Z", level: "INFO", msg: `[${props.service.id}] Health check passed` }
-  ];
+const DEFAULT_LOG_TAIL = 1000;
+const LOAD_MORE_STEP = 5000;
+const POLL_INTERVAL_MS = 5000;
 
-  const levelColor = (level: string) => {
-    if (level === "WARN") return "text-amber-600";
-    if (level === "ERROR") return "text-red-600";
-    return "text-gray-400";
+function LogsTab(props: { service: Service }) {
+  const isSystem = props.service.system === true;
+
+  const [deployments] = createResource(
+    () => (isSystem ? null : props.service.id),
+    (id) => getDeployments(id)
+  );
+  const [selectedId, setSelectedId] = createSignal<string | null>(null);
+  const activeId = () => selectedId() ?? deployments()?.[0]?.id ?? null;
+
+  const [lines, setLines] = createSignal<LogEntry[]>([]);
+  const [loading, setLoading] = createSignal(true);
+  const [hasMore, setHasMore] = createSignal(false);
+  const [tail, setTail] = createSignal(DEFAULT_LOG_TAIL);
+
+  const fetchLogs = async () => {
+    const t = tail();
+    let fetched: LogEntry[];
+    if (isSystem) {
+      fetched = await getSystemLogs(props.service.id, t);
+    } else {
+      const did = activeId();
+      if (!did) return;
+      fetched = await getLogs(props.service.id, did, t);
+    }
+
+    setHasMore(fetched.length >= t);
+
+    const current = lines();
+    if (current.length === 0) {
+      setLines(fetched);
+    } else {
+      const lastTs = current[current.length - 1].ts;
+      const lastText = current[current.length - 1].text;
+      let newStart = fetched.length;
+      for (let i = fetched.length - 1; i >= 0; i--) {
+        if (fetched[i].ts === lastTs && fetched[i].text === lastText) {
+          newStart = i + 1;
+          break;
+        }
+      }
+      if (newStart < fetched.length) {
+        setLines((prev) => [...prev, ...fetched.slice(newStart)]);
+      }
+    }
+    setLoading(false);
   };
+
+  createEffect(
+    on(activeId, () => {
+      setLines([]);
+      setLoading(true);
+      setTail(DEFAULT_LOG_TAIL);
+      fetchLogs();
+    })
+  );
+
+  const pollTimer = setInterval(fetchLogs, POLL_INTERVAL_MS);
+  onCleanup(() => clearInterval(pollTimer));
+
+  let scrollRef: HTMLDivElement | undefined;
+  let wasAtBottom = true;
+
+  createEffect(
+    on(lines, () => {
+      if (wasAtBottom && scrollRef) {
+        requestAnimationFrame(() => {
+          scrollRef!.scrollTop = scrollRef!.scrollHeight;
+        });
+      }
+    })
+  );
+
+  const onScroll = () => {
+    if (!scrollRef) return;
+    wasAtBottom = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight < 50;
+  };
+
+  const loadMore = async () => {
+    const newTail = tail() + LOAD_MORE_STEP;
+    setTail(newTail);
+    let fetched: LogEntry[];
+    if (isSystem) {
+      fetched = await getSystemLogs(props.service.id, newTail);
+    } else {
+      const did = activeId();
+      if (!did) return;
+      fetched = await getLogs(props.service.id, did, newTail);
+    }
+    setHasMore(fetched.length >= newTail);
+    setLines(fetched);
+  };
+
+  const formatTs = (ms: number) =>
+    new Date(ms).toISOString().replace("T", " ").replace("Z", "").slice(0, 19);
 
   return (
     <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div class="p-4 font-mono text-xs leading-6 overflow-x-auto">
-        <For each={DUMMY_LOGS}>
-          {(line) => (
-            <div class="flex gap-3 whitespace-nowrap">
-              <span class="text-gray-400 select-none shrink-0">
-                {line.ts.replace("T", " ").replace("Z", "")}
-              </span>
-              <span class={`w-10 shrink-0 ${levelColor(line.level)}`}>{line.level}</span>
-              <span class="text-gray-700">{line.msg}</span>
+      <Show when={!isSystem}>
+        <div class="px-4 py-2 border-b border-gray-100">
+          <Select
+            options={deployments() ?? []}
+            optionValue="id"
+            optionTextValue={(d) => `#${d.id.split("-").slice(-1)[0]} — ${d.status.toLowerCase()}`}
+            value={deployments()?.find((d) => d.id === activeId()) ?? null}
+            onChange={(d) => { if (d) setSelectedId(d.id); }}
+            itemComponent={(itemProps) => {
+              const d = itemProps.item.rawValue;
+              const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
+              return (
+                <Select.Item
+                  item={itemProps.item}
+                  class="text-xs px-3 py-1.5 cursor-pointer outline-none rounded data-[highlighted]:bg-indigo-50 data-[highlighted]:text-indigo-700 text-gray-700"
+                >
+                  <Select.ItemLabel>#{shortId} — {d.status.toLowerCase()}</Select.ItemLabel>
+                </Select.Item>
+              );
+            }}
+          >
+            <Select.Trigger class="inline-flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 outline-none hover:border-gray-300 transition-colors">
+              <Select.Value<typeof import("../lib/types").Deployment>>
+                {(state) => {
+                  const d = state.selectedOption();
+                  if (!d) return "Select deployment";
+                  const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
+                  return `#${shortId} — ${d.status.toLowerCase()}`;
+                }}
+              </Select.Value>
+              <Select.Icon>
+                <ChevronDown class="size-3 text-gray-400" />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 overflow-hidden">
+                <Select.Listbox class="max-h-48 overflow-y-auto outline-none" />
+              </Select.Content>
+            </Select.Portal>
+          </Select>
+        </div>
+      </Show>
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        class="p-4 font-mono text-xs leading-6 max-h-[600px] overflow-y-auto"
+      >
+        <Show
+          when={!loading() && lines().length > 0}
+          fallback={
+            <div class="text-gray-400 text-center py-8">
+              {loading() ? "Loading logs…" : "No logs available."}
             </div>
-          )}
-        </For>
+          }
+        >
+          <Show when={hasMore()}>
+            <div class="text-center pb-3">
+              <button
+                type="button"
+                onClick={loadMore}
+                class="text-xs text-indigo-600 hover:text-indigo-700 font-medium outline-none"
+              >
+                Load previous logs
+              </button>
+            </div>
+          </Show>
+          <For each={lines()}>
+            {(line) => (
+              <div class="flex gap-3">
+                <span class="text-gray-400 select-none shrink-0 whitespace-nowrap">{formatTs(line.ts)}</span>
+                <span
+                  class={`shrink-0 whitespace-nowrap ${line.stream === "stderr" ? "text-red-400" : "text-gray-400"}`}
+                >
+                  {line.stream}
+                </span>
+                <span class="text-gray-700 break-words">{line.text}</span>
+              </div>
+            )}
+          </For>
+        </Show>
       </div>
     </div>
   );

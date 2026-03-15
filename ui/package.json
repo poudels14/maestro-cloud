@@ -8,6 +8,7 @@
     "start": "vite preview"
   },
   "dependencies": {
+    "@kobalte/core": "^0.13.11",
     "@solidjs/meta": "^0.29.4",
     "@tanstack/solid-router": "^1.166.2",
     "@tanstack/solid-start": "^1.166.2",
