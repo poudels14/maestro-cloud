@@ -113,12 +113,16 @@ async fn init_probe(
     .expect("failed to build probe image");
     let logs_dir = config.data_dir.join("logs/system/maestro-probe");
     std::fs::create_dir_all(&logs_dir).expect("Failed to create probe logs dir");
+    let deployment_logs_dir = std::fs::canonicalize(config.deployment_logs_dir())
+        .expect("failed to canonicalize deployment logs dir");
 
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: format!(
-            "docker run --name {container_name} --network {} --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 {PROBE_IMAGE_TAG}",
+            "docker run --name {container_name} --network {} -p {}:6400 -v {}:/logs:ro --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 -e PORT=6400 {PROBE_IMAGE_TAG}",
             config.network,
+            config.probe_port,
+            deployment_logs_dir.display(),
         ),
         name: "maestro-probe".to_string(),
         max_restarts: None,

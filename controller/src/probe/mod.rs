@@ -1,48 +1,81 @@
 mod healthcheck;
 
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::broadcast;
 use tokio::time::sleep;
 
 use crate::deployment::etcd::EtcdStateStore;
+use crate::server;
+use crate::signal::ShutdownEvent;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub async fn run(etcd_endpoint: &str) -> Result<()> {
-    eprintln!("starting, etcd={etcd_endpoint}");
+const LOGS_DIR: &str = "/logs";
+
+pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
+    eprintln!("starting, etcd={etcd_endpoint}, port={port}");
 
     let store = EtcdStateStore::new(etcd_endpoint).await?;
-    let http_client = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build()?;
-    let mut health_state = healthcheck::HealthState::new();
+    let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
 
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    let (shutdown_tx, _) = broadcast::channel::<ShutdownEvent>(4);
 
-    loop {
-        let poll = async {
-            sleep(POLL_INTERVAL).await;
-            if let Err(err) =
-                healthcheck::check_deployments(&store, &http_client, &mut health_state).await
-            {
-                eprintln!("poll error: {err}");
-            }
-        };
+    let server = server::Server::new(store.clone(), PathBuf::from(LOGS_DIR));
+    let bind_addr = format!("0.0.0.0:{port}");
+    let server_shutdown_rx = shutdown_tx.subscribe();
+    let server_shutdown_tx = shutdown_tx.clone();
+    let server_future = async move {
+        let result = server.serve(&bind_addr, server_shutdown_rx).await;
+        let _ = server_shutdown_tx.send(ShutdownEvent::Graceful);
+        result
+    };
 
-        tokio::select! {
-            _ = sigterm.recv() => {
-                eprintln!("received SIGTERM, shutting down");
-                break;
+    let healthcheck_shutdown_tx = shutdown_tx.clone();
+    let healthcheck_future = async move {
+        let http_client = reqwest::Client::builder()
+            .timeout(HEALTH_TIMEOUT)
+            .build()
+            .expect("failed to build http client");
+        let mut health_state = healthcheck::HealthState::new();
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+
+        loop {
+            let poll = async {
+                sleep(POLL_INTERVAL).await;
+                if let Err(err) =
+                    healthcheck::check_deployments(store.as_ref(), &http_client, &mut health_state)
+                        .await
+                {
+                    eprintln!("[probe] poll error: {err}");
+                }
+            };
+
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    eprintln!("[probe] received SIGTERM, shutting down");
+                    break;
+                }
+                _ = sigint.recv() => {
+                    eprintln!("[probe] received SIGINT, shutting down");
+                    break;
+                }
+                _ = poll => {}
             }
-            _ = sigint.recv() => {
-                eprintln!("received SIGINT, shutting down");
-                break;
-            }
-            _ = poll => {}
         }
-    }
 
+        let _ = healthcheck_shutdown_tx.send(ShutdownEvent::Graceful);
+        Ok::<(), crate::error::Error>(())
+    };
+
+    let _ = tokio::try_join!(server_future, healthcheck_future);
     Ok(())
 }

@@ -614,7 +614,7 @@ async fn log_http(request: Request<Body>, next: Next) -> Response {
     let status = response.status();
     let elapsed_ms = started.elapsed().as_millis();
 
-    println!("[http] {method} {path} -> {status} ({elapsed_ms}ms)");
+    println!("{method} {path} -> {status} ({elapsed_ms}ms)");
     response
 }
 

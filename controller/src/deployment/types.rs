@@ -10,6 +10,7 @@ pub struct DeploymentConfig {
     pub cluster_name: String,
     pub data_dir: PathBuf,
     pub etcd_port: u16,
+    pub probe_port: u16,
     pub project_dir: PathBuf,
     pub network: String,
 }
