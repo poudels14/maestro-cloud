@@ -8,6 +8,11 @@ export interface Build {
   dockerfilePath: string;
 }
 
+export interface Ingress {
+  host: string;
+  port?: number;
+}
+
 export interface Deploy {
   command?: BuildCommand | null;
   healthcheckPath: string;
@@ -21,6 +26,7 @@ export interface Service {
   build?: Build | null;
   image?: string | null;
   deploy: Deploy;
+  ingress?: Ingress | null;
   system?: boolean;
 }
 

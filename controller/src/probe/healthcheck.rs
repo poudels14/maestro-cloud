@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -15,11 +15,13 @@ pub async fn check_deployments(
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
+    let mut active_ids = HashSet::new();
     for service_id in service_ids {
         let deployments = store.list_service_deployments(&service_id).await?;
 
         for deployment in deployments {
             if deployment.status == DeploymentStatus::PendingReady {
+                active_ids.insert(deployment.id.clone());
                 if let Err(err) =
                     check_and_promote(store, http, state, &service_id, &deployment).await
                 {
@@ -32,6 +34,7 @@ pub async fn check_deployments(
         }
     }
 
+    state.retain(|id, _| active_ids.contains(id));
     Ok(())
 }
 
@@ -89,12 +92,11 @@ async fn check_and_promote(
 }
 
 fn build_health_url(deployment: &ServiceDeployment, health_path: &str) -> Option<String> {
-    if let Some(first_port) = deployment.config.deploy.ports.first() {
-        let host_port = first_port.split(':').next().unwrap_or(first_port);
-        Some(format!("http://localhost:{host_port}{health_path}"))
-    } else {
-        let short_id: String = deployment.id.chars().take(6).collect();
-        let container_name = format!("{}-{short_id}", deployment.config.id);
-        Some(format!("http://{container_name}{health_path}"))
-    }
+    let hostname = deployment.hostname();
+    let port = deployment
+        .config
+        .ingress
+        .as_ref()
+        .map(|i| i.port.unwrap_or(80))?;
+    Some(format!("http://{hostname}:{port}{health_path}"))
 }

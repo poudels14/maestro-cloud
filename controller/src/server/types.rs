@@ -1,5 +1,6 @@
 use crate::deployment::types::{
-    DeploymentStatus, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceProvider,
+    DeploymentStatus, IngressConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceProvider,
 };
 
 #[derive(Debug, serde::Serialize)]
@@ -35,6 +36,8 @@ pub(crate) struct RolloutServiceRequest {
     #[serde(default)]
     pub(crate) image: Option<String>,
     pub(crate) deploy: ServiceDeployConfig,
+    #[serde(default)]
+    pub(crate) ingress: Option<IngressConfig>,
 }
 
 #[derive(Debug, serde::Serialize)]

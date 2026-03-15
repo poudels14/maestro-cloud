@@ -190,6 +190,7 @@ impl Server {
                         command: None,
                         healthcheck_path: None,
                     },
+                    ingress: None,
                 },
                 status: Some(crate::deployment::types::DeploymentStatus::Ready),
                 system: true,
@@ -433,6 +434,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         build,
         image,
         deploy,
+        ingress,
     } = request;
 
     let service_id = id.trim().to_string();
@@ -450,7 +452,8 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         "provider": &provider,
         "build": &build,
         "image": &image,
-        "deploy": &deploy
+        "deploy": &deploy,
+        "ingress": &ingress
     });
     let version_bytes = serde_json::to_vec(&version_payload)
         .map_err(|err| format!("failed to serialize version payload: {err}"))?;
@@ -464,6 +467,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         build,
         image,
         deploy,
+        ingress,
     })
 }
 
@@ -507,6 +511,7 @@ fn is_active_service_status(status: Option<&crate::deployment::types::Deployment
         Some(
             crate::deployment::types::DeploymentStatus::Queued
                 | crate::deployment::types::DeploymentStatus::Building
+                | crate::deployment::types::DeploymentStatus::PendingReady
                 | crate::deployment::types::DeploymentStatus::Ready
         )
     )
