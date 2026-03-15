@@ -39,7 +39,11 @@ export async function stopDeployment(serviceId: string, deploymentId: string) {
   if (!res.ok) throw new Error(`Failed to stop deployment: ${res.statusText}`);
 }
 
-export async function getLogs(serviceId: string, deploymentId: string, tail?: number): Promise<LogEntry[]> {
+export async function getLogs(
+  serviceId: string,
+  deploymentId: string,
+  tail?: number
+): Promise<LogEntry[]> {
   const params = tail ? `?tail=${tail}` : "";
   const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs${params}`;
   const res = await fetch(url);

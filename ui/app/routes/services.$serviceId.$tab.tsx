@@ -1,5 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createEffect, createResource, createSignal, For, Show, Suspense, on, onCleanup } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Show,
+  Suspense,
+  on,
+  onCleanup
+} from "solid-js";
 import { ArrowLeft, ChevronDown, Clock, GitCommitHorizontal, Rocket } from "lucide-solid";
 import { Select } from "@kobalte/core/select";
 import type { LogEntry, Service } from "../lib/types";
@@ -386,7 +395,9 @@ function LogsTab(props: { service: Service }) {
             optionValue="id"
             optionTextValue={(d) => `#${d.id.split("-").slice(-1)[0]} — ${d.status.toLowerCase()}`}
             value={deployments()?.find((d) => d.id === activeId()) ?? null}
-            onChange={(d) => { if (d) setSelectedId(d.id); }}
+            onChange={(d) => {
+              if (d) setSelectedId(d.id);
+            }}
             itemComponent={(itemProps) => {
               const d = itemProps.item.rawValue;
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
@@ -395,7 +406,9 @@ function LogsTab(props: { service: Service }) {
                   item={itemProps.item}
                   class="text-xs px-3 py-1.5 cursor-pointer outline-none rounded data-[highlighted]:bg-indigo-50 data-[highlighted]:text-indigo-700 text-gray-700"
                 >
-                  <Select.ItemLabel>#{shortId} — {d.status.toLowerCase()}</Select.ItemLabel>
+                  <Select.ItemLabel>
+                    #{shortId} — {d.status.toLowerCase()}
+                  </Select.ItemLabel>
                 </Select.Item>
               );
             }}
@@ -446,17 +459,33 @@ function LogsTab(props: { service: Service }) {
             </div>
           </Show>
           <For each={lines()}>
-            {(line) => (
-              <div class="flex gap-3">
-                <span class="text-gray-400 select-none shrink-0 whitespace-nowrap">{formatTs(line.ts)}</span>
-                <span
-                  class={`shrink-0 whitespace-nowrap ${line.stream === "stderr" ? "text-red-400" : "text-gray-400"}`}
-                >
-                  {line.stream}
-                </span>
-                <span class="text-gray-700 break-words">{line.text}</span>
-              </div>
-            )}
+            {(line) => {
+              const levelColor = () => {
+                switch (line.level) {
+                  case "error":
+                    return "text-red-500";
+                  case "warn":
+                    return "text-amber-500";
+                  case "debug":
+                    return "text-gray-400";
+                  case "trace":
+                    return "text-gray-300";
+                  default:
+                    return "text-blue-400";
+                }
+              };
+              return (
+                <div class="flex gap-3">
+                  <span class="text-gray-400 select-none shrink-0 whitespace-nowrap">
+                    {formatTs(line.ts)}
+                  </span>
+                  <span class={`w-10 shrink-0 whitespace-nowrap uppercase ${levelColor()}`}>
+                    {line.level}
+                  </span>
+                  <span class="text-gray-700 break-words">{line.text}</span>
+                </div>
+              );
+            }}
           </For>
         </Show>
       </div>

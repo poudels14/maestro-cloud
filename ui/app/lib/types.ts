@@ -35,6 +35,7 @@ export interface Deployment {
 
 export interface LogEntry {
   ts: number;
+  level: string;
   stream: "stdout" | "stderr";
   text: string;
 }

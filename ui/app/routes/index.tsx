@@ -73,7 +73,12 @@ function DeleteConfirmDialog(props: {
   onCancel: () => void;
 }) {
   return (
-    <Dialog open={props.open} onOpenChange={(open) => { if (!open) props.onCancel(); }}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) props.onCancel();
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 bg-black/30 z-50" />
         <Dialog.Content class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-xl z-50 p-6 w-full max-w-sm outline-none">
@@ -81,7 +86,9 @@ function DeleteConfirmDialog(props: {
             Remove service
           </Dialog.Title>
           <Dialog.Description class="text-sm text-gray-500 mb-5">
-            Are you sure you want to remove <span class="font-medium text-gray-700">{props.serviceName}</span>? This will delete all deployments and cannot be undone.
+            Are you sure you want to remove{" "}
+            <span class="font-medium text-gray-700">{props.serviceName}</span>? This will delete all
+            deployments and cannot be undone.
           </Dialog.Description>
           <div class="flex justify-end gap-2">
             <button
@@ -106,7 +113,10 @@ function DeleteConfirmDialog(props: {
 }
 
 function ServicesPage() {
-  const [services, { refetch }] = createResource(() => (import.meta.env.SSR ? null : true), getServices);
+  const [services, { refetch }] = createResource(
+    () => (import.meta.env.SSR ? null : true),
+    getServices
+  );
   const navigate = useNavigate();
   const [deleteTarget, setDeleteTarget] = createSignal<Service | null>(null);
 
@@ -180,7 +190,9 @@ function ServicesPage() {
 
                     <Show when={systemServices().length > 0}>
                       <div class="flex items-baseline gap-2 mb-4 mt-10">
-                        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">System</h2>
+                        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
+                          System
+                        </h2>
                       </div>
                       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         <For each={systemServices()}>
