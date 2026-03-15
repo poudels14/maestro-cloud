@@ -80,7 +80,7 @@ async fn init_probe(
     })
     .await
     .expect("failed to build probe image");
-    let logs_dir = config.data_dir.join("logs/system/probe");
+    let logs_dir = config.data_dir.join("logs/system/maestro-probe");
     std::fs::create_dir_all(&logs_dir).expect("Failed to create probe logs dir");
 
     let probe_job_config = SupervisedJobConfig {
