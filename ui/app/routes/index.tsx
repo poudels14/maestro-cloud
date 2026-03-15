@@ -11,7 +11,8 @@ export const Route = createFileRoute("/")({
 
 function ServiceCard(props: { service: Service; onClick: () => void }) {
   const s = props.service;
-  const status = s.status ?? "IDLE";
+  const isSystem = s.system === true;
+  const status = isSystem ? "SYSTEM" : (s.status ?? "IDLE");
   const sourceName =
     s.build != null
       ? s.build.repo

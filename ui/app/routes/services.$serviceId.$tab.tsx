@@ -103,7 +103,8 @@ function ServiceSidebar(props: {
         <For each={props.services}>
           {(service) => {
             const isSelected = () => service.id === props.selected?.id;
-            const status = service.status ?? "IDLE";
+            const isSystem = service.system === true;
+            const status = isSystem ? "SYSTEM" : (service.status ?? "IDLE");
             return (
               <button
                 type="button"
