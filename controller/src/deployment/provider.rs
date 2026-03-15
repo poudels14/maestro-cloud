@@ -1,3 +1,8 @@
+use std::path::PathBuf;
+
+use anyhow::{Result, anyhow};
+use tokio::process::Command;
+
 use crate::deployment::types::ServiceDeployment;
 
 pub trait ServiceCommandPlanner: Send + Sync {
@@ -5,8 +10,47 @@ pub trait ServiceCommandPlanner: Send + Sync {
     fn deploy(&self, deployment: &ServiceDeployment) -> Option<String>;
 }
 
+pub struct DockerBuildConfig {
+    pub context_dir: PathBuf,
+    pub tag: String,
+    pub dockerfile: Option<String>,
+}
+
 pub struct DockerDeploymentProvider;
 pub struct ShellDeploymentProvider;
+
+impl DockerDeploymentProvider {
+    pub async fn build(config: &DockerBuildConfig) -> Result<()> {
+        eprintln!(
+            "[maestro]: building docker image {} from {}",
+            config.tag,
+            config.context_dir.display()
+        );
+
+        let mut args = vec!["build", "-t", &config.tag];
+        let dockerfile_flag;
+        if let Some(ref dockerfile) = config.dockerfile {
+            dockerfile_flag = dockerfile.clone();
+            args.extend(["-f", &dockerfile_flag]);
+        }
+        let context = config.context_dir.display().to_string();
+        args.push(&context);
+
+        let output = Command::new("docker")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|err| anyhow!("failed to run docker build: {err}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("docker build failed for {}: {stderr}", config.tag));
+        }
+
+        eprintln!("[maestro]: docker image {} built successfully", config.tag);
+        Ok(())
+    }
+}
 
 impl ServiceCommandPlanner for DockerDeploymentProvider {
     fn build(&self, deployment: &ServiceDeployment) -> Option<String> {

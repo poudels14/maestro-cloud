@@ -19,6 +19,8 @@ pub(crate) struct ServiceListItem {
     #[serde(flatten)]
     pub(crate) service: ServiceConfig,
     pub(crate) status: Option<DeploymentStatus>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) system: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

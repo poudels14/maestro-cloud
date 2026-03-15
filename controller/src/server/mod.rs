@@ -26,6 +26,11 @@ use crate::signal::ShutdownEvent;
 
 mod types;
 
+const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
+    ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
+    ("maestro-sidecar", "Sidecar", "maestro-sidecar"),
+];
+
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
@@ -150,13 +155,35 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
-        let items = infos
+        let mut items: Vec<ServiceListItem> = infos
             .into_iter()
             .map(|info| ServiceListItem {
                 service: info.config,
                 status: info.status,
+                system: false,
             })
             .collect();
+
+        for (id, name, image) in SYSTEM_SERVICES {
+            items.push(ServiceListItem {
+                service: ServiceConfig {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    version: String::new(),
+                    provider: ServiceProvider::Docker,
+                    build: None,
+                    image: Some(image.to_string()),
+                    deploy: ServiceDeployConfig {
+                        flags: vec![],
+                        ports: vec![],
+                        command: None,
+                        healthcheck_path: None,
+                    },
+                },
+                status: Some(crate::deployment::types::DeploymentStatus::Ready),
+                system: true,
+            });
+        }
 
         Ok(Json(items))
     }
