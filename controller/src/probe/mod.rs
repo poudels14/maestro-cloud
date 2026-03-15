@@ -16,6 +16,7 @@ pub async fn run(etcd_endpoint: &str) -> Result<()> {
 
     let store = EtcdStateStore::new(etcd_endpoint).await?;
     let http_client = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build()?;
+    let mut health_state = healthcheck::HealthState::new();
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
@@ -23,7 +24,9 @@ pub async fn run(etcd_endpoint: &str) -> Result<()> {
     loop {
         let poll = async {
             sleep(POLL_INTERVAL).await;
-            if let Err(err) = healthcheck::check_deployments(&store, &http_client).await {
+            if let Err(err) =
+                healthcheck::check_deployments(&store, &http_client, &mut health_state).await
+            {
                 eprintln!("[probe]: poll error: {err}");
             }
         };

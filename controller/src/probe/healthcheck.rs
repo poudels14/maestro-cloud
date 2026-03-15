@@ -1,9 +1,18 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{Deployment, DeploymentStatus, ServiceDeployment};
 
-pub async fn check_deployments(store: &dyn ClusterStore, http: &reqwest::Client) -> Result<()> {
+/// Tracks whether each deployment was healthy on the last check.
+pub type HealthState = HashMap<String, bool>;
+
+pub async fn check_deployments(
+    store: &dyn ClusterStore,
+    http: &reqwest::Client,
+    state: &mut HealthState,
+) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
     for service_id in service_ids {
@@ -11,7 +20,9 @@ pub async fn check_deployments(store: &dyn ClusterStore, http: &reqwest::Client)
 
         for deployment in deployments {
             if deployment.status == DeploymentStatus::PendingReady {
-                if let Err(err) = check_and_promote(store, http, &service_id, &deployment).await {
+                if let Err(err) =
+                    check_and_promote(store, http, state, &service_id, &deployment).await
+                {
                     eprintln!(
                         "[probe]: error checking {}/{}: {err}",
                         service_id, deployment.id
@@ -27,6 +38,7 @@ pub async fn check_deployments(store: &dyn ClusterStore, http: &reqwest::Client)
 async fn check_and_promote(
     store: &dyn ClusterStore,
     http: &reqwest::Client,
+    state: &mut HealthState,
     service_id: &str,
     deployment: &ServiceDeployment,
 ) -> Result<()> {
@@ -45,20 +57,25 @@ async fn check_and_promote(
         return Ok(());
     };
 
-    eprintln!("[probe]: probing {}/{} -> {url}", service_id, deployment.id);
-
     let is_healthy = http
         .get(&url)
         .send()
         .await
         .is_ok_and(|resp| resp.status().is_success());
 
-    if is_healthy {
-        eprintln!(
-            "[probe]: healthy! marking {}/{} READY",
-            service_id, deployment.id
-        );
+    let was_healthy = state.get(&deployment.id).copied();
 
+    if was_healthy != Some(is_healthy) {
+        if is_healthy {
+            eprintln!("[probe]: {}/{} became healthy", service_id, deployment.id);
+        } else {
+            eprintln!("[probe]: {}/{} became unhealthy", service_id, deployment.id);
+        }
+    }
+
+    state.insert(deployment.id.clone(), is_healthy);
+
+    if is_healthy {
         let dep = Deployment {
             service_id: service_id.to_string(),
             id: deployment.id.clone(),
