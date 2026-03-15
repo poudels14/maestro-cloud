@@ -15,11 +15,20 @@ const PROBE_IMAGE_TAG: &str = "maestro-probe";
 const SYSTEM_CONTAINER_SUFFIX: &str = "a0b2c";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
-    ensure_docker_network().await;
     let etcd_container = format!("maestro-etcd-{SYSTEM_CONTAINER_SUFFIX}");
     let probe_container = format!("maestro-probe-{SYSTEM_CONTAINER_SUFFIX}");
+    cleanup_container(&etcd_container).await;
+    cleanup_container(&probe_container).await;
+    ensure_docker_network().await;
     start_etcd(&etcd_container, config, supervisor).await;
     init_probe(&probe_container, &etcd_container, config, supervisor).await;
+}
+
+async fn cleanup_container(name: &str) {
+    let _ = tokio::process::Command::new("docker")
+        .args(["rm", "-f", name])
+        .output()
+        .await;
 }
 
 async fn ensure_docker_network() {
