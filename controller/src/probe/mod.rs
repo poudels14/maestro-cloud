@@ -12,7 +12,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(etcd_endpoint: &str) -> Result<()> {
-    eprintln!("[probe]: starting, etcd={etcd_endpoint}");
+    eprintln!("starting, etcd={etcd_endpoint}");
 
     let store = EtcdStateStore::new(etcd_endpoint).await?;
     let http_client = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build()?;
@@ -27,17 +27,17 @@ pub async fn run(etcd_endpoint: &str) -> Result<()> {
             if let Err(err) =
                 healthcheck::check_deployments(&store, &http_client, &mut health_state).await
             {
-                eprintln!("[probe]: poll error: {err}");
+                eprintln!("poll error: {err}");
             }
         };
 
         tokio::select! {
             _ = sigterm.recv() => {
-                eprintln!("[probe]: received SIGTERM, shutting down");
+                eprintln!("received SIGTERM, shutting down");
                 break;
             }
             _ = sigint.recv() => {
-                eprintln!("[probe]: received SIGINT, shutting down");
+                eprintln!("received SIGINT, shutting down");
                 break;
             }
             _ = poll => {}

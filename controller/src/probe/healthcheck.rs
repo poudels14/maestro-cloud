@@ -23,10 +23,7 @@ pub async fn check_deployments(
                 if let Err(err) =
                     check_and_promote(store, http, state, &service_id, &deployment).await
                 {
-                    eprintln!(
-                        "[probe]: error checking {}/{}: {err}",
-                        service_id, deployment.id
-                    );
+                    eprintln!("error checking {}/{}: {err}", service_id, deployment.id);
                 }
             }
         }
@@ -67,9 +64,9 @@ async fn check_and_promote(
 
     if was_healthy != Some(is_healthy) {
         if is_healthy {
-            eprintln!("[probe]: {}/{} became healthy", service_id, deployment.id);
+            eprintln!("{}/{} became healthy", service_id, deployment.id);
         } else {
-            eprintln!("[probe]: {}/{} became unhealthy", service_id, deployment.id);
+            eprintln!("{}/{} became unhealthy", service_id, deployment.id);
         }
     }
 
