@@ -7,7 +7,7 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -73,6 +73,7 @@ impl Server {
                 "/api/services/{serviceId}/redeploy",
                 post(Self::redeploy_service),
             )
+            .route("/api/services/{serviceId}", delete(Self::delete_service))
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}/logs",
                 get(Self::get_deployment_logs),
@@ -304,6 +305,23 @@ impl Server {
             status: Some(outcome.deployment.status),
             version: outcome.deployment.config.version.clone(),
         }))
+    }
+
+    async fn delete_service(
+        Path(service_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        state
+            .store
+            .delete_service(service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(StatusCode::NO_CONTENT)
     }
 
     async fn remove_deployment(

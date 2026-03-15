@@ -66,4 +66,8 @@ pub trait ClusterStore: Send + Sync {
     ) -> Result<Option<ServiceDeployment>> {
         bail!("stop_service_deployment not implemented")
     }
+
+    async fn delete_service(&self, _service_id: &str) -> Result<()> {
+        bail!("delete_service not implemented")
+    }
 }

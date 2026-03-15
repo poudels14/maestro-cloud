@@ -10,7 +10,7 @@ use etcd_client::{
 use crate::deployment::keys::{
     SERVICES_PREFIX, SERVICES_ROOT, service_deployment_history_key,
     service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
-    service_id_from_info_key, service_info_key,
+    service_id_from_info_key, service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -584,6 +584,23 @@ impl ClusterStore for EtcdStateStore {
         Err(anyhow!(
             "failed to request stop due to concurrent updates; retry"
         ))
+    }
+
+    async fn delete_service(&self, service_id: &str) -> anyhow::Result<()> {
+        let mut client = self.client.lock().await;
+
+        let prefix = service_prefix(service_id);
+        let range_end = prefix_range_end(prefix.as_bytes())
+            .ok_or_else(|| anyhow!("failed to compute range end for service prefix"))?;
+        client
+            .delete(
+                prefix.as_bytes(),
+                Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+            )
+            .await
+            .map_err(|err| anyhow!("failed to delete service keys: {err}"))?;
+
+        Ok(())
     }
 }
 
