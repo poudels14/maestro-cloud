@@ -8,5 +8,5 @@ const URL_SAFE_ALPHABET: [char; 62] = [
 ];
 
 pub fn unique_id() -> String {
-    nanoid!(24, &URL_SAFE_ALPHABET)
+    nanoid!(10, &URL_SAFE_ALPHABET)
 }
