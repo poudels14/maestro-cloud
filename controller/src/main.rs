@@ -87,9 +87,15 @@ async fn run() -> crate::error::Result<()> {
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
 
+            let sidecar_dir = std::env::current_dir()
+                .expect("failed to get current dir")
+                .parent()
+                .expect("failed to get parent dir")
+                .join("sidecar");
             let deployment_config = DeploymentConfig {
                 data_dir,
                 etcd_port,
+                sidecar_dir,
             };
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
@@ -117,12 +123,21 @@ async fn run() -> crate::error::Result<()> {
             let deployment_future = async move {
                 let result = controller.run().await.map_err(Into::into);
                 let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
-                result
+                result.map(|()| controller)
             };
 
-            let result = tokio::try_join!(server_future, deployment_future).map(|_| ());
+            let result = tokio::try_join!(server_future, deployment_future);
             signal_task.abort();
-            result
+            match result {
+                Ok((_, controller)) => {
+                    let mut supervisor = controller.into_supervisor();
+                    supervisor
+                        .shutdown_all(supervisor::ShutdownRequest::Force)
+                        .await;
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
         }
         Some(CliCommand::Rollout { host }) => {
             cli::run_rollout(Path::new(DEFAULT_CONFIG_PATH), &host).await

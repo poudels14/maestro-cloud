@@ -136,6 +136,10 @@ impl DeploymentController {
         self.supervisor.has_jobs()
     }
 
+    pub(crate) fn into_supervisor(self) -> JobSupervisor {
+        self.supervisor
+    }
+
     async fn process_queued_deployment(
         &mut self,
         queued_deployment: QueuedDeployment,
@@ -195,13 +199,27 @@ impl DeploymentController {
             id: deployment_id,
         };
 
+        let has_healthcheck = queued_deployment
+            .deployment
+            .config
+            .deploy
+            .healthcheck_path
+            .as_ref()
+            .is_some_and(|p| !p.is_empty());
+
+        let next_status = if has_healthcheck {
+            DeploymentStatus::PendingReady
+        } else {
+            DeploymentStatus::Ready
+        };
+
         if let Err(err) = self
             .store
-            .update_deployment_status(&deployment, DeploymentStatus::Ready)
+            .update_deployment_status(&deployment, next_status)
             .await
         {
             eprintln!(
-                "[maestro]: failed to mark deployment `{}` ready: {err}",
+                "[maestro]: failed to update deployment `{}` status: {err}",
                 deployment.id
             );
         }
@@ -240,13 +258,15 @@ impl DeploymentController {
             };
 
             let new_status = match deployment_status {
-                Some(DeploymentStatus::Ready | DeploymentStatus::Building) => {
-                    match finished_task.status {
-                        SupervisedJobStatus::Crashed => Some(DeploymentStatus::Crashed),
-                        SupervisedJobStatus::Stopped => Some(DeploymentStatus::Terminated),
-                        _ => None,
-                    }
-                }
+                Some(
+                    DeploymentStatus::Ready
+                    | DeploymentStatus::PendingReady
+                    | DeploymentStatus::Building,
+                ) => match finished_task.status {
+                    SupervisedJobStatus::Crashed => Some(DeploymentStatus::Crashed),
+                    SupervisedJobStatus::Stopped => Some(DeploymentStatus::Terminated),
+                    _ => None,
+                },
                 _ => None,
             };
 

@@ -9,6 +9,7 @@ use crate::utils;
 pub struct DeploymentConfig {
     pub data_dir: PathBuf,
     pub etcd_port: u16,
+    pub sidecar_dir: PathBuf,
 }
 
 impl DeploymentConfig {
@@ -105,6 +106,7 @@ pub struct Command {
 pub enum DeploymentStatus {
     Queued,
     Building,
+    PendingReady,
     Ready,
     Crashed,
     Terminated,
@@ -117,7 +119,13 @@ impl DeploymentStatus {
     /// Whether a transition from `self` to `target` is allowed.
     pub fn can_transition_to(&self, target: &DeploymentStatus) -> bool {
         match target {
-            DeploymentStatus::Ready => matches!(self, DeploymentStatus::Building),
+            DeploymentStatus::PendingReady => matches!(self, DeploymentStatus::Building),
+            DeploymentStatus::Ready => {
+                matches!(
+                    self,
+                    DeploymentStatus::Building | DeploymentStatus::PendingReady
+                )
+            }
             DeploymentStatus::Crashed => !matches!(
                 self,
                 DeploymentStatus::Crashed
