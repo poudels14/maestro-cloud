@@ -4,7 +4,7 @@ use crate::deployment::types::{
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PatchServiceResponse {
+pub(crate) struct RolloutServiceResponse {
     pub(crate) queued: bool,
     pub(crate) deployment_id: Option<String>,
     pub(crate) deployment_index: Option<usize>,
@@ -25,7 +25,7 @@ pub(crate) struct ServiceListItem {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PatchServiceRequest {
+pub(crate) struct RolloutServiceRequest {
     pub(crate) id: String,
     pub(crate) name: String,
     #[serde(default)]
