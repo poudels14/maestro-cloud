@@ -14,8 +14,8 @@ use crate::deployment::keys::{
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, DeploymentStatus, ForceQueueOutcome, QueuedDeployment,
-    ServiceDeployment, ServiceInfo,
+    CancelDeploymentOutcome, Deployment, DeploymentStatus, ForceQueueOutcome, IngressConfig,
+    QueuedDeployment, ServiceDeployment, ServiceInfo,
 };
 use crate::utils::time::current_time_millis;
 
@@ -162,6 +162,42 @@ impl EtcdStateStore {
         Err(anyhow!(
             "failed to update service info status for `{service_id}` due to concurrent updates"
         ))
+    }
+
+    async fn configure_ingress(
+        &self,
+        service_id: &str,
+        container_name: &str,
+        ingress: &IngressConfig,
+    ) -> Result<()> {
+        let router_prefix = format!("/traefik/http/routers/{service_id}");
+        let service_prefix = format!("/traefik/http/services/{service_id}");
+
+        let rule = format!("Host(`{}`)", ingress.host);
+        let url = format!("http://{}:{}", container_name, ingress.port.unwrap_or(80));
+
+        let success = vec![
+            request_put(&format!("{router_prefix}/rule"), &rule),
+            request_put(&format!("{router_prefix}/service"), service_id),
+            request_put(&format!("{router_prefix}/entrypoints/0"), "web"),
+            request_put(
+                &format!("{service_prefix}/loadBalancer/servers/0/url"),
+                &url,
+            ),
+        ];
+
+        let mut client = self.client.lock().await;
+        let txn = Txn::new().and_then(success);
+        client
+            .txn(txn)
+            .await
+            .map_err(|err| anyhow!("failed to configure traefik ingress: {err}"))?;
+
+        eprintln!(
+            "[maestro]: configured ingress for `{service_id}`: {} -> {url}",
+            ingress.host
+        );
+        Ok(())
     }
 
     async fn find_deployment_snapshot(
@@ -351,6 +387,20 @@ impl ClusterStore for EtcdStateStore {
                 .await?;
 
             if committed {
+                if status == DeploymentStatus::Ready {
+                    if let Some(ingress) = &updated.config.ingress {
+                        let container = updated.hostname();
+                        if let Err(err) = self
+                            .configure_ingress(&updated.config.id, &container, ingress)
+                            .await
+                        {
+                            eprintln!(
+                                "[maestro]: failed to configure ingress for `{}`: {err}",
+                                updated.config.id
+                            );
+                        }
+                    }
+                }
                 let _ = self
                     .update_service_info_status(&deployment.service_id, status)
                     .await;

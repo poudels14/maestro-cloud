@@ -67,6 +67,16 @@ pub struct ServiceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub deploy: ServiceDeployConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<IngressConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressConfig {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -156,6 +166,11 @@ pub struct ServiceDeployment {
 }
 
 impl ServiceDeployment {
+    pub fn hostname(&self) -> String {
+        let short_id: String = self.id.chars().take(6).collect();
+        format!("{}-{short_id}", self.config.id)
+    }
+
     pub fn new(config: ServiceConfig) -> Result<Self> {
         Ok(ServiceDeployment {
             id: utils::nanoid::unique_id(),

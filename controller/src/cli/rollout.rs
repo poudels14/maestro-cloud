@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::types::{ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
+use crate::deployment::types::{
+    IngressConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
+};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +24,8 @@ struct ServiceTemplate {
     #[serde(default)]
     image: Option<String>,
     deploy: ServiceDeployConfig,
+    #[serde(default)]
+    ingress: Option<IngressConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +39,8 @@ struct PatchServiceRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<String>,
     deploy: ServiceDeployConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ingress: Option<IngressConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +187,7 @@ fn service_payload(
         build,
         image,
         deploy,
+        ingress: service_template.ingress.clone(),
     })
 }
 

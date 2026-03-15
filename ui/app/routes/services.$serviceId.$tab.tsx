@@ -209,11 +209,21 @@ function OverviewTab(props: { service: Service }) {
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
 
+  const ingressItems = s.ingress
+    ? [
+        { label: "Host", value: s.ingress.host },
+        { label: "Port", value: String(s.ingress.port ?? 80) }
+      ]
+    : null;
+
   return (
     <div class="space-y-6">
       <ConfigSection title="General" items={configItems} />
       <ConfigSection title="Source" items={sourceItems} />
       <ConfigSection title="Deploy" items={deployItems} />
+      <Show when={ingressItems}>
+        {(items) => <ConfigSection title="Ingress" items={items()} />}
+      </Show>
     </div>
   );
 }
