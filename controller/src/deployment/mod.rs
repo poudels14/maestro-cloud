@@ -11,12 +11,15 @@ pub mod types;
 pub use types::DeploymentConfig;
 
 const MAESTRO_NETWORK: &str = "maestro";
-const SIDECAR_IMAGE_TAG: &str = "maestro-sidecar";
+const PROBE_IMAGE_TAG: &str = "maestro-probe";
+const SYSTEM_CONTAINER_SUFFIX: &str = "a0b2c";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
     ensure_docker_network().await;
-    start_etcd(config, supervisor).await;
-    init_sidecar(config, supervisor).await;
+    let etcd_container = format!("maestro-etcd-{SYSTEM_CONTAINER_SUFFIX}");
+    let probe_container = format!("maestro-probe-{SYSTEM_CONTAINER_SUFFIX}");
+    start_etcd(&etcd_container, config, supervisor).await;
+    init_probe(&probe_container, &etcd_container, config, supervisor).await;
 }
 
 async fn ensure_docker_network() {
@@ -26,13 +29,17 @@ async fn ensure_docker_network() {
         .await;
 }
 
-async fn start_etcd(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
+async fn start_etcd(
+    container_name: &str,
+    config: &DeploymentConfig,
+    supervisor: &mut JobSupervisor,
+) {
     let etcd_data_dir = config.etcd_dir().join("data");
     std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
         command: format!(
-            "docker run --name maestro-etcd --network {MAESTRO_NETWORK} -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
+            "docker run --name {container_name} --network {MAESTRO_NETWORK} -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
             config.etcd_port,
             std::fs::canonicalize(etcd_data_dir)
                 .expect("error canonicalizing etcd data dir")
@@ -51,29 +58,34 @@ async fn start_etcd(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
     await_job_running(supervisor, etcd_job_config).await;
 }
 
-async fn init_sidecar(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
+async fn init_probe(
+    container_name: &str,
+    etcd_container: &str,
+    config: &DeploymentConfig,
+    supervisor: &mut JobSupervisor,
+) {
     DockerDeploymentProvider::build(&DockerBuildConfig {
-        context_dir: config.sidecar_dir.clone(),
-        tag: SIDECAR_IMAGE_TAG.to_string(),
-        dockerfile: None,
+        context_dir: config.project_dir.clone(),
+        tag: PROBE_IMAGE_TAG.to_string(),
+        dockerfile: Some("Dockerfile.probe".to_string()),
     })
     .await
-    .expect("failed to build sidecar image");
+    .expect("failed to build probe image");
+    let logs_dir = config.data_dir.join("logs/system/probe");
+    std::fs::create_dir_all(&logs_dir).expect("Failed to create probe logs dir");
 
-    let logs_dir = config.data_dir.join("logs/system/sidecar");
-    std::fs::create_dir_all(&logs_dir).expect("Failed to create sidecar logs dir");
-    let sidecar_job_config = SupervisedJobConfig {
-        id: "maestro-sidecar".to_string(),
+    let probe_job_config = SupervisedJobConfig {
+        id: "maestro-probe".to_string(),
         command: format!(
-            "docker run --name maestro-sidecar --network {MAESTRO_NETWORK} --rm -e ETCD_ENDPOINT=http://maestro-etcd:2379 {SIDECAR_IMAGE_TAG}",
+            "docker run --name {container_name} --network {MAESTRO_NETWORK} --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 {PROBE_IMAGE_TAG}",
         ),
-        name: "maestro-sidecar".to_string(),
+        name: "maestro-probe".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 60_000,
         logs_dir: Some(logs_dir),
     };
-    await_job_running(supervisor, sidecar_job_config).await;
+    await_job_running(supervisor, probe_job_config).await;
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {
