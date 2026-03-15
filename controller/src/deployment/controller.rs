@@ -43,12 +43,15 @@ impl DeploymentController {
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
     ) -> Self {
+        let docker_provider = DockerDeploymentProvider {
+            network: config.network.clone(),
+        };
         Self {
             config,
             store,
             signal_rx,
             supervisor,
-            docker_provider: DockerDeploymentProvider,
+            docker_provider,
             shell_provider: ShellDeploymentProvider,
             deployments: HashMap::new(),
             shutdown_in_progress: false,
