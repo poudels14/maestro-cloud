@@ -62,14 +62,14 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
         )));
     }
 
-    let patch_url = patch_endpoint(host)?;
-    println!("[maestro]: rolling out services via {patch_url}");
+    let rollout_url = rollout_endpoint(host)?;
+    println!("[maestro]: rolling out services via {rollout_url}");
 
     let client = reqwest::Client::new();
 
     for (service_id, service_template) in &cluster.services {
         let payload = service_payload(service_id, service_template)?;
-        let response = call_patch_endpoint(&client, &patch_url, &payload, service_id).await?;
+        let response = call_rollout_endpoint(&client, &rollout_url, &payload, service_id).await?;
 
         if response.queued {
             println!(
@@ -87,20 +87,20 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
     Ok(())
 }
 
-async fn call_patch_endpoint(
+async fn call_rollout_endpoint(
     client: &reqwest::Client,
     endpoint: &str,
     payload: &PatchServiceRequest,
     service_id: &str,
 ) -> Result<PatchServiceResponse> {
     let response = client
-        .patch(endpoint)
+        .post(endpoint)
         .json(payload)
         .send()
         .await
         .map_err(|err| {
             Error::external(format!(
-                "failed to call patch endpoint for service `{service_id}`: {err}"
+                "failed to call rollout endpoint for service `{service_id}`: {err}"
             ))
         })?;
 
@@ -108,7 +108,7 @@ async fn call_patch_endpoint(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(Error::external(format!(
-            "patch failed for service `{service_id}` with status {status}: {body}"
+            "rollout failed for service `{service_id}` with status {status}: {body}"
         )));
     }
 
@@ -117,7 +117,7 @@ async fn call_patch_endpoint(
         .await
         .map_err(|err| {
             Error::external(format!(
-                "failed to decode patch response for service `{service_id}`: {err}"
+                "failed to decode rollout response for service `{service_id}`: {err}"
             ))
         })?;
     Ok(payload)
@@ -144,8 +144,11 @@ fn normalize_base_url(host: &str) -> Result<String> {
     Ok(base.trim_end_matches('/').to_string())
 }
 
-fn patch_endpoint(host: &str) -> Result<String> {
-    Ok(format!("{}/api/services/patch", normalize_base_url(host)?))
+fn rollout_endpoint(host: &str) -> Result<String> {
+    Ok(format!(
+        "{}/api/services/rollout",
+        normalize_base_url(host)?
+    ))
 }
 
 fn service_payload(

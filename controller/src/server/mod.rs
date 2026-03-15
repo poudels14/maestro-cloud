@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use self::types::{
-    CancelDeploymentResponse, PatchServiceRequest, PatchServiceResponse, RemoveDeploymentResponse,
-    ServiceListItem,
+    CancelDeploymentResponse, RemoveDeploymentResponse, RolloutServiceRequest,
+    RolloutServiceResponse, ServiceListItem,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -55,7 +55,7 @@ impl Server {
         Router::new()
             .route("/_healthy", get(Self::healthy))
             .route("/api/services", get(Self::list_services))
-            .route("/api/services/patch", patch(Self::patch_service))
+            .route("/api/services/rollout", post(Self::rollout_service))
             .route(
                 "/api/services/{serviceId}/deployments",
                 get(Self::list_deployments),
@@ -112,14 +112,14 @@ impl Server {
         "ok"
     }
 
-    async fn patch_service(
+    async fn rollout_service(
         State(state): State<AppState>,
-        Json(request): Json<PatchServiceRequest>,
-    ) -> Result<Json<PatchServiceResponse>, (StatusCode, String)> {
+        Json(request): Json<RolloutServiceRequest>,
+    ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
         let service_config = build_service_config(request).map_err(|err| {
             (
                 StatusCode::BAD_REQUEST,
-                format!("invalid patch request payload: {err}"),
+                format!("invalid rollout request payload: {err}"),
             )
         })?;
 
@@ -131,7 +131,7 @@ impl Server {
             UpsertServiceOutcome::Queued {
                 deployment_index,
                 deployment,
-            } => PatchServiceResponse {
+            } => RolloutServiceResponse {
                 queued: true,
                 deployment_id: Some(deployment.id.clone()),
                 deployment_index: Some(deployment_index),
@@ -142,7 +142,7 @@ impl Server {
             UpsertServiceOutcome::Unchanged {
                 service_id,
                 version,
-            } => PatchServiceResponse {
+            } => RolloutServiceResponse {
                 queued: false,
                 deployment_id: None,
                 deployment_index: None,
@@ -269,7 +269,7 @@ impl Server {
     async fn redeploy_service(
         Path(service_id): Path<String>,
         State(state): State<AppState>,
-    ) -> Result<Json<PatchServiceResponse>, (StatusCode, String)> {
+    ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
         validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -295,7 +295,7 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
-        Ok(Json(PatchServiceResponse {
+        Ok(Json(RolloutServiceResponse {
             queued: true,
             deployment_id: Some(outcome.deployment.id.clone()),
             deployment_index: Some(outcome.deployment_index),
@@ -406,8 +406,8 @@ struct LogsQuery {
     tail: Option<usize>,
 }
 
-fn build_service_config(request: PatchServiceRequest) -> Result<ServiceConfig, String> {
-    let PatchServiceRequest {
+fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig, String> {
+    let RolloutServiceRequest {
         id,
         name,
         provider,

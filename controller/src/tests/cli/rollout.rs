@@ -28,9 +28,9 @@ fn parse_config_supports_jsonc() {
 }
 
 #[test]
-fn patch_endpoint_adds_http_when_missing() {
-    let endpoint = patch_endpoint("127.0.0.1:3000").expect("should build endpoint");
-    assert_eq!(endpoint, "http://127.0.0.1:3000/api/services/patch");
+fn rollout_endpoint_adds_http_when_missing() {
+    let endpoint = rollout_endpoint("127.0.0.1:3000").expect("should build endpoint");
+    assert_eq!(endpoint, "http://127.0.0.1:3000/api/services/rollout");
 }
 
 #[test]
