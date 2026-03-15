@@ -13,6 +13,13 @@ export async function getDeployments(serviceId: string): Promise<Deployment[]> {
   return res.json();
 }
 
+export async function deleteService(serviceId: string) {
+  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}`, {
+    method: "DELETE"
+  });
+  if (!res.ok) throw new Error(`Failed to delete service: ${res.statusText}`);
+}
+
 export async function redeployService(serviceId: string) {
   const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, {
     method: "POST"

@@ -2,6 +2,10 @@ pub const SERVICES_ROOT: &str = "/maetro/services";
 pub const SERVICES_PREFIX: &str = "/maetro/services/";
 pub const SERVICE_HISTORY_NEXT_INDEX_SUFFIX: &str = "/deployments/history-next-index";
 
+pub fn service_prefix(service_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/")
+}
+
 pub fn service_info_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/info")
 }

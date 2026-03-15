@@ -145,11 +145,13 @@ function ServiceDetailPanel(props: {
             active={props.tab === "overview"}
             onClick={() => props.navigateTab("overview")}
           />
-          <TabButton
-            label="Deployments"
-            active={props.tab === "deployments"}
-            onClick={() => props.navigateTab("deployments")}
-          />
+          <Show when={!s.system}>
+            <TabButton
+              label="Deployments"
+              active={props.tab === "deployments"}
+              onClick={() => props.navigateTab("deployments")}
+            />
+          </Show>
           <TabButton
             label="Logs"
             active={props.tab === "logs"}
