@@ -31,6 +31,7 @@ const DEFAULT_LOG_LIMIT: usize = 1000;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
+    ("maestro-ingress", "Ingress", "traefik:v3.6"),
     ("maestro-probe", "Probe", "maestro-probe"),
 ];
 

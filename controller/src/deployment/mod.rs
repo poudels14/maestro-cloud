@@ -16,10 +16,13 @@ const SYSTEM_CONTAINER_SUFFIX: &str = "a0b2c";
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
     let etcd_container = format!("maestro-etcd-{SYSTEM_CONTAINER_SUFFIX}");
     let probe_container = format!("maestro-probe-{SYSTEM_CONTAINER_SUFFIX}");
+    let ingress_container = format!("maestro-ingress-{SYSTEM_CONTAINER_SUFFIX}");
     cleanup_container(&etcd_container).await;
     cleanup_container(&probe_container).await;
+    cleanup_container(&ingress_container).await;
     ensure_docker_network(&config.network).await;
     start_etcd(&etcd_container, config, supervisor).await;
+    start_ingress(&ingress_container, &etcd_container, config, supervisor).await;
     init_probe(&probe_container, &etcd_container, config, supervisor).await;
 }
 
@@ -65,6 +68,34 @@ async fn start_etcd(
         logs_dir: Some(config.etcd_dir().join("logs/")),
     };
     await_job_running(supervisor, etcd_job_config).await;
+}
+
+async fn start_ingress(
+    container_name: &str,
+    etcd_container: &str,
+    config: &DeploymentConfig,
+    supervisor: &mut JobSupervisor,
+) {
+    let logs_dir = config.data_dir.join("logs/system/maestro-ingress");
+    std::fs::create_dir_all(&logs_dir).expect("Failed to create ingress logs dir");
+
+    let ingress_job_config = SupervisedJobConfig {
+        id: "maestro-ingress".to_string(),
+        command: format!(
+            "docker run --name {container_name} --network {} -p 8888:8888 -p 8080:8080 --rm traefik:v3.6 {} {} {} {}",
+            config.network,
+            "--api.insecure=true",
+            format_args!("--providers.etcd.rootKey=traefik"),
+            format_args!("--providers.etcd.endpoints={etcd_container}:2379"),
+            "--entrypoints.web.address=:8888",
+        ),
+        name: "maestro-ingress".to_string(),
+        max_restarts: None,
+        restart_delay_ms: 1_000,
+        shutdown_grace_period_ms: 10_000,
+        logs_dir: Some(logs_dir),
+    };
+    await_job_running(supervisor, ingress_job_config).await;
 }
 
 async fn init_probe(
