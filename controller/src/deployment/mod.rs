@@ -10,7 +10,6 @@ pub mod types;
 
 pub use types::DeploymentConfig;
 
-const MAESTRO_NETWORK: &str = "maestro";
 const PROBE_IMAGE_TAG: &str = "maestro-probe";
 const SYSTEM_CONTAINER_SUFFIX: &str = "a0b2c";
 
@@ -19,7 +18,7 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     let probe_container = format!("maestro-probe-{SYSTEM_CONTAINER_SUFFIX}");
     cleanup_container(&etcd_container).await;
     cleanup_container(&probe_container).await;
-    ensure_docker_network().await;
+    ensure_docker_network(&config.network).await;
     start_etcd(&etcd_container, config, supervisor).await;
     init_probe(&probe_container, &etcd_container, config, supervisor).await;
 }
@@ -31,9 +30,9 @@ async fn cleanup_container(name: &str) {
         .await;
 }
 
-async fn ensure_docker_network() {
+async fn ensure_docker_network(network: &str) {
     let _ = tokio::process::Command::new("docker")
-        .args(["network", "create", MAESTRO_NETWORK])
+        .args(["network", "create", network])
         .output()
         .await;
 }
@@ -48,7 +47,8 @@ async fn start_etcd(
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
         command: format!(
-            "docker run --name {container_name} --network {MAESTRO_NETWORK} -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
+            "docker run --name {container_name} --network {} -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
+            config.network,
             config.etcd_port,
             std::fs::canonicalize(etcd_data_dir)
                 .expect("error canonicalizing etcd data dir")
@@ -86,7 +86,8 @@ async fn init_probe(
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: format!(
-            "docker run --name {container_name} --network {MAESTRO_NETWORK} --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 {PROBE_IMAGE_TAG}",
+            "docker run --name {container_name} --network {} --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 {PROBE_IMAGE_TAG}",
+            config.network,
         ),
         name: "maestro-probe".to_string(),
         max_restarts: None,

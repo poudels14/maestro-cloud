@@ -41,6 +41,8 @@ enum CliCommand {
         port: u16,
         #[arg(long = "data-dir")]
         data_dir: PathBuf,
+        #[arg(long = "network", default_value = "maestro")]
+        network: String,
     },
     Rollout {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
@@ -53,7 +55,11 @@ enum CliCommand {
         host: String,
     },
     Probe {
-        #[arg(long = "etcd-endpoint", default_value = "http://127.0.0.1:6479")]
+        #[arg(
+            long = "etcd-endpoint",
+            env = "ETCD_ENDPOINT",
+            default_value = "http://127.0.0.1:6479"
+        )]
         etcd_endpoint: String,
     },
     Init,
@@ -79,6 +85,7 @@ async fn run() -> crate::error::Result<()> {
             port,
             expose_etcd,
             data_dir,
+            network,
         }) => {
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
@@ -101,6 +108,7 @@ async fn run() -> crate::error::Result<()> {
                 data_dir,
                 etcd_port,
                 project_dir,
+                network,
             };
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;

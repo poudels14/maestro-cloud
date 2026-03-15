@@ -10,6 +10,7 @@ pub struct DeploymentConfig {
     pub data_dir: PathBuf,
     pub etcd_port: u16,
     pub project_dir: PathBuf,
+    pub network: String,
 }
 
 impl DeploymentConfig {
