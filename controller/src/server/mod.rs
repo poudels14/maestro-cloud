@@ -28,7 +28,7 @@ mod types;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
-    ("maestro-sidecar", "Sidecar", "maestro-sidecar"),
+    ("maestro-probe", "Probe", "maestro-probe"),
 ];
 
 #[derive(Clone)]

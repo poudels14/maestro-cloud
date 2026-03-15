@@ -9,7 +9,7 @@ use crate::utils;
 pub struct DeploymentConfig {
     pub data_dir: PathBuf,
     pub etcd_port: u16,
-    pub sidecar_dir: PathBuf,
+    pub project_dir: PathBuf,
 }
 
 impl DeploymentConfig {

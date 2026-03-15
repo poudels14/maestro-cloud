@@ -1,6 +1,7 @@
 mod cli;
 mod deployment;
 mod error;
+mod probe;
 mod server;
 mod signal;
 mod supervisor;
@@ -51,6 +52,10 @@ enum CliCommand {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
         host: String,
     },
+    Probe {
+        #[arg(long = "etcd-endpoint", default_value = "http://127.0.0.1:6479")]
+        etcd_endpoint: String,
+    },
     Init,
 }
 
@@ -87,15 +92,15 @@ async fn run() -> crate::error::Result<()> {
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
 
-            let sidecar_dir = std::env::current_dir()
+            let project_dir = std::env::current_dir()
                 .expect("failed to get current dir")
                 .parent()
                 .expect("failed to get parent dir")
-                .join("sidecar");
+                .to_path_buf();
             let deployment_config = DeploymentConfig {
                 data_dir,
                 etcd_port,
-                sidecar_dir,
+                project_dir,
             };
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
@@ -147,6 +152,9 @@ async fn run() -> crate::error::Result<()> {
             deployment_id,
             host,
         }) => cli::run_cancel(&host, &service_id, &deployment_id).await,
+        Some(CliCommand::Probe { etcd_endpoint }) => probe::run(&etcd_endpoint)
+            .await
+            .map_err(|err| Error::internal(err.to_string())),
         Some(CliCommand::Init) => cli::init_config(Path::new(DEFAULT_CONFIG_PATH)),
     }
 }

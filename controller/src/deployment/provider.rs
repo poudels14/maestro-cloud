@@ -28,10 +28,10 @@ impl DockerDeploymentProvider {
         );
 
         let mut args = vec!["build", "-t", &config.tag];
-        let dockerfile_flag;
+        let dockerfile_path;
         if let Some(ref dockerfile) = config.dockerfile {
-            dockerfile_flag = dockerfile.clone();
-            args.extend(["-f", &dockerfile_flag]);
+            dockerfile_path = config.context_dir.join(dockerfile).display().to_string();
+            args.extend(["-f", &dockerfile_path]);
         }
         let context = config.context_dir.display().to_string();
         args.push(&context);
