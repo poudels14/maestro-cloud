@@ -17,12 +17,12 @@ use error::Error;
 use signal::spawn_shutdown_signal_bus;
 
 use crate::{
-    deployment::{DeploymentConfig, controller::DeploymentController, etcd::EtcdStateStore},
+    deployment::{DeploymentConfig, controller::DeploymentController},
     supervisor::controller::JobSupervisor,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
-const DEFAULT_BIND_PORT: u16 = 6400;
+const DEFAULT_API_PORT: u16 = 6400;
 const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:6400";
 
 #[derive(Debug, Parser)]
@@ -39,7 +39,7 @@ enum CliCommand {
         cluster_name: String,
         #[arg(long = "expose_etcd")]
         expose_etcd: Option<u16>,
-        #[arg(long = "port", default_value_t = DEFAULT_BIND_PORT)]
+        #[arg(long = "port", default_value_t = DEFAULT_API_PORT)]
         port: u16,
         #[arg(long = "data-dir")]
         data_dir: PathBuf,
@@ -63,6 +63,8 @@ enum CliCommand {
             default_value = "http://127.0.0.1:6479"
         )]
         etcd_endpoint: String,
+        #[arg(long = "port", env = "PORT", default_value_t = DEFAULT_API_PORT)]
+        port: u16,
     },
     Init,
 }
@@ -98,7 +100,6 @@ async fn run() -> crate::error::Result<()> {
                     data_dir.display()
                 ))
             })?;
-            let bind_addr = format!("127.0.0.1:{port}");
             let etcd_port = expose_etcd.unwrap_or(6479);
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
@@ -112,6 +113,7 @@ async fn run() -> crate::error::Result<()> {
                 cluster_name,
                 data_dir,
                 etcd_port,
+                probe_port: port,
                 project_dir,
                 network,
             };
@@ -119,10 +121,7 @@ async fn run() -> crate::error::Result<()> {
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
 
             let store: Arc<dyn deployment::store::ClusterStore> =
-                Arc::new(EtcdStateStore::new(&etcd_endpoint).await?);
-            let server =
-                server::Server::new(store.clone(), deployment_config.deployment_logs_dir());
-            let server_signal_rx = signal_tx.subscribe();
+                Arc::new(deployment::etcd::EtcdStateStore::new(&etcd_endpoint).await?);
             let deployment_signal_rx = signal_tx.subscribe();
 
             let mut controller = DeploymentController::new(
@@ -131,24 +130,18 @@ async fn run() -> crate::error::Result<()> {
                 supervisor,
                 deployment_signal_rx,
             );
-            let server_shutdown_tx = signal_tx.clone();
             let deployment_shutdown_tx = signal_tx.clone();
 
-            let server_future = async move {
-                let result = server.serve(&bind_addr, server_signal_rx).await;
-                let _ = server_shutdown_tx.send(signal::ShutdownEvent::Graceful);
-                result
-            };
-            let deployment_future = async move {
+            let result = async move {
                 let result = controller.run().await.map_err(Into::into);
                 let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
                 result.map(|()| controller)
-            };
+            }
+            .await;
 
-            let result = tokio::try_join!(server_future, deployment_future);
             signal_task.abort();
             match result {
-                Ok((_, controller)) => {
+                Ok(controller) => {
                     let mut supervisor = controller.into_supervisor();
                     supervisor
                         .shutdown_all(supervisor::ShutdownRequest::Force)
@@ -166,7 +159,10 @@ async fn run() -> crate::error::Result<()> {
             deployment_id,
             host,
         }) => cli::run_cancel(&host, &service_id, &deployment_id).await,
-        Some(CliCommand::Probe { etcd_endpoint }) => probe::run(&etcd_endpoint)
+        Some(CliCommand::Probe {
+            etcd_endpoint,
+            port,
+        }) => probe::run(&etcd_endpoint, port)
             .await
             .map_err(|err| Error::internal(err.to_string())),
         Some(CliCommand::Init) => cli::init_config(Path::new(DEFAULT_CONFIG_PATH)),
