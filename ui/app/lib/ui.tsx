@@ -15,6 +15,7 @@ export function timeAgo(ms: number): string {
 export const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
   QUEUED: { dot: "bg-amber-400", bg: "bg-amber-50", text: "text-amber-700" },
   BUILDING: { dot: "bg-blue-400", bg: "bg-blue-50", text: "text-blue-700" },
+  PENDING_READY: { dot: "bg-cyan-400", bg: "bg-cyan-50", text: "text-cyan-700" },
   READY: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
   DEPLOYING: { dot: "bg-indigo-400", bg: "bg-indigo-50", text: "text-indigo-700" },
   RUNNING: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
@@ -23,6 +24,7 @@ export const STATUS_COLORS: Record<string, { dot: string; bg: string; text: stri
   TERMINATED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
   CANCELLED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
   CANCELED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
+  SYSTEM: { dot: "bg-violet-400", bg: "bg-violet-50", text: "text-violet-700" },
   IDLE: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" },
   STOPPED: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" }
 };
@@ -71,7 +73,7 @@ export function TabButton(props: {
 }
 
 const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING", "DEPLOYING"]);
-const STOPPABLE_STATUSES = new Set(["READY", "RUNNING"]);
+const STOPPABLE_STATUSES = new Set(["READY", "PENDING_READY", "RUNNING"]);
 
 export function DeploymentMenu(props: {
   status: string;

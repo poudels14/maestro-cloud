@@ -21,6 +21,7 @@ export interface Service {
   build?: Build | null;
   image?: string | null;
   deploy: Deploy;
+  system?: boolean;
 }
 
 export interface Deployment {
