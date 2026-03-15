@@ -1,4 +1,4 @@
-import type { Deployment, Service } from "./types";
+import type { Deployment, LogEntry, Service } from "./types";
 
 export async function getServices(): Promise<Service[]> {
   const res = await fetch("/api/services");
@@ -30,4 +30,20 @@ export async function stopDeployment(serviceId: string, deploymentId: string) {
   const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/remove`;
   const res = await fetch(url, { method: "PATCH" });
   if (!res.ok) throw new Error(`Failed to stop deployment: ${res.statusText}`);
+}
+
+export async function getLogs(serviceId: string, deploymentId: string, tail?: number): Promise<LogEntry[]> {
+  const params = tail ? `?tail=${tail}` : "";
+  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs${params}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getSystemLogs(name: string, tail?: number): Promise<LogEntry[]> {
+  const params = tail ? `?tail=${tail}` : "";
+  const url = `/api/system/${encodeURIComponent(name)}/logs${params}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
+  return res.json();
 }
