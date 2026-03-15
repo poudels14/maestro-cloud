@@ -550,7 +550,9 @@ impl ClusterStore for EtcdStateStore {
             };
 
             match snapshot.deployment.status {
-                DeploymentStatus::Ready | DeploymentStatus::Building => {}
+                DeploymentStatus::Ready
+                | DeploymentStatus::PendingReady
+                | DeploymentStatus::Building => {}
                 DeploymentStatus::Removed => {
                     return Ok(Some(snapshot.deployment));
                 }
