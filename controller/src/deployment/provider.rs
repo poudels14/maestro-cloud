@@ -16,7 +16,9 @@ pub struct DockerBuildConfig {
     pub dockerfile: Option<String>,
 }
 
-pub struct DockerDeploymentProvider;
+pub struct DockerDeploymentProvider {
+    pub network: String,
+}
 pub struct ShellDeploymentProvider;
 
 impl DockerDeploymentProvider {
@@ -73,6 +75,7 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
                 &deployment.config.id,
                 &deployment.id,
                 image,
+                &self.network,
                 &deployment.config.deploy.ports,
                 &deployment.config.deploy.flags,
             ))
@@ -114,33 +117,20 @@ fn docker_run_command(
     service_id: &str,
     deployment_id: &str,
     image: &str,
+    network: &str,
     ports: &[String],
     flags: &[String],
 ) -> String {
     let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
     let container_name = format!("{service_id}-{short_deployment_id}");
-    let docker_port_flags = ports
-        .iter()
-        .map(|port| format!("-p {port}"))
-        .collect::<Vec<_>>();
 
-    if docker_port_flags.is_empty() && flags.is_empty() {
-        format!("exec docker run --rm --name {container_name} {image}")
-    } else if flags.is_empty() {
-        format!(
-            "exec docker run --rm --name {container_name} {} {image}",
-            docker_port_flags.join(" ")
-        )
-    } else if docker_port_flags.is_empty() {
-        format!(
-            "exec docker run --rm --name {container_name} {image} {}",
-            flags.join(" ")
-        )
-    } else {
-        format!(
-            "exec docker run --rm --name {container_name} {} {image} {}",
-            docker_port_flags.join(" "),
-            flags.join(" "),
-        )
+    let mut args = format!("exec docker run --rm --name {container_name} --network {network}");
+    for port in ports {
+        args.push_str(&format!(" -p {port}"));
     }
+    args.push_str(&format!(" {image}"));
+    for flag in flags {
+        args.push_str(&format!(" {flag}"));
+    }
+    args
 }
