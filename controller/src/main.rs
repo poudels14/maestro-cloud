@@ -115,7 +115,8 @@ async fn run() -> crate::error::Result<()> {
 
             let store: Arc<dyn deployment::store::ClusterStore> =
                 Arc::new(EtcdStateStore::new(&etcd_endpoint).await?);
-            let server = server::Server::new(store.clone());
+            let server =
+                server::Server::new(store.clone(), deployment_config.deployment_logs_dir());
             let server_signal_rx = signal_tx.subscribe();
             let deployment_signal_rx = signal_tx.subscribe();
 

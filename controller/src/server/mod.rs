@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::Response,
@@ -23,8 +23,11 @@ use crate::deployment::types::{
     ServiceDeployment, ServiceProvider,
 };
 use crate::signal::ShutdownEvent;
+use crate::supervisor::logs;
 
 mod types;
+
+const DEFAULT_LOG_LIMIT: usize = 1000;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
@@ -34,6 +37,7 @@ const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
+    logs_dir: PathBuf,
 }
 
 pub(crate) struct Server {
@@ -41,9 +45,9 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(crate) fn new(store: Arc<dyn ClusterStore>) -> Self {
+    pub(crate) fn new(store: Arc<dyn ClusterStore>, logs_dir: PathBuf) -> Self {
         Self {
-            state: AppState { store },
+            state: AppState { store, logs_dir },
         }
     }
 
@@ -68,6 +72,11 @@ impl Server {
                 "/api/services/{serviceId}/redeploy",
                 post(Self::redeploy_service),
             )
+            .route(
+                "/api/services/{serviceId}/deployments/{deploymentId}/logs",
+                get(Self::get_deployment_logs),
+            )
+            .route("/api/system/{name}/logs", get(Self::get_system_logs))
             .with_state(self.state.clone())
             .layer(middleware::from_fn(log_http))
     }
@@ -345,6 +354,56 @@ impl Server {
             )),
         }
     }
+
+    async fn get_deployment_logs(
+        Path((service_id, deployment_id)): Path<(String, String)>,
+        Query(query): Query<LogsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        let deployment_id = deployment_id.trim();
+        validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        if deployment_id.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "deploymentId cannot be empty".to_string(),
+            ));
+        }
+
+        let log_path = state
+            .logs_dir
+            .join("services")
+            .join(service_id)
+            .join("deployments")
+            .join(deployment_id)
+            .join("logs.jsonl");
+
+        logs::read_jsonl_logs(&log_path, query.tail.unwrap_or(DEFAULT_LOG_LIMIT))
+            .await
+            .map(Json)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+    }
+
+    async fn get_system_logs(
+        Path(name): Path<String>,
+        Query(query): Query<LogsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+        let name = name.trim();
+        validate_service_id(name, "name").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        let log_path = state.logs_dir.join("system").join(name).join("logs.jsonl");
+        logs::read_jsonl_logs(&log_path, query.tail.unwrap_or(DEFAULT_LOG_LIMIT))
+            .await
+            .map(Json)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LogsQuery {
+    tail: Option<usize>,
 }
 
 fn build_service_config(request: PatchServiceRequest) -> Result<ServiceConfig, String> {

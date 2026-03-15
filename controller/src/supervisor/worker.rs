@@ -1,10 +1,18 @@
-use std::{fs::OpenOptions, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    fs::OpenOptions,
+    path::PathBuf,
+    process::Stdio,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 
 use tokio::{
-    sync::{oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::{sleep, timeout},
 };
+
+use super::logs::read_pipe_to_jsonl;
 use watchexec_supervisor::{
     ProcessEnd, Signal,
     command::{Command, Program, Shell, SpawnOptions},
@@ -137,34 +145,57 @@ impl SupervisedJobRunner {
         }
     }
 
-    async fn setup_job(job: &Job, config: &SupervisedJobConfig) {
-        let (stdout_path, stderr_path) = match config.logs_dir.as_ref() {
-            Some(logs_dir) => match std::fs::create_dir_all(logs_dir) {
-                Ok(_) => (
-                    Some(logs_dir.join("stdout.log")),
-                    Some(logs_dir.join("stderr.log")),
-                ),
-                Err(err) => {
-                    eprint!("Error creating logs dir: {:?}", err);
-                    (None, None)
-                }
-            },
-            _ => (None, None),
+    async fn setup_job(job: &Job, config: &SupervisedJobConfig) -> Option<JoinHandle<()>> {
+        let logs_dir = config.logs_dir.as_ref()?;
+        if let Err(err) = std::fs::create_dir_all(logs_dir) {
+            eprintln!("[maestro]: failed to create logs dir: {err}");
+            return None;
+        }
+
+        let log_path = logs_dir.join("logs.jsonl");
+        let log_file = match OpenOptions::new().create(true).append(true).open(&log_path) {
+            Ok(f) => Arc::new(StdMutex::new(f)),
+            Err(err) => {
+                eprintln!(
+                    "[maestro]: failed to open log file {}: {err}",
+                    log_path.display()
+                );
+                return None;
+            }
         };
 
+        let (pipe_tx, mut pipe_rx) =
+            mpsc::unbounded_channel::<(os_pipe::PipeReader, os_pipe::PipeReader)>();
+
         job.set_spawn_hook(move |command, _| {
-            if let Some(path) = &stdout_path {
-                redirect_to_log_file(path, |file| {
-                    command.command_mut().stdout(Stdio::from(file));
-                });
-            }
-            if let Some(path) = &stderr_path {
-                redirect_to_log_file(path, |file| {
-                    command.command_mut().stderr(Stdio::from(file));
-                });
-            }
+            let Ok((stdout_reader, stdout_writer)) = os_pipe::pipe() else {
+                return;
+            };
+            let Ok((stderr_reader, stderr_writer)) = os_pipe::pipe() else {
+                return;
+            };
+            command.command_mut().stdout(Stdio::from(stdout_writer));
+            command.command_mut().stderr(Stdio::from(stderr_writer));
+            let _ = pipe_tx.send((stdout_reader, stderr_reader));
         })
         .await;
+
+        let collector = tokio::spawn(async move {
+            while let Some((stdout_reader, stderr_reader)) = pipe_rx.recv().await {
+                tokio::spawn(read_pipe_to_jsonl(
+                    stdout_reader,
+                    "stdout",
+                    log_file.clone(),
+                ));
+                tokio::spawn(read_pipe_to_jsonl(
+                    stderr_reader,
+                    "stderr",
+                    log_file.clone(),
+                ));
+            }
+        });
+
+        Some(collector)
     }
 
     async fn run_job(
@@ -173,7 +204,7 @@ impl SupervisedJobRunner {
         mut job_handle: JoinHandle<()>,
         mut shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> SupervisedJobStatus {
-        Self::setup_job(&job, &config).await;
+        let collector_handle = Self::setup_job(&job, &config).await;
         let name = config.name.clone();
 
         let shutdown_grace = Duration::from_millis(config.shutdown_grace_period_ms);
@@ -276,17 +307,10 @@ impl SupervisedJobRunner {
             job_handle.abort();
             let _ = timeout(Duration::from_secs(1), &mut job_handle).await;
         }
+        if let Some(handle) = collector_handle {
+            let _ = timeout(Duration::from_secs(2), handle).await;
+        }
         exit_status
-    }
-}
-
-fn redirect_to_log_file(path: &PathBuf, apply: impl FnOnce(std::fs::File)) {
-    match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => apply(file),
-        Err(err) => eprintln!(
-            "[maestro]: failed to open log file {}: {err}",
-            path.display()
-        ),
     }
 }
 
