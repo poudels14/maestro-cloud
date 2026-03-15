@@ -11,12 +11,12 @@ pub mod types;
 pub use types::DeploymentConfig;
 
 const PROBE_IMAGE_TAG: &str = "maestro-probe";
-const SYSTEM_CONTAINER_SUFFIX: &str = "a0b2c";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
-    let etcd_container = format!("maestro-etcd-{SYSTEM_CONTAINER_SUFFIX}");
-    let probe_container = format!("maestro-probe-{SYSTEM_CONTAINER_SUFFIX}");
-    let ingress_container = format!("maestro-ingress-{SYSTEM_CONTAINER_SUFFIX}");
+    let suffix = &config.cluster_name;
+    let etcd_container = format!("maestro-etcd-{suffix}");
+    let probe_container = format!("maestro-probe-{suffix}");
+    let ingress_container = format!("maestro-ingress-{suffix}");
     cleanup_container(&etcd_container).await;
     cleanup_container(&probe_container).await;
     cleanup_container(&ingress_container).await;

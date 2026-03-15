@@ -7,6 +7,7 @@ use crate::utils;
 
 #[derive(Debug, Clone)]
 pub struct DeploymentConfig {
+    pub cluster_name: String,
     pub data_dir: PathBuf,
     pub etcd_port: u16,
     pub project_dir: PathBuf,
