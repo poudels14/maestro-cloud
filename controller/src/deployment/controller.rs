@@ -24,6 +24,10 @@ const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 #[cfg(test)]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 200;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(not(test))]
+const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
+#[cfg(test)]
+const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
 
 pub struct DeploymentController {
     config: DeploymentConfig,
@@ -99,7 +103,7 @@ impl DeploymentController {
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
         self.stop_removed_deployments().await;
-        self.remove_old_deployments().await;
+        self.drain_old_deployments().await;
         self.reconcile_replicas().await;
         let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
@@ -356,18 +360,19 @@ impl DeploymentController {
                 continue;
             };
 
-            let should_stop = match self.store.read_service_deployment(deployment).await {
-                Ok(Some(d)) => d.status == DeploymentStatus::Removed,
-                Ok(None) => false,
+            let store_deployment = match self.store.read_service_deployment(deployment).await {
+                Ok(Some(d)) => d,
+                Ok(None) => continue,
                 Err(err) => {
                     eprintln!(
                         "[maestro]: failed to read deployment `{}` stop state: {err}",
                         deployment.id
                     );
-                    false
+                    continue;
                 }
             };
-            if should_stop {
+
+            if store_deployment.status == DeploymentStatus::Draining {
                 let _ = self
                     .store
                     .delete_replica_state(
@@ -376,6 +381,27 @@ impl DeploymentController {
                         deployment.replica_index,
                     )
                     .await;
+
+                let drain_elapsed = store_deployment.drained_at.is_some_and(|drained_at| {
+                    crate::utils::time::current_time_millis()
+                        .map(|now| now.saturating_sub(drained_at) >= INGRESS_DRAIN_GRACE_PERIOD_MS)
+                        .unwrap_or(false)
+                });
+                if drain_elapsed {
+                    let deployment_ref = Deployment {
+                        service_id: deployment.service_id.clone(),
+                        id: deployment.id.clone(),
+                        replica_index: deployment.replica_index,
+                    };
+                    let _ = self
+                        .store
+                        .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                        .await;
+                    let _ = self
+                        .supervisor
+                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                }
+            } else if store_deployment.status == DeploymentStatus::Removed {
                 let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
@@ -383,7 +409,7 @@ impl DeploymentController {
         }
     }
 
-    async fn remove_old_deployments(&mut self) {
+    async fn drain_old_deployments(&mut self) {
         let mut services: HashMap<String, Vec<String>> = HashMap::new();
         for deployment in self.deployments.values() {
             let ids = services.entry(deployment.service_id.clone()).or_default();
@@ -446,17 +472,17 @@ impl DeploymentController {
                 };
 
                 eprintln!(
-                    "[maestro]: removing old deployment `{}` for service `{service_id}` (new deployment `{}` has ready replica)",
+                    "[maestro]: draining old deployment `{}` for service `{service_id}` (new deployment `{}` has ready replica)",
                     old.id, latest.id
                 );
 
                 if let Err(err) = self
                     .store
-                    .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                    .update_deployment_status(&deployment_ref, DeploymentStatus::Draining)
                     .await
                 {
                     eprintln!(
-                        "[maestro]: failed to mark old deployment `{}` as removed: {err}",
+                        "[maestro]: failed to mark old deployment `{}` as draining: {err}",
                         old.id
                     );
                 }

@@ -144,33 +144,41 @@ impl EtcdStateStore {
         let rule = format!("Host(`{}`)", ingress.host);
         let port = ingress.port.unwrap_or(80);
 
-        let mut client = self.client.lock().await;
-
-        if let Some(range_end) = prefix_range_end(servers_prefix.as_bytes()) {
-            client
-                .delete(
-                    servers_prefix.as_bytes(),
-                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
-                )
-                .await
-                .map_err(|err| anyhow!("failed to delete stale ingress servers: {err}"))?;
-        }
-
         let mut put_ops = vec![
             request_put(&format!("{router_prefix}/rule"), &rule),
             request_put(&format!("{router_prefix}/service"), service_id),
             request_put(&format!("{router_prefix}/entryPoints/0"), "web"),
         ];
-        for (i, container_name) in container_names.iter().enumerate() {
-            let url = format!("http://{container_name}:{port}");
-            put_ops.push(request_put(&format!("{servers_prefix}{i}/url"), &url));
-        }
+        let new_keys: Vec<String> = container_names
+            .iter()
+            .enumerate()
+            .map(|(i, container_name)| {
+                let key = format!("{servers_prefix}{i}/url");
+                let url = format!("http://{container_name}:{port}");
+                put_ops.push(request_put(&key, &url));
+                key
+            })
+            .collect();
+
+        let mut client = self.client.lock().await;
 
         let txn = Txn::new().and_then(put_ops);
         client
             .txn(txn)
             .await
             .map_err(|err| anyhow!("failed to configure traefik ingress: {err}"))?;
+
+        if let Some(range_end) = prefix_range_end(servers_prefix.as_bytes()) {
+            let options = GetOptions::new().with_range(range_end).with_keys_only();
+            if let Ok(response) = client.get(servers_prefix.as_bytes(), Some(options)).await {
+                for kv in response.kvs() {
+                    let key = String::from_utf8_lossy(kv.key()).to_string();
+                    if !new_keys.contains(&key) {
+                        let _ = client.delete(kv.key(), None).await;
+                    }
+                }
+            }
+        }
 
         let urls: Vec<String> = container_names
             .iter()
@@ -235,31 +243,50 @@ impl EtcdStateStore {
     }
 
     async fn sync_ingress_for_service(&self, service_id: &str) {
-        let active = self.find_active_deployment(service_id).await;
-        let ingress = active
-            .as_ref()
-            .and_then(|d| d.deployment.config.ingress.as_ref());
+        let deployments = match self.list_service_deployments(service_id).await {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let ingress = deployments
+            .iter()
+            .find(|d| {
+                matches!(
+                    d.status,
+                    DeploymentStatus::Ready
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Building
+                )
+            })
+            .and_then(|d| d.config.ingress.clone());
 
         let Some(ingress) = ingress else {
             return;
         };
 
-        let containers: Vec<String> = if let Some(active) = &active {
+        let mut containers = Vec::new();
+        for deployment in &deployments {
+            if !matches!(
+                deployment.status,
+                DeploymentStatus::Ready
+                    | DeploymentStatus::PendingReady
+                    | DeploymentStatus::Building
+            ) {
+                continue;
+            }
             let replicas = self
-                .read_replica_states(service_id, &active.deployment.id)
+                .read_replica_states(service_id, &deployment.id)
                 .await
                 .unwrap_or_default();
-            replicas
-                .iter()
-                .filter(|r| r.status == DeploymentStatus::Ready)
-                .map(|r| active.deployment.hostname_for_replica(r.replica_index))
-                .collect()
-        } else {
-            vec![]
-        };
+            for replica in &replicas {
+                if replica.status == DeploymentStatus::Ready {
+                    containers.push(deployment.hostname_for_replica(replica.replica_index));
+                }
+            }
+        }
 
         if let Err(err) = self
-            .configure_ingress(service_id, &containers, ingress)
+            .configure_ingress(service_id, &containers, &ingress)
             .await
         {
             eprintln!("[maestro]: failed to configure ingress for `{service_id}`: {err}");
@@ -426,6 +453,9 @@ impl ClusterStore for EtcdStateStore {
             updated.status = status.clone();
             if status == DeploymentStatus::Ready && updated.deployed_at.is_none() {
                 updated.deployed_at = Some(current_time_millis()?);
+            }
+            if status == DeploymentStatus::Draining && updated.drained_at.is_none() {
+                updated.drained_at = Some(current_time_millis()?);
             }
 
             let deployment_json = serde_json::to_string(&updated)
@@ -732,7 +762,7 @@ impl ClusterStore for EtcdStateStore {
                 DeploymentStatus::Ready
                 | DeploymentStatus::PendingReady
                 | DeploymentStatus::Building => {}
-                DeploymentStatus::Removed => {
+                DeploymentStatus::Draining | DeploymentStatus::Removed => {
                     return Ok(Some(snapshot.deployment));
                 }
                 _ => {
@@ -741,7 +771,8 @@ impl ClusterStore for EtcdStateStore {
             }
 
             let mut updated = snapshot.deployment.clone();
-            updated.status = DeploymentStatus::Removed;
+            updated.status = DeploymentStatus::Draining;
+            updated.drained_at = Some(current_time_millis()?);
             // replica states are in separate keys; no need to update them here
             let updated_json = serde_json::to_string(&updated)
                 .map_err(|err| anyhow!("failed to serialize remove-requested deployment: {err}"))?;

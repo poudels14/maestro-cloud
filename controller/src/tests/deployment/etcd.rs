@@ -31,6 +31,7 @@ fn deployment_with_source(
         id: "A1B2C3D4E5".to_string(),
         created_at: 1,
         deployed_at: None,
+        drained_at: None,
         status: DeploymentStatus::Queued,
 
         config: ServiceConfig {
@@ -130,6 +131,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
         id: "ZXCVBN1234".to_string(),
         created_at: 1,
         deployed_at: None,
+        drained_at: None,
         status: DeploymentStatus::Queued,
 
         config: ServiceConfig {
@@ -180,31 +182,34 @@ fn sync_ingress(state: &mut InMemoryStoreState, service_id: &str) {
     let Some(deployments) = state.history.get(service_id) else {
         return;
     };
-    let active = deployments.iter().rev().find(|d| {
+    let has_ingress = deployments.iter().rev().any(|d| {
         matches!(
             d.status,
             DeploymentStatus::Ready | DeploymentStatus::PendingReady | DeploymentStatus::Building
-        )
+        ) && d.config.ingress.is_some()
     });
-    let Some(active) = active else {
+    if !has_ingress {
         state.ingress_backends.remove(service_id);
         return;
-    };
-    if active.config.ingress.is_none() {
-        return;
     }
-    let key = format!("{service_id}/{}", active.id);
-    let backends: Vec<String> = state
-        .replica_states
-        .get(&key)
-        .map(|replicas| {
-            replicas
-                .iter()
-                .filter(|r| r.status == DeploymentStatus::Ready)
-                .map(|r| active.hostname_for_replica(r.replica_index))
-                .collect()
-        })
-        .unwrap_or_default();
+
+    let mut backends = Vec::new();
+    for deployment in deployments.iter().rev() {
+        if !matches!(
+            deployment.status,
+            DeploymentStatus::Ready | DeploymentStatus::PendingReady | DeploymentStatus::Building
+        ) {
+            continue;
+        }
+        let key = format!("{service_id}/{}", deployment.id);
+        if let Some(replicas) = state.replica_states.get(&key) {
+            for replica in replicas {
+                if replica.status == DeploymentStatus::Ready {
+                    backends.push(deployment.hostname_for_replica(replica.replica_index));
+                }
+            }
+        }
+    }
     state
         .ingress_backends
         .insert(service_id.to_string(), backends);
@@ -256,6 +261,7 @@ impl InMemoryStore {
                     id: format!("{service_id}-{dep_idx}"),
                     created_at,
                     deployed_at: None,
+                    drained_at: None,
                     status: DeploymentStatus::Queued,
 
                     config: config.clone(),
@@ -303,6 +309,7 @@ impl InMemoryStore {
                 id: format!("{service_id}-{dep_idx}"),
                 created_at,
                 deployed_at: None,
+                drained_at: None,
                 status: DeploymentStatus::Queued,
 
                 config,
@@ -379,6 +386,7 @@ impl InMemoryStore {
             id: format!("{service_id}-{dep_idx}"),
             created_at: dep_idx as u64 + 1,
             deployed_at: None,
+            drained_at: None,
             status: DeploymentStatus::Queued,
             config,
             git_commit: None,
@@ -603,11 +611,17 @@ impl ClusterStore for InMemoryStore {
             };
 
             match d.status {
-                DeploymentStatus::Ready | DeploymentStatus::Building => {}
+                DeploymentStatus::Ready
+                | DeploymentStatus::PendingReady
+                | DeploymentStatus::Building => {}
+                DeploymentStatus::Draining | DeploymentStatus::Removed => {
+                    return Ok(Some(d.clone()));
+                }
                 _ => return Ok(Some(d.clone())),
             }
 
-            d.status = DeploymentStatus::Removed;
+            d.status = DeploymentStatus::Draining;
+            d.drained_at = Some(1);
             d.clone()
         };
 
@@ -615,7 +629,7 @@ impl ClusterStore for InMemoryStore {
             .transitions
             .entry(updated.id.clone())
             .or_default()
-            .push(DeploymentStatus::Removed);
+            .push(DeploymentStatus::Draining);
         Ok(Some(updated))
     }
 }
@@ -885,6 +899,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
                 DeploymentStatus::Queued,
                 DeploymentStatus::Building,
                 DeploymentStatus::Ready,
+                DeploymentStatus::Draining,
                 DeploymentStatus::Removed,
             ][..]
         )

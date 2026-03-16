@@ -1,4 +1,5 @@
 mod cancel;
+mod redeploy;
 mod rollout;
 
 use std::{io::Write, path::Path};
@@ -13,6 +14,10 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
 
 pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<()> {
     cancel::run_cancel(host, service_id, deployment_id).await
+}
+
+pub async fn run_redeploy(host: &str, service_id: &str) -> Result<()> {
+    redeploy::run_redeploy(host, service_id).await
 }
 
 pub fn init_config(config_path: &Path) -> Result<()> {
