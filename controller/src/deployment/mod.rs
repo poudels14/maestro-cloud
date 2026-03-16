@@ -21,9 +21,9 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     cleanup_container(&probe_container).await;
     cleanup_container(&ingress_container).await;
     ensure_docker_network(&config.network).await;
-    start_etcd(&etcd_container, config, supervisor).await;
-    start_ingress(&ingress_container, &etcd_container, config, supervisor).await;
+    init_etcd(&etcd_container, config, supervisor).await;
     init_probe(&probe_container, &etcd_container, config, supervisor).await;
+    init_ingress(&ingress_container, &etcd_container, config, supervisor).await;
 }
 
 async fn cleanup_container(name: &str) {
@@ -40,7 +40,7 @@ async fn ensure_docker_network(network: &str) {
         .await;
 }
 
-async fn start_etcd(
+async fn init_etcd(
     container_name: &str,
     config: &DeploymentConfig,
     supervisor: &mut JobSupervisor,
@@ -70,7 +70,7 @@ async fn start_etcd(
     await_job_running(supervisor, etcd_job_config).await;
 }
 
-async fn start_ingress(
+async fn init_ingress(
     container_name: &str,
     etcd_container: &str,
     config: &DeploymentConfig,
