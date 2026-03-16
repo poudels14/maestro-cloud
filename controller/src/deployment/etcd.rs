@@ -234,28 +234,30 @@ impl EtcdStateStore {
         self.find_deployment_snapshot(&deployment_ref).await.ok()?
     }
 
-    async fn sync_ingress_for_service(&self, service_id: &str, deployment: &ServiceDeployment) {
-        let Some(ingress) = &deployment.config.ingress else {
-            eprintln!("[maestro]: sync_ingress skipped for `{service_id}`: no ingress config");
+    async fn sync_ingress_for_service(&self, service_id: &str) {
+        let active = self.find_active_deployment(service_id).await;
+        let ingress = active
+            .as_ref()
+            .and_then(|d| d.deployment.config.ingress.as_ref());
+
+        let Some(ingress) = ingress else {
             return;
         };
-        let replicas = match self.read_replica_states(service_id, &deployment.id).await {
-            Ok(r) => r,
-            Err(err) => {
-                eprintln!(
-                    "[maestro]: sync_ingress failed to read replica states for `{service_id}`: {err}"
-                );
-                return;
-            }
+
+        let containers: Vec<String> = if let Some(active) = &active {
+            let replicas = self
+                .read_replica_states(service_id, &active.deployment.id)
+                .await
+                .unwrap_or_default();
+            replicas
+                .iter()
+                .filter(|r| r.status == DeploymentStatus::Ready)
+                .map(|r| active.deployment.hostname_for_replica(r.replica_index))
+                .collect()
+        } else {
+            vec![]
         };
-        let containers: Vec<String> = replicas
-            .iter()
-            .filter(|r| r.status == DeploymentStatus::Ready)
-            .map(|r| deployment.hostname_for_replica(r.replica_index))
-            .collect();
-        if containers.is_empty() {
-            return;
-        }
+
         if let Err(err) = self
             .configure_ingress(service_id, &containers, ingress)
             .await
@@ -473,18 +475,7 @@ impl ClusterStore for EtcdStateStore {
 
         drop(client);
 
-        let deployment_ref = Deployment {
-            service_id: service_id.to_string(),
-            id: deployment_id.to_string(),
-            replica_index,
-        };
-        if let Ok(Some(deployment)) = self
-            .find_deployment_snapshot(&deployment_ref)
-            .await
-            .map(|s| s.map(|s| s.deployment))
-        {
-            self.sync_ingress_for_service(service_id, &deployment).await;
-        }
+        self.sync_ingress_for_service(service_id).await;
 
         Ok(())
     }
@@ -504,18 +495,7 @@ impl ClusterStore for EtcdStateStore {
 
         drop(client);
 
-        let deployment_ref = Deployment {
-            service_id: service_id.to_string(),
-            id: deployment_id.to_string(),
-            replica_index,
-        };
-        if let Ok(Some(deployment)) = self
-            .find_deployment_snapshot(&deployment_ref)
-            .await
-            .map(|s| s.map(|s| s.deployment))
-        {
-            self.sync_ingress_for_service(service_id, &deployment).await;
-        }
+        self.sync_ingress_for_service(service_id).await;
 
         Ok(())
     }
