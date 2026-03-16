@@ -31,6 +31,7 @@ fn deployment_with_source(
         created_at: 1,
         deployed_at: None,
         status: DeploymentStatus::Queued,
+
         config: ServiceConfig {
             id: "svc-1".to_string(),
             name: "service-1".to_string(),
@@ -43,7 +44,9 @@ fn deployment_with_source(
                 ports: vec![],
                 command: deploy_command,
                 healthcheck_path: Some("/_healthy".to_string()),
+                replicas: 1,
             },
+            ingress: None,
         },
         git_commit: None,
         build: None,
@@ -61,13 +64,15 @@ fn command_planner_uses_image_for_deploy_when_present() {
         }),
     );
 
-    let planner = DockerDeploymentProvider;
+    let planner = DockerDeploymentProvider {
+        network: "test-net".to_string(),
+    };
     let deploy = planner
-        .deploy(&deployment)
+        .deploy(&deployment, 0)
         .expect("deploy command should exist");
     assert_eq!(
         deploy,
-        "exec docker run --rm --name svc-1-A1B2C3 traefik/whoami"
+        "exec docker run --rm --name svc-1-A1B2C3 --network test-net traefik/whoami"
     );
 }
 
@@ -82,14 +87,16 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
         "env=test".to_string(),
     ];
 
-    let planner = DockerDeploymentProvider;
+    let planner = DockerDeploymentProvider {
+        network: "test-net".to_string(),
+    };
     let deploy = planner
-        .deploy(&deployment)
+        .deploy(&deployment, 0)
         .expect("deploy command should exist");
 
     assert_eq!(
         deploy,
-        "exec docker run --rm --name svc-1-ABCDEF -p 8080:80 -p 8443:443 traefik/whoami --network=host --label env=test",
+        "exec docker run --rm --name svc-1-ABCDEF --network test-net -p 8080:80 -p 8443:443 traefik/whoami --network=host --label env=test",
     );
 }
 
@@ -107,9 +114,11 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
         }),
     );
 
-    let planner = DockerDeploymentProvider;
+    let planner = DockerDeploymentProvider {
+        network: "test-net".to_string(),
+    };
     let deploy = planner
-        .deploy(&deployment)
+        .deploy(&deployment, 0)
         .expect("deploy command should exist");
     assert_eq!(deploy, "arc deploy --service svc-1");
 }
@@ -121,6 +130,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
         created_at: 1,
         deployed_at: None,
         status: DeploymentStatus::Queued,
+
         config: ServiceConfig {
             id: "svc-shell".to_string(),
             name: "service-shell".to_string(),
@@ -136,7 +146,9 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                     args: vec!["ok".to_string()],
                 }),
                 healthcheck_path: Some("/_healthy".to_string()),
+                replicas: 1,
             },
+            ingress: None,
         },
         git_commit: None,
         build: None,
@@ -144,7 +156,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
 
     let planner = ShellDeploymentProvider;
     let deploy = planner
-        .deploy(&deployment)
+        .deploy(&deployment, 0)
         .expect("deploy command should exist");
     assert_eq!(deploy, "echo ok");
 }
@@ -195,7 +207,9 @@ impl InMemoryStore {
                     ports: vec![],
                     command: Some(deploy_command.clone()),
                     healthcheck_path: Some("/_healthy".to_string()),
+                    replicas: 1,
                 },
+                ingress: None,
             };
             state.configs.insert(service_id.clone(), config.clone());
 
@@ -206,6 +220,7 @@ impl InMemoryStore {
                     created_at,
                     deployed_at: None,
                     status: DeploymentStatus::Queued,
+
                     config: config.clone(),
                     git_commit: None,
                     build: None,
@@ -238,7 +253,9 @@ impl InMemoryStore {
                     ports: vec![],
                     command: Some(deploy_command),
                     healthcheck_path: Some("/_healthy".to_string()),
+                    replicas: 1,
                 },
+                ingress: None,
             };
 
             if dep_idx == 0 {
@@ -250,6 +267,7 @@ impl InMemoryStore {
                 created_at,
                 deployed_at: None,
                 status: DeploymentStatus::Queued,
+
                 config,
                 git_commit: None,
                 build: None,
@@ -385,6 +403,16 @@ impl ClusterStore for InMemoryStore {
         Ok(())
     }
 
+    async fn update_replica_status(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+        _replica_index: u32,
+        _status: DeploymentStatus,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn read_service_deployment(
         &self,
         deployment: &Deployment,
@@ -446,6 +474,10 @@ async fn stress_supervisor_updates_deployment_statuses() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_name: "test".to_string(),
+            probe_port: 0,
+            project_dir: data_dir.clone(),
+            network: "test-net".to_string(),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -515,6 +547,10 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_name: "test".to_string(),
+            probe_port: 0,
+            project_dir: data_dir.clone(),
+            network: "test-net".to_string(),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -611,6 +647,10 @@ async fn stop_requested_active_deployment_is_marked_removed() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_name: "test".to_string(),
+            probe_port: 0,
+            project_dir: data_dir.clone(),
+            network: "test-net".to_string(),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -645,6 +685,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
         .stop_service_deployment(&Deployment {
             service_id: "svc-0".to_string(),
             id: "svc-0-0".to_string(),
+            replica_index: 0,
         })
         .await
         .expect("stop request should succeed");

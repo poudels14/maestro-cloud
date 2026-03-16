@@ -47,6 +47,8 @@ struct PatchServiceRequest {
 #[serde(rename_all = "camelCase")]
 struct PatchServiceResponse {
     queued: bool,
+    #[serde(default)]
+    replicas: Option<u32>,
     service_id: String,
     version: String,
 }
@@ -81,6 +83,11 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
             println!(
                 "[maestro]: queued service `{}` with version `{}`",
                 response.service_id, response.version
+            );
+        } else if let Some(replicas) = response.replicas {
+            println!(
+                "[maestro]: scaled service `{}` to {replicas} replicas",
+                response.service_id
             );
         } else {
             println!(

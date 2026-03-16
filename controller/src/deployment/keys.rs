@@ -33,6 +33,14 @@ pub fn service_id_from_history_key(key: &str) -> Option<String> {
     Some(service_id.to_string())
 }
 
+pub fn replica_state_key(service_id: &str, deployment_id: &str, replica_index: u32) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/replicas/{deployment_id}/{replica_index}")
+}
+
+pub fn replica_states_prefix(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/replicas/{deployment_id}/")
+}
+
 pub fn service_id_from_info_key(key: &str) -> Option<String> {
     let remainder = key.strip_prefix(&format!("{SERVICES_ROOT}/"))?;
     let (service_id, suffix) = remainder.split_once('/')?;

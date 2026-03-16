@@ -8,14 +8,16 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, service_deployment_history_key,
-    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
-    service_id_from_info_key, service_info_key, service_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, replica_state_key, replica_states_prefix,
+    service_deployment_history_key, service_deployment_history_prefix,
+    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
+    service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, DeploymentStatus, ForceQueueOutcome, IngressConfig,
-    QueuedDeployment, ServiceDeployment, ServiceInfo,
+    CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
+    ForceQueueOutcome, IngressConfig, QueuedDeployment, ReplicaState, ServiceConfig,
+    ServiceDeployment, ServiceInfo,
 };
 use crate::utils::time::current_time_millis;
 
@@ -167,35 +169,52 @@ impl EtcdStateStore {
     async fn configure_ingress(
         &self,
         service_id: &str,
-        container_name: &str,
+        container_names: &[String],
         ingress: &IngressConfig,
     ) -> Result<()> {
         let router_prefix = format!("traefik/http/routers/{service_id}");
         let service_prefix = format!("traefik/http/services/{service_id}");
+        let servers_prefix = format!("{service_prefix}/loadBalancer/servers/");
 
         let rule = format!("Host(`{}`)", ingress.host);
-        let url = format!("http://{}:{}", container_name, ingress.port.unwrap_or(80));
+        let port = ingress.port.unwrap_or(80);
 
-        let success = vec![
+        let mut client = self.client.lock().await;
+
+        if let Some(range_end) = prefix_range_end(servers_prefix.as_bytes()) {
+            client
+                .delete(
+                    servers_prefix.as_bytes(),
+                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+                )
+                .await
+                .map_err(|err| anyhow!("failed to delete stale ingress servers: {err}"))?;
+        }
+
+        let mut put_ops = vec![
             request_put(&format!("{router_prefix}/rule"), &rule),
             request_put(&format!("{router_prefix}/service"), service_id),
             request_put(&format!("{router_prefix}/entryPoints/0"), "web"),
-            request_put(
-                &format!("{service_prefix}/loadBalancer/servers/0/url"),
-                &url,
-            ),
         ];
+        for (i, container_name) in container_names.iter().enumerate() {
+            let url = format!("http://{container_name}:{port}");
+            put_ops.push(request_put(&format!("{servers_prefix}{i}/url"), &url));
+        }
 
-        let mut client = self.client.lock().await;
-        let txn = Txn::new().and_then(success);
+        let txn = Txn::new().and_then(put_ops);
         client
             .txn(txn)
             .await
             .map_err(|err| anyhow!("failed to configure traefik ingress: {err}"))?;
 
+        let urls: Vec<String> = container_names
+            .iter()
+            .map(|c| format!("http://{c}:{port}"))
+            .collect();
         eprintln!(
-            "[probe] configured ingress for `{service_id}`: {} -> {url}",
-            ingress.host
+            "[probe] configured ingress for `{service_id}`: {} -> [{}]",
+            ingress.host,
+            urls.join(", ")
         );
         Ok(())
     }
@@ -230,6 +249,84 @@ impl EtcdStateStore {
         }
 
         Ok(None)
+    }
+
+    async fn find_active_deployment(&self, service_id: &str) -> Option<DeploymentSnapshot> {
+        let deployments = self.list_service_deployments(service_id).await.ok()?;
+        let active = deployments.into_iter().find(|d| {
+            matches!(
+                d.status,
+                DeploymentStatus::Ready
+                    | DeploymentStatus::Building
+                    | DeploymentStatus::PendingReady
+            )
+        })?;
+        let deployment_ref = Deployment {
+            service_id: service_id.to_string(),
+            id: active.id.clone(),
+            replica_index: 0,
+        };
+        self.find_deployment_snapshot(&deployment_ref).await.ok()?
+    }
+
+    async fn sync_ingress_for_service(&self, service_id: &str, deployment: &ServiceDeployment) {
+        let Some(ingress) = &deployment.config.ingress else {
+            eprintln!("[maestro]: sync_ingress skipped for `{service_id}`: no ingress config");
+            return;
+        };
+        let replicas = match self.read_replica_states(service_id, &deployment.id).await {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!(
+                    "[maestro]: sync_ingress failed to read replica states for `{service_id}`: {err}"
+                );
+                return;
+            }
+        };
+        let containers: Vec<String> = replicas
+            .iter()
+            .filter(|r| r.status == DeploymentStatus::Ready)
+            .map(|r| deployment.hostname_for_replica(r.replica_index))
+            .collect();
+        if containers.is_empty() {
+            eprintln!(
+                "[maestro]: sync_ingress skipped for `{service_id}`: no ready replicas (total: {}, statuses: {:?})",
+                replicas.len(),
+                replicas
+                    .iter()
+                    .map(|r| format!("replica{}={:?}", r.replica_index, r.status))
+                    .collect::<Vec<_>>()
+            );
+            return;
+        }
+        if let Err(err) = self
+            .configure_ingress(service_id, &containers, ingress)
+            .await
+        {
+            eprintln!("[maestro]: failed to configure ingress for `{service_id}`: {err}");
+        }
+    }
+
+    async fn read_replica_states(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<Vec<ReplicaState>> {
+        let prefix_key = replica_states_prefix(service_id, deployment_id);
+        let prefix = prefix_key.as_bytes();
+        let range_end = prefix_range_end(prefix)
+            .ok_or_else(|| anyhow!("failed to compute range end for replica states prefix"))?;
+        let options = GetOptions::new().with_range(range_end);
+        let response = self.get(prefix.to_vec(), Some(options)).await?;
+
+        let mut states = Vec::new();
+        for kv in response.kvs() {
+            let state = serde_json::from_slice::<ReplicaState>(kv.value())
+                .map_err(|err| anyhow!("invalid replica state JSON: {err}"))?;
+            states.push(state);
+        }
+        states.sort_by_key(|s| s.replica_index);
+        Ok(states)
     }
 }
 
@@ -387,20 +484,6 @@ impl ClusterStore for EtcdStateStore {
                 .await?;
 
             if committed {
-                if status == DeploymentStatus::Ready {
-                    if let Some(ingress) = &updated.config.ingress {
-                        let container = updated.hostname();
-                        if let Err(err) = self
-                            .configure_ingress(&updated.config.id, &container, ingress)
-                            .await
-                        {
-                            eprintln!(
-                                "[maestro]: failed to configure ingress for `{}`: {err}",
-                                updated.config.id
-                            );
-                        }
-                    }
-                }
                 let _ = self
                     .update_service_info_status(&deployment.service_id, status)
                     .await;
@@ -412,6 +495,111 @@ impl ClusterStore for EtcdStateStore {
             "failed to update deployment `{}` to {status:?} due to concurrent updates",
             deployment.id,
         ))
+    }
+
+    async fn update_replica_status(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+        status: DeploymentStatus,
+    ) -> anyhow::Result<()> {
+        let key = replica_state_key(service_id, deployment_id, replica_index);
+        let state = ReplicaState {
+            replica_index,
+            status,
+        };
+        let json = serde_json::to_string(&state)
+            .map_err(|err| anyhow!("failed to serialize replica state: {err}"))?;
+
+        let mut client = self.client.lock().await;
+        client
+            .put(key.as_bytes().to_vec(), json.as_bytes().to_vec(), None)
+            .await
+            .map_err(|err| anyhow!("failed to write replica state: {err}"))?;
+
+        drop(client);
+
+        let deployment_ref = Deployment {
+            service_id: service_id.to_string(),
+            id: deployment_id.to_string(),
+            replica_index,
+        };
+        if let Ok(Some(deployment)) = self
+            .find_deployment_snapshot(&deployment_ref)
+            .await
+            .map(|s| s.map(|s| s.deployment))
+        {
+            self.sync_ingress_for_service(service_id, &deployment).await;
+        }
+
+        Ok(())
+    }
+
+    async fn delete_replica_state(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+    ) -> anyhow::Result<()> {
+        let key = replica_state_key(service_id, deployment_id, replica_index);
+        let mut client = self.client.lock().await;
+        client
+            .delete(key.as_bytes(), None)
+            .await
+            .map_err(|err| anyhow!("failed to delete replica state: {err}"))?;
+
+        drop(client);
+
+        let deployment_ref = Deployment {
+            service_id: service_id.to_string(),
+            id: deployment_id.to_string(),
+            replica_index,
+        };
+        if let Ok(Some(deployment)) = self
+            .find_deployment_snapshot(&deployment_ref)
+            .await
+            .map(|s| s.map(|s| s.deployment))
+        {
+            self.sync_ingress_for_service(service_id, &deployment).await;
+        }
+
+        Ok(())
+    }
+
+    async fn list_replica_states(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> anyhow::Result<Vec<ReplicaState>> {
+        self.read_replica_states(service_id, deployment_id).await
+    }
+
+    async fn list_service_deployments_with_replicas(
+        &self,
+        service_id: &str,
+    ) -> anyhow::Result<Vec<DeploymentWithReplicas>> {
+        let deployments = self.list_service_deployments(service_id).await?;
+        let mut result = Vec::with_capacity(deployments.len());
+        for deployment in deployments {
+            let replicas: Vec<ReplicaState> = self
+                .read_replica_states(service_id, &deployment.id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| {
+                    !matches!(
+                        r.status,
+                        DeploymentStatus::Terminated | DeploymentStatus::Removed
+                    )
+                })
+                .collect();
+            result.push(DeploymentWithReplicas {
+                deployment,
+                replicas,
+            });
+        }
+        Ok(result)
     }
 
     async fn list_service_infos(&self) -> anyhow::Result<Vec<ServiceInfo>> {
@@ -570,6 +758,7 @@ impl ClusterStore for EtcdStateStore {
 
             let mut updated = snapshot.deployment.clone();
             updated.status = DeploymentStatus::Canceled;
+            // replica states are in separate keys; no need to update them here
             let updated_json = serde_json::to_string(&updated)
                 .map_err(|err| anyhow!("failed to serialize canceled deployment: {err}"))?;
 
@@ -613,6 +802,7 @@ impl ClusterStore for EtcdStateStore {
 
             let mut updated = snapshot.deployment.clone();
             updated.status = DeploymentStatus::Removed;
+            // replica states are in separate keys; no need to update them here
             let updated_json = serde_json::to_string(&updated)
                 .map_err(|err| anyhow!("failed to serialize remove-requested deployment: {err}"))?;
 
@@ -633,6 +823,53 @@ impl ClusterStore for EtcdStateStore {
 
         Err(anyhow!(
             "failed to request stop due to concurrent updates; retry"
+        ))
+    }
+
+    async fn update_service_config(
+        &self,
+        service_id: &str,
+        config: ServiceConfig,
+    ) -> anyhow::Result<()> {
+        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
+            let Some(info_snapshot) = self.read_service_info_snapshot(service_id).await? else {
+                return Err(anyhow!("service `{service_id}` not found"));
+            };
+
+            let mut updated_info = info_snapshot.info.clone();
+            updated_info.config = config.clone();
+            let info_json = serde_json::to_string(&updated_info)
+                .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
+
+            let active_deployment = self.find_active_deployment(service_id).await;
+
+            let mut compare = vec![compare_mod_revision_or_absent(
+                &info_snapshot.key,
+                Some(info_snapshot.mod_revision),
+            )];
+            let mut success = vec![request_put(&info_snapshot.key, &info_json)];
+
+            if let Some(dep_snapshot) = &active_deployment {
+                let mut updated_dep = dep_snapshot.deployment.clone();
+                updated_dep.config = config.clone();
+                let dep_json = serde_json::to_string(&updated_dep)
+                    .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
+                compare.push(compare_mod_revision_or_absent(
+                    &dep_snapshot.key,
+                    Some(dep_snapshot.mod_revision),
+                ));
+                success.push(request_put(&dep_snapshot.key, &dep_json));
+            }
+
+            let committed = self.txn(compare, success).await?;
+
+            if committed {
+                return Ok(());
+            }
+        }
+
+        Err(anyhow!(
+            "failed to update service config for `{service_id}` due to concurrent updates"
         ))
     }
 

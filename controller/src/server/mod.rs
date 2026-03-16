@@ -135,6 +135,7 @@ impl Server {
                 deployment,
             } => RolloutServiceResponse {
                 queued: true,
+                replicas: None,
                 deployment_id: Some(deployment.id.clone()),
                 deployment_index: Some(deployment_index),
                 service_id: deployment.config.id.clone(),
@@ -146,6 +147,20 @@ impl Server {
                 version,
             } => RolloutServiceResponse {
                 queued: false,
+                replicas: None,
+                deployment_id: None,
+                deployment_index: None,
+                service_id,
+                status: None,
+                version,
+            },
+            UpsertServiceOutcome::Scaled {
+                service_id,
+                version,
+                replicas,
+            } => RolloutServiceResponse {
+                queued: false,
+                replicas: Some(replicas),
                 deployment_id: None,
                 deployment_index: None,
                 service_id,
@@ -189,6 +204,7 @@ impl Server {
                         ports: vec![],
                         command: None,
                         healthcheck_path: None,
+                        replicas: 1,
                     },
                     ingress: None,
                 },
@@ -203,21 +219,23 @@ impl Server {
     async fn list_deployments(
         Path(service_id): Path<String>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<ServiceDeployment>>, (StatusCode, String)> {
+    ) -> Result<Json<Vec<crate::deployment::types::DeploymentWithReplicas>>, (StatusCode, String)>
+    {
         let service_id = service_id.trim();
         validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
         let mut deployments = state
             .store
-            .list_service_deployments(service_id)
+            .list_service_deployments_with_replicas(service_id)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
         deployments.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.id.cmp(&a.id))
+            b.deployment
+                .created_at
+                .cmp(&a.deployment.created_at)
+                .then_with(|| b.deployment.id.cmp(&a.deployment.id))
         });
 
         Ok(Json(deployments))
@@ -241,6 +259,7 @@ impl Server {
         let deployment = Deployment {
             service_id: service_id.clone(),
             id: deployment_id.clone(),
+            replica_index: 0,
         };
         let outcome = state
             .store
@@ -300,6 +319,7 @@ impl Server {
 
         Ok(Json(RolloutServiceResponse {
             queued: true,
+            replicas: None,
             deployment_id: Some(outcome.deployment.id.clone()),
             deployment_index: Some(outcome.deployment_index),
             service_id: outcome.deployment.config.id.clone(),
@@ -343,6 +363,7 @@ impl Server {
         let deployment = Deployment {
             service_id: service_id.clone(),
             id: deployment_id.clone(),
+            replica_index: 0,
         };
         let outcome = state
             .store
@@ -391,18 +412,59 @@ impl Server {
             ));
         }
 
-        let log_path = state
+        let deployment_dir = state
             .logs_dir
             .join("services")
             .join(service_id)
             .join("deployments")
-            .join(deployment_id)
-            .join("logs.jsonl");
+            .join(deployment_id);
 
-        logs::read_jsonl_logs(&log_path, query.tail.unwrap_or(DEFAULT_LOG_LIMIT))
+        let deployment = state
+            .store
+            .read_service_deployment(&Deployment {
+                service_id: service_id.to_string(),
+                id: deployment_id.to_string(),
+                replica_index: 0,
+            })
             .await
-            .map(Json)
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let replicas = deployment
+            .as_ref()
+            .map(|d| d.config.deploy.replicas)
+            .unwrap_or(1);
+
+        let mut all_entries: Vec<serde_json::Value> = Vec::new();
+        for replica_index in 0..replicas {
+            let log_path = deployment_dir
+                .join(format!("replica{replica_index}"))
+                .join("logs.jsonl");
+            let hostname = deployment
+                .as_ref()
+                .map(|d| d.hostname_for_replica(replica_index))
+                .unwrap_or_else(|| format!("replica{replica_index}"));
+            if let Ok(mut entries) = logs::read_jsonl_logs(&log_path, tail).await {
+                for entry in &mut entries {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert(
+                            "hostname".to_string(),
+                            serde_json::Value::String(hostname.clone()),
+                        );
+                    }
+                }
+                all_entries.extend(entries);
+            }
+        }
+
+        all_entries.sort_by(|a, b| {
+            let ts_a = a.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+            let ts_b = b.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+            ts_a.cmp(&ts_b)
+        });
+
+        let start = all_entries.len().saturating_sub(tail);
+        Ok(Json(all_entries[start..].to_vec()))
     }
 
     async fn get_system_logs(
@@ -452,7 +514,12 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         "provider": &provider,
         "build": &build,
         "image": &image,
-        "deploy": &deploy,
+        "deploy": {
+            "flags": &deploy.flags,
+            "ports": &deploy.ports,
+            "command": &deploy.command,
+            "healthcheckPath": &deploy.healthcheck_path,
+        },
         "ingress": &ingress
     });
     let version_bytes = serde_json::to_vec(&version_payload)
@@ -488,6 +555,20 @@ async fn upsert_config_and_maybe_queue(
         && existing.config.version == service_version
         && is_active_service_status(existing.status.as_ref())
     {
+        let desired_replicas = service_config.deploy.replicas;
+        if existing.config.deploy.replicas != desired_replicas {
+            let mut updated_config = existing.config.clone();
+            updated_config.deploy.replicas = desired_replicas;
+            store
+                .update_service_config(&service_id, updated_config)
+                .await
+                .map_err(|err| err.to_string())?;
+            return Ok(UpsertServiceOutcome::Scaled {
+                service_id,
+                version: service_version,
+                replicas: desired_replicas,
+            });
+        }
         return Ok(UpsertServiceOutcome::Unchanged {
             service_id,
             version: service_version,

@@ -1,8 +1,8 @@
 use super::*;
 use crate::deployment::types::{Command, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
 
-fn sample_patch_request(id: &str, name: &str) -> PatchServiceRequest {
-    PatchServiceRequest {
+fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
+    RolloutServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
         provider: ServiceProvider::Docker,
@@ -19,12 +19,14 @@ fn sample_patch_request(id: &str, name: &str) -> PatchServiceRequest {
                 args: vec!["--prod".to_string()],
             }),
             healthcheck_path: Some("/_healthy".to_string()),
+            replicas: 1,
         },
+        ingress: None,
     }
 }
 
-fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> PatchServiceRequest {
-    PatchServiceRequest {
+fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> RolloutServiceRequest {
+    RolloutServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
         provider: ServiceProvider::Docker,
@@ -38,7 +40,9 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> PatchSe
                 args: vec!["--prod".to_string()],
             }),
             healthcheck_path: Some("/_healthy".to_string()),
+            replicas: 1,
         },
+        ingress: None,
     }
 }
 

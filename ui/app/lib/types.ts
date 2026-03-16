@@ -16,6 +16,7 @@ export interface Ingress {
 export interface Deploy {
   command?: BuildCommand | null;
   healthcheckPath: string;
+  replicas?: number;
 }
 
 export interface Service {
@@ -30,10 +31,16 @@ export interface Service {
   system?: boolean;
 }
 
+export interface ReplicaState {
+  replicaIndex: number;
+  status: string;
+}
+
 export interface Deployment {
   id: string;
   createdAt: number;
   status: string;
+  replicas?: ReplicaState[];
   config: Service;
   gitCommit: string | null;
   build: unknown | null;
@@ -44,4 +51,5 @@ export interface LogEntry {
   level: string;
   stream: "stdout" | "stderr";
   text: string;
+  hostname?: string;
 }

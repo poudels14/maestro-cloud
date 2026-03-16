@@ -7,7 +7,7 @@ use crate::deployment::types::ServiceDeployment;
 
 pub trait ServiceCommandPlanner: Send + Sync {
     fn build(&self, deployment: &ServiceDeployment) -> Option<String>;
-    fn deploy(&self, deployment: &ServiceDeployment) -> Option<String>;
+    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<String>;
 }
 
 pub struct DockerBuildConfig {
@@ -63,7 +63,7 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
         ))
     }
 
-    fn deploy(&self, deployment: &ServiceDeployment) -> Option<String> {
+    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<String> {
         if let Some(image) = deployment
             .config
             .image
@@ -74,6 +74,8 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
             Some(docker_run_command(
                 &deployment.config.id,
                 &deployment.id,
+                replica_index,
+                deployment.config.deploy.replicas,
                 image,
                 &self.network,
                 &deployment.config.deploy.ports,
@@ -95,7 +97,7 @@ impl ServiceCommandPlanner for ShellDeploymentProvider {
         None
     }
 
-    fn deploy(&self, deployment: &ServiceDeployment) -> Option<String> {
+    fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<String> {
         let deploy_command = deployment.config.deploy.command.as_ref()?;
         let command = deploy_command.command.trim();
         if command.is_empty() {
@@ -116,17 +118,25 @@ fn to_shell_command(command: &str, args: &[String]) -> String {
 fn docker_run_command(
     service_id: &str,
     deployment_id: &str,
+    replica_index: u32,
+    replicas: u32,
     image: &str,
     network: &str,
     ports: &[String],
     flags: &[String],
 ) -> String {
     let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
-    let container_name = format!("{service_id}-{short_deployment_id}");
+    let container_name = if replica_index == 0 {
+        format!("{service_id}-{short_deployment_id}")
+    } else {
+        format!("{service_id}-{short_deployment_id}-{replica_index}")
+    };
 
     let mut args = format!("exec docker run --rm --name {container_name} --network {network}");
-    for port in ports {
-        args.push_str(&format!(" -p {port}"));
+    if replicas <= 1 {
+        for port in ports {
+            args.push_str(&format!(" -p {port}"));
+        }
     }
     args.push_str(&format!(" {image}"));
     for flag in flags {
