@@ -19,7 +19,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 const LOGS_DIR: &str = "/logs";
 
 pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
-    eprintln!("starting, etcd={etcd_endpoint}, port={port}");
+    eprintln!("starting probe etcd={etcd_endpoint} port={port}");
 
     let store = EtcdStateStore::new(etcd_endpoint).await?;
     let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
