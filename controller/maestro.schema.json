@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["services"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/service"
+      }
+    }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "required": ["name", "deploy"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["docker", "shell"],
+          "default": "docker"
+        },
+        "build": {
+          "$ref": "#/$defs/build"
+        },
+        "image": {
+          "type": "string"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "ingress": {
+          "$ref": "#/$defs/ingress"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["build"],
+          "properties": {
+            "image": false
+          }
+        },
+        {
+          "required": ["image"],
+          "properties": {
+            "build": false
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "shell" }
+          },
+          "required": ["deploy"]
+        }
+      ]
+    },
+    "build": {
+      "type": "object",
+      "required": ["repo", "dockerfilePath"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "dockerfilePath": {
+          "type": "string"
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "exposePorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "default": []
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "healthcheckPath": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": ["host"],
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}
