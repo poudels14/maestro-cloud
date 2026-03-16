@@ -101,7 +101,7 @@ pub struct ServiceDeployConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ports: Vec<String>,
+    pub expose_ports: Vec<u16>,
     pub command: Option<Command>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck_path: Option<String>,
