@@ -225,8 +225,6 @@ pub struct DeploymentBuildInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceInfo {
     pub config: ServiceConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<DeploymentStatus>,
 }
 
 fn default_replicas() -> u32 {
