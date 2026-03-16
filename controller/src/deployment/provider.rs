@@ -75,10 +75,9 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
                 &deployment.config.id,
                 &deployment.id,
                 replica_index,
-                deployment.config.deploy.replicas,
                 image,
                 &self.network,
-                &deployment.config.deploy.ports,
+                &deployment.config.deploy.expose_ports,
                 &deployment.config.deploy.flags,
             ))
         } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
@@ -119,10 +118,9 @@ fn docker_run_command(
     service_id: &str,
     deployment_id: &str,
     replica_index: u32,
-    replicas: u32,
     image: &str,
     network: &str,
-    ports: &[String],
+    expose_ports: &[u16],
     flags: &[String],
 ) -> String {
     let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
@@ -133,10 +131,8 @@ fn docker_run_command(
     };
 
     let mut args = format!("exec docker run --rm --name {container_name} --network {network}");
-    if replicas <= 1 {
-        for port in ports {
-            args.push_str(&format!(" -p {port}"));
-        }
+    for port in expose_ports {
+        args.push_str(&format!(" -p 0:{port}"));
     }
     args.push_str(&format!(" {image}"));
     for flag in flags {

@@ -13,7 +13,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
         image: None,
         deploy: ServiceDeployConfig {
             flags: vec![],
-            ports: vec![],
+            expose_ports: vec![],
             command: Some(Command {
                 command: "arc-deploy".to_string(),
                 args: vec!["--prod".to_string()],
@@ -34,7 +34,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
         image: Some(image.to_string()),
         deploy: ServiceDeployConfig {
             flags: vec![],
-            ports: vec![],
+            expose_ports: vec![],
             command: Some(Command {
                 command: "arc-deploy".to_string(),
                 args: vec!["--prod".to_string()],

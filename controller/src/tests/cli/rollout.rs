@@ -12,7 +12,7 @@ fn sample_config() -> &'static str {
             "dockerfilePath": "Dockerfile"
           },
           "deploy": {
-            "ports": ["8080:80", "8443:443"],
+            "exposePorts": [8080, 8443],
             "flags": ["--network=host"],
             "healthcheckPath": "/_healthy"
           }
@@ -47,9 +47,6 @@ fn service_payload_uses_map_key_as_service_id() {
         payload.build.as_ref().map(|build| build.repo.as_str()),
         Some("https://example.com/org/repo.git"),
     );
-    assert_eq!(
-        payload.deploy.ports,
-        vec!["8080:80".to_string(), "8443:443".to_string()]
-    );
+    assert_eq!(payload.deploy.expose_ports, vec![8080, 8443]);
     assert_eq!(payload.deploy.flags, vec!["--network=host".to_string()]);
 }

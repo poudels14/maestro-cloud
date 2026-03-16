@@ -41,7 +41,7 @@ fn deployment_with_source(
             image: image.map(str::to_string),
             deploy: ServiceDeployConfig {
                 flags: vec![],
-                ports: vec![],
+                expose_ports: vec![],
                 command: deploy_command,
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
@@ -80,7 +80,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
 fn command_planner_appends_deploy_flags_to_docker_run() {
     let mut deployment = deployment_with_source(None, Some("traefik/whoami"), None);
     deployment.id = "ABCDEF123456".to_string();
-    deployment.config.deploy.ports = vec!["8080:80".to_string(), "8443:443".to_string()];
+    deployment.config.deploy.expose_ports = vec![80, 443];
     deployment.config.deploy.flags = vec![
         "--network=host".to_string(),
         "--label".to_string(),
@@ -96,7 +96,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 
     assert_eq!(
         deploy,
-        "exec docker run --rm --name svc-1-ABCDEF --network test-net -p 8080:80 -p 8443:443 traefik/whoami --network=host --label env=test",
+        "exec docker run --rm --name svc-1-ABCDEF --network test-net -p 0:80 -p 0:443 traefik/whoami --network=host --label env=test",
     );
 }
 
@@ -140,7 +140,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
             image: None,
             deploy: ServiceDeployConfig {
                 flags: vec![],
-                ports: vec![],
+                expose_ports: vec![],
                 command: Some(Command {
                     command: "echo".to_string(),
                     args: vec!["ok".to_string()],
@@ -204,7 +204,7 @@ impl InMemoryStore {
                 image: None,
                 deploy: ServiceDeployConfig {
                     flags: vec![],
-                    ports: vec![],
+                    expose_ports: vec![],
                     command: Some(deploy_command.clone()),
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,
@@ -250,7 +250,7 @@ impl InMemoryStore {
                 image: None,
                 deploy: ServiceDeployConfig {
                     flags: vec![],
-                    ports: vec![],
+                    expose_ports: vec![],
                     command: Some(deploy_command),
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,

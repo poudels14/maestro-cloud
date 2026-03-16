@@ -201,7 +201,7 @@ impl Server {
                     image: Some(image.to_string()),
                     deploy: ServiceDeployConfig {
                         flags: vec![],
-                        ports: vec![],
+                        expose_ports: vec![],
                         command: None,
                         healthcheck_path: None,
                         replicas: 1,
@@ -516,7 +516,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         "image": &image,
         "deploy": {
             "flags": &deploy.flags,
-            "ports": &deploy.ports,
+            "exposePorts": &deploy.expose_ports,
             "command": &deploy.command,
             "healthcheckPath": &deploy.healthcheck_path,
         },
