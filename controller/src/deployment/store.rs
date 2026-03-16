@@ -80,6 +80,10 @@ pub trait ClusterStore: Send + Sync {
         bail!("read_service_info not implemented")
     }
 
+    async fn get_service_status(&self, _service_id: &str) -> Result<Option<DeploymentStatus>> {
+        bail!("get_service_status not implemented")
+    }
+
     async fn read_service_deployment(
         &self,
         _deployment: &Deployment,

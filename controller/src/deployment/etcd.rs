@@ -131,41 +131,6 @@ impl EtcdStateStore {
         }))
     }
 
-    async fn update_service_info_status(
-        &self,
-        service_id: &str,
-        status: DeploymentStatus,
-    ) -> Result<()> {
-        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
-            let Some(info_snapshot) = self.read_service_info_snapshot(service_id).await? else {
-                return Ok(());
-            };
-
-            let mut updated_info = info_snapshot.info.clone();
-            updated_info.status = Some(status.clone());
-            let info_json = serde_json::to_string(&updated_info)
-                .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
-
-            let committed = self
-                .txn(
-                    vec![compare_mod_revision_or_absent(
-                        &info_snapshot.key,
-                        Some(info_snapshot.mod_revision),
-                    )],
-                    vec![request_put(&info_snapshot.key, &info_json)],
-                )
-                .await?;
-
-            if committed {
-                return Ok(());
-            }
-        }
-
-        Err(anyhow!(
-            "failed to update service info status for `{service_id}` due to concurrent updates"
-        ))
-    }
-
     async fn configure_ingress(
         &self,
         service_id: &str,
@@ -414,7 +379,6 @@ impl ClusterStore for EtcdStateStore {
 
         let updated_info = ServiceInfo {
             config: queued_deployment.deployment.config.clone(),
-            status: Some(DeploymentStatus::Building),
         };
         let info_json = serde_json::to_string(&updated_info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
@@ -476,9 +440,6 @@ impl ClusterStore for EtcdStateStore {
                 .await?;
 
             if committed {
-                let _ = self
-                    .update_service_info_status(&deployment.service_id, status)
-                    .await;
                 return Ok(());
             }
         }
@@ -655,6 +616,14 @@ impl ClusterStore for EtcdStateStore {
             .map(|snapshot| snapshot.info))
     }
 
+    async fn get_service_status(
+        &self,
+        service_id: &str,
+    ) -> anyhow::Result<Option<DeploymentStatus>> {
+        let deployments = self.list_service_deployments(service_id).await?;
+        Ok(deployments.first().map(|d| d.status.clone()))
+    }
+
     async fn read_service_deployment(
         &self,
         deployment: &Deployment,
@@ -692,7 +661,6 @@ impl ClusterStore for EtcdStateStore {
 
             let info = ServiceInfo {
                 config: deployment.config.clone(),
-                status: Some(DeploymentStatus::Queued),
             };
             let info_json = serde_json::to_string(&info)
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
@@ -806,9 +774,6 @@ impl ClusterStore for EtcdStateStore {
 
             let committed = self.txn(compare, success).await?;
             if committed {
-                let _ = self
-                    .update_service_info_status(&deployment.service_id, DeploymentStatus::Removed)
-                    .await;
                 return Ok(Some(updated));
             }
         }

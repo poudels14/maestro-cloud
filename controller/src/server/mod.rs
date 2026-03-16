@@ -181,14 +181,19 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
-        let mut items: Vec<ServiceListItem> = infos
-            .into_iter()
-            .map(|info| ServiceListItem {
+        let mut items: Vec<ServiceListItem> = Vec::with_capacity(infos.len());
+        for info in infos {
+            let status = state
+                .store
+                .get_service_status(&info.config.id)
+                .await
+                .unwrap_or(None);
+            items.push(ServiceListItem {
                 service: info.config,
-                status: info.status,
+                status,
                 system: false,
-            })
-            .collect();
+            });
+        }
 
         for (id, name, image) in SYSTEM_SERVICES {
             items.push(ServiceListItem {
@@ -548,12 +553,16 @@ async fn upsert_config_and_maybe_queue(
         return Err("service version cannot be empty".to_string());
     }
 
+    let service_status = store
+        .get_service_status(&service_id)
+        .await
+        .map_err(|err| err.to_string())?;
     if let Some(existing) = store
         .read_service_info(&service_id)
         .await
         .map_err(|err| err.to_string())?
         && existing.config.version == service_version
-        && is_active_service_status(existing.status.as_ref())
+        && is_active_service_status(service_status.as_ref())
     {
         let desired_replicas = service_config.deploy.replicas;
         if existing.config.deploy.replicas != desired_replicas {

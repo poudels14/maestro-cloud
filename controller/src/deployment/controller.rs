@@ -111,12 +111,13 @@ impl DeploymentController {
     async fn queue_terminated_active_deployments(&self) -> Result<()> {
         let service_ids = self.store.list_service_ids().await?;
         for service_id in service_ids {
+            let status = self.store.get_service_status(&service_id).await?;
+            if status != Some(DeploymentStatus::Terminated) {
+                continue;
+            }
             let Some(info) = self.store.read_service_info(&service_id).await? else {
                 continue;
             };
-            if info.status != Some(DeploymentStatus::Terminated) {
-                continue;
-            }
             let deployment = ServiceDeployment::new(info.config)?;
             let _ = self.store.queue_deployment(deployment).await?;
         }
