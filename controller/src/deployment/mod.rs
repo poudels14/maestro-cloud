@@ -267,12 +267,10 @@ async fn init_tailnet(
                 "--hostname maestro-tailscale",
                 &format!("--domainname {dns_domain}"),
                 &format!("--network {}", config.network),
-                "--cap-add=NET_ADMIN",
-                "--device=/dev/net/tun",
                 &format!("-v {}:/var/lib/tailscale", state_dir.display()),
                 &format!("-e TS_AUTHKEY={authkey}"),
                 &format!("-e TS_ROUTES={network_cidr}"),
-                "-e TS_USERSPACE=false",
+                "-e TS_USERSPACE=true",
                 "ghcr.io/tailscale/tailscale:latest",
             ]
             .join(" "),
