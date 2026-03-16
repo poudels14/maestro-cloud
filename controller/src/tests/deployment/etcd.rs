@@ -5,8 +5,9 @@ use crate::deployment::provider::{
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Command, Deployment, DeploymentConfig, DeploymentStatus, QueuedDeployment, ServiceBuildConfig,
-    ServiceConfig, ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    Command, Deployment, DeploymentConfig, DeploymentStatus, IngressConfig, QueuedDeployment,
+    ReplicaState, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
+    ServiceInfo, ServiceProvider,
 };
 use crate::supervisor::controller::JobSupervisor;
 use anyhow::Result;
@@ -171,6 +172,42 @@ struct InMemoryStoreState {
     configs: HashMap<String, ServiceConfig>,
     history: HashMap<String, Vec<ServiceDeployment>>,
     transitions: HashMap<String, Vec<DeploymentStatus>>,
+    replica_states: HashMap<String, Vec<ReplicaState>>,
+    ingress_backends: HashMap<String, Vec<String>>,
+}
+
+fn sync_ingress(state: &mut InMemoryStoreState, service_id: &str) {
+    let Some(deployments) = state.history.get(service_id) else {
+        return;
+    };
+    let active = deployments.iter().rev().find(|d| {
+        matches!(
+            d.status,
+            DeploymentStatus::Ready | DeploymentStatus::PendingReady | DeploymentStatus::Building
+        )
+    });
+    let Some(active) = active else {
+        state.ingress_backends.remove(service_id);
+        return;
+    };
+    if active.config.ingress.is_none() {
+        return;
+    }
+    let key = format!("{service_id}/{}", active.id);
+    let backends: Vec<String> = state
+        .replica_states
+        .get(&key)
+        .map(|replicas| {
+            replicas
+                .iter()
+                .filter(|r| r.status == DeploymentStatus::Ready)
+                .map(|r| active.hostname_for_replica(r.replica_index))
+                .collect()
+        })
+        .unwrap_or_default();
+    state
+        .ingress_backends
+        .insert(service_id.to_string(), backends);
 }
 
 impl InMemoryStore {
@@ -305,6 +342,68 @@ impl InMemoryStore {
         let state = self.state.lock().expect("state lock");
         state.transitions.clone()
     }
+
+    fn seed_service_config(&self, service_id: &str, ingress: Option<IngressConfig>) {
+        let mut state = self.state.lock().expect("state lock");
+        let config = ServiceConfig {
+            id: service_id.to_string(),
+            name: format!("service-{service_id}"),
+            version: "cfg-0".to_string(),
+            provider: ServiceProvider::Shell,
+            build: None,
+            image: None,
+            deploy: ServiceDeployConfig {
+                flags: vec![],
+                expose_ports: vec![],
+                command: None,
+                healthcheck_path: None,
+                replicas: 1,
+            },
+            ingress,
+        };
+        state.configs.insert(service_id.to_string(), config);
+    }
+
+    fn add_queued_deployment(&self, service_id: &str, deploy_command: Command) -> String {
+        let mut state = self.state.lock().expect("state lock");
+        let mut config = state
+            .configs
+            .get(service_id)
+            .cloned()
+            .expect("service config should exist");
+        let dep_idx = state.history.get(service_id).map(|d| d.len()).unwrap_or(0);
+        config.version = format!("cfg-{service_id}-{dep_idx}");
+        config.deploy.command = Some(deploy_command);
+
+        let deployment = ServiceDeployment {
+            id: format!("{service_id}-{dep_idx}"),
+            created_at: dep_idx as u64 + 1,
+            deployed_at: None,
+            status: DeploymentStatus::Queued,
+            config,
+            git_commit: None,
+            build: None,
+        };
+        let id = deployment.id.clone();
+        state
+            .transitions
+            .insert(id.clone(), vec![DeploymentStatus::Queued]);
+        state
+            .history
+            .entry(service_id.to_string())
+            .or_default()
+            .push(deployment);
+        id
+    }
+
+    fn ingress_backends(&self, service_id: &str) -> Vec<String> {
+        let state = self.state.lock().expect("state lock");
+        state
+            .ingress_backends
+            .get(service_id)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait]
@@ -405,12 +504,76 @@ impl ClusterStore for InMemoryStore {
 
     async fn update_replica_status(
         &self,
-        _service_id: &str,
-        _deployment_id: &str,
-        _replica_index: u32,
-        _status: DeploymentStatus,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+        status: DeploymentStatus,
     ) -> Result<()> {
+        let mut state = self.state.lock().expect("state lock");
+        let key = format!("{service_id}/{deployment_id}");
+        let replicas = state.replica_states.entry(key).or_default();
+        if let Some(existing) = replicas
+            .iter_mut()
+            .find(|r| r.replica_index == replica_index)
+        {
+            existing.status = status;
+        } else {
+            replicas.push(ReplicaState {
+                replica_index,
+                status,
+            });
+        }
+        sync_ingress(&mut state, service_id);
         Ok(())
+    }
+
+    async fn list_replica_states(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> Result<Vec<ReplicaState>> {
+        let state = self.state.lock().expect("state lock");
+        let key = format!("{service_id}/{deployment_id}");
+        Ok(state.replica_states.get(&key).cloned().unwrap_or_default())
+    }
+
+    async fn delete_replica_state(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+    ) -> Result<()> {
+        let mut state = self.state.lock().expect("state lock");
+        let key = format!("{service_id}/{deployment_id}");
+        if let Some(replicas) = state.replica_states.get_mut(&key) {
+            replicas.retain(|r| r.replica_index != replica_index);
+        }
+        sync_ingress(&mut state, service_id);
+        Ok(())
+    }
+
+    async fn list_service_deployments(&self, service_id: &str) -> Result<Vec<ServiceDeployment>> {
+        let state = self.state.lock().expect("state lock");
+        let mut deployments = state.history.get(service_id).cloned().unwrap_or_default();
+        deployments.reverse();
+        Ok(deployments)
+    }
+
+    async fn get_service_status(&self, service_id: &str) -> Result<Option<DeploymentStatus>> {
+        let state = self.state.lock().expect("state lock");
+        let status = state
+            .history
+            .get(service_id)
+            .and_then(|deps| deps.last())
+            .map(|d| d.status.clone());
+        Ok(status)
+    }
+
+    async fn read_service_info(&self, service_id: &str) -> Result<Option<ServiceInfo>> {
+        let state = self.state.lock().expect("state lock");
+        Ok(state.configs.get(service_id).map(|config| ServiceInfo {
+            config: config.clone(),
+        }))
     }
 
     async fn read_service_deployment(
@@ -725,6 +888,136 @@ async fn stop_requested_active_deployment_is_marked_removed() {
                 DeploymentStatus::Removed,
             ][..]
         )
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn continuous_redeploy_maintains_ingress_backends() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-redeploy-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    let service_id = "svc-ingress";
+    store.seed_service_config(
+        service_id,
+        Some(IngressConfig {
+            host: "test.local".to_string(),
+            port: Some(80),
+        }),
+    );
+
+    let deploy_cmd = Command {
+        command: "sleep".to_string(),
+        args: vec!["30".to_string()],
+    };
+
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+
+    let mut controller = DeploymentController::new(
+        DeploymentConfig {
+            data_dir: data_dir.clone(),
+            etcd_port: 0,
+            cluster_name: "test".to_string(),
+            probe_port: 0,
+            project_dir: data_dir.clone(),
+            network: "test-net".to_string(),
+        },
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+    );
+
+    let mut ingress_was_empty_after_first_ready = false;
+    let mut first_deployment_ready = false;
+    let mut deployment_ids = Vec::new();
+
+    for deploy_round in 0..4 {
+        let dep_id = store.add_queued_deployment(service_id, deploy_cmd.clone());
+        deployment_ids.push(dep_id.clone());
+
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            controller
+                .reconcile_deployments()
+                .await
+                .expect("reconcile should succeed");
+            sleep(Duration::from_millis(10)).await;
+            controller.reap_finished_tasks().await;
+
+            if first_deployment_ready {
+                let backends = store.ingress_backends(service_id);
+                if backends.is_empty() {
+                    ingress_was_empty_after_first_ready = true;
+                }
+            }
+
+            let deployments = store.all_deployments();
+            let current = deployments.iter().find(|d| d.id == dep_id);
+            if current.is_some_and(|d| d.status == DeploymentStatus::Ready) {
+                first_deployment_ready = true;
+                break;
+            }
+
+            assert!(
+                Instant::now() < ready_deadline,
+                "deployment {dep_id} (round {deploy_round}) did not reach Ready in time"
+            );
+        }
+
+        for _ in 0..10 {
+            controller
+                .reconcile_deployments()
+                .await
+                .expect("reconcile should succeed");
+            sleep(Duration::from_millis(10)).await;
+            controller.reap_finished_tasks().await;
+
+            let backends = store.ingress_backends(service_id);
+            if backends.is_empty() {
+                ingress_was_empty_after_first_ready = true;
+            }
+        }
+    }
+
+    assert!(
+        !ingress_was_empty_after_first_ready,
+        "ingress backends were empty after the first deployment was ready (downtime detected)"
+    );
+
+    let deployments = store.all_deployments();
+    let service_deployments: Vec<_> = deployments
+        .iter()
+        .filter(|d| d.config.id == service_id)
+        .collect();
+    let ready_count = service_deployments
+        .iter()
+        .filter(|d| d.status == DeploymentStatus::Ready)
+        .count();
+    assert_eq!(ready_count, 1, "exactly one deployment should be Ready");
+
+    let last_dep_id = deployment_ids.last().unwrap();
+    let last_dep = service_deployments
+        .iter()
+        .find(|d| d.id == *last_dep_id)
+        .expect("last deployment should exist");
+    assert_eq!(
+        last_dep.status,
+        DeploymentStatus::Ready,
+        "the latest deployment should be the one that is Ready"
+    );
+
+    let backends = store.ingress_backends(service_id);
+    assert_eq!(backends.len(), 1, "ingress should have exactly one backend");
+    let expected_hostname = last_dep.hostname_for_replica(0);
+    assert_eq!(
+        backends[0], expected_hostname,
+        "ingress should point to the latest deployment's container"
     );
 
     let _ = std::fs::remove_dir_all(&data_dir);

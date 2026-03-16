@@ -16,7 +16,7 @@ pub fn service_active_deployment_key(service_id: &str) -> String {
 }
 
 pub fn service_deployment_history_key(service_id: &str, index: usize) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/deployments/history/{index}")
+    format!("{SERVICES_ROOT}/{service_id}/deployments/history/{index:010}")
 }
 
 pub fn service_history_next_index_key(service_id: &str) -> String {
