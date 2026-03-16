@@ -43,8 +43,8 @@ enum CliCommand {
         port: u16,
         #[arg(long = "data-dir")]
         data_dir: PathBuf,
-        #[arg(long = "network", default_value = "maestro")]
-        network: String,
+        #[arg(long = "network")]
+        network: Option<String>,
     },
     Rollout {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
@@ -103,6 +103,8 @@ async fn run() -> crate::error::Result<()> {
             let etcd_port = expose_etcd.unwrap_or(6479);
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
+            let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
+            println!("[maestro]: docker network {network}");
 
             let project_dir = std::env::current_dir()
                 .expect("failed to get current dir")
