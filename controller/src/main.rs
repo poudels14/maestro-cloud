@@ -49,6 +49,13 @@ enum CliCommand {
     Rollout {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
         host: String,
+        #[arg(long = "config")]
+        config: Option<PathBuf>,
+    },
+    Redeploy {
+        service_id: String,
+        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
+        host: String,
     },
     Cancel {
         service_id: String,
@@ -153,8 +160,12 @@ async fn run() -> crate::error::Result<()> {
                 Err(err) => Err(err),
             }
         }
-        Some(CliCommand::Rollout { host }) => {
-            cli::run_rollout(Path::new(DEFAULT_CONFIG_PATH), &host).await
+        Some(CliCommand::Rollout { host, config }) => {
+            let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            cli::run_rollout(&config_path, &host).await
+        }
+        Some(CliCommand::Redeploy { service_id, host }) => {
+            cli::run_redeploy(&host, &service_id).await
         }
         Some(CliCommand::Cancel {
             service_id,

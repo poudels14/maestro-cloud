@@ -280,7 +280,9 @@ function DeploymentsTab(props: { serviceId: string }) {
                         {(replica) => (
                           <span class="inline-flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
                             <StatusDot status={replica.status} />
-                            <span class="font-mono text-gray-600">replica {replica.replicaIndex}</span>
+                            <span class="font-mono text-gray-600">
+                              replica {replica.replicaIndex}
+                            </span>
                             <span class="text-gray-400">{replica.status.toLowerCase()}</span>
                           </span>
                         )}

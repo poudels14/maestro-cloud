@@ -127,6 +127,7 @@ pub enum DeploymentStatus {
     Crashed,
     Terminated,
     Removed,
+    Draining,
     #[serde(alias = "CANCELLED")]
     Canceled,
 }
@@ -148,6 +149,14 @@ impl DeploymentStatus {
                     | DeploymentStatus::Canceled
                     | DeploymentStatus::Terminated
             ),
+            DeploymentStatus::Draining => {
+                matches!(
+                    self,
+                    DeploymentStatus::Ready
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Building
+                )
+            }
             DeploymentStatus::Terminated => !matches!(self, DeploymentStatus::Terminated),
             _ => true,
         }
@@ -170,6 +179,8 @@ pub struct ServiceDeployment {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployed_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drained_at: Option<u64>,
     pub status: DeploymentStatus,
     pub config: ServiceConfig,
     pub git_commit: Option<GitCommitInfo>,
@@ -191,6 +202,7 @@ impl ServiceDeployment {
             id: utils::nanoid::unique_id(),
             created_at: utils::time::current_time_millis()?,
             deployed_at: None,
+            drained_at: None,
             status: DeploymentStatus::Queued,
             config,
             git_commit: None,
