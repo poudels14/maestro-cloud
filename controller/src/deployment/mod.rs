@@ -78,25 +78,30 @@ async fn init_etcd(
 ) {
     let etcd_data_dir = config.etcd_dir().join("data");
     std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
+    let etcd_data_path =
+        std::fs::canonicalize(&etcd_data_dir).expect("error canonicalizing etcd data dir");
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
-        command: format!(
-            "docker run --name {container_name} --hostname maestro-etcd --domainname {dns_domain} --network {} -p {}:2379 -v {}:/data --rm quay.io/coreos/etcd:v3.6.8 etcd {} {} {}",
-            config.network,
-            config.etcd_port,
-            std::fs::canonicalize(etcd_data_dir)
-                .expect("error canonicalizing etcd data dir")
-                .to_str()
-                .expect("error getting etcd data dir"),
+        command: [
+            "exec docker run --rm",
+            &format!("--name {container_name}"),
+            "--hostname maestro-etcd",
+            &format!("--domainname {dns_domain}"),
+            &format!("--network {}", config.network),
+            &format!("-p {}:2379", config.etcd_port),
+            &format!("-v {}:/data", etcd_data_path.display()),
+            "quay.io/coreos/etcd:v3.6.8 etcd",
             "--data-dir=/data",
-            " --listen-client-urls=http://0.0.0.0:2379",
-            "--advertise-client-urls=http://127.0.0.1:6479"
-        ),
+            "--listen-client-urls=http://0.0.0.0:2379",
+            "--advertise-client-urls=http://127.0.0.1:6479",
+        ]
+        .join(" "),
         name: "maestro-etcd".to_string(),
         max_restarts: None,
         restart_delay_ms: 100,
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(config.etcd_dir().join("logs/")),
+        docker_container: Some(container_name.to_string()),
     };
     await_job_running(supervisor, etcd_job_config).await;
 }
@@ -118,20 +123,27 @@ async fn init_ingress(
 
     let ingress_job_config = SupervisedJobConfig {
         id: "maestro-ingress".to_string(),
-        command: format!(
-            "docker run --name {container_name} --hostname web --domainname {dns_domain} --network {} -p 8888:8888 -p 8080:8080 --rm traefik:v3.6 {} {} {} {} {}",
-            config.network,
+        command: [
+            "exec docker run --rm",
+            &format!("--name {container_name}"),
+            "--hostname web",
+            &format!("--domainname {dns_domain}"),
+            &format!("--network {}", config.network),
+            "-p 8888:8888 -p 8080:8080",
+            "traefik:v3.6",
             "--api.insecure=true",
             "--providers.etcd=true",
-            format_args!("--providers.etcd.rootKey=traefik"),
-            format_args!("--providers.etcd.endpoints={etcd_container}:2379"),
+            "--providers.etcd.rootKey=traefik",
+            &format!("--providers.etcd.endpoints={etcd_container}:2379"),
             "--entrypoints.web.address=:8888",
-        ),
+        ]
+        .join(" "),
         name: "maestro-ingress".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(logs_dir),
+        docker_container: Some(container_name.to_string()),
     };
     await_job_running(supervisor, ingress_job_config).await;
 }
@@ -157,17 +169,25 @@ async fn init_probe(
 
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
-        command: format!(
-            "docker run --name {container_name} --hostname maestro-probe --domainname {dns_domain} --network {} -p {}:6400 -v {}:/logs:ro --rm -e ETCD_ENDPOINT=http://{etcd_container}:2379 -e PORT=6400 {PROBE_IMAGE_TAG}",
-            config.network,
-            config.probe_port,
-            deployment_logs_dir.display(),
-        ),
+        command: [
+            "exec docker run --rm",
+            &format!("--name {container_name}"),
+            "--hostname maestro-probe",
+            &format!("--domainname {dns_domain}"),
+            &format!("--network {}", config.network),
+            &format!("-p {}:6400", config.probe_port),
+            &format!("-v {}:/logs:ro", deployment_logs_dir.display()),
+            &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
+            "-e PORT=6400",
+            PROBE_IMAGE_TAG,
+        ]
+        .join(" "),
         name: "maestro-probe".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 60_000,
         logs_dir: Some(logs_dir),
+        docker_container: Some(container_name.to_string()),
     };
     await_job_running(supervisor, probe_job_config).await;
 }
@@ -206,15 +226,27 @@ async fn init_tailnet(
         supervisor,
         SupervisedJobConfig {
             id: "maestro-dns".to_string(),
-            command: format!(
-                "docker run --name {dns_container} --hostname maestro-dns --domainname {dns_domain} --network {} --rm {DNS_IMAGE_TAG} {dns_domain}",
-                config.network,
-            ),
+            command: {
+                let mut args = vec![
+                    "exec docker run --rm".to_string(),
+                    format!("--name {dns_container}"),
+                    "--hostname maestro-dns".to_string(),
+                    format!("--domainname {dns_domain}"),
+                    format!("--network {}", config.network),
+                ];
+                if let Some(ip) = &config.nameserver_ip {
+                    args.push(format!("--ip {ip}"));
+                }
+                args.push(DNS_IMAGE_TAG.to_string());
+                args.push(dns_domain.to_string());
+                args.join(" ")
+            },
             name: "maestro-dns".to_string(),
             max_restarts: None,
             restart_delay_ms: 1_000,
             shutdown_grace_period_ms: 10_000,
             logs_dir: Some(dns_logs_dir),
+            docker_container: Some(dns_container.to_string()),
         },
     )
     .await;
@@ -229,16 +261,27 @@ async fn init_tailnet(
         supervisor,
         SupervisedJobConfig {
             id: "maestro-tailscale".to_string(),
-            command: format!(
-                "docker run --name {tailscale_container} --hostname maestro-tailscale --domainname {dns_domain} --network {} --cap-add=NET_ADMIN --device=/dev/net/tun -v {}:/var/lib/tailscale --rm -e TS_AUTHKEY={authkey} -e TS_ROUTES={network_cidr} -e TS_USERSPACE=false ghcr.io/tailscale/tailscale:latest",
-                config.network,
-                state_dir.display(),
-            ),
+            command: [
+                "exec docker run --rm",
+                &format!("--name {tailscale_container}"),
+                "--hostname maestro-tailscale",
+                &format!("--domainname {dns_domain}"),
+                &format!("--network {}", config.network),
+                "--cap-add=NET_ADMIN",
+                "--device=/dev/net/tun",
+                &format!("-v {}:/var/lib/tailscale", state_dir.display()),
+                &format!("-e TS_AUTHKEY={authkey}"),
+                &format!("-e TS_ROUTES={network_cidr}"),
+                "-e TS_USERSPACE=false",
+                "ghcr.io/tailscale/tailscale:latest",
+            ]
+            .join(" "),
             name: "maestro-tailscale".to_string(),
             max_restarts: None,
             restart_delay_ms: 1_000,
             shutdown_grace_period_ms: 10_000,
             logs_dir: Some(ts_logs_dir),
+            docker_container: Some(tailscale_container.to_string()),
         },
     )
     .await;

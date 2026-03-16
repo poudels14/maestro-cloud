@@ -28,6 +28,7 @@ pub struct SupervisedJobConfig {
     pub max_restarts: Option<u32>,
     pub shutdown_grace_period_ms: u64,
     pub logs_dir: Option<PathBuf>,
+    pub docker_container: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +221,7 @@ impl SupervisedJobRunner {
             job: &Job,
             grace: Duration,
             shutdown_timeout: Duration,
+            docker_container: Option<&str>,
         ) -> bool {
             match request {
                 ShutdownRequest::Force => force_stop_and_delete(job).await,
@@ -227,6 +229,9 @@ impl SupervisedJobRunner {
                     graceful_stop_and_delete(job, grace, shutdown_timeout).await;
                 }
                 ShutdownRequest::None => return false,
+            }
+            if let Some(container) = docker_container {
+                docker_kill(container).await;
             }
             true
         }
@@ -243,7 +248,15 @@ impl SupervisedJobRunner {
 
             match outcome {
                 WorkerOutcome::Shutdown(request) => {
-                    if handle_shutdown(request, &job, shutdown_grace, shutdown_timeout).await {
+                    if handle_shutdown(
+                        request,
+                        &job,
+                        shutdown_grace,
+                        shutdown_timeout,
+                        config.docker_container.as_deref(),
+                    )
+                    .await
+                    {
                         exit_status = SupervisedJobStatus::Stopped;
                         break;
                     }
@@ -277,7 +290,15 @@ impl SupervisedJobRunner {
                     };
 
                     if let WorkerOutcome::Shutdown(request) = delay_outcome {
-                        if handle_shutdown(request, &job, shutdown_grace, shutdown_timeout).await {
+                        if handle_shutdown(
+                            request,
+                            &job,
+                            shutdown_grace,
+                            shutdown_timeout,
+                            config.docker_container.as_deref(),
+                        )
+                        .await
+                        {
                             exit_status = SupervisedJobStatus::Stopped;
                             break;
                         }
@@ -346,6 +367,13 @@ async fn force_stop_and_delete(job: &Job) {
     let _ = timeout(Duration::from_secs(1), job.signal(Signal::ForceStop)).await;
     let _ = timeout(Duration::from_secs(2), job.stop()).await;
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+}
+
+async fn docker_kill(container: &str) {
+    let _ = tokio::process::Command::new("docker")
+        .args(["kill", container])
+        .output()
+        .await;
 }
 
 async fn is_job_running(job: &Job) -> bool {
