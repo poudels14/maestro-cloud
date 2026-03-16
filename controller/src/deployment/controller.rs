@@ -206,6 +206,9 @@ impl DeploymentController {
             };
 
             let replica_job_id = replica_job_id(&deployment_id, replica_index);
+            let docker_container = queued_deployment
+                .deployment
+                .hostname_for_replica(replica_index);
             let job = SupervisedJobConfig {
                 id: replica_job_id.clone(),
                 name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
@@ -222,6 +225,7 @@ impl DeploymentController {
                         .join(&deployment_id)
                         .join(format!("replica{replica_index}")),
                 ),
+                docker_container: Some(docker_container),
             };
 
             if let Some(task_id) = self.supervisor.start_job(job) {
@@ -596,6 +600,7 @@ impl DeploymentController {
         };
 
         let job_id = replica_job_id(deployment_id, replica_index);
+        let docker_container = deployment_record.hostname_for_replica(replica_index);
         let job = SupervisedJobConfig {
             id: job_id.clone(),
             name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
@@ -612,6 +617,7 @@ impl DeploymentController {
                     .join(deployment_id)
                     .join(format!("replica{replica_index}")),
             ),
+            docker_container: Some(docker_container),
         };
 
         if let Some(task_id) = self.supervisor.start_job(job) {
