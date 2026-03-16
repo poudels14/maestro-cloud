@@ -7,6 +7,8 @@ use crate::deployment::types::{
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RolloutServiceResponse {
     pub(crate) queued: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) replicas: Option<u32>,
     pub(crate) deployment_id: Option<String>,
     pub(crate) deployment_index: Option<usize>,
     pub(crate) service_id: String,

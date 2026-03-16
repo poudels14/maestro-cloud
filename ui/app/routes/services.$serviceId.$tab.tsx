@@ -205,6 +205,7 @@ function OverviewTab(props: { service: Service }) {
     ? `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
     : "(not set)";
   const deployItems = [
+    { label: "Replicas", value: String(s.deploy.replicas ?? 1) },
     { label: "Deploy command", value: deployCommand },
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
@@ -273,6 +274,19 @@ function DeploymentsTab(props: { serviceId: string }) {
                       />
                     </div>
                   </div>
+                  <Show when={d.replicas && d.replicas.length > 0}>
+                    <div class="flex items-center gap-2 mb-2 flex-wrap">
+                      <For each={d.replicas}>
+                        {(replica) => (
+                          <span class="inline-flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+                            <StatusDot status={replica.status} />
+                            <span class="font-mono text-gray-600">replica {replica.replicaIndex}</span>
+                            <span class="text-gray-400">{replica.status.toLowerCase()}</span>
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="flex items-center gap-3 text-xs text-gray-400">
                     <span class="font-mono">{d.config.version.slice(0, 12)}</span>
                     <Show when={d.gitCommit}>
@@ -327,24 +341,7 @@ function LogsTab(props: { service: Service }) {
     }
 
     setHasMore(fetched.length >= t);
-
-    const current = lines();
-    if (current.length === 0) {
-      setLines(fetched);
-    } else {
-      const lastTs = current[current.length - 1].ts;
-      const lastText = current[current.length - 1].text;
-      let newStart = fetched.length;
-      for (let i = fetched.length - 1; i >= 0; i--) {
-        if (fetched[i].ts === lastTs && fetched[i].text === lastText) {
-          newStart = i + 1;
-          break;
-        }
-      }
-      if (newStart < fetched.length) {
-        setLines((prev) => [...prev, ...fetched.slice(newStart)]);
-      }
-    }
+    setLines(fetched);
     setLoading(false);
   };
 
@@ -489,6 +486,11 @@ function LogsTab(props: { service: Service }) {
                   <span class="text-gray-400 select-none shrink-0 whitespace-nowrap">
                     {formatTs(line.ts)}
                   </span>
+                  <Show when={line.hostname}>
+                    <span class="text-violet-400 shrink-0 whitespace-nowrap truncate max-w-32">
+                      {line.hostname}
+                    </span>
+                  </Show>
                   <span class={`w-10 shrink-0 whitespace-nowrap uppercase ${levelColor()}`}>
                     {line.level}
                   </span>

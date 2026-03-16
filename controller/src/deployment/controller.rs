@@ -99,6 +99,7 @@ impl DeploymentController {
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
         self.stop_removed_deployments().await;
+        self.reconcile_replicas().await;
         let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
             self.process_queued_deployment(queued_deployment).await?;
@@ -151,17 +152,6 @@ impl DeploymentController {
             ServiceProvider::Docker => self.docker_provider.build(&queued_deployment.deployment),
             ServiceProvider::Shell => self.shell_provider.build(&queued_deployment.deployment),
         };
-        let deploy_command = match queued_deployment.deployment.config.provider {
-            ServiceProvider::Docker => self.docker_provider.deploy(&queued_deployment.deployment),
-            ServiceProvider::Shell => self.shell_provider.deploy(&queued_deployment.deployment),
-        };
-        let Some(deploy_command) = deploy_command else {
-            eprintln!(
-                "[maestro]: skipping queued deployment `{}` for service `{}`: no image or deploy command",
-                queued_deployment.deployment.id, queued_deployment.service_id
-            );
-            return Ok(());
-        };
 
         let claimed = self
             .store
@@ -172,36 +162,8 @@ impl DeploymentController {
         }
 
         let service_id = queued_deployment.service_id;
-        let deployment_id = queued_deployment.deployment.id;
-        let job = SupervisedJobConfig {
-            id: deployment_id.clone(),
-            name: format!("{service_id}/{deployment_id}"),
-            command: deploy_command,
-            restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-            max_restarts: DEFAULT_MAX_RESTARTS,
-            shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-            logs_dir: Some(
-                self.config
-                    .deployment_logs_dir()
-                    .join("services")
-                    .join(&service_id)
-                    .join("deployments")
-                    .join(&deployment_id),
-            ),
-        };
-
-        let Some(task_id) = self.supervisor.start_job(job) else {
-            eprintln!(
-                "[maestro]: failed to start deployment `{deployment_id}` for service `{service_id}`: job already exists"
-            );
-            return Ok(());
-        };
-
-        let deployment = Deployment {
-            service_id,
-            id: deployment_id,
-        };
-
+        let deployment_id = queued_deployment.deployment.id.clone();
+        let replicas = queued_deployment.deployment.config.deploy.replicas;
         let has_healthcheck = queued_deployment
             .deployment
             .config
@@ -210,24 +172,93 @@ impl DeploymentController {
             .as_ref()
             .is_some_and(|p| !p.trim().is_empty());
 
-        let next_status = if has_healthcheck {
+        let replica_status = if has_healthcheck {
             DeploymentStatus::PendingReady
         } else {
             DeploymentStatus::Ready
         };
 
+        for replica_index in 0..replicas {
+            let deploy_command = match queued_deployment.deployment.config.provider {
+                ServiceProvider::Docker => self
+                    .docker_provider
+                    .deploy(&queued_deployment.deployment, replica_index),
+                ServiceProvider::Shell => self
+                    .shell_provider
+                    .deploy(&queued_deployment.deployment, replica_index),
+            };
+            let Some(deploy_command) = deploy_command else {
+                eprintln!(
+                    "[maestro]: skipping replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: no deploy command",
+                );
+                continue;
+            };
+
+            let replica_job_id = replica_job_id(&deployment_id, replica_index);
+            let job = SupervisedJobConfig {
+                id: replica_job_id.clone(),
+                name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
+                command: deploy_command,
+                restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
+                max_restarts: DEFAULT_MAX_RESTARTS,
+                shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
+                logs_dir: Some(
+                    self.config
+                        .deployment_logs_dir()
+                        .join("services")
+                        .join(&service_id)
+                        .join("deployments")
+                        .join(&deployment_id)
+                        .join(format!("replica{replica_index}")),
+                ),
+            };
+
+            if let Some(task_id) = self.supervisor.start_job(job) {
+                self.deployments.insert(
+                    task_id,
+                    Deployment {
+                        service_id: service_id.clone(),
+                        id: deployment_id.clone(),
+                        replica_index,
+                    },
+                );
+            } else {
+                eprintln!(
+                    "[maestro]: failed to start replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: job already exists"
+                );
+            }
+
+            if let Err(err) = self
+                .store
+                .update_replica_status(
+                    &service_id,
+                    &deployment_id,
+                    replica_index,
+                    replica_status.clone(),
+                )
+                .await
+            {
+                eprintln!(
+                    "[maestro]: failed to update replica{replica_index} of deployment `{deployment_id}` status: {err}",
+                );
+            }
+        }
+
+        let deployment_ref = Deployment {
+            service_id,
+            id: deployment_id,
+            replica_index: 0,
+        };
         if let Err(err) = self
             .store
-            .update_deployment_status(&deployment, next_status)
+            .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
             .await
         {
             eprintln!(
-                "[maestro]: failed to update deployment `{}` status: {err}",
-                deployment.id
+                "[maestro]: failed to update deployment `{}` to Ready: {err}",
+                deployment_ref.id
             );
         }
-
-        self.deployments.insert(task_id, deployment);
 
         Ok(())
     }
@@ -239,28 +270,32 @@ impl DeploymentController {
                 continue;
             };
 
+            let remaining_replicas = self
+                .deployments
+                .values()
+                .filter(|d| d.id == deployment.id)
+                .count();
+
             eprintln!(
-                "[maestro]: service `{}` deployment `{}` worker finished",
-                deployment.service_id, deployment.id
+                "[maestro]: service `{}` deployment `{}` replica{} finished ({} replicas still running)",
+                deployment.service_id, deployment.id, deployment.replica_index, remaining_replicas
             );
 
             if self.shutdown_in_progress {
                 continue;
             }
 
-            let deployment_status = match self.store.read_service_deployment(&deployment).await {
-                Ok(Some(d)) => Some(d.status),
-                Ok(None) => None,
-                Err(err) => {
-                    eprintln!(
-                        "[maestro]: failed to read deployment `{}` remove state: {err}",
-                        deployment.id
-                    );
-                    None
-                }
-            };
+            let replica_states = self
+                .store
+                .list_replica_states(&deployment.service_id, &deployment.id)
+                .await
+                .unwrap_or_default();
+            let current_replica_status = replica_states
+                .iter()
+                .find(|r| r.replica_index == deployment.replica_index)
+                .map(|r| &r.status);
 
-            let new_status = match deployment_status {
+            let new_status = match current_replica_status {
                 Some(
                     DeploymentStatus::Ready
                     | DeploymentStatus::PendingReady
@@ -276,12 +311,17 @@ impl DeploymentController {
             if let Some(new_status) = new_status {
                 if let Err(err) = self
                     .store
-                    .update_deployment_status(&deployment, new_status.clone())
+                    .update_replica_status(
+                        &deployment.service_id,
+                        &deployment.id,
+                        deployment.replica_index,
+                        new_status.clone(),
+                    )
                     .await
                 {
                     eprintln!(
-                        "[maestro]: failed to update deployment `{}` to {new_status:?}: {err}",
-                        deployment.id
+                        "[maestro]: failed to update replica{} of deployment `{}` to {new_status:?}: {err}",
+                        deployment.replica_index, deployment.id
                     );
                 }
             }
@@ -289,7 +329,11 @@ impl DeploymentController {
     }
 
     async fn mark_deployments_terminated(&self) {
+        let mut seen_deployment_ids = std::collections::HashSet::new();
         for deployment in self.deployments.values() {
+            if !seen_deployment_ids.insert(deployment.id.clone()) {
+                continue;
+            }
             if let Err(err) = self
                 .store
                 .update_deployment_status(deployment, DeploymentStatus::Terminated)
@@ -328,4 +372,155 @@ impl DeploymentController {
             }
         }
     }
+
+    async fn reconcile_replicas(&mut self) {
+        let mut seen_deployments: HashMap<String, String> = HashMap::new();
+        for deployment in self.deployments.values() {
+            seen_deployments
+                .entry(deployment.id.clone())
+                .or_insert_with(|| deployment.service_id.clone());
+        }
+
+        if seen_deployments.is_empty() {
+            return;
+        }
+
+        for (deployment_id, service_id) in &seen_deployments {
+            let desired = match self.store.read_service_info(service_id).await {
+                Ok(Some(info)) => info.config.deploy.replicas,
+                _ => continue,
+            };
+
+            let running_indices: Vec<u32> = self
+                .deployments
+                .values()
+                .filter(|d| d.id == *deployment_id)
+                .map(|d| d.replica_index)
+                .collect();
+            let running_count = running_indices.len() as u32;
+
+            if desired != running_count {
+                eprintln!(
+                    "[maestro]: reconcile_replicas for `{service_id}/{deployment_id}`: desired={desired}, running={running_count}, running_indices={running_indices:?}"
+                );
+            }
+
+            if desired > running_count {
+                let first = self.deployments.values().find(|d| d.id == *deployment_id);
+                let Some(first) = first else { continue };
+                let deployment_record = match self.store.read_service_deployment(first).await {
+                    Ok(Some(d)) => d,
+                    _ => continue,
+                };
+                let max_existing = running_indices.iter().copied().max().unwrap_or(0);
+                for replica_index in (max_existing + 1)..=(max_existing + (desired - running_count))
+                {
+                    self.start_replica(
+                        service_id,
+                        deployment_id,
+                        replica_index,
+                        &deployment_record,
+                    )
+                    .await;
+                }
+            } else if desired < running_count {
+                let mut sorted = running_indices;
+                sorted.sort();
+                sorted.reverse();
+                let excess = (running_count - desired) as usize;
+                for &replica_index in sorted.iter().take(excess) {
+                    let job_id = replica_job_id(deployment_id, replica_index);
+                    let _ = self
+                        .supervisor
+                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    let _ = self
+                        .store
+                        .delete_replica_state(service_id, deployment_id, replica_index)
+                        .await;
+                }
+            }
+
+            let replica_states = self
+                .store
+                .list_replica_states(service_id, deployment_id)
+                .await
+                .unwrap_or_default();
+            for state in &replica_states {
+                if state.replica_index >= desired {
+                    let _ = self
+                        .store
+                        .delete_replica_state(service_id, deployment_id, state.replica_index)
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn start_replica(
+        &mut self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+        deployment_record: &ServiceDeployment,
+    ) {
+        let deploy_command = match deployment_record.config.provider {
+            ServiceProvider::Docker => self
+                .docker_provider
+                .deploy(deployment_record, replica_index),
+            ServiceProvider::Shell => self.shell_provider.deploy(deployment_record, replica_index),
+        };
+        let Some(deploy_command) = deploy_command else {
+            return;
+        };
+
+        let job_id = replica_job_id(deployment_id, replica_index);
+        let job = SupervisedJobConfig {
+            id: job_id.clone(),
+            name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
+            command: deploy_command,
+            restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
+            max_restarts: DEFAULT_MAX_RESTARTS,
+            shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
+            logs_dir: Some(
+                self.config
+                    .deployment_logs_dir()
+                    .join("services")
+                    .join(service_id)
+                    .join("deployments")
+                    .join(deployment_id)
+                    .join(format!("replica{replica_index}")),
+            ),
+        };
+
+        if let Some(task_id) = self.supervisor.start_job(job) {
+            self.deployments.insert(
+                task_id,
+                Deployment {
+                    service_id: service_id.to_string(),
+                    id: deployment_id.to_string(),
+                    replica_index,
+                },
+            );
+
+            let has_healthcheck = deployment_record
+                .config
+                .deploy
+                .healthcheck_path
+                .as_ref()
+                .is_some_and(|p| !p.trim().is_empty());
+            let status = if has_healthcheck {
+                DeploymentStatus::PendingReady
+            } else {
+                DeploymentStatus::Ready
+            };
+            let _ = self
+                .store
+                .update_replica_status(service_id, deployment_id, replica_index, status)
+                .await;
+        }
+    }
+}
+
+fn replica_job_id(deployment_id: &str, replica_index: u32) -> String {
+    format!("{deployment_id}-replica-{replica_index}")
 }

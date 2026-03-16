@@ -31,6 +31,7 @@ impl DeploymentConfig {
 pub struct Deployment {
     pub id: String,
     pub service_id: String,
+    pub replica_index: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +105,8 @@ pub struct ServiceDeployConfig {
     pub command: Option<Command>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck_path: Option<String>,
+    #[serde(default = "default_replicas")]
+    pub replicas: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -153,6 +156,14 @@ impl DeploymentStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ReplicaState {
+    #[serde(default)]
+    pub replica_index: u32,
+    pub status: DeploymentStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceDeployment {
     pub id: String,
     #[serde(default)]
@@ -166,9 +177,13 @@ pub struct ServiceDeployment {
 }
 
 impl ServiceDeployment {
-    pub fn hostname(&self) -> String {
+    pub fn hostname_for_replica(&self, replica_index: u32) -> String {
         let short_id: String = self.id.chars().take(6).collect();
-        format!("{}-{short_id}", self.config.id)
+        if replica_index == 0 {
+            format!("{}-{short_id}", self.config.id)
+        } else {
+            format!("{}-{short_id}-{replica_index}", self.config.id)
+        }
     }
 
     pub fn new(config: ServiceConfig) -> Result<Self> {
@@ -182,6 +197,15 @@ impl ServiceDeployment {
             build: None,
         })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentWithReplicas {
+    #[serde(flatten)]
+    pub deployment: ServiceDeployment,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replicas: Vec<ReplicaState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,4 +227,8 @@ pub struct ServiceInfo {
     pub config: ServiceConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<DeploymentStatus>,
+}
+
+fn default_replicas() -> u32 {
+    1
 }

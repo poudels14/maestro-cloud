@@ -2,8 +2,9 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, DeploymentStatus, ForceQueueOutcome, QueuedDeployment,
-    ServiceDeployment, ServiceInfo,
+    CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
+    ForceQueueOutcome, QueuedDeployment, ReplicaState, ServiceConfig, ServiceDeployment,
+    ServiceInfo,
 };
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,11 @@ pub enum UpsertServiceOutcome {
     Unchanged {
         service_id: String,
         version: String,
+    },
+    Scaled {
+        service_id: String,
+        version: String,
+        replicas: u32,
     },
 }
 
@@ -29,6 +35,31 @@ pub trait ClusterStore: Send + Sync {
         deployment: &Deployment,
         status: DeploymentStatus,
     ) -> Result<()>;
+    async fn update_replica_status(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+        _replica_index: u32,
+        _status: DeploymentStatus,
+    ) -> Result<()> {
+        bail!("update_replica_status not implemented")
+    }
+    async fn list_replica_states(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+    ) -> Result<Vec<ReplicaState>> {
+        bail!("list_replica_states not implemented")
+    }
+
+    async fn delete_replica_state(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+        _replica_index: u32,
+    ) -> Result<()> {
+        bail!("delete_replica_state not implemented")
+    }
 
     async fn list_service_infos(&self) -> Result<Vec<ServiceInfo>> {
         bail!("list_service_infos not implemented")
@@ -36,6 +67,13 @@ pub trait ClusterStore: Send + Sync {
 
     async fn list_service_deployments(&self, _service_id: &str) -> Result<Vec<ServiceDeployment>> {
         bail!("list_service_deployments not implemented")
+    }
+
+    async fn list_service_deployments_with_replicas(
+        &self,
+        _service_id: &str,
+    ) -> Result<Vec<DeploymentWithReplicas>> {
+        bail!("list_service_deployments_with_replicas not implemented")
     }
 
     async fn read_service_info(&self, _service_id: &str) -> Result<Option<ServiceInfo>> {
@@ -69,5 +107,9 @@ pub trait ClusterStore: Send + Sync {
 
     async fn delete_service(&self, _service_id: &str) -> Result<()> {
         bail!("delete_service not implemented")
+    }
+
+    async fn update_service_config(&self, _service_id: &str, _config: ServiceConfig) -> Result<()> {
+        bail!("update_service_config not implemented")
     }
 }
