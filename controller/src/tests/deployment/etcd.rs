@@ -72,7 +72,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
         .expect("deploy command should exist");
     assert_eq!(
         deploy,
-        "exec docker run --rm --name svc-1-A1B2C3 --network test-net traefik/whoami"
+        "exec docker run --rm --name svc-1-A1B2C3 --hostname svc-1-A1B2C3 --network test-net traefik/whoami"
     );
 }
 
@@ -96,7 +96,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 
     assert_eq!(
         deploy,
-        "exec docker run --rm --name svc-1-ABCDEF --network test-net -p 0:80 -p 0:443 traefik/whoami --network=host --label env=test",
+        "exec docker run --rm --name svc-1-ABCDEF --hostname svc-1-ABCDEF --network test-net -p 0:80 -p 0:443 traefik/whoami --network=host --label env=test",
     );
 }
 

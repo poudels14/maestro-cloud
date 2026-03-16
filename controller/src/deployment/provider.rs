@@ -130,7 +130,9 @@ fn docker_run_command(
         format!("{service_id}-{short_deployment_id}-{replica_index}")
     };
 
-    let mut args = format!("exec docker run --rm --name {container_name} --network {network}");
+    let mut args = format!(
+        "exec docker run --rm --name {container_name} --hostname {container_name} --network {network}"
+    );
     for port in expose_ports {
         args.push_str(&format!(" -p 0:{port}"));
     }
