@@ -13,6 +13,8 @@ pub struct DeploymentConfig {
     pub probe_port: u16,
     pub project_dir: PathBuf,
     pub network: String,
+    pub tailscale_authkey: Option<String>,
+    pub nameserver_ip: Option<String>,
 }
 
 impl DeploymentConfig {

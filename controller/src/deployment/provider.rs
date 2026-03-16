@@ -18,6 +18,7 @@ pub struct DockerBuildConfig {
 
 pub struct DockerDeploymentProvider {
     pub network: String,
+    pub dns_domain: Option<String>,
 }
 pub struct ShellDeploymentProvider;
 
@@ -77,6 +78,7 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
                 replica_index,
                 image,
                 &self.network,
+                self.dns_domain.as_deref(),
                 &deployment.config.deploy.expose_ports,
                 &deployment.config.deploy.flags,
             ))
@@ -120,6 +122,7 @@ fn docker_run_command(
     replica_index: u32,
     image: &str,
     network: &str,
+    dns_domain: Option<&str>,
     expose_ports: &[u16],
     flags: &[String],
 ) -> String {
@@ -133,6 +136,9 @@ fn docker_run_command(
     let mut args = format!(
         "exec docker run --rm --name {container_name} --hostname {container_name} --network {network}"
     );
+    if let Some(domain) = dns_domain {
+        args.push_str(&format!(" --domainname {domain}"));
+    }
     for port in expose_ports {
         args.push_str(&format!(" -p 0:{port}"));
     }

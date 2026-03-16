@@ -68,6 +68,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
 
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
+        dns_domain: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -91,6 +92,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
+        dns_domain: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -118,6 +120,7 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
 
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
+        dns_domain: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -655,6 +658,8 @@ async fn stress_supervisor_updates_deployment_statuses() {
             probe_port: 0,
             project_dir: data_dir.clone(),
             network: "test-net".to_string(),
+            tailscale_authkey: None,
+            nameserver_ip: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -728,6 +733,8 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             probe_port: 0,
             project_dir: data_dir.clone(),
             network: "test-net".to_string(),
+            tailscale_authkey: None,
+            nameserver_ip: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -828,6 +835,8 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             probe_port: 0,
             project_dir: data_dir.clone(),
             network: "test-net".to_string(),
+            tailscale_authkey: None,
+            nameserver_ip: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -942,6 +951,8 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             probe_port: 0,
             project_dir: data_dir.clone(),
             network: "test-net".to_string(),
+            tailscale_authkey: None,
+            nameserver_ip: None,
         },
         store.clone(),
         JobSupervisor::new(),

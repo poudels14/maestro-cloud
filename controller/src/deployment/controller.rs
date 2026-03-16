@@ -47,8 +47,13 @@ impl DeploymentController {
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
     ) -> Self {
+        let dns_domain = config
+            .tailscale_authkey
+            .as_ref()
+            .map(|_| format!("{}.maestro.internal", config.cluster_name));
         let docker_provider = DockerDeploymentProvider {
             network: config.network.clone(),
+            dns_domain,
         };
         Self {
             config,

@@ -45,6 +45,12 @@ enum CliCommand {
         data_dir: PathBuf,
         #[arg(long = "network")]
         network: Option<String>,
+        #[arg(long = "enable-tailscale")]
+        enable_tailscale: bool,
+        #[arg(long = "tailscale-authkey", env = "TS_AUTHKEY")]
+        tailscale_authkey: Option<String>,
+        #[arg(long = "nameserver-ip")]
+        nameserver_ip: Option<String>,
     },
     Rollout {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
@@ -98,7 +104,20 @@ async fn run() -> crate::error::Result<()> {
             expose_etcd,
             data_dir,
             network,
+            enable_tailscale,
+            tailscale_authkey,
+            nameserver_ip,
         }) => {
+            if enable_tailscale && tailscale_authkey.is_none() {
+                return Err(Error::invalid_input(
+                    "--enable-tailscale requires --tailscale-authkey or TS_AUTHKEY env var",
+                ));
+            }
+            let tailscale_authkey = if enable_tailscale {
+                tailscale_authkey
+            } else {
+                None
+            };
             let cluster_name = cluster_name.to_lowercase();
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
@@ -125,6 +144,8 @@ async fn run() -> crate::error::Result<()> {
                 probe_port: port,
                 project_dir,
                 network,
+                tailscale_authkey,
+                nameserver_ip,
             };
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
