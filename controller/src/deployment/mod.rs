@@ -76,6 +76,11 @@ async fn init_ingress(
     config: &DeploymentConfig,
     supervisor: &mut JobSupervisor,
 ) {
+    let endpoint = format!("http://127.0.0.1:{}", config.etcd_port);
+    if let Ok(mut client) = etcd_client::Client::connect([&endpoint], None).await {
+        let _ = client.put("traefik", "", None).await;
+    }
+
     let logs_dir = config.data_dir.join("logs/system/maestro-ingress");
     std::fs::create_dir_all(&logs_dir).expect("Failed to create ingress logs dir");
 
