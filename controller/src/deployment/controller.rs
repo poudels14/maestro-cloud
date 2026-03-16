@@ -208,7 +208,7 @@ impl DeploymentController {
             .deploy
             .healthcheck_path
             .as_ref()
-            .is_some_and(|p| !p.is_empty());
+            .is_some_and(|p| !p.trim().is_empty());
 
         let next_status = if has_healthcheck {
             DeploymentStatus::PendingReady

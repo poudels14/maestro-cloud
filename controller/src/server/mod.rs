@@ -93,7 +93,7 @@ impl Server {
             .await
             .map_err(|err| format!("failed to bind {bind_addr}: {err}"))?;
         println!(
-            "[maestro]: server listening on http://{bind_addr} [pid={}]",
+            "[probe] server listening on http://{bind_addr} [pid={}]",
             std::process::id()
         );
         axum::serve(listener, app)

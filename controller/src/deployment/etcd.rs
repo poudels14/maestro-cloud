@@ -170,8 +170,8 @@ impl EtcdStateStore {
         container_name: &str,
         ingress: &IngressConfig,
     ) -> Result<()> {
-        let router_prefix = format!("/traefik/http/routers/{service_id}");
-        let service_prefix = format!("/traefik/http/services/{service_id}");
+        let router_prefix = format!("traefik/http/routers/{service_id}");
+        let service_prefix = format!("traefik/http/services/{service_id}");
 
         let rule = format!("Host(`{}`)", ingress.host);
         let url = format!("http://{}:{}", container_name, ingress.port.unwrap_or(80));
@@ -179,7 +179,7 @@ impl EtcdStateStore {
         let success = vec![
             request_put(&format!("{router_prefix}/rule"), &rule),
             request_put(&format!("{router_prefix}/service"), service_id),
-            request_put(&format!("{router_prefix}/entrypoints/0"), "web"),
+            request_put(&format!("{router_prefix}/entryPoints/0"), "web"),
             request_put(
                 &format!("{service_prefix}/loadBalancer/servers/0/url"),
                 &url,
@@ -194,7 +194,7 @@ impl EtcdStateStore {
             .map_err(|err| anyhow!("failed to configure traefik ingress: {err}"))?;
 
         eprintln!(
-            "[maestro]: configured ingress for `{service_id}`: {} -> {url}",
+            "[probe] configured ingress for `{service_id}`: {} -> {url}",
             ingress.host
         );
         Ok(())

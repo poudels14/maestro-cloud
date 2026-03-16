@@ -82,10 +82,11 @@ async fn start_ingress(
     let ingress_job_config = SupervisedJobConfig {
         id: "maestro-ingress".to_string(),
         command: format!(
-            "docker run --name {container_name} --network {} -p 8888:8888 -p 8080:8080 --rm traefik:v3.6 {} {} {} {}",
+            "docker run --name {container_name} --network {} -p 8888:8888 -p 8080:8080 --rm traefik:v3.6 {} {} {} {} {}",
             config.network,
             "--api.insecure=true",
-            format_args!("--providers.etcd.rootKey=/traefik"),
+            "--providers.etcd=true",
+            format_args!("--providers.etcd.rootKey=traefik"),
             format_args!("--providers.etcd.endpoints={etcd_container}:2379"),
             "--entrypoints.web.address=:8888",
         ),
