@@ -99,6 +99,7 @@ impl DeploymentController {
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
         self.stop_removed_deployments().await;
+        self.remove_old_deployments().await;
         self.reconcile_replicas().await;
         let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
@@ -369,6 +370,87 @@ impl DeploymentController {
                 let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
+            }
+        }
+    }
+
+    async fn remove_old_deployments(&mut self) {
+        let mut services: HashMap<String, Vec<String>> = HashMap::new();
+        for deployment in self.deployments.values() {
+            let ids = services.entry(deployment.service_id.clone()).or_default();
+            if !ids.contains(&deployment.id) {
+                ids.push(deployment.id.clone());
+            }
+        }
+
+        for (service_id, deployment_ids) in &services {
+            if deployment_ids.len() <= 1 {
+                continue;
+            }
+
+            let store_deployments = match self.store.list_service_deployments(service_id).await {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let latest_active = store_deployments.iter().find(|d| {
+                matches!(
+                    d.status,
+                    DeploymentStatus::Ready
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Building
+                )
+            });
+            let Some(latest) = latest_active else {
+                continue;
+            };
+
+            let has_ready_replica = self
+                .store
+                .list_replica_states(service_id, &latest.id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|r| r.status == DeploymentStatus::Ready);
+
+            if !has_ready_replica {
+                continue;
+            }
+
+            for old in &store_deployments {
+                if old.id == latest.id {
+                    continue;
+                }
+                if !matches!(
+                    old.status,
+                    DeploymentStatus::Ready
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Building
+                ) {
+                    continue;
+                }
+
+                let deployment_ref = Deployment {
+                    service_id: service_id.clone(),
+                    id: old.id.clone(),
+                    replica_index: 0,
+                };
+
+                eprintln!(
+                    "[maestro]: removing old deployment `{}` for service `{service_id}` (new deployment `{}` has ready replica)",
+                    old.id, latest.id
+                );
+
+                if let Err(err) = self
+                    .store
+                    .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                    .await
+                {
+                    eprintln!(
+                        "[maestro]: failed to mark old deployment `{}` as removed: {err}",
+                        old.id
+                    );
+                }
             }
         }
     }
