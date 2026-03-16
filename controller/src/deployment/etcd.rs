@@ -289,14 +289,6 @@ impl EtcdStateStore {
             .map(|r| deployment.hostname_for_replica(r.replica_index))
             .collect();
         if containers.is_empty() {
-            eprintln!(
-                "[maestro]: sync_ingress skipped for `{service_id}`: no ready replicas (total: {}, statuses: {:?})",
-                replicas.len(),
-                replicas
-                    .iter()
-                    .map(|r| format!("replica{}={:?}", r.replica_index, r.status))
-                    .collect::<Vec<_>>()
-            );
             return;
         }
         if let Err(err) = self
