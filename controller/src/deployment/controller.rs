@@ -369,6 +369,14 @@ impl DeploymentController {
             };
             if should_stop {
                 let _ = self
+                    .store
+                    .delete_replica_state(
+                        &deployment.service_id,
+                        &deployment.id,
+                        deployment.replica_index,
+                    )
+                    .await;
+                let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
             }
