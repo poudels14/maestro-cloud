@@ -54,7 +54,7 @@ function ServiceDetailPage() {
     navigate({ to: "/services/$serviceId/$tab", params: { serviceId: s.id, tab } });
 
   const serviceList = () => services() ?? [];
-  const loading = () => services.loading;
+  const loading = () => services.loading || services() === undefined;
 
   return (
     <div class="h-screen flex bg-[#fafafa]">
