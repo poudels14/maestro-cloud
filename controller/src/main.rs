@@ -24,8 +24,8 @@ use crate::{
 };
 
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
-const DEFAULT_API_PORT: u16 = 6400;
-const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:6400";
+const DEFAULT_API_PORT: u16 = 3001;
+const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:3001";
 
 #[derive(Debug, Parser)]
 #[command(name = "maestro", disable_help_subcommand = true)]

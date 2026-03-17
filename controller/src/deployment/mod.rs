@@ -201,7 +201,7 @@ async fn init_admin(
             if let Some(pf) = &port_flag {
                 args.push(pf.clone());
             }
-            args.push(format!("-e MAESTRO_API_HOST=http://{probe_container}:6400"));
+            args.push(format!("-e MAESTRO_API_HOST=http://{probe_container}:3001"));
             args.push(ADMIN_IMAGE_TAG.to_string());
             args.join(" ")
         },
@@ -257,7 +257,7 @@ async fn init_probe(
             &format!("-v {}:/run/secrets/secret-key:ro", secret_key_abs.display()),
             &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
             "-e MAESTRO_SECRET_KEY_FILE=/run/secrets/secret-key",
-            "-e PORT=6400",
+            "-e PORT=3001",
             PROBE_IMAGE_TAG,
         ]
         .join(" "),
