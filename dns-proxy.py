@@ -84,7 +84,7 @@ def verify_peer(ip):
     try:
         query_name = encode_name([MAGIC_QUERY, "maestro", "internal"])
         txn_id = b"\xfe\xfe"
-        header = txn_id + struct.pack("!HHHH", 0x0100, 1, 0, 0, 0)
+        header = txn_id + struct.pack("!HHHHH", 0x0100, 1, 0, 0, 0)
         qtype_class = struct.pack("!HH", 16, 1)
         query = header + query_name + qtype_class
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
