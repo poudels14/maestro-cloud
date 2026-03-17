@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 from collections import Counter
 
-CONTROLLER_DIR = os.path.join(os.path.dirname(__file__), "..")
+PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 
 
 def request_loop(host, url, interval_ms, results, lock, stop_event):
@@ -32,17 +32,17 @@ def request_loop(host, url, interval_ms, results, lock, stop_event):
             time.sleep(remaining)
 
 
-def redeploy_loop(service_id, api_host, redeploy_interval, deploys, lock, stop_event):
+def redeploy_loop(service_id, admin_host, redeploy_interval, deploys, lock, stop_event):
     while not stop_event.is_set():
         time.sleep(redeploy_interval)
         if stop_event.is_set():
             break
         start = time.monotonic()
         result = subprocess.run(
-            ["cargo", "run", "--release", "--", "redeploy", service_id, "--host", api_host],
+            ["cargo", "run", "--release", "--", "redeploy", service_id, "--host", admin_host],
             capture_output=True,
             text=True,
-            cwd=CONTROLLER_DIR,
+            cwd=PROJECT_ROOT,
         )
         elapsed = time.monotonic() - start
         output = (result.stdout + result.stderr).strip()
@@ -57,7 +57,7 @@ def redeploy_loop(service_id, api_host, redeploy_interval, deploys, lock, stop_e
         print(f"  [redeploy] {output} ({elapsed:.2f}s)")
 
 
-def run(host, url, service_id, api_host, duration, interval_ms, redeploy_interval):
+def run(host, url, service_id, admin_host, duration, interval_ms, redeploy_interval):
     results = Counter()
     deploys = []
     lock = threading.Lock()
@@ -75,7 +75,7 @@ def run(host, url, service_id, api_host, duration, interval_ms, redeploy_interva
     )
     redeploy_thread = threading.Thread(
         target=redeploy_loop,
-        args=(service_id, api_host, redeploy_interval, deploys, lock, stop_event),
+        args=(service_id, admin_host, redeploy_interval, deploys, lock, stop_event),
     )
 
     request_thread.start()
@@ -106,13 +106,13 @@ if __name__ == "__main__":
     parser.add_argument("--host", required=True, help="Host header for requests")
     parser.add_argument("--url", required=True, help="ingress URL to hit")
     parser.add_argument("--service", required=True, help="service id to redeploy")
-    parser.add_argument("--api-host", default="127.0.0.1:6400", help="maestro API host")
+    parser.add_argument("--admin-host", required=True, help="maestro API host")
     args = parser.parse_args()
     run(
         args.host,
         args.url,
         args.service,
-        args.api_host,
+        args.admin_host,
         args.duration,
         args.interval,
         args.redeploy_interval,

@@ -280,9 +280,16 @@ function DeploymentsTab(props: { serviceId: string }) {
             {(d) => {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
               const [expanded, setExpanded] = createSignal(false);
-              const secretKeys = () => Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) => a.localeCompare(b));
-              const changedSecrets = () => secretKeys().filter(([, meta]) => meta.prevHash != null && meta.hash !== meta.prevHash).map(([key]) => key);
-              const envEntries = () => Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
+              const secretKeys = () =>
+                Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) =>
+                  a.localeCompare(b)
+                );
+              const changedSecrets = () =>
+                secretKeys()
+                  .filter(([, meta]) => meta.prevHash != null && meta.hash !== meta.prevHash)
+                  .map(([key]) => key);
+              const envEntries = () =>
+                Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
               const hasDetails = () => envEntries().length > 0 || secretKeys().length > 0;
               return (
                 <div class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:bg-gray-50/50">
@@ -362,7 +369,9 @@ function DeploymentsTab(props: { serviceId: string }) {
                     <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
                       <Show when={envEntries().length > 0}>
                         <div>
-                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">Environment</div>
+                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                            Environment
+                          </div>
                           <div class="space-y-0.5">
                             <For each={envEntries()}>
                               {([key, value]) => (
@@ -380,19 +389,24 @@ function DeploymentsTab(props: { serviceId: string }) {
                         <div>
                           <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                             Secrets
-                            <span class="normal-case ml-1 text-gray-300">({d.config.deploy.secrets?.mountPath})</span>
+                            <span class="normal-case ml-1 text-gray-300">
+                              ({d.config.deploy.secrets?.mountPath})
+                            </span>
                           </div>
                           <div class="space-y-0.5">
                             <For each={secretKeys()}>
                               {([key, meta]) => {
-                                const changed = meta.prevHash != null && meta.hash !== meta.prevHash;
+                                const changed =
+                                  meta.prevHash != null && meta.hash !== meta.prevHash;
                                 const isNew = meta.prevHash == null;
                                 return (
                                   <div class="flex items-baseline gap-2 text-xs">
                                     <span class="text-gray-500 font-mono">{key}</span>
                                     <span class="text-gray-300">=</span>
                                     <span class="text-gray-400 font-mono">••••••••</span>
-                                    {changed && <span class="text-amber-500 text-[10px]">changed</span>}
+                                    {changed && (
+                                      <span class="text-amber-500 text-[10px]">changed</span>
+                                    )}
                                     {isNew && <span class="text-green-500 text-[10px]">new</span>}
                                   </div>
                                 );
