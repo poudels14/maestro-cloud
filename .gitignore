@@ -1,4 +1,8 @@
 target
 node_modules
+.vite
 routeTree.gen.ts
+
+.env
+.envrc
 
