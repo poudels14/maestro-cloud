@@ -110,6 +110,8 @@ pub struct ServiceDeployConfig {
     pub healthcheck_path: Option<String>,
     #[serde(default = "default_replicas")]
     pub replicas: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_restarts: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
