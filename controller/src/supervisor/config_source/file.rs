@@ -50,6 +50,7 @@ impl FileServiceConfigSource {
                     shutdown_grace_period_ms: self.shutdown_grace_period_ms,
                     logs_dir: None,
                     docker_container: None,
+                    secrets_mount: None,
                 }
             }
         }

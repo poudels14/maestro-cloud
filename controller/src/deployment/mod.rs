@@ -15,6 +15,11 @@ const ADMIN_IMAGE_TAG: &str = "maestro-admin";
 const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
+    let secrets_dir = config.data_dir.join("secrets");
+    if secrets_dir.exists() {
+        let _ = std::fs::remove_dir_all(&secrets_dir);
+    }
+
     let suffix = &config.cluster_name;
     let dns_domain = format!("{suffix}.maestro.internal");
     let etcd_container = format!("maestro-etcd-{suffix}");
@@ -111,6 +116,7 @@ async fn init_etcd(
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(config.data_dir.join("logs/system/maestro-etcd")),
         docker_container: Some(container_name.to_string()),
+        secrets_mount: None,
     };
     await_job_running(supervisor, etcd_job_config).await;
 }
@@ -155,6 +161,7 @@ async fn init_ingress(
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
+        secrets_mount: None,
     };
     await_job_running(supervisor, ingress_job_config).await;
     eprintln!("[maestro]: ingress listening on http://127.0.0.1:{web_port}");
@@ -204,6 +211,7 @@ async fn init_admin(
         shutdown_grace_period_ms: 10_000,
         logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
+        secrets_mount: None,
     };
     await_job_running(supervisor, admin_job_config).await;
     if let Some(port) = config.probe_port {
@@ -231,6 +239,12 @@ async fn init_probe(
     let deployment_logs_dir = std::fs::canonicalize(config.deployment_logs_dir())
         .expect("failed to canonicalize deployment logs dir");
 
+    let secret_key_dir = config.data_dir.join("system/probe");
+    std::fs::create_dir_all(&secret_key_dir).expect("Failed to create probe secrets dir");
+    let secret_key_path = secret_key_dir.join("secret-key");
+    let secret_key_abs = std::fs::canonicalize(&secret_key_dir)
+        .expect("failed to canonicalize probe secrets dir")
+        .join("secret-key");
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: [
@@ -240,7 +254,9 @@ async fn init_probe(
             &format!("--domainname {dns_domain}"),
             &format!("--network {}", config.network),
             &format!("-v {}:/logs:ro", deployment_logs_dir.display()),
+            &format!("-v {}:/run/secrets/secret-key:ro", secret_key_abs.display()),
             &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
+            "-e MAESTRO_SECRET_KEY_FILE=/run/secrets/secret-key",
             "-e PORT=6400",
             PROBE_IMAGE_TAG,
         ]
@@ -251,6 +267,11 @@ async fn init_probe(
         shutdown_grace_period_ms: 60_000,
         logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
+        secrets_mount: Some(crate::supervisor::SecretsMount {
+            host_path: secret_key_path,
+            container_path: "/run/secrets/secret-key".to_string(),
+            content: config.secret_key.as_str().to_string(),
+        }),
     };
     await_job_running(supervisor, probe_job_config).await;
 }
@@ -319,6 +340,7 @@ async fn init_tailnet(
             shutdown_grace_period_ms: 10_000,
             logs_dir: Some(logs_dir),
             docker_container: Some(container_name.to_string()),
+            secrets_mount: None,
         },
     )
     .await;

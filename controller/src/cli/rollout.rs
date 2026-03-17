@@ -187,6 +187,27 @@ fn service_payload(
     )
     .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
 
+    let mut deploy = deploy;
+    let mut resolved_env = std::collections::HashMap::new();
+    for (key, value) in &deploy.env {
+        let resolved = expand_env_value(value).map_err(|err| {
+            Error::invalid_config(format!("service `{service_id}` env `{key}`: {err}"))
+        })?;
+        resolved_env.insert(key.clone(), resolved);
+    }
+    deploy.env = resolved_env;
+
+    if let Some(secrets) = &mut deploy.secrets {
+        let mut resolved_items = std::collections::HashMap::new();
+        for (key, value) in &secrets.items {
+            let resolved = expand_env_value(value).map_err(|err| {
+                Error::invalid_config(format!("service `{service_id}` secret `{key}`: {err}"))
+            })?;
+            resolved_items.insert(key.clone(), resolved);
+        }
+        secrets.items = resolved_items;
+    }
+
     Ok(PatchServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
@@ -257,6 +278,12 @@ fn validate_service_provider_config(
             Ok((None, None, deploy.clone()))
         }
     }
+}
+
+fn expand_env_value(value: &str) -> std::result::Result<String, String> {
+    shellexpand::env(value)
+        .map(|s| s.into_owned())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

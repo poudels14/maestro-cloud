@@ -29,6 +29,45 @@ pub struct SupervisedJobConfig {
     pub shutdown_grace_period_ms: u64,
     pub logs_dir: Option<PathBuf>,
     pub docker_container: Option<String>,
+    pub secrets_mount: Option<SecretsMount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretsMount {
+    pub host_path: PathBuf,
+    pub container_path: String,
+    pub content: String,
+}
+
+impl SecretsMount {
+    pub fn write(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.host_path.parent() {
+            std::fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        std::fs::write(&self.host_path, &self.content)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                std::fs::set_permissions(&self.host_path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    pub fn cleanup(&self) {
+        if let Ok(len) = std::fs::metadata(&self.host_path).map(|m| m.len()) {
+            let _ = std::fs::write(&self.host_path, vec![0u8; len as usize]);
+        }
+        let _ = std::fs::remove_file(&self.host_path);
+        if let Some(parent) = self.host_path.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +276,11 @@ impl SupervisedJobRunner {
         }
 
         loop {
+            if let Some(secrets) = &config.secrets_mount {
+                if let Err(err) = secrets.write() {
+                    eprintln!("[maestro]: failed to write secrets for '{name}': {err}");
+                }
+            }
             job.start().await;
             log_service_process_ids(&name, &job).await;
 
@@ -317,6 +361,9 @@ impl SupervisedJobRunner {
             }
         }
 
+        if let Some(secrets) = &config.secrets_mount {
+            secrets.cleanup();
+        }
         let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
         if timeout(Duration::from_secs(3), &mut job_handle)
             .await

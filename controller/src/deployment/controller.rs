@@ -54,6 +54,9 @@ impl DeploymentController {
         let docker_provider = DockerDeploymentProvider {
             network: config.network.clone(),
             dns_domain,
+            secrets_dir: std::fs::canonicalize(&config.data_dir)
+                .unwrap_or_else(|_| config.data_dir.clone())
+                .join("secrets"),
         };
         Self {
             config,
@@ -190,7 +193,7 @@ impl DeploymentController {
         };
 
         for replica_index in 0..replicas {
-            let deploy_command = match queued_deployment.deployment.config.provider {
+            let deploy_output = match queued_deployment.deployment.config.provider {
                 ServiceProvider::Docker => self
                     .docker_provider
                     .deploy(&queued_deployment.deployment, replica_index),
@@ -198,7 +201,7 @@ impl DeploymentController {
                     .shell_provider
                     .deploy(&queued_deployment.deployment, replica_index),
             };
-            let Some(deploy_command) = deploy_command else {
+            let Some(deploy_output) = deploy_output else {
                 eprintln!(
                     "[maestro]: skipping replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: no deploy command",
                 );
@@ -218,7 +221,7 @@ impl DeploymentController {
             let job = SupervisedJobConfig {
                 id: replica_job_id.clone(),
                 name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
-                command: deploy_command,
+                command: deploy_output.command,
                 restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
                 max_restarts,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
@@ -232,6 +235,7 @@ impl DeploymentController {
                         .join(format!("replica{replica_index}")),
                 ),
                 docker_container: Some(docker_container),
+                secrets_mount: deploy_output.secrets_mount,
             };
 
             if let Some(task_id) = self.supervisor.start_job(job) {
@@ -595,13 +599,13 @@ impl DeploymentController {
         replica_index: u32,
         deployment_record: &ServiceDeployment,
     ) {
-        let deploy_command = match deployment_record.config.provider {
+        let deploy_output = match deployment_record.config.provider {
             ServiceProvider::Docker => self
                 .docker_provider
                 .deploy(deployment_record, replica_index),
             ServiceProvider::Shell => self.shell_provider.deploy(deployment_record, replica_index),
         };
-        let Some(deploy_command) = deploy_command else {
+        let Some(deploy_output) = deploy_output else {
             return;
         };
 
@@ -615,7 +619,7 @@ impl DeploymentController {
         let job = SupervisedJobConfig {
             id: job_id.clone(),
             name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
-            command: deploy_command,
+            command: deploy_output.command,
             restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
             max_restarts,
             shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
@@ -629,6 +633,7 @@ impl DeploymentController {
                     .join(format!("replica{replica_index}")),
             ),
             docker_container: Some(docker_container),
+            secrets_mount: deploy_output.secrets_mount,
         };
 
         if let Some(task_id) = self.supervisor.start_job(job) {
