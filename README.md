@@ -108,5 +108,5 @@ In Tailscale admin > DNS > Add nameserver > Custom:
 curl http://my-app-abc123.my-cluster.maestro.internal/
 
 # Via ingress
-curl -H "Host: example.com" http://maestro-ingress-my-cluster.my-cluster.maestro.internal:8888/
+curl -H "Host: example.com" http://web.my-cluster.maestro.internal:8888/
 ```
