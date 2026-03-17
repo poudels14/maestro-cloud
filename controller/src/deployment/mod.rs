@@ -11,6 +11,7 @@ pub mod types;
 pub use types::DeploymentConfig;
 
 const PROBE_IMAGE_TAG: &str = "maestro-probe";
+const ADMIN_IMAGE_TAG: &str = "maestro-admin";
 const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
@@ -19,10 +20,12 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     let etcd_container = format!("maestro-etcd-{suffix}");
     let probe_container = format!("maestro-probe-{suffix}");
     let ingress_container = format!("maestro-ingress-{suffix}");
+    let admin_container = format!("maestro-admin-{suffix}");
     let tailscale_container = format!("maestro-tailscale-{suffix}");
     cleanup_container(&etcd_container).await;
     cleanup_container(&probe_container).await;
     cleanup_container(&ingress_container).await;
+    cleanup_container(&admin_container).await;
     cleanup_container(&tailscale_container).await;
     ensure_docker_network(&config.network, config.subnet.as_deref()).await;
     init_etcd(&etcd_container, &dns_domain, config, supervisor).await;
@@ -40,6 +43,14 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     init_ingress(
         &ingress_container,
         &etcd_container,
+        &dns_domain,
+        config,
+        supervisor,
+    )
+    .await;
+    init_admin(
+        &admin_container,
+        &probe_container,
         &dns_domain,
         config,
         supervisor,
@@ -149,6 +160,58 @@ async fn init_ingress(
     eprintln!("[maestro]: ingress listening on http://127.0.0.1:{web_port}");
 }
 
+async fn init_admin(
+    container_name: &str,
+    probe_container: &str,
+    dns_domain: &str,
+    config: &DeploymentConfig,
+    supervisor: &mut JobSupervisor,
+) {
+    DockerDeploymentProvider::build(&DockerBuildConfig {
+        context_dir: config.project_dir.clone(),
+        tag: ADMIN_IMAGE_TAG.to_string(),
+        dockerfile: Some("Dockerfile.admin".to_string()),
+    })
+    .await
+    .expect("failed to build admin-ui image");
+
+    let logs_dir = config.data_dir.join("logs/system/maestro-admin");
+    std::fs::create_dir_all(&logs_dir).expect("Failed to create admin-ui logs dir");
+
+    let port_flag = config
+        .probe_port
+        .map(|p| format!("-p {}:3000", get_unused_port(p)));
+    let admin_job_config = SupervisedJobConfig {
+        id: "maestro-admin".to_string(),
+        command: {
+            let mut args = vec![
+                "exec docker run --rm".to_string(),
+                format!("--name {container_name}"),
+                "--hostname admin".to_string(),
+                format!("--domainname {dns_domain}"),
+                format!("--network {}", config.network),
+            ];
+            if let Some(pf) = &port_flag {
+                args.push(pf.clone());
+            }
+            args.push(format!("-e MAESTRO_API_HOST=http://{probe_container}:6400"));
+            args.push(ADMIN_IMAGE_TAG.to_string());
+            args.join(" ")
+        },
+        name: "maestro-admin".to_string(),
+        max_restarts: None,
+        restart_delay_ms: 1_000,
+        shutdown_grace_period_ms: 10_000,
+        logs_dir: Some(logs_dir),
+        docker_container: Some(container_name.to_string()),
+    };
+    await_job_running(supervisor, admin_job_config).await;
+    if let Some(port) = config.probe_port {
+        eprintln!("[maestro]: admin ui listening on http://127.0.0.1:{port}");
+    }
+    eprintln!("[maestro]: admin ui running at http://admin.{dns_domain}:3000");
+}
+
 async fn init_probe(
     container_name: &str,
     etcd_container: &str,
@@ -168,28 +231,20 @@ async fn init_probe(
     let deployment_logs_dir = std::fs::canonicalize(config.deployment_logs_dir())
         .expect("failed to canonicalize deployment logs dir");
 
-    let port_flag = config
-        .probe_port
-        .map(|p| format!("-p {}:6400", get_unused_port(p)));
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
-        command: {
-            let mut args = vec![
-                "exec docker run --rm".to_string(),
-                format!("--name {container_name}"),
-                "--hostname maestro-probe".to_string(),
-                format!("--domainname {dns_domain}"),
-                format!("--network {}", config.network),
-            ];
-            if let Some(pf) = &port_flag {
-                args.push(pf.clone());
-            }
-            args.push(format!("-v {}:/logs:ro", deployment_logs_dir.display()));
-            args.push(format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"));
-            args.push("-e PORT=6400".to_string());
-            args.push(PROBE_IMAGE_TAG.to_string());
-            args.join(" ")
-        },
+        command: [
+            "exec docker run --rm",
+            &format!("--name {container_name}"),
+            "--hostname maestro-probe",
+            &format!("--domainname {dns_domain}"),
+            &format!("--network {}", config.network),
+            &format!("-v {}:/logs:ro", deployment_logs_dir.display()),
+            &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
+            "-e PORT=6400",
+            PROBE_IMAGE_TAG,
+        ]
+        .join(" "),
         name: "maestro-probe".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,
