@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/solid-router";
 
-const API_HOST = process.env.MAESTRO_API_HOST || "http://127.0.0.1:6400";
+const API_HOST = process.env.MAESTRO_API_HOST || "http://127.0.0.1:3001";
 
 async function proxy(request: Request): Promise<Response> {
   const url = new URL(request.url);
