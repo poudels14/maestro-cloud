@@ -1,6 +1,7 @@
 target
 node_modules
 .vite
+.nitro
 routeTree.gen.ts
 
 .env
