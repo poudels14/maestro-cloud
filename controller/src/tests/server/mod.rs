@@ -20,6 +20,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             }),
             healthcheck_path: Some("/_healthy".to_string()),
             replicas: 1,
+            max_restarts: None,
         },
         ingress: None,
     }
@@ -41,6 +42,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             }),
             healthcheck_path: Some("/_healthy".to_string()),
             replicas: 1,
+            max_restarts: None,
         },
         ingress: None,
     }

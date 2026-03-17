@@ -17,8 +17,8 @@ use crate::{
     supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus},
 };
 
-const DEFAULT_RESTART_DELAY_MS: u64 = 1_000;
-const DEFAULT_MAX_RESTARTS: Option<u32> = Some(5);
+const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
+const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
 #[cfg(not(test))]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 #[cfg(test)]
@@ -209,12 +209,18 @@ impl DeploymentController {
             let docker_container = queued_deployment
                 .deployment
                 .hostname_for_replica(replica_index);
+            let max_restarts = queued_deployment
+                .deployment
+                .config
+                .deploy
+                .max_restarts
+                .or(DEFAULT_MAX_RESTARTS);
             let job = SupervisedJobConfig {
                 id: replica_job_id.clone(),
                 name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
                 command: deploy_command,
                 restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-                max_restarts: DEFAULT_MAX_RESTARTS,
+                max_restarts,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
                 logs_dir: Some(
                     self.config
@@ -601,12 +607,17 @@ impl DeploymentController {
 
         let job_id = replica_job_id(deployment_id, replica_index);
         let docker_container = deployment_record.hostname_for_replica(replica_index);
+        let max_restarts = deployment_record
+            .config
+            .deploy
+            .max_restarts
+            .or(DEFAULT_MAX_RESTARTS);
         let job = SupervisedJobConfig {
             id: job_id.clone(),
             name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
             command: deploy_command,
             restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-            max_restarts: DEFAULT_MAX_RESTARTS,
+            max_restarts,
             shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
             logs_dir: Some(
                 self.config

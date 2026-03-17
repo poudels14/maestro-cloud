@@ -47,6 +47,7 @@ fn deployment_with_source(
                 command: deploy_command,
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
+                max_restarts: None,
             },
             ingress: None,
         },
@@ -153,6 +154,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                 }),
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
+                max_restarts: None,
             },
             ingress: None,
         },
@@ -253,6 +255,7 @@ impl InMemoryStore {
                     command: Some(deploy_command.clone()),
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,
+                    max_restarts: None,
                 },
                 ingress: None,
             };
@@ -300,6 +303,7 @@ impl InMemoryStore {
                     command: Some(deploy_command),
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,
+                    max_restarts: None,
                 },
                 ingress: None,
             };
@@ -368,6 +372,7 @@ impl InMemoryStore {
                 command: None,
                 healthcheck_path: None,
                 replicas: 1,
+                max_restarts: None,
             },
             ingress,
         };

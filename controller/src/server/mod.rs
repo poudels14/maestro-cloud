@@ -210,6 +210,7 @@ impl Server {
                         command: None,
                         healthcheck_path: None,
                         replicas: 1,
+                        max_restarts: None,
                     },
                     ingress: None,
                 },
