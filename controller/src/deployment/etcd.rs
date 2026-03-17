@@ -8,8 +8,8 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, replica_state_key, replica_states_prefix,
-    service_deployment_history_key, service_deployment_history_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, deployment_secrets_key, replica_state_key,
+    replica_states_prefix, service_deployment_history_key, service_deployment_history_prefix,
     service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
     service_info_key, service_prefix,
 };
@@ -27,6 +27,7 @@ const MAX_TXN_RETRIES: usize = 16;
 #[derive(Clone)]
 pub struct EtcdStateStore {
     client: Arc<tokio::sync::Mutex<EtcdClient>>,
+    secret_key: crate::utils::crypto::SecretKey,
 }
 
 struct DeploymentSnapshot {
@@ -49,7 +50,7 @@ struct InfoSnapshot {
 }
 
 impl EtcdStateStore {
-    pub async fn new(endpoint: &str) -> Result<Self> {
+    pub async fn new(endpoint: &str, secret_key: crate::utils::crypto::SecretKey) -> Result<Self> {
         let backoff = ConstantBuilder::default()
             .with_delay(Duration::from_secs(1))
             .with_max_times(15);
@@ -65,7 +66,62 @@ impl EtcdStateStore {
 
         Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
+            secret_key,
         })
+    }
+
+    fn strip_deployment_with_metadata(
+        &self,
+        deployment: &ServiceDeployment,
+        prev_keys: &std::collections::HashMap<String, crate::deployment::types::SecretKeyMeta>,
+    ) -> ServiceDeployment {
+        let mut d = deployment.clone();
+        if let Some(secrets) = &d.config.deploy.secrets {
+            d.config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
+        }
+        d
+    }
+
+    async fn prev_secret_keys(
+        &self,
+        service_id: &str,
+    ) -> std::collections::HashMap<String, crate::deployment::types::SecretKeyMeta> {
+        let deployments = match self.list_service_deployments(service_id).await {
+            Ok(d) => d,
+            Err(_) => return Default::default(),
+        };
+        deployments
+            .first()
+            .and_then(|d| d.config.deploy.secrets.as_ref())
+            .map(|s| s.keys.clone())
+            .unwrap_or_default()
+    }
+
+    async fn write_deployment_secrets(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        deployment: &ServiceDeployment,
+    ) {
+        let Some(secrets) = &deployment.config.deploy.secrets else {
+            return;
+        };
+        if secrets.items.is_empty() {
+            return;
+        }
+        let items_json = match serde_json::to_string(&secrets.items) {
+            Ok(json) => json,
+            Err(_) => return,
+        };
+        let value = match crate::utils::crypto::encrypt_string(&self.secret_key, &items_json) {
+            Ok(encrypted) => encrypted,
+            Err(_) => return,
+        };
+        let key = deployment_secrets_key(service_id, deployment_id);
+        let mut client = self.client.lock().await;
+        let _ = client
+            .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
+            .await;
     }
 
     async fn get(
@@ -374,6 +430,16 @@ impl ClusterStore for EtcdStateStore {
 
             let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
+            let mut deployment = deployment;
+            if let Some(secrets) = &mut deployment.config.deploy.secrets {
+                if secrets.items.is_empty() && !secrets.keys.is_empty() {
+                    let items = self
+                        .read_deployment_secrets(&service_id, &deployment.id)
+                        .await
+                        .unwrap_or_default();
+                    secrets.items = items;
+                }
+            }
             queued.push(QueuedDeployment {
                 service_id,
                 key,
@@ -398,6 +464,10 @@ impl ClusterStore for EtcdStateStore {
     ) -> anyhow::Result<bool> {
         let mut building = queued_deployment.deployment.clone();
         building.status = DeploymentStatus::Building;
+        self.write_deployment_secrets(&queued_deployment.service_id, &building.id, &building)
+            .await;
+        let prev_keys = self.prev_secret_keys(&queued_deployment.service_id).await;
+        let building = self.strip_deployment_with_metadata(&building, &prev_keys);
 
         let deployment_json = serde_json::to_string(&building)
             .map_err(|err| anyhow!("failed to serialize building deployment: {err}"))?;
@@ -407,7 +477,10 @@ impl ClusterStore for EtcdStateStore {
             .await?;
 
         let updated_info = ServiceInfo {
-            config: queued_deployment.deployment.config.clone(),
+            config: queued_deployment
+                .deployment
+                .config
+                .strip_secrets(&Default::default()),
         };
         let info_json = serde_json::to_string(&updated_info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
@@ -644,6 +717,22 @@ impl ClusterStore for EtcdStateStore {
             .map(|snapshot| snapshot.deployment))
     }
 
+    async fn read_deployment_secrets(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        let key = deployment_secrets_key(service_id, deployment_id);
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let Some(kv) = response.kvs().first() else {
+            return Ok(Default::default());
+        };
+        let value = String::from_utf8_lossy(kv.value()).to_string();
+        let items_json =
+            crate::utils::crypto::decrypt_string(&self.secret_key, &value).unwrap_or(value);
+        Ok(serde_json::from_str(&items_json).unwrap_or_default())
+    }
+
     async fn queue_deployment(
         &self,
         deployment: ServiceDeployment,
@@ -666,11 +755,13 @@ impl ClusterStore for EtcdStateStore {
             let deployment_index = usize::try_from(deployment_index_u64)
                 .map_err(|_| anyhow!("deployment index overflowed usize"))?;
 
-            let deployment_json = serde_json::to_string(&deployment)
+            let prev_keys = self.prev_secret_keys(&deployment.config.id).await;
+            let stripped_deployment = self.strip_deployment_with_metadata(&deployment, &prev_keys);
+            let deployment_json = serde_json::to_string(&stripped_deployment)
                 .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
             let info = ServiceInfo {
-                config: deployment.config.clone(),
+                config: deployment.config.strip_secrets(&Default::default()),
             };
             let info_json = serde_json::to_string(&info)
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
@@ -695,6 +786,9 @@ impl ClusterStore for EtcdStateStore {
 
             let committed = self.txn(compare, success).await?;
             if committed {
+                let service_id = &deployment.config.id;
+                self.write_deployment_secrets(service_id, &deployment.id, &deployment)
+                    .await;
                 return Ok(ForceQueueOutcome {
                     deployment_index,
                     deployment: deployment.clone(),
@@ -728,7 +822,6 @@ impl ClusterStore for EtcdStateStore {
 
             let mut updated = snapshot.deployment.clone();
             updated.status = DeploymentStatus::Canceled;
-            // replica states are in separate keys; no need to update them here
             let updated_json = serde_json::to_string(&updated)
                 .map_err(|err| anyhow!("failed to serialize canceled deployment: {err}"))?;
 
@@ -773,7 +866,6 @@ impl ClusterStore for EtcdStateStore {
             let mut updated = snapshot.deployment.clone();
             updated.status = DeploymentStatus::Draining;
             updated.drained_at = Some(current_time_millis()?);
-            // replica states are in separate keys; no need to update them here
             let updated_json = serde_json::to_string(&updated)
                 .map_err(|err| anyhow!("failed to serialize remove-requested deployment: {err}"))?;
 
@@ -805,7 +897,7 @@ impl ClusterStore for EtcdStateStore {
             };
 
             let mut updated_info = info_snapshot.info.clone();
-            updated_info.config = config.clone();
+            updated_info.config = config.strip_secrets(&Default::default());
             let info_json = serde_json::to_string(&updated_info)
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
 
@@ -820,6 +912,7 @@ impl ClusterStore for EtcdStateStore {
             if let Some(dep_snapshot) = &active_deployment {
                 let mut updated_dep = dep_snapshot.deployment.clone();
                 updated_dep.config = config.clone();
+                let updated_dep = updated_dep;
                 let dep_json = serde_json::to_string(&updated_dep)
                     .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
                 compare.push(compare_mod_revision_or_absent(

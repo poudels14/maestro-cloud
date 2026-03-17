@@ -217,6 +217,13 @@ function OverviewTab(props: { service: Service }) {
       ]
     : null;
 
+  const envItems = Object.entries(s.deploy.env ?? {}).map(([key, value]) => ({
+    label: key,
+    value
+  }));
+
+  const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
+
   return (
     <div class="space-y-6">
       <ConfigSection title="General" items={configItems} />
@@ -224,6 +231,29 @@ function OverviewTab(props: { service: Service }) {
       <ConfigSection title="Deploy" items={deployItems} />
       <Show when={ingressItems}>
         {(items) => <ConfigSection title="Ingress" items={items()} />}
+      </Show>
+      <Show when={envItems.length > 0}>
+        <ConfigSection title="Environment" items={envItems} />
+      </Show>
+      <Show when={secretKeys.length > 0}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+            Secrets
+            <span class="ml-1.5 text-gray-300 normal-case">
+              (mounted at {s.deploy.secrets?.mountPath})
+            </span>
+          </h4>
+          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <For each={secretKeys}>
+              {(key) => (
+                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                  <span class="text-xs text-gray-500 shrink-0">{key}</span>
+                  <span class="text-sm font-mono text-gray-400">••••••••</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
       </Show>
     </div>
   );
@@ -249,6 +279,11 @@ function DeploymentsTab(props: { serviceId: string }) {
           <For each={deployments()}>
             {(d) => {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
+              const [expanded, setExpanded] = createSignal(false);
+              const secretKeys = () => Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) => a.localeCompare(b));
+              const changedSecrets = () => secretKeys().filter(([, meta]) => meta.prevHash != null && meta.hash !== meta.prevHash).map(([key]) => key);
+              const envEntries = () => Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
+              const hasDetails = () => envEntries().length > 0 || secretKeys().length > 0;
               return (
                 <div class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:bg-gray-50/50">
                   <div class="flex items-center justify-between gap-3 mb-2">
@@ -289,6 +324,18 @@ function DeploymentsTab(props: { serviceId: string }) {
                       </For>
                     </div>
                   </Show>
+                  <Show when={changedSecrets().length > 0}>
+                    <div class="flex items-center gap-1.5 flex-wrap text-xs mb-2">
+                      <span class="text-amber-500 font-medium">secrets changed:</span>
+                      <For each={changedSecrets()}>
+                        {(key) => (
+                          <span class="inline-flex items-center bg-amber-50 border border-amber-200 text-amber-700 rounded px-1.5 py-0.5 font-mono">
+                            {key}
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="flex items-center gap-3 text-xs text-gray-400">
                     <span class="font-mono">{d.config.version.slice(0, 12)}</span>
                     <Show when={d.gitCommit}>
@@ -297,11 +344,65 @@ function DeploymentsTab(props: { serviceId: string }) {
                         <span class="font-mono truncate">{d.gitCommit}</span>
                       </span>
                     </Show>
+                    <Show when={hasDetails()}>
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(!expanded())}
+                        class="text-xs text-indigo-500 hover:text-indigo-600 outline-none"
+                      >
+                        {expanded() ? "hide details" : "details"}
+                      </button>
+                    </Show>
                     <span class="flex items-center gap-1 ml-auto">
                       <Clock class="size-3" />
                       {timeAgo(d.createdAt)}
                     </span>
                   </div>
+                  <Show when={expanded()}>
+                    <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                      <Show when={envEntries().length > 0}>
+                        <div>
+                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">Environment</div>
+                          <div class="space-y-0.5">
+                            <For each={envEntries()}>
+                              {([key, value]) => (
+                                <div class="flex items-baseline gap-2 text-xs">
+                                  <span class="text-gray-500 font-mono">{key}</span>
+                                  <span class="text-gray-300">=</span>
+                                  <span class="text-gray-700 font-mono truncate">{value}</span>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+                      <Show when={secretKeys().length > 0}>
+                        <div>
+                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                            Secrets
+                            <span class="normal-case ml-1 text-gray-300">({d.config.deploy.secrets?.mountPath})</span>
+                          </div>
+                          <div class="space-y-0.5">
+                            <For each={secretKeys()}>
+                              {([key, meta]) => {
+                                const changed = meta.prevHash != null && meta.hash !== meta.prevHash;
+                                const isNew = meta.prevHash == null;
+                                return (
+                                  <div class="flex items-baseline gap-2 text-xs">
+                                    <span class="text-gray-500 font-mono">{key}</span>
+                                    <span class="text-gray-300">=</span>
+                                    <span class="text-gray-400 font-mono">••••••••</span>
+                                    {changed && <span class="text-amber-500 text-[10px]">changed</span>}
+                                    {isNew && <span class="text-green-500 text-[10px]">new</span>}
+                                  </div>
+                                );
+                              }}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
                 </div>
               );
             }}

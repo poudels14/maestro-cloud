@@ -13,10 +13,22 @@ export interface Ingress {
   port?: number;
 }
 
+export interface SecretKeyMeta {
+  hash: string;
+  prevHash?: string | null;
+}
+
+export interface SecretsConfig {
+  mountPath: string;
+  keys: Record<string, SecretKeyMeta>;
+}
+
 export interface Deploy {
   command?: BuildCommand | null;
   healthcheckPath: string;
   replicas?: number;
+  env?: Record<string, string>;
+  secrets?: SecretsConfig | null;
 }
 
 export interface Service {

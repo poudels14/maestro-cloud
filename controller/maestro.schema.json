@@ -103,6 +103,22 @@
         "maxRestarts": {
           "type": "integer",
           "minimum": 0
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "secrets": {
+          "type": "object",
+          "required": ["mountPath", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "mountPath": { "type": "string" },
+            "items": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
         }
       }
     },

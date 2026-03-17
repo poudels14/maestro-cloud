@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::utils;
+use crate::utils::crypto::SecretString;
 
 #[derive(Debug, Clone)]
 pub struct DeploymentConfig {
@@ -16,6 +18,7 @@ pub struct DeploymentConfig {
     pub network: String,
     pub subnet: Option<String>,
     pub tailscale_authkey: Option<String>,
+    pub secret_key: SecretString,
 }
 
 impl DeploymentConfig {
@@ -75,6 +78,16 @@ pub struct ServiceConfig {
     pub ingress: Option<IngressConfig>,
 }
 
+impl ServiceConfig {
+    pub fn strip_secrets(&self, prev_keys: &HashMap<String, SecretKeyMeta>) -> Self {
+        let mut config = self.clone();
+        if let Some(secrets) = &config.deploy.secrets {
+            config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
+        }
+        config
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IngressConfig {
@@ -112,6 +125,67 @@ pub struct ServiceDeployConfig {
     pub replicas: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<SecretsConfig>,
+}
+
+/// Secrets with resolved values — used during rollout and deployment.
+/// Never stored in etcd or returned by API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsConfig {
+    pub mount_path: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub items: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub keys: HashMap<String, SecretKeyMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretKeyMeta {
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_hash: Option<String>,
+}
+
+impl SecretsConfig {
+    pub fn compute_secrets_hash(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut sorted_keys: Vec<&String> = self.items.keys().collect();
+        sorted_keys.sort();
+        let mut hasher = Sha256::new();
+        for key in sorted_keys {
+            hasher.update(key.as_bytes());
+            hasher.update(b"=");
+            hasher.update(self.items.get(key).unwrap().as_bytes());
+            hasher.update(b"\n");
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn compute_value_hash(value: &str) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(value.as_bytes()))
+    }
+
+    pub fn to_metadata(&self, prev_keys: &HashMap<String, SecretKeyMeta>) -> SecretsConfig {
+        let keys = self
+            .items
+            .iter()
+            .map(|(k, v)| {
+                let hash = Self::compute_value_hash(v);
+                let prev_hash = prev_keys.get(k).map(|m| m.hash.clone());
+                (k.clone(), SecretKeyMeta { hash, prev_hash })
+            })
+            .collect();
+        SecretsConfig {
+            mount_path: self.mount_path.clone(),
+            items: HashMap::new(),
+            keys,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -91,6 +91,14 @@ pub trait ClusterStore: Send + Sync {
         bail!("read_service_deployment not implemented")
     }
 
+    async fn read_deployment_secrets(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        bail!("read_deployment_secrets not implemented")
+    }
+
     async fn queue_deployment(&self, _deployment: ServiceDeployment) -> Result<ForceQueueOutcome> {
         bail!("queue_deployment not implemented")
     }

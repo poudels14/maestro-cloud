@@ -10,6 +10,7 @@ use crate::deployment::types::{
     ServiceInfo, ServiceProvider,
 };
 use crate::supervisor::controller::JobSupervisor;
+use crate::utils::crypto::SecretString;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::{
@@ -48,6 +49,8 @@ fn deployment_with_source(
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
                 max_restarts: None,
+                env: Default::default(),
+                secrets: None,
             },
             ingress: None,
         },
@@ -70,12 +73,13 @@ fn command_planner_uses_image_for_deploy_when_present() {
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
         dns_domain: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
     assert_eq!(
-        deploy,
+        deploy.command,
         "exec docker run --rm --name svc-1-A1B2C3 --hostname svc-1-A1B2C3 --network test-net traefik/whoami"
     );
 }
@@ -94,13 +98,14 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
         dns_domain: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
 
     assert_eq!(
-        deploy,
+        deploy.command,
         "exec docker run --rm --name svc-1-ABCDEF --hostname svc-1-ABCDEF --network test-net -p 0:80 -p 0:443 traefik/whoami --network=host --label env=test",
     );
 }
@@ -122,11 +127,12 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
     let planner = DockerDeploymentProvider {
         network: "test-net".to_string(),
         dns_domain: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
-    assert_eq!(deploy, "arc deploy --service svc-1");
+    assert_eq!(deploy.command, "arc deploy --service svc-1");
 }
 
 #[test]
@@ -155,6 +161,8 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
                 max_restarts: None,
+                env: Default::default(),
+                secrets: None,
             },
             ingress: None,
         },
@@ -166,7 +174,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
-    assert_eq!(deploy, "echo ok");
+    assert_eq!(deploy.command, "echo ok");
 }
 
 #[derive(Default)]
@@ -256,6 +264,8 @@ impl InMemoryStore {
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,
                     max_restarts: None,
+                    env: Default::default(),
+                    secrets: None,
                 },
                 ingress: None,
             };
@@ -304,6 +314,8 @@ impl InMemoryStore {
                     healthcheck_path: Some("/_healthy".to_string()),
                     replicas: 1,
                     max_restarts: None,
+                    env: Default::default(),
+                    secrets: None,
                 },
                 ingress: None,
             };
@@ -373,6 +385,8 @@ impl InMemoryStore {
                 healthcheck_path: None,
                 replicas: 1,
                 max_restarts: None,
+                env: Default::default(),
+                secrets: None,
             },
             ingress,
         };
@@ -666,6 +680,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
             network: "test-net".to_string(),
             subnet: None,
             tailscale_authkey: None,
+            secret_key: SecretString::new("test".to_string()),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -742,6 +757,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             network: "test-net".to_string(),
             subnet: None,
             tailscale_authkey: None,
+            secret_key: SecretString::new("test".to_string()),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -845,6 +861,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             network: "test-net".to_string(),
             subnet: None,
             tailscale_authkey: None,
+            secret_key: SecretString::new("test".to_string()),
         },
         store.clone(),
         JobSupervisor::new(),
@@ -962,6 +979,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             network: "test-net".to_string(),
             subnet: None,
             tailscale_authkey: None,
+            secret_key: SecretString::new("test".to_string()),
         },
         store.clone(),
         JobSupervisor::new(),

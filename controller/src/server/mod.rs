@@ -212,6 +212,8 @@ impl Server {
                         healthcheck_path: None,
                         replicas: 1,
                         max_restarts: None,
+                        env: Default::default(),
+                        secrets: None,
                     },
                     ingress: None,
                 },
@@ -316,7 +318,25 @@ impl Server {
             ));
         };
 
-        let deployment = ServiceDeployment::new(info.config)
+        let mut config = info.config;
+
+        let deployments = state
+            .store
+            .list_service_deployments(&service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        if let Some(prev) = deployments.first() {
+            if let Some(secrets) = &mut config.deploy.secrets {
+                let items = state
+                    .store
+                    .read_deployment_secrets(&service_id, &prev.id)
+                    .await
+                    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+                secrets.items = items;
+            }
+        }
+
+        let deployment = ServiceDeployment::new(config)
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let outcome = state
             .store
@@ -515,6 +535,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     }
     let (build, image, deploy) = validate_service_provider_config(provider, build, image, deploy)?;
 
+    let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
     let version_payload = json!({
         "id": &service_id,
         "name": &service_name,
@@ -526,6 +547,8 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
             "exposePorts": &deploy.expose_ports,
             "command": &deploy.command,
             "healthcheckPath": &deploy.healthcheck_path,
+            "env": &deploy.env,
+            "secretsHash": &secrets_hash,
         },
         "ingress": &ingress
     });

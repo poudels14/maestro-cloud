@@ -1,13 +1,21 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use tokio::process::Command;
 
 use crate::deployment::types::ServiceDeployment;
+use crate::supervisor::SecretsMount;
+
+#[derive(Debug)]
+pub struct DeployOutput {
+    pub command: String,
+    pub secrets_mount: Option<SecretsMount>,
+}
 
 pub trait ServiceCommandPlanner: Send + Sync {
     fn build(&self, deployment: &ServiceDeployment) -> Option<String>;
-    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<String>;
+    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput>;
 }
 
 pub struct DockerBuildConfig {
@@ -19,6 +27,7 @@ pub struct DockerBuildConfig {
 pub struct DockerDeploymentProvider {
     pub network: String,
     pub dns_domain: Option<String>,
+    pub secrets_dir: PathBuf,
 }
 pub struct ShellDeploymentProvider;
 
@@ -64,7 +73,7 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
         ))
     }
 
-    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<String> {
+    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput> {
         if let Some(image) = deployment
             .config
             .image
@@ -72,21 +81,52 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
             .map(str::trim)
             .filter(|image| !image.is_empty())
         {
-            Some(docker_run_command(
-                &deployment.config.id,
-                &deployment.id,
-                replica_index,
-                image,
-                &self.network,
-                self.dns_domain.as_deref(),
-                &deployment.config.deploy.expose_ports,
-                &deployment.config.deploy.flags,
-            ))
+            let secrets_info = deployment.config.deploy.secrets.as_ref().and_then(|s| {
+                if s.items.is_empty() {
+                    return None;
+                }
+                let host_path = self
+                    .secrets_dir
+                    .join(&deployment.config.id)
+                    .join(&deployment.id)
+                    .join(format!("replica{replica_index}.env"));
+                let content: String = s
+                    .items
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Some((host_path, s.mount_path.clone(), content))
+            });
+            let mount_arg = secrets_info.as_ref().map(|(host_path, container_path, _)| {
+                (host_path.display().to_string(), container_path.clone())
+            });
+            Some(DeployOutput {
+                command: docker_run_command(
+                    &deployment.config.id,
+                    &deployment.id,
+                    replica_index,
+                    image,
+                    &self.network,
+                    self.dns_domain.as_deref(),
+                    &deployment.config.deploy.expose_ports,
+                    &deployment.config.deploy.env,
+                    mount_arg.as_ref(),
+                    &deployment.config.deploy.flags,
+                ),
+                secrets_mount: secrets_info.map(|(host_path, container_path, content)| {
+                    SecretsMount {
+                        host_path,
+                        container_path,
+                        content,
+                    }
+                }),
+            })
         } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
-            Some(to_shell_command(
-                &deploy_command.command,
-                &deploy_command.args,
-            ))
+            Some(DeployOutput {
+                command: to_shell_command(&deploy_command.command, &deploy_command.args),
+                secrets_mount: None,
+            })
         } else {
             None
         }
@@ -98,13 +138,16 @@ impl ServiceCommandPlanner for ShellDeploymentProvider {
         None
     }
 
-    fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<String> {
+    fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<DeployOutput> {
         let deploy_command = deployment.config.deploy.command.as_ref()?;
         let command = deploy_command.command.trim();
         if command.is_empty() {
             return None;
         }
-        Some(to_shell_command(command, &deploy_command.args))
+        Some(DeployOutput {
+            command: to_shell_command(command, &deploy_command.args),
+            secrets_mount: None,
+        })
     }
 }
 
@@ -124,6 +167,8 @@ fn docker_run_command(
     network: &str,
     dns_domain: Option<&str>,
     expose_ports: &[u16],
+    env: &HashMap<String, String>,
+    secrets_mount: Option<&(String, String)>,
     flags: &[String],
 ) -> String {
     let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
@@ -141,6 +186,12 @@ fn docker_run_command(
     }
     for port in expose_ports {
         args.push_str(&format!(" -p 0:{port}"));
+    }
+    for (key, value) in env {
+        args.push_str(&format!(" -e {key}={value}"));
+    }
+    if let Some((host_path, container_path)) = secrets_mount {
+        args.push_str(&format!(" -v {host_path}:{container_path}:ro"));
     }
     args.push_str(&format!(" {image}"));
     for flag in flags {
