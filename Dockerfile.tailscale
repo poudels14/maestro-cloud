@@ -1,0 +1,6 @@
+FROM ghcr.io/tailscale/tailscale:latest
+RUN apk add --no-cache python3
+COPY dns-proxy.py /dns-proxy.py
+COPY tailscale-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
