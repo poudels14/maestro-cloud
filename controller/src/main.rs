@@ -34,51 +34,82 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
+    /// Start the cluster controller and all system services
     Start {
-        #[arg(long = "cluster-name")]
+        #[arg(long = "cluster-name", help = "Unique name for this cluster")]
         cluster_name: String,
-        #[arg(long = "expose_etcd")]
-        expose_etcd: Option<u16>,
-        #[arg(long = "port", default_value_t = DEFAULT_API_PORT)]
-        port: u16,
-        #[arg(long = "data-dir")]
+        #[arg(long = "etcd-port", help = "Host port for etcd (random if not set)")]
+        etcd_port: Option<u16>,
+        #[arg(
+            long = "admin-port",
+            help = "Host port for maestro controller (not exposed if not set)"
+        )]
+        admin_port: Option<u16>,
+        #[arg(long = "port", help = "Host port for ingress")]
+        web_port: u16,
+        #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
         data_dir: PathBuf,
-        #[arg(long = "network")]
+        #[arg(
+            long = "network",
+            help = "Docker network name (default: maestro-{cluster-name})"
+        )]
         network: Option<String>,
-        #[arg(long = "enable-tailscale")]
+        #[arg(
+            long = "subnet",
+            help = "Docker network subnet CIDR (e.g., 172.22.0.0/16)"
+        )]
+        subnet: Option<String>,
+        #[arg(
+            long = "enable-tailscale",
+            help = "Enable Tailscale subnet routing and DNS"
+        )]
         enable_tailscale: bool,
-        #[arg(long = "tailscale-authkey", env = "TS_AUTHKEY")]
+        #[arg(
+            long = "tailscale-authkey",
+            env = "TS_AUTHKEY",
+            help = "Tailscale auth key"
+        )]
         tailscale_authkey: Option<String>,
-        #[arg(long = "nameserver-ip")]
-        nameserver_ip: Option<String>,
     },
+    /// Deploy services from the config file
     Rollout {
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
+        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
         host: String,
-        #[arg(long = "config")]
+        #[arg(
+            long = "config",
+            help = "Path to maestro.jsonc (default: maestro.jsonc)"
+        )]
         config: Option<PathBuf>,
     },
+    /// Trigger a redeployment of a running service
     Redeploy {
+        #[arg(help = "Service ID to redeploy")]
         service_id: String,
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
+        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
         host: String,
     },
+    /// Cancel a queued or building deployment
     Cancel {
+        #[arg(help = "Service ID")]
         service_id: String,
+        #[arg(help = "Deployment ID to cancel")]
         deployment_id: String,
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST)]
+        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
         host: String,
     },
+    /// Run the health probe server (used internally by the probe container)
     Probe {
         #[arg(
             long = "etcd-endpoint",
             env = "ETCD_ENDPOINT",
-            default_value = "http://127.0.0.1:6479"
+            default_value = "http://127.0.0.1:6479",
+            help = "etcd endpoint URL"
         )]
         etcd_endpoint: String,
-        #[arg(long = "port", env = "PORT", default_value_t = DEFAULT_API_PORT)]
+        #[arg(long = "port", env = "PORT", default_value_t = DEFAULT_API_PORT, help = "Port to listen on")]
         port: u16,
     },
+    /// Create a default maestro.jsonc config file
     Init,
 }
 
@@ -100,13 +131,14 @@ async fn run() -> crate::error::Result<()> {
         }
         Some(CliCommand::Start {
             cluster_name,
-            port,
-            expose_etcd,
+            admin_port,
+            web_port,
+            etcd_port,
             data_dir,
             network,
+            subnet,
             enable_tailscale,
             tailscale_authkey,
-            nameserver_ip,
         }) => {
             if enable_tailscale && tailscale_authkey.is_none() {
                 return Err(Error::invalid_input(
@@ -126,7 +158,14 @@ async fn run() -> crate::error::Result<()> {
                     data_dir.display()
                 ))
             })?;
-            let etcd_port = expose_etcd.unwrap_or(6479);
+            let etcd_port = etcd_port.unwrap_or_else(|| {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                    .expect("failed to bind to random port for etcd");
+                listener
+                    .local_addr()
+                    .expect("failed to get local addr")
+                    .port()
+            });
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
             let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
@@ -141,11 +180,12 @@ async fn run() -> crate::error::Result<()> {
                 cluster_name,
                 data_dir,
                 etcd_port,
-                probe_port: port,
+                probe_port: admin_port,
+                web_port,
                 project_dir,
                 network,
+                subnet,
                 tailscale_authkey,
-                nameserver_ip,
             };
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
