@@ -1,0 +1,28 @@
+{
+  "$schema": "../../controller/maestro.schema.json",
+  "services": {
+    "env-server": {
+      "name": "Env Server",
+      "image": "env-server:latest",
+      "ingress": {
+        "host": "env-server.local",
+        "port": 8080
+      },
+      "deploy": {
+        "replicas": 1,
+        "healthcheckPath": "/health",
+        "env": {
+          "APP_NAME": "maestro-test",
+          "APP_ENV": "${APP_ENV:-development}"
+        },
+        "secrets": {
+          "mountPath": "/app/.env",
+          "items": {
+            "DB_PASSWORD": "${DB_PASSWORD:-secret123}",
+            "API_KEY": "${API_KEY:-test-api-key}"
+          }
+        }
+      }
+    }
+  }
+}
