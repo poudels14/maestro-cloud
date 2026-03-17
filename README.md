@@ -43,7 +43,7 @@ Create `maestro.jsonc` in your working directory:
 ### 2. Start the cluster
 
 ```bash
-maestro start --cluster-name my-cluster --data-dir ./data
+maestro start --cluster-name my-cluster --port 8888 --data-dir ./data
 ```
 
 ### 3. Deploy services
@@ -68,22 +68,23 @@ Tailscale enables remote access to your containers from any device on your tailn
 export TS_AUTHKEY=tskey-auth-...
 maestro start \
   --cluster-name my-cluster \
+  --port 8888 \
   --data-dir ./data \
-  --enable-tailscale \
-  --nameserver-ip 172.22.0.4 # (optional) assigns a fixed IP to the DNS container so it doesn't change across restarts
+  --subnet 172.22.0.0/16 \
+  --enable-tailscale
 ```
 
 ### 2. Approve the subnet route
 
-Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines > find `maestro-my-cluster` > Edit route settings > approve the advertised subnet.
+Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines > find `maestro-tailscale-my-cluster` > Edit route settings > approve the advertised subnet.
 
-To auto-approve routes, add to your ACL policy:
+To auto-approve routes for all clusters, add to your ACL policy (Access Controls in Tailscale admin):
 
 ```json
 {
   "autoApprovers": {
     "routes": {
-      "172.22.0.0/16": ["tag:maestro"]
+      "172.16.0.0/12": ["tag:maestro"]
     }
   },
   "tagOwners": {
@@ -92,21 +93,42 @@ To auto-approve routes, add to your ACL policy:
 }
 ```
 
+`172.16.0.0/12` covers `172.16.x.x` through `172.31.x.x`, so any Docker network subnet is auto-approved. If you use a specific subnet (e.g., `--subnet 172.22.0.0/16`), you can narrow it down.
+
 Then generate an auth key tagged with `tag:maestro`.
 
 ### 3. Configure split DNS
 
 In Tailscale admin > DNS > Add nameserver > Custom:
 
-- Nameserver: the IP from maestro's log output (or your `--nameserver-ip` value)
-- Restrict to domain: `my-cluster.maestro.internal`
+- Nameserver: the `.255` IP of your subnet (e.g., `172.22.0.255` for `172.22.0.0/16`), shown in maestro's log output
+- Restrict to domain: `maestro.internal`
+
+You only need **one** split DNS entry — the DNS proxy auto-discovers peer clusters via Tailscale and forwards queries across clusters.
 
 ### 4. Access your services
 
 ```bash
-# Via container hostname
-curl http://my-app-abc123.my-cluster.maestro.internal/
-
 # Via ingress
 curl -H "Host: example.com" http://web.my-cluster.maestro.internal:8888/
+
+# Via container hostname (port 80 is the container's internal port)
+curl http://my-app-abc123.my-cluster.maestro.internal/
+
+# Cross-cluster access works automatically
+curl http://web.other-cluster.maestro.internal:8888/
 ```
+
+### Multi-cluster setup
+
+Each cluster needs its own subnet to avoid IP conflicts:
+
+```bash
+# Cluster 1
+maestro start --cluster-name cluster-1 --port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
+
+# Cluster 2
+maestro start --cluster-name cluster-2 --port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
+```
+
+Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.

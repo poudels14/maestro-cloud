@@ -11,7 +11,7 @@ pub mod types;
 pub use types::DeploymentConfig;
 
 const PROBE_IMAGE_TAG: &str = "maestro-probe";
-const DNS_IMAGE_TAG: &str = "maestro-dns";
+const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 
 pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
     let suffix = &config.cluster_name;
@@ -20,23 +20,14 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     let probe_container = format!("maestro-probe-{suffix}");
     let ingress_container = format!("maestro-ingress-{suffix}");
     let tailscale_container = format!("maestro-tailscale-{suffix}");
-    let dns_container = format!("maestro-dns-{suffix}");
     cleanup_container(&etcd_container).await;
     cleanup_container(&probe_container).await;
     cleanup_container(&ingress_container).await;
     cleanup_container(&tailscale_container).await;
-    cleanup_container(&dns_container).await;
-    ensure_docker_network(&config.network).await;
+    ensure_docker_network(&config.network, config.subnet.as_deref()).await;
     init_etcd(&etcd_container, &dns_domain, config, supervisor).await;
     if config.tailscale_authkey.is_some() {
-        init_tailnet(
-            &tailscale_container,
-            &dns_container,
-            &dns_domain,
-            config,
-            supervisor,
-        )
-        .await;
+        init_tailnet(&tailscale_container, &dns_domain, config, supervisor).await;
     }
     init_probe(
         &probe_container,
@@ -63,9 +54,16 @@ async fn cleanup_container(name: &str) {
         .await;
 }
 
-async fn ensure_docker_network(network: &str) {
+async fn ensure_docker_network(network: &str, subnet: Option<&str>) {
+    let mut args = vec!["network", "create"];
+    let subnet_flag;
+    if let Some(s) = subnet {
+        subnet_flag = format!("--subnet={s}");
+        args.push(&subnet_flag);
+    }
+    args.push(network);
     let _ = tokio::process::Command::new("docker")
-        .args(["network", "create", network])
+        .args(&args)
         .output()
         .await;
 }
@@ -100,7 +98,7 @@ async fn init_etcd(
         max_restarts: None,
         restart_delay_ms: 100,
         shutdown_grace_period_ms: 10_000,
-        logs_dir: Some(config.etcd_dir().join("logs/")),
+        logs_dir: Some(config.data_dir.join("logs/system/maestro-etcd")),
         docker_container: Some(container_name.to_string()),
     };
     await_job_running(supervisor, etcd_job_config).await;
@@ -121,6 +119,7 @@ async fn init_ingress(
     let logs_dir = config.data_dir.join("logs/system/maestro-ingress");
     std::fs::create_dir_all(&logs_dir).expect("Failed to create ingress logs dir");
 
+    let web_port = config.web_port;
     let ingress_job_config = SupervisedJobConfig {
         id: "maestro-ingress".to_string(),
         command: [
@@ -130,7 +129,7 @@ async fn init_ingress(
             &format!("--domainname {dns_domain}"),
             &format!("--network {}", config.network),
             "--network-alias web",
-            "-p 8888:8888 -p 8080:8080",
+            &format!("-p {web_port}:8888"),
             "traefik:v3.6",
             "--api.insecure=true",
             "--providers.etcd=true",
@@ -147,6 +146,7 @@ async fn init_ingress(
         docker_container: Some(container_name.to_string()),
     };
     await_job_running(supervisor, ingress_job_config).await;
+    eprintln!("[maestro]: ingress listening on http://127.0.0.1:{web_port}");
 }
 
 async fn init_probe(
@@ -168,21 +168,28 @@ async fn init_probe(
     let deployment_logs_dir = std::fs::canonicalize(config.deployment_logs_dir())
         .expect("failed to canonicalize deployment logs dir");
 
+    let port_flag = config
+        .probe_port
+        .map(|p| format!("-p {}:6400", get_unused_port(p)));
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
-        command: [
-            "exec docker run --rm",
-            &format!("--name {container_name}"),
-            "--hostname maestro-probe",
-            &format!("--domainname {dns_domain}"),
-            &format!("--network {}", config.network),
-            &format!("-p {}:6400", config.probe_port),
-            &format!("-v {}:/logs:ro", deployment_logs_dir.display()),
-            &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
-            "-e PORT=6400",
-            PROBE_IMAGE_TAG,
-        ]
-        .join(" "),
+        command: {
+            let mut args = vec![
+                "exec docker run --rm".to_string(),
+                format!("--name {container_name}"),
+                "--hostname maestro-probe".to_string(),
+                format!("--domainname {dns_domain}"),
+                format!("--network {}", config.network),
+            ];
+            if let Some(pf) = &port_flag {
+                args.push(pf.clone());
+            }
+            args.push(format!("-v {}:/logs:ro", deployment_logs_dir.display()));
+            args.push(format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"));
+            args.push("-e PORT=6400".to_string());
+            args.push(PROBE_IMAGE_TAG.to_string());
+            args.join(" ")
+        },
         name: "maestro-probe".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,
@@ -194,8 +201,7 @@ async fn init_probe(
 }
 
 async fn init_tailnet(
-    tailscale_container: &str,
-    dns_container: &str,
+    container_name: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
     supervisor: &mut JobSupervisor,
@@ -215,72 +221,49 @@ async fn init_tailnet(
 
     DockerDeploymentProvider::build(&DockerBuildConfig {
         context_dir: config.project_dir.clone(),
-        tag: DNS_IMAGE_TAG.to_string(),
-        dockerfile: Some("Dockerfile.dns".to_string()),
+        tag: TAILSCALE_IMAGE_TAG.to_string(),
+        dockerfile: Some("Dockerfile.tailscale".to_string()),
     })
     .await
-    .expect("failed to build dns image");
+    .expect("failed to build tailscale image");
 
-    let dns_logs_dir = config.data_dir.join("logs/system/maestro-dns");
-    std::fs::create_dir_all(&dns_logs_dir).expect("Failed to create dns logs dir");
-    await_job_running(
-        supervisor,
-        SupervisedJobConfig {
-            id: "maestro-dns".to_string(),
-            command: {
-                let mut args = vec![
-                    "exec docker run --rm".to_string(),
-                    format!("--name {dns_container}"),
-                    "--hostname maestro-dns".to_string(),
-                    format!("--domainname {dns_domain}"),
-                    format!("--network {}", config.network),
-                ];
-                if let Some(ip) = &config.nameserver_ip {
-                    args.push(format!("--ip {ip}"));
-                }
-                args.push(DNS_IMAGE_TAG.to_string());
-                args.push(dns_domain.to_string());
-                args.join(" ")
-            },
-            name: "maestro-dns".to_string(),
-            max_restarts: None,
-            restart_delay_ms: 1_000,
-            shutdown_grace_period_ms: 10_000,
-            logs_dir: Some(dns_logs_dir),
-            docker_container: Some(dns_container.to_string()),
-        },
-    )
-    .await;
-
-    let ts_logs_dir = config.data_dir.join("logs/system/maestro-tailscale");
-    std::fs::create_dir_all(&ts_logs_dir).expect("Failed to create tailscale logs dir");
+    let logs_dir = config.data_dir.join("logs/system/maestro-tailscale");
+    std::fs::create_dir_all(&logs_dir).expect("Failed to create tailscale logs dir");
     let state_dir = config.data_dir.join("system/tailscale/state");
     std::fs::create_dir_all(&state_dir).expect("Failed to create tailscale state dir");
     let state_dir =
         std::fs::canonicalize(&state_dir).expect("failed to canonicalize tailscale state dir");
+    let nameserver_ip = default_nameserver_ip(&network_cidr);
+
     await_job_running(
         supervisor,
         SupervisedJobConfig {
             id: "maestro-tailscale".to_string(),
-            command: [
-                "exec docker run --rm",
-                &format!("--name {tailscale_container}"),
-                "--hostname maestro-tailscale",
-                &format!("--domainname {dns_domain}"),
-                &format!("--network {}", config.network),
-                &format!("-v {}:/var/lib/tailscale", state_dir.display()),
-                &format!("-e TS_AUTHKEY={authkey}"),
-                &format!("-e TS_ROUTES={network_cidr}"),
-                "-e TS_USERSPACE=true",
-                "ghcr.io/tailscale/tailscale:latest",
-            ]
-            .join(" "),
+            command: {
+                let mut args = vec![
+                    "exec docker run --rm".to_string(),
+                    format!("--name {container_name}"),
+                    format!("--hostname maestro-tailscale-{}", config.cluster_name),
+                    format!("--domainname {dns_domain}"),
+                    format!("--network {}", config.network),
+                    format!("-v {}:/var/lib/tailscale", state_dir.display()),
+                    format!("-e TS_AUTHKEY={authkey}"),
+                    format!("-e TS_ROUTES={network_cidr}"),
+                    "-e TS_USERSPACE=true".to_string(),
+                ];
+                if let Some(ip) = &nameserver_ip {
+                    args.push(format!("--ip {ip}"));
+                }
+                args.push(TAILSCALE_IMAGE_TAG.to_string());
+                args.push(config.cluster_name.clone());
+                args.join(" ")
+            },
             name: "maestro-tailscale".to_string(),
             max_restarts: None,
             restart_delay_ms: 1_000,
             shutdown_grace_period_ms: 10_000,
-            logs_dir: Some(ts_logs_dir),
-            docker_container: Some(tailscale_container.to_string()),
+            logs_dir: Some(logs_dir),
+            docker_container: Some(container_name.to_string()),
         },
     )
     .await;
@@ -288,7 +271,7 @@ async fn init_tailnet(
     let _ = tokio::process::Command::new("docker")
         .args([
             "exec",
-            tailscale_container,
+            container_name,
             "tailscale",
             "set",
             &format!("--advertise-routes={network_cidr}"),
@@ -297,13 +280,10 @@ async fn init_tailnet(
         .await;
 
     eprintln!("[maestro]: tailscale subnet router started, advertising route {network_cidr}");
-    let nameserver_ip = config
-        .nameserver_ip
-        .clone()
-        .or(get_docker_ip(dns_container).await);
+    let nameserver_ip = nameserver_ip.or(get_docker_ip(container_name).await);
     if let Some(nameserver_ip) = &nameserver_ip {
         eprintln!(
-            "[maestro]: dns server running at {nameserver_ip}\n           configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"{dns_domain}\""
+            "[maestro]: dns server running at {nameserver_ip}\n           configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"maestro.internal\""
         );
     }
 }
@@ -351,6 +331,32 @@ async fn get_network_cidr(network: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn get_unused_port(preferred: u16) -> u16 {
+    if std::net::TcpListener::bind(("0.0.0.0", preferred)).is_ok() {
+        preferred
+    } else {
+        let listener =
+            std::net::TcpListener::bind("0.0.0.0:0").expect("failed to bind to random port");
+        listener
+            .local_addr()
+            .expect("failed to get local addr")
+            .port()
+    }
+}
+
+fn default_nameserver_ip(network_cidr: &str) -> Option<String> {
+    let base = network_cidr.split('/').next()?;
+    let mut octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
+    if octets.len() != 4 {
+        return None;
+    }
+    octets[3] = 255;
+    Some(format!(
+        "{}.{}.{}.{}",
+        octets[0], octets[1], octets[2], octets[3]
+    ))
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {
