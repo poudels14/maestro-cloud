@@ -129,6 +129,7 @@ async fn init_ingress(
             "--hostname web",
             &format!("--domainname {dns_domain}"),
             &format!("--network {}", config.network),
+            "--network-alias web",
             "-p 8888:8888 -p 8080:8080",
             "traefik:v3.6",
             "--api.insecure=true",
