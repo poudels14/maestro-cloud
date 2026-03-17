@@ -110,7 +110,7 @@ enum CliCommand {
         #[arg(
             long = "etcd-endpoint",
             env = "ETCD_ENDPOINT",
-            default_value = "http://127.0.0.1:6479",
+            default_value = "http://127.0.0.1:6401",
             help = "etcd endpoint URL"
         )]
         etcd_endpoint: String,
