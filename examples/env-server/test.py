@@ -23,8 +23,9 @@ PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
 
-def fetch_json(url, host, timeout=10):
-    req = urllib.request.Request(url, headers={"Host": host})
+def fetch_json(url, host=None, timeout=10):
+    headers = {"Host": host} if host else {}
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
@@ -60,7 +61,7 @@ def rollout(admin_host, config_path):
     result = subprocess.run(
         [
             "cargo", "run", "--release", "--",
-            "rollout", "--host", admin_host, "--config", config_path,
+            "rollout", "--host", admin_host, "--config", config_path, "--apply",
         ],
         capture_output=True,
         text=True,
@@ -125,9 +126,17 @@ def run(url, host, service_id, config_path, admin_host):
 
     # --- Test 1: Initial rollout ---
     print("\n=== Test 1: Initial rollout ===")
+    old_hostname = None
+    try:
+        old_data = fetch_json(url, host)
+        old_hostname = old_data.get("hostname")
+    except Exception:
+        pass
     rollout(admin_host, config_path)
-    time.sleep(3)
-    data = wait_for_ready(url, host)
+    if old_hostname:
+        data = wait_for_new_deployment(url, host, old_hostname)
+    else:
+        data = wait_for_ready(url, host)
     hostname1 = data["hostname"]
     print(f"  hostname: {hostname1}")
 
@@ -193,6 +202,23 @@ def run(url, host, service_id, config_path, admin_host):
     check("hostname changed", hostname5 != hostname4, True)
     check("secret DB_PASSWORD preserved after redeploy", data["secrets"].get("DB_PASSWORD"), "new-password-456")
     check("env APP_ENV preserved after redeploy", data["env"].get("APP_ENV"), "staging")
+
+    # --- Test 6: Log API ---
+    print("\n=== Test 6: Log API ===")
+
+    sys_logs_url = f"{admin_host}/api/system/maestro-probe/logs?tail=10"
+    try:
+        sys_logs = fetch_json(sys_logs_url)
+        check("system logs returns array", isinstance(sys_logs, list), True)
+        check("system logs not empty", len(sys_logs) > 0, True)
+        if sys_logs:
+            entry = sys_logs[0]
+            check("log entry has 'text'", "text" in entry, True)
+            check("log entry has 'ts'", "ts" in entry, True)
+            check("log entry has 'level'", "level" in entry, True)
+    except Exception as err:
+        print(f"  {FAIL} system logs: {err}")
+        results["fail"] += 1
 
     # --- Summary ---
     total = results["pass"] + results["fail"]

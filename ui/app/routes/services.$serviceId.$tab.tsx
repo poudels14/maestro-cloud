@@ -11,7 +11,6 @@ import {
 } from "solid-js";
 import { ArrowLeft, ChevronDown, Clock, GitCommitHorizontal, Rocket } from "lucide-solid";
 import clsx from "clsx";
-import { Select } from "@kobalte/core/select";
 import type { LogEntry, Service } from "../lib/types";
 import {
   getServices,
@@ -116,17 +115,13 @@ function ServiceSidebar(props: {
         <For each={props.services.filter((s) => !s.system)}>
           {(service) => {
             const isSelected = () => service.id === props.selected?.id;
-            const status = service.status ?? "IDLE";
             return (
               <button
                 type="button"
                 onClick={() => props.onSelect(service)}
-                class={clsx("w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors outline-none", {
-                  "bg-indigo-50 text-indigo-700 font-medium": isSelected(),
-                  "text-gray-700 hover:bg-gray-50": !isSelected()
-                })}
+                class={`w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors outline-none ${isSelected() ? "bg-indigo-50 text-indigo-700 font-medium" : "text-gray-700 hover:bg-gray-50"}`}
               >
-                <StatusDot status={status} />
+                <StatusDot status={service.status ?? "IDLE"} />
                 <span class="truncate">{service.name}</span>
               </button>
             );
@@ -136,17 +131,14 @@ function ServiceSidebar(props: {
           <div class="px-4 pt-4 pb-1">
             <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">System</span>
           </div>
-          <For each={props.services.filter((s) => s.system)}>
+          <For each={props.services.filter((s) => s.system === true)}>
             {(service) => {
               const isSelected = () => service.id === props.selected?.id;
               return (
                 <button
                   type="button"
                   onClick={() => props.onSelect(service)}
-                  class={clsx("w-full text-left px-4 py-2 flex items-center gap-2.5 text-xs transition-colors outline-none", {
-                    "bg-indigo-50 text-indigo-700 font-medium": isSelected(),
-                    "text-gray-500 hover:bg-gray-50": !isSelected()
-                  })}
+                  class={`w-full text-left px-4 py-2 flex items-center gap-2.5 text-xs transition-colors outline-none ${isSelected() ? "bg-indigo-50 text-indigo-700 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
                 >
                   <StatusDot status="SYSTEM" />
                   <span class="truncate">{service.name}</span>
@@ -196,7 +188,7 @@ function ServiceDetailPanel(props: {
             <OverviewTab service={s} />
           </Show>
           <Show when={props.tab === "deployments"}>
-            <DeploymentsTab serviceId={s.id} />
+            <DeploymentsTab serviceId={s.id} hasBuild={!!s.build} />
           </Show>
           <Show when={props.tab === "logs"}>
             <LogsTab service={s} />
@@ -219,6 +211,7 @@ function OverviewTab(props: { service: Service }) {
     s.build != null
       ? [
           { label: "Git repository", value: s.build.repo },
+          ...(s.build.branch ? [{ label: "Branch", value: s.build.branch }] : []),
           { label: "Dockerfile", value: s.build.dockerfilePath }
         ]
       : [{ label: "Image", value: s.image ?? "(not set)" }];
@@ -281,8 +274,9 @@ function OverviewTab(props: { service: Service }) {
   );
 }
 
-function DeploymentsTab(props: { serviceId: string }) {
+function DeploymentsTab(props: { serviceId: string; hasBuild: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
+  const [logsOpen, setLogsOpen] = createSignal<string | null>(null);
 
   return (
     <Suspense
@@ -302,6 +296,7 @@ function DeploymentsTab(props: { serviceId: string }) {
             {(d) => {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
               const [expanded, setExpanded] = createSignal(false);
+              const isLogsOpen = () => logsOpen() === d.id;
               const secretKeys = () =>
                 Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) =>
                   a.localeCompare(b)
@@ -314,129 +309,152 @@ function DeploymentsTab(props: { serviceId: string }) {
                 Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
               const hasDetails = () => envEntries().length > 0 || secretKeys().length > 0;
               return (
-                <div class="rounded-lg border border-gray-200 bg-white p-4 transition-colors hover:bg-gray-50/50">
-                  <div class="flex items-center justify-between gap-3 mb-2">
-                    <div class="flex items-center gap-2.5 min-w-0">
-                      <span class="text-sm font-semibold font-mono text-gray-900">#{shortId}</span>
+                <div class="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                  <div class="p-4">
+                    <div class="flex items-start justify-between gap-3 mb-1">
+                      <div class="text-sm font-semibold text-gray-900 truncate min-w-0">
+                        {d.gitCommit ? d.gitCommit.message : shortId}
+                      </div>
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        <span class="flex items-center gap-1 text-xs text-gray-400">
+                          <Clock class="size-3" />
+                          {timeAgo(d.createdAt)}
+                        </span>
+                        <DeploymentMenu
+                          status={d.status}
+                          onCancel={async () => {
+                            await cancelDeployment(props.serviceId, d.id);
+                            refetch();
+                          }}
+                          onStop={async () => {
+                            await stopDeployment(props.serviceId, d.id);
+                            refetch();
+                          }}
+                          onRedeploy={async () => {
+                            await redeployService(props.serviceId);
+                            refetch();
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                      <StatusBadge status={d.status} />
-                      <DeploymentMenu
-                        status={d.status}
-                        onCancel={async () => {
-                          await cancelDeployment(props.serviceId, d.id);
-                          refetch();
-                        }}
-                        onStop={async () => {
-                          await stopDeployment(props.serviceId, d.id);
-                          refetch();
-                        }}
-                        onRedeploy={async () => {
-                          await redeployService(props.serviceId);
-                          refetch();
-                        }}
-                      />
+                    <div class="flex items-center gap-2 mb-2 text-xs">
+                      <Show when={["TERMINATED", "REMOVED", "CANCELED", "CRASHED", "DRAINING"].includes(d.status)}>
+                        <StatusBadge status={d.status} />
+                      </Show>
+                      <span class="font-mono text-gray-400">{shortId}</span>
+                      <Show when={d.gitCommit}>
+                        <span class="text-gray-300">·</span>
+                        <GitCommitHorizontal class="size-3 text-gray-400" />
+                        <span class="font-mono text-gray-400">{d.gitCommit!.reference.slice(0, 7)}</span>
+                      </Show>
                     </div>
-                  </div>
-                  <Show when={d.replicas && d.replicas.length > 0}>
-                    <div class="flex items-center gap-2 mb-2 flex-wrap">
-                      <For each={d.replicas}>
-                        {(replica) => (
-                          <span class="inline-flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
-                            <StatusDot status={replica.status} />
-                            <span class="font-mono text-gray-600">
-                              replica {replica.replicaIndex}
+                    <Show when={d.replicas && d.replicas.length > 0 && !["TERMINATED", "REMOVED", "CANCELED", "DRAINING"].includes(d.status)}>
+                      <div class="flex items-center gap-2 mb-2 flex-wrap">
+                        <For each={d.replicas}>
+                          {(replica) => (
+                            <span class="inline-flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+                              <StatusDot status={replica.status} />
+                              <span class="font-mono text-gray-600">
+                                replica {replica.replicaIndex}
+                              </span>
+                              <span class="text-gray-400">{replica.status.toLowerCase()}</span>
                             </span>
-                            <span class="text-gray-400">{replica.status.toLowerCase()}</span>
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <Show when={changedSecrets().length > 0}>
-                    <div class="flex items-center gap-1.5 flex-wrap text-xs mb-2">
-                      <span class="text-amber-500 font-medium">secrets changed:</span>
-                      <For each={changedSecrets()}>
-                        {(key) => (
-                          <span class="inline-flex items-center bg-amber-50 border border-amber-200 text-amber-700 rounded px-1.5 py-0.5 font-mono">
-                            {key}
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <div class="flex items-center gap-3 text-xs text-gray-400">
-                    <span class="font-mono">{d.config.version.slice(0, 12)}</span>
-                    <Show when={d.gitCommit}>
-                      <span class="flex items-center gap-1">
-                        <GitCommitHorizontal class="size-3" />
-                        <span class="font-mono truncate">{d.gitCommit}</span>
-                      </span>
+                          )}
+                        </For>
+                      </div>
                     </Show>
-                    <Show when={hasDetails()}>
+                    <Show when={changedSecrets().length > 0}>
+                      <div class="flex items-center gap-1.5 flex-wrap text-xs mb-2">
+                        <span class="text-amber-500 font-medium">secrets changed:</span>
+                        <For each={changedSecrets()}>
+                          {(key) => (
+                            <span class="inline-flex items-center bg-amber-50 border border-amber-200 text-amber-700 rounded px-1.5 py-0.5 font-mono">
+                              {key}
+                            </span>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    <div class="flex items-center gap-3 text-xs text-gray-400">
+                      <span class="font-mono">{d.config.version.slice(0, 12)}</span>
+                      <Show when={hasDetails()}>
+                        <button
+                          type="button"
+                          onClick={() => setExpanded(!expanded())}
+                          class="text-xs text-indigo-500 hover:text-indigo-600 outline-none"
+                        >
+                          {expanded() ? "hide details" : "details"}
+                        </button>
+                      </Show>
                       <button
                         type="button"
-                        onClick={() => setExpanded(!expanded())}
+                        onClick={() => setLogsOpen(isLogsOpen() ? null : d.id)}
                         class="text-xs text-indigo-500 hover:text-indigo-600 outline-none"
                       >
-                        {expanded() ? "hide details" : "details"}
+                        {isLogsOpen() ? "hide logs" : "logs"}
                       </button>
-                    </Show>
-                    <span class="flex items-center gap-1 ml-auto">
-                      <Clock class="size-3" />
-                      {timeAgo(d.createdAt)}
-                    </span>
-                  </div>
-                  <Show when={expanded()}>
-                    <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
-                      <Show when={envEntries().length > 0}>
-                        <div>
-                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
-                            Environment
-                          </div>
-                          <div class="space-y-0.5">
-                            <For each={envEntries()}>
-                              {([key, value]) => (
-                                <div class="flex items-baseline gap-2 text-xs">
-                                  <span class="text-gray-500 font-mono">{key}</span>
-                                  <span class="text-gray-300">=</span>
-                                  <span class="text-gray-700 font-mono truncate">{value}</span>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </div>
-                      </Show>
-                      <Show when={secretKeys().length > 0}>
-                        <div>
-                          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
-                            Secrets
-                            <span class="normal-case ml-1 text-gray-300">
-                              ({d.config.deploy.secrets?.mountPath})
-                            </span>
-                          </div>
-                          <div class="space-y-0.5">
-                            <For each={secretKeys()}>
-                              {([key, meta]) => {
-                                const changed =
-                                  meta.prevHash != null && meta.hash !== meta.prevHash;
-                                const isNew = meta.prevHash == null;
-                                return (
+                    </div>
+                    <Show when={expanded()}>
+                      <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                        <Show when={envEntries().length > 0}>
+                          <div>
+                            <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                              Environment
+                            </div>
+                            <div class="space-y-0.5">
+                              <For each={envEntries()}>
+                                {([key, value]) => (
                                   <div class="flex items-baseline gap-2 text-xs">
                                     <span class="text-gray-500 font-mono">{key}</span>
                                     <span class="text-gray-300">=</span>
-                                    <span class="text-gray-400 font-mono">••••••••</span>
-                                    {changed && (
-                                      <span class="text-amber-500 text-[10px]">changed</span>
-                                    )}
-                                    {isNew && <span class="text-green-500 text-[10px]">new</span>}
+                                    <span class="text-gray-700 font-mono truncate">{value}</span>
                                   </div>
-                                );
-                              }}
-                            </For>
+                                )}
+                              </For>
+                            </div>
                           </div>
-                        </div>
-                      </Show>
+                        </Show>
+                        <Show when={secretKeys().length > 0}>
+                          <div>
+                            <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                              Secrets
+                              <span class="normal-case ml-1 text-gray-300">
+                                ({d.config.deploy.secrets?.mountPath})
+                              </span>
+                            </div>
+                            <div class="space-y-0.5">
+                              <For each={secretKeys()}>
+                                {([key, meta]) => {
+                                  const changed =
+                                    meta.prevHash != null && meta.hash !== meta.prevHash;
+                                  const isNew = meta.prevHash == null;
+                                  return (
+                                    <div class="flex items-baseline gap-2 text-xs">
+                                      <span class="text-gray-500 font-mono">{key}</span>
+                                      <span class="text-gray-300">=</span>
+                                      <span class="text-gray-400 font-mono">••••••••</span>
+                                      {changed && (
+                                        <span class="text-amber-500 text-[10px]">changed</span>
+                                      )}
+                                      {isNew && <span class="text-green-500 text-[10px]">new</span>}
+                                    </div>
+                                  );
+                                }}
+                              </For>
+                            </div>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                  <Show when={isLogsOpen()}>
+                    <div class="border-t border-gray-200">
+                      <DeploymentLogViewer
+                        serviceId={props.serviceId}
+                        deploymentId={d.id}
+                        isSystem={false}
+                        hasBuild={props.hasBuild}
+                      />
                     </div>
                   </Show>
                 </div>
@@ -460,9 +478,43 @@ function LogsTab(props: { service: Service }) {
     () => (isSystem ? null : props.service.id),
     (id) => getDeployments(id)
   );
-  const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const activeId = () => selectedId() ?? deployments()?.[0]?.id ?? null;
 
+  const latestDeployment = () => deployments()?.[0] ?? null;
+
+  return (
+    <Show
+      when={!isSystem && latestDeployment()}
+      fallback={
+        <Show when={isSystem}>
+          <DeploymentLogViewer
+            serviceId={props.service.id}
+            deploymentId={null}
+            isSystem={true}
+            hasBuild={false}
+          />
+        </Show>
+      }
+    >
+      {(dep) => (
+        <DeploymentLogViewer
+          serviceId={props.service.id}
+          deploymentId={dep().id}
+          isSystem={false}
+          hasBuild={!!props.service.build}
+          label={dep().id.split("-").slice(-1)[0]}
+        />
+      )}
+    </Show>
+  );
+}
+
+function DeploymentLogViewer(props: {
+  serviceId: string;
+  deploymentId: string | null;
+  isSystem: boolean;
+  hasBuild: boolean;
+  label?: string;
+}) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [hasMore, setHasMore] = createSignal(false);
@@ -470,9 +522,10 @@ function LogsTab(props: { service: Service }) {
   const [logPhase, setLogPhase] = createSignal<"deploy" | "build">("deploy");
 
   const hasBuildLogs = () => lines().some((l) => l.source?.endsWith("/build"));
+  const showTabs = () => props.hasBuild || hasBuildLogs();
   const filteredLines = () => {
     const all = lines().filter((l) => l.text.trim().length > 0);
-    if (!hasBuildLogs()) return all;
+    if (!showTabs()) return all;
     const phase = logPhase();
     return all.filter((l) => {
       if (phase === "build") return l.source?.endsWith("/build");
@@ -483,26 +536,27 @@ function LogsTab(props: { service: Service }) {
   const fetchLogs = async () => {
     const t = tail();
     let fetched: LogEntry[];
-    if (isSystem) {
-      fetched = await getSystemLogs(props.service.id, t);
+    if (props.isSystem) {
+      fetched = await getSystemLogs(props.serviceId, t);
     } else {
-      const did = activeId();
-      if (!did) return;
-      fetched = await getLogs(props.service.id, did, t);
+      if (!props.deploymentId) return;
+      fetched = await getLogs(props.serviceId, props.deploymentId, t);
     }
-
     setHasMore(fetched.length >= t);
     setLines(fetched);
     setLoading(false);
   };
 
   createEffect(
-    on(activeId, () => {
-      setLines([]);
-      setLoading(true);
-      setTail(DEFAULT_LOG_TAIL);
-      fetchLogs();
-    })
+    on(
+      () => props.deploymentId,
+      () => {
+        setLines([]);
+        setLoading(true);
+        setTail(DEFAULT_LOG_TAIL);
+        fetchLogs();
+      }
+    )
   );
 
   const pollTimer = setInterval(fetchLogs, POLL_INTERVAL_MS);
@@ -530,92 +584,49 @@ function LogsTab(props: { service: Service }) {
     const newTail = tail() + LOAD_MORE_STEP;
     setTail(newTail);
     let fetched: LogEntry[];
-    if (isSystem) {
-      fetched = await getSystemLogs(props.service.id, newTail);
+    if (props.isSystem) {
+      fetched = await getSystemLogs(props.serviceId, newTail);
     } else {
-      const did = activeId();
-      if (!did) return;
-      fetched = await getLogs(props.service.id, did, newTail);
+      if (!props.deploymentId) return;
+      fetched = await getLogs(props.serviceId, props.deploymentId, newTail);
     }
     setHasMore(fetched.length >= newTail);
     setLines(fetched);
   };
 
-  const formatTs = (ms: number) =>
-    new Date(ms).toISOString().replace("T", " ").replace("Z", "").slice(0, 19);
-
   return (
     <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div class="px-4 py-2 border-b border-gray-100 flex items-center gap-4">
-        <Show when={!isSystem}>
-          <Select
-            options={deployments() ?? []}
-            optionValue="id"
-            optionTextValue={(d) => `#${d.id.split("-").slice(-1)[0]} — ${d.status.toLowerCase()}`}
-            value={deployments()?.find((d) => d.id === activeId()) ?? null}
-            onChange={(d) => {
-              if (d) setSelectedId(d.id);
-            }}
-            itemComponent={(itemProps) => {
-              const d = itemProps.item.rawValue;
-              const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
-              return (
-                <Select.Item
-                  item={itemProps.item}
-                  class="text-xs px-3 py-1.5 cursor-pointer outline-none rounded data-[highlighted]:bg-indigo-50 data-[highlighted]:text-indigo-700 text-gray-700"
-                >
-                  <Select.ItemLabel>
-                    #{shortId} — {d.status.toLowerCase()}
-                  </Select.ItemLabel>
-                </Select.Item>
-              );
-            }}
-          >
-            <Select.Trigger class="inline-flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 outline-none hover:border-gray-300 transition-colors">
-              <Select.Value<typeof import("../lib/types").Deployment>>
-                {(state) => {
-                  const d = state.selectedOption();
-                  if (!d) return "Select deployment";
-                  const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
-                  return `#${shortId} — ${d.status.toLowerCase()}`;
-                }}
-              </Select.Value>
-              <Select.Icon>
-                <ChevronDown class="size-3 text-gray-400" />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 overflow-hidden">
-                <Select.Listbox class="max-h-48 overflow-y-auto outline-none" />
-              </Select.Content>
-            </Select.Portal>
-          </Select>
-        </Show>
-        <Show when={hasBuildLogs()}>
-          <div class="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setLogPhase("build")}
-              class={clsx("text-xs font-medium outline-none pb-0.5 border-b-2", {
-                "text-indigo-600 border-indigo-600": logPhase() === "build",
-                "text-gray-400 border-transparent hover:text-gray-600": logPhase() !== "build"
-              })}
-            >
-              Build
-            </button>
-            <button
-              type="button"
-              onClick={() => setLogPhase("deploy")}
-              class={clsx("text-xs font-medium outline-none pb-0.5 border-b-2", {
-                "text-indigo-600 border-indigo-600": logPhase() === "deploy",
-                "text-gray-400 border-transparent hover:text-gray-600": logPhase() !== "deploy"
-              })}
-            >
-              Deploy
-            </button>
-          </div>
-        </Show>
-      </div>
+      <Show when={showTabs() || props.label}>
+        <div class="px-4 py-2.5 border-b border-gray-100 flex items-center gap-4">
+          <Show when={props.label}>
+            <span class="text-xs text-gray-500 font-medium">{props.label}</span>
+          </Show>
+          <Show when={showTabs()}>
+            <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
+              <button
+                type="button"
+                onClick={() => setLogPhase("build")}
+                class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
+                  "bg-white text-gray-900 shadow-sm font-medium": logPhase() === "build",
+                  "text-gray-500 hover:text-gray-700": logPhase() !== "build"
+                })}
+              >
+                Build
+              </button>
+              <button
+                type="button"
+                onClick={() => setLogPhase("deploy")}
+                class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
+                  "bg-white text-gray-900 shadow-sm font-medium": logPhase() === "deploy",
+                  "text-gray-500 hover:text-gray-700": logPhase() !== "deploy"
+                })}
+              >
+                Deploy
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -666,6 +677,10 @@ function LogsTab(props: { service: Service }) {
       </div>
     </div>
   );
+}
+
+function formatTs(ms: number) {
+  return new Date(ms).toISOString().replace("T", " ").replace("Z", "").slice(0, 19);
 }
 
 function ConfigSection(props: { title: string; items: { label: string; value: string }[] }) {
