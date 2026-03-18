@@ -1,6 +1,5 @@
 mod healthcheck;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +15,6 @@ use crate::signal::ShutdownEvent;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
-const LOGS_DIR: &str = "/logs";
-
 pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     eprintln!("starting probe etcd={etcd_endpoint} port={port}");
 
@@ -31,7 +28,11 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownEvent>(4);
 
-    let server = server::Server::new(store.clone(), PathBuf::from(LOGS_DIR));
+    let log_store = Arc::new(
+        crate::logs::LogStore::open(std::path::Path::new("/data/logs.db"))
+            .expect("failed to open probe log store"),
+    );
+    let server = server::Server::new(store.clone(), Some(log_store));
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
     let server_shutdown_tx = shutdown_tx.clone();

@@ -1,4 +1,5 @@
 use crate::deployment::provider::{DockerBuildConfig, DockerDeploymentProvider};
+use crate::logs::{LogConfig, LogEntry};
 use crate::supervisor::{SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor};
 
 pub mod controller;
@@ -14,7 +15,11 @@ const PROBE_IMAGE_TAG: &str = "maestro-probe";
 const ADMIN_IMAGE_TAG: &str = "maestro-admin";
 const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 
-pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSupervisor) {
+pub async fn start_system_jobs(
+    config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
+    supervisor: &mut JobSupervisor,
+) {
     let secrets_dir = config.data_dir.join("secrets");
     if secrets_dir.exists() {
         let _ = std::fs::remove_dir_all(&secrets_dir);
@@ -33,23 +38,32 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
     cleanup_container(&admin_container).await;
     cleanup_container(&tailscale_container).await;
     ensure_docker_network(&config.network, config.subnet.as_deref()).await;
-    init_etcd(&etcd_container, &dns_domain, config, supervisor).await;
+    init_etcd(&etcd_container, &dns_domain, config, log_sender, supervisor).await;
     if config.tailscale_authkey.is_some() {
-        init_tailnet(&tailscale_container, &dns_domain, config, supervisor).await;
+        init_tailnet(
+            &tailscale_container,
+            &dns_domain,
+            config,
+            log_sender,
+            supervisor,
+        )
+        .await;
     }
-    init_probe(
-        &probe_container,
-        &etcd_container,
-        &dns_domain,
-        config,
-        supervisor,
-    )
-    .await;
     init_ingress(
         &ingress_container,
         &etcd_container,
         &dns_domain,
         config,
+        log_sender,
+        supervisor,
+    )
+    .await;
+    init_probe(
+        &probe_container,
+        &etcd_container,
+        &dns_domain,
+        config,
+        log_sender,
         supervisor,
     )
     .await;
@@ -58,6 +72,7 @@ pub async fn start_system_jobs(config: &DeploymentConfig, supervisor: &mut JobSu
         &probe_container,
         &dns_domain,
         config,
+        log_sender,
         supervisor,
     )
     .await;
@@ -88,6 +103,7 @@ async fn init_etcd(
     container_name: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
     let etcd_data_dir = config.etcd_dir().join("data");
@@ -105,18 +121,24 @@ async fn init_etcd(
             &format!("-p {}:2379", config.etcd_port),
             &format!("-v {}:/data", etcd_data_path.display()),
             "quay.io/coreos/etcd:v3.6.8 etcd",
+            &format!("--name=maestro-{}", config.cluster_name),
             "--data-dir=/data",
             "--listen-client-urls=http://0.0.0.0:2379",
             "--advertise-client-urls=http://127.0.0.1:6479",
+            "--listen-client-http-urls=",
         ]
         .join(" "),
         name: "maestro-etcd".to_string(),
         max_restarts: None,
         restart_delay_ms: 100,
         shutdown_grace_period_ms: 10_000,
-        logs_dir: Some(config.data_dir.join("logs/system/maestro-etcd")),
         docker_container: Some(container_name.to_string()),
         secrets_mount: None,
+        log_config: Some(LogConfig {
+            sender: log_sender.clone(),
+            tags: Default::default(),
+            system: true,
+        }),
     };
     await_job_running(supervisor, etcd_job_config).await;
 }
@@ -126,15 +148,13 @@ async fn init_ingress(
     etcd_container: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
     let endpoint = format!("http://127.0.0.1:{}", config.etcd_port);
     if let Ok(mut client) = etcd_client::Client::connect([&endpoint], None).await {
         let _ = client.put("traefik", "", None).await;
     }
-
-    let logs_dir = config.data_dir.join("logs/system/maestro-ingress");
-    std::fs::create_dir_all(&logs_dir).expect("Failed to create ingress logs dir");
 
     let web_port = config.web_port;
     let ingress_job_config = SupervisedJobConfig {
@@ -148,7 +168,6 @@ async fn init_ingress(
             "--network-alias web",
             &format!("-p {web_port}:8888"),
             "traefik:v3.6",
-            "--api.insecure=true",
             "--providers.etcd=true",
             "--providers.etcd.rootKey=traefik",
             &format!("--providers.etcd.endpoints={etcd_container}:2379"),
@@ -159,9 +178,13 @@ async fn init_ingress(
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 10_000,
-        logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
         secrets_mount: None,
+        log_config: Some(LogConfig {
+            sender: log_sender.clone(),
+            tags: Default::default(),
+            system: true,
+        }),
     };
     await_job_running(supervisor, ingress_job_config).await;
     eprintln!("[maestro]: ingress listening on http://127.0.0.1:{web_port}");
@@ -172,6 +195,7 @@ async fn init_admin(
     probe_container: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
     DockerDeploymentProvider::build(&DockerBuildConfig {
@@ -181,9 +205,6 @@ async fn init_admin(
     })
     .await
     .expect("failed to build admin-ui image");
-
-    let logs_dir = config.data_dir.join("logs/system/maestro-admin");
-    std::fs::create_dir_all(&logs_dir).expect("Failed to create admin-ui logs dir");
 
     let port_flag = config
         .probe_port
@@ -209,9 +230,13 @@ async fn init_admin(
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 10_000,
-        logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
         secrets_mount: None,
+        log_config: Some(LogConfig {
+            sender: log_sender.clone(),
+            tags: Default::default(),
+            system: true,
+        }),
     };
     await_job_running(supervisor, admin_job_config).await;
     if let Some(port) = config.probe_port {
@@ -225,6 +250,7 @@ async fn init_probe(
     etcd_container: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
     DockerDeploymentProvider::build(&DockerBuildConfig {
@@ -234,17 +260,16 @@ async fn init_probe(
     })
     .await
     .expect("failed to build probe image");
-    let logs_dir = config.data_dir.join("logs/system/maestro-probe");
-    std::fs::create_dir_all(&logs_dir).expect("Failed to create probe logs dir");
-    let deployment_logs_dir = std::fs::canonicalize(config.deployment_logs_dir())
-        .expect("failed to canonicalize deployment logs dir");
-
-    let secret_key_dir = config.data_dir.join("system/probe");
-    std::fs::create_dir_all(&secret_key_dir).expect("Failed to create probe secrets dir");
-    let secret_key_path = secret_key_dir.join("secret-key");
-    let secret_key_abs = std::fs::canonicalize(&secret_key_dir)
-        .expect("failed to canonicalize probe secrets dir")
+    let probe_dir = config.probe_dir();
+    let probe_data_dir = probe_dir.join("data");
+    std::fs::create_dir_all(&probe_data_dir).expect("Failed to create probe data dir");
+    let probe_data_abs =
+        std::fs::canonicalize(&probe_data_dir).expect("failed to canonicalize probe data dir");
+    let secret_key_path = probe_dir.join("secret-key");
+    let secret_key_abs = std::fs::canonicalize(&probe_dir)
+        .expect("failed to canonicalize probe dir")
         .join("secret-key");
+    let probe_host_port = config.probe_port.expect("probe_port should be resolved");
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: [
@@ -253,7 +278,8 @@ async fn init_probe(
             "--hostname maestro-probe",
             &format!("--domainname {dns_domain}"),
             &format!("--network {}", config.network),
-            &format!("-v {}:/logs:ro", deployment_logs_dir.display()),
+            &format!("-p {probe_host_port}:3001"),
+            &format!("-v {}:/data", probe_data_abs.display()),
             &format!("-v {}:/run/secrets/secret-key:ro", secret_key_abs.display()),
             &format!("-e ETCD_ENDPOINT=http://{etcd_container}:2379"),
             "-e MAESTRO_SECRET_KEY_FILE=/run/secrets/secret-key",
@@ -265,12 +291,16 @@ async fn init_probe(
         max_restarts: None,
         restart_delay_ms: 1_000,
         shutdown_grace_period_ms: 60_000,
-        logs_dir: Some(logs_dir),
         docker_container: Some(container_name.to_string()),
         secrets_mount: Some(crate::supervisor::SecretsMount {
             host_path: secret_key_path,
             container_path: "/run/secrets/secret-key".to_string(),
             content: config.secret_key.as_str().to_string(),
+        }),
+        log_config: Some(LogConfig {
+            sender: log_sender.clone(),
+            tags: Default::default(),
+            system: true,
         }),
     };
     await_job_running(supervisor, probe_job_config).await;
@@ -280,6 +310,7 @@ async fn init_tailnet(
     container_name: &str,
     dns_domain: &str,
     config: &DeploymentConfig,
+    log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
     let Some(authkey) = &config.tailscale_authkey else {
@@ -303,8 +334,6 @@ async fn init_tailnet(
     .await
     .expect("failed to build tailscale image");
 
-    let logs_dir = config.data_dir.join("logs/system/maestro-tailscale");
-    std::fs::create_dir_all(&logs_dir).expect("Failed to create tailscale logs dir");
     let state_dir = config.data_dir.join("system/tailscale/state");
     std::fs::create_dir_all(&state_dir).expect("Failed to create tailscale state dir");
     let state_dir =
@@ -338,9 +367,13 @@ async fn init_tailnet(
             max_restarts: None,
             restart_delay_ms: 1_000,
             shutdown_grace_period_ms: 10_000,
-            logs_dir: Some(logs_dir),
             docker_container: Some(container_name.to_string()),
             secrets_mount: None,
+            log_config: Some(LogConfig {
+                sender: log_sender.clone(),
+                tags: Default::default(),
+                system: true,
+            }),
         },
     )
     .await;
