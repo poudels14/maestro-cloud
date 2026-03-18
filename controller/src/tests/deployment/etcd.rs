@@ -115,7 +115,10 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
     let deployment = deployment_with_source(
         Some(ServiceBuildConfig {
             repo: "https://example.com/repo.git".to_string(),
+            branch: None,
             dockerfile_path: "Dockerfile".to_string(),
+            watch: false,
+            env: Default::default(),
         }),
         None,
         Some(Command {

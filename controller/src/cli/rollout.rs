@@ -53,7 +53,7 @@ struct PatchServiceResponse {
     version: String,
 }
 
-pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
+pub async fn run_rollout(config_path: &Path, host: &str, apply: bool) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             Error::not_found(format!("{} does not exist", config_path.display()))
@@ -70,10 +70,30 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
         )));
     }
 
-    let rollout_url = rollout_endpoint(host)?;
-    println!("[maestro]: rolling out services via {rollout_url}");
-
+    let base_url = normalize_base_url(host)?;
     let client = reqwest::Client::new();
+
+    if !apply {
+        let diff_url = format!("{base_url}/api/services/rollout/diff");
+        let mut has_changes = false;
+
+        for (service_id, service_template) in &cluster.services {
+            let payload = service_payload(service_id, service_template)?;
+            let diff = call_diff_endpoint(&client, &diff_url, &payload, service_id).await?;
+            print_diff(&diff);
+            if !matches!(diff.status.as_str(), "unchanged") {
+                has_changes = true;
+            }
+        }
+
+        if has_changes {
+            println!("\nrun with --apply to deploy these changes");
+        }
+        return Ok(());
+    }
+
+    let rollout_url = format!("{base_url}/api/services/rollout");
+    println!("[maestro]: rolling out services");
 
     for (service_id, service_template) in &cluster.services {
         let payload = service_payload(service_id, service_template)?;
@@ -98,6 +118,88 @@ pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffResponse {
+    service_id: String,
+    status: String,
+    #[serde(default)]
+    changes: Vec<DiffChange>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffChange {
+    field: String,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+async fn call_diff_endpoint(
+    client: &reqwest::Client,
+    endpoint: &str,
+    payload: &PatchServiceRequest,
+    service_id: &str,
+) -> Result<DiffResponse> {
+    let response = client
+        .post(endpoint)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|err| {
+            Error::external(format!(
+                "failed to call diff endpoint for service `{service_id}`: {err}"
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::external(format!(
+            "diff failed for service `{service_id}` with status {status}: {body}"
+        )));
+    }
+
+    let diffs: Vec<DiffResponse> = response.json().await.map_err(|err| {
+        Error::external(format!(
+            "failed to decode diff response for service `{service_id}`: {err}"
+        ))
+    })?;
+
+    diffs
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::external(format!("empty diff response for service `{service_id}`")))
+}
+
+fn print_diff(diff: &DiffResponse) {
+    match diff.status.as_str() {
+        "new" => {
+            println!("\n  + {} (new service)", diff.service_id);
+        }
+        "unchanged" => {
+            println!("\n  = {} (no changes)", diff.service_id);
+        }
+        _ => {
+            println!("\n  ~ {} (changed)", diff.service_id);
+            for change in &diff.changes {
+                match (&change.from, &change.to) {
+                    (None, Some(to)) => {
+                        println!("    + {}: {to}", change.field);
+                    }
+                    (Some(from), None) => {
+                        println!("    - {}: {from}", change.field);
+                    }
+                    (Some(from), Some(to)) => {
+                        println!("    ~ {}: {from} -> {to}", change.field);
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+    }
 }
 
 async fn call_rollout_endpoint(
@@ -157,13 +259,6 @@ fn normalize_base_url(host: &str) -> Result<String> {
     Ok(base.trim_end_matches('/').to_string())
 }
 
-fn rollout_endpoint(host: &str) -> Result<String> {
-    Ok(format!(
-        "{}/api/services/rollout",
-        normalize_base_url(host)?
-    ))
-}
-
 fn service_payload(
     service_id: &str,
     service_template: &ServiceTemplate,
@@ -207,6 +302,20 @@ fn service_payload(
         }
         secrets.items = resolved_items;
     }
+
+    let build = if let Some(mut build) = build {
+        let mut resolved_build_env = std::collections::HashMap::new();
+        for (key, value) in &build.env {
+            let resolved = expand_env_value(value).map_err(|err| {
+                Error::invalid_config(format!("service `{service_id}` build.env `{key}`: {err}"))
+            })?;
+            resolved_build_env.insert(key.clone(), resolved);
+        }
+        build.env = resolved_build_env;
+        Some(build)
+    } else {
+        None
+    };
 
     Ok(PatchServiceRequest {
         id: id.to_string(),

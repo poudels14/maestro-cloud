@@ -64,4 +64,5 @@ export interface LogEntry {
   stream: "stdout" | "stderr";
   text: string;
   hostname?: string;
+  source?: string;
 }

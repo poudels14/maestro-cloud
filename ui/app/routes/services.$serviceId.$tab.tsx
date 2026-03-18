@@ -10,6 +10,7 @@ import {
   onCleanup
 } from "solid-js";
 import { ArrowLeft, ChevronDown, Clock, GitCommitHorizontal, Rocket } from "lucide-solid";
+import clsx from "clsx";
 import { Select } from "@kobalte/core/select";
 import type { LogEntry, Service } from "../lib/types";
 import {
@@ -112,20 +113,18 @@ function ServiceSidebar(props: {
         <span class="text-xs text-gray-400">{props.services.length}</span>
       </div>
       <div class="flex-1 overflow-y-auto py-1">
-        <For each={props.services}>
+        <For each={props.services.filter((s) => !s.system)}>
           {(service) => {
             const isSelected = () => service.id === props.selected?.id;
-            const isSystem = service.system === true;
-            const status = isSystem ? "SYSTEM" : (service.status ?? "IDLE");
+            const status = service.status ?? "IDLE";
             return (
               <button
                 type="button"
                 onClick={() => props.onSelect(service)}
-                class={`w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors outline-none ${
-                  isSelected()
-                    ? "bg-indigo-50 text-indigo-700 font-medium"
-                    : "text-gray-700 hover:bg-gray-50"
-                }`}
+                class={clsx("w-full text-left px-4 py-2.5 flex items-center gap-2.5 text-sm transition-colors outline-none", {
+                  "bg-indigo-50 text-indigo-700 font-medium": isSelected(),
+                  "text-gray-700 hover:bg-gray-50": !isSelected()
+                })}
               >
                 <StatusDot status={status} />
                 <span class="truncate">{service.name}</span>
@@ -133,6 +132,29 @@ function ServiceSidebar(props: {
             );
           }}
         </For>
+        <Show when={props.services.some((s) => s.system)}>
+          <div class="px-4 pt-4 pb-1">
+            <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">System</span>
+          </div>
+          <For each={props.services.filter((s) => s.system)}>
+            {(service) => {
+              const isSelected = () => service.id === props.selected?.id;
+              return (
+                <button
+                  type="button"
+                  onClick={() => props.onSelect(service)}
+                  class={clsx("w-full text-left px-4 py-2 flex items-center gap-2.5 text-xs transition-colors outline-none", {
+                    "bg-indigo-50 text-indigo-700 font-medium": isSelected(),
+                    "text-gray-500 hover:bg-gray-50": !isSelected()
+                  })}
+                >
+                  <StatusDot status="SYSTEM" />
+                  <span class="truncate">{service.name}</span>
+                </button>
+              );
+            }}
+          </For>
+        </Show>
       </div>
     </div>
   );
@@ -445,6 +467,18 @@ function LogsTab(props: { service: Service }) {
   const [loading, setLoading] = createSignal(true);
   const [hasMore, setHasMore] = createSignal(false);
   const [tail, setTail] = createSignal(DEFAULT_LOG_TAIL);
+  const [logPhase, setLogPhase] = createSignal<"deploy" | "build">("deploy");
+
+  const hasBuildLogs = () => lines().some((l) => l.source?.endsWith("/build"));
+  const filteredLines = () => {
+    const all = lines().filter((l) => l.text.trim().length > 0);
+    if (!hasBuildLogs()) return all;
+    const phase = logPhase();
+    return all.filter((l) => {
+      if (phase === "build") return l.source?.endsWith("/build");
+      return !l.source?.endsWith("/build");
+    });
+  };
 
   const fetchLogs = async () => {
     const t = tail();
@@ -478,7 +512,7 @@ function LogsTab(props: { service: Service }) {
   let wasAtBottom = true;
 
   createEffect(
-    on(lines, () => {
+    on(filteredLines, () => {
       if (wasAtBottom && scrollRef) {
         requestAnimationFrame(() => {
           scrollRef!.scrollTop = scrollRef!.scrollHeight;
@@ -512,8 +546,8 @@ function LogsTab(props: { service: Service }) {
 
   return (
     <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <Show when={!isSystem}>
-        <div class="px-4 py-2 border-b border-gray-100">
+      <div class="px-4 py-2 border-b border-gray-100 flex items-center gap-4">
+        <Show when={!isSystem}>
           <Select
             options={deployments() ?? []}
             optionValue="id"
@@ -556,15 +590,39 @@ function LogsTab(props: { service: Service }) {
               </Select.Content>
             </Select.Portal>
           </Select>
-        </div>
-      </Show>
+        </Show>
+        <Show when={hasBuildLogs()}>
+          <div class="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setLogPhase("build")}
+              class={clsx("text-xs font-medium outline-none pb-0.5 border-b-2", {
+                "text-indigo-600 border-indigo-600": logPhase() === "build",
+                "text-gray-400 border-transparent hover:text-gray-600": logPhase() !== "build"
+              })}
+            >
+              Build
+            </button>
+            <button
+              type="button"
+              onClick={() => setLogPhase("deploy")}
+              class={clsx("text-xs font-medium outline-none pb-0.5 border-b-2", {
+                "text-indigo-600 border-indigo-600": logPhase() === "deploy",
+                "text-gray-400 border-transparent hover:text-gray-600": logPhase() !== "deploy"
+              })}
+            >
+              Deploy
+            </button>
+          </div>
+        </Show>
+      </div>
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        class="p-4 font-mono text-xs leading-6 max-h-[600px] overflow-y-auto"
+        class="p-4 font-mono text-xs leading-6 max-h-[600px] overflow-x-auto overflow-y-auto"
       >
         <Show
-          when={!loading() && lines().length > 0}
+          when={!loading() && filteredLines().length > 0}
           fallback={
             <div class="text-gray-400 text-center py-8">
               {loading() ? "Loading logs…" : "No logs available."}
@@ -582,39 +640,27 @@ function LogsTab(props: { service: Service }) {
               </button>
             </div>
           </Show>
-          <For each={lines()}>
-            {(line) => {
-              const levelColor = () => {
-                switch (line.level) {
-                  case "error":
-                    return "text-red-500";
-                  case "warn":
-                    return "text-amber-500";
-                  case "debug":
-                    return "text-gray-400";
-                  case "trace":
-                    return "text-gray-300";
-                  default:
-                    return "text-blue-400";
-                }
-              };
-              return (
-                <div class="flex gap-3">
-                  <span class="text-gray-400 select-none shrink-0 whitespace-nowrap">
-                    {formatTs(line.ts)}
+          <For each={filteredLines()}>
+            {(line) => (
+              <div class="flex gap-3 whitespace-nowrap">
+                <span class="text-gray-400 select-none shrink-0">{formatTs(line.ts)}</span>
+                <Show when={line.hostname}>
+                  <span class="text-violet-400 shrink-0 truncate max-w-48" title={line.hostname}>
+                    {line.hostname}
                   </span>
-                  <Show when={line.hostname}>
-                    <span class="text-violet-400 shrink-0 whitespace-nowrap truncate max-w-32">
-                      {line.hostname}
-                    </span>
-                  </Show>
-                  <span class={`w-10 shrink-0 whitespace-nowrap uppercase ${levelColor()}`}>
-                    {line.level}
-                  </span>
-                  <span class="text-gray-700 break-words">{line.text}</span>
-                </div>
-              );
-            }}
+                </Show>
+                <span class={clsx("w-12 shrink-0 uppercase text-right", {
+                  "text-red-500": line.level === "error",
+                  "text-amber-500": line.level === "warn",
+                  "text-gray-400": line.level === "debug",
+                  "text-gray-300": line.level === "trace",
+                  "text-blue-400": line.level !== "error" && line.level !== "warn" && line.level !== "debug" && line.level !== "trace"
+                })}>
+                  {line.level}
+                </span>
+                <span class="text-gray-700">{line.text}</span>
+              </div>
+            )}
           </For>
         </Show>
       </div>

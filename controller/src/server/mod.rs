@@ -14,13 +14,13 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use self::types::{
-    CancelDeploymentResponse, RemoveDeploymentResponse, RolloutServiceRequest,
-    RolloutServiceResponse, ServiceListItem,
+    CancelDeploymentResponse, RemoveDeploymentResponse, RolloutChange, RolloutDiffResponse,
+    RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, ServiceProvider,
+    CancelDeploymentOutcome, Deployment, SecretsConfig, ServiceBuildConfig, ServiceConfig,
+    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
 };
 use crate::signal::ShutdownEvent;
 
@@ -30,9 +30,10 @@ const DEFAULT_LOG_LIMIT: usize = 1000;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
-    ("maestro-ingress", "Ingress", "traefik:v3.6"),
-    ("maestro-probe", "Probe", "maestro-probe"),
-    ("maestro-admin", "Admin", "maestro-admin"),
+    ("maestro-ingress", "ingress", "traefik:v3.6"),
+    ("maestro-probe", "probe", "maestro-probe"),
+    ("maestro-admin", "admin", "maestro-admin"),
+    ("maestro-tailscale", "tailscale", "maestro-tailscale"),
 ];
 
 #[derive(Clone)]
@@ -60,6 +61,7 @@ impl Server {
             .route("/_healthy", get(Self::healthy))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout", post(Self::rollout_service))
+            .route("/api/services/rollout/diff", post(Self::rollout_diff))
             .route(
                 "/api/services/{serviceId}/deployments",
                 get(Self::list_deployments),
@@ -75,6 +77,10 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/redeploy",
                 post(Self::redeploy_service),
+            )
+            .route(
+                "/api/services/{serviceId}/deployments/{deploymentId}",
+                delete(Self::delete_deployment),
             )
             .route("/api/services/{serviceId}", delete(Self::delete_service))
             .route(
@@ -174,6 +180,24 @@ impl Server {
         };
 
         Ok(Json(response))
+    }
+
+    async fn rollout_diff(
+        State(state): State<AppState>,
+        Json(request): Json<RolloutServiceRequest>,
+    ) -> Result<Json<Vec<RolloutDiffResponse>>, (StatusCode, String)> {
+        let service_config = build_service_config(request).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid rollout request payload: {err}"),
+            )
+        })?;
+
+        let diff = compute_rollout_diff(state.store.as_ref(), &service_config)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(vec![diff]))
     }
 
     async fn list_services(
@@ -426,6 +450,42 @@ impl Server {
         }
     }
 
+    async fn delete_deployment(
+        Path((service_id, deployment_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        let deployment_id = deployment_id.trim().to_string();
+        validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        if deployment_id.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "deploymentId cannot be empty".to_string(),
+            ));
+        }
+
+        let deployment = crate::deployment::types::Deployment {
+            service_id: service_id.clone(),
+            id: deployment_id.clone(),
+            replica_index: 0,
+        };
+        let result = state
+            .store
+            .delete_deployment(&deployment)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        if result.is_none() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("deployment `{deployment_id}` was not found for service `{service_id}`"),
+            ));
+        }
+
+        Ok(StatusCode::NO_CONTENT)
+    }
+
     async fn get_deployment_logs(
         Path((service_id, deployment_id)): Path<(String, String)>,
         Query(query): Query<LogsQuery>,
@@ -640,7 +700,10 @@ fn validate_build_config(
             Ok((
                 Some(ServiceBuildConfig {
                     repo,
+                    branch: build.branch,
                     dockerfile_path,
+                    watch: build.watch,
+                    env: build.env,
                 }),
                 None,
             ))
@@ -715,6 +778,190 @@ fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String>
         ));
     }
     Ok(())
+}
+
+async fn compute_rollout_diff(
+    store: &dyn ClusterStore,
+    new_config: &ServiceConfig,
+) -> Result<RolloutDiffResponse, String> {
+    let existing = store
+        .read_service_info(&new_config.id)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let Some(existing) = existing else {
+        return Ok(RolloutDiffResponse {
+            service_id: new_config.id.clone(),
+            status: RolloutDiffStatus::New,
+            changes: Vec::new(),
+        });
+    };
+
+    let old = &existing.config;
+    let mut changes = Vec::new();
+
+    if old.image != new_config.image {
+        changes.push(RolloutChange {
+            field: "image".into(),
+            from: old.image.clone(),
+            to: new_config.image.clone(),
+        });
+    }
+
+    if old.build != new_config.build {
+        changes.push(RolloutChange {
+            field: "build".into(),
+            from: old
+                .build
+                .as_ref()
+                .map(|b| format!("{}:{}", b.repo, b.dockerfile_path)),
+            to: new_config
+                .build
+                .as_ref()
+                .map(|b| format!("{}:{}", b.repo, b.dockerfile_path)),
+        });
+    }
+
+    if old.ingress != new_config.ingress {
+        changes.push(RolloutChange {
+            field: "ingress".into(),
+            from: old.ingress.as_ref().map(|i| i.host.clone()),
+            to: new_config.ingress.as_ref().map(|i| i.host.clone()),
+        });
+    }
+
+    if old.deploy.replicas != new_config.deploy.replicas {
+        changes.push(RolloutChange {
+            field: "replicas".into(),
+            from: Some(old.deploy.replicas.to_string()),
+            to: Some(new_config.deploy.replicas.to_string()),
+        });
+    }
+
+    if old.deploy.healthcheck_path != new_config.deploy.healthcheck_path {
+        changes.push(RolloutChange {
+            field: "healthcheckPath".into(),
+            from: old.deploy.healthcheck_path.clone(),
+            to: new_config.deploy.healthcheck_path.clone(),
+        });
+    }
+
+    if old.deploy.command != new_config.deploy.command {
+        changes.push(RolloutChange {
+            field: "command".into(),
+            from: old.deploy.command.as_ref().map(|c| c.command.clone()),
+            to: new_config
+                .deploy
+                .command
+                .as_ref()
+                .map(|c| c.command.clone()),
+        });
+    }
+
+    for (key, new_val) in &new_config.deploy.env {
+        if let Some(old_val) = old.deploy.env.get(key) {
+            if old_val != new_val {
+                changes.push(RolloutChange {
+                    field: format!("env.{key}"),
+                    from: Some(old_val.clone()),
+                    to: Some(new_val.clone()),
+                });
+            }
+        } else {
+            changes.push(RolloutChange {
+                field: format!("env.{key}"),
+                from: None,
+                to: Some(new_val.clone()),
+            });
+        }
+    }
+    for key in old.deploy.env.keys() {
+        if !new_config.deploy.env.contains_key(key) {
+            changes.push(RolloutChange {
+                field: format!("env.{key}"),
+                from: Some(old.deploy.env[key].clone()),
+                to: None,
+            });
+        }
+    }
+
+    diff_secrets(
+        &old.deploy.secrets,
+        &new_config.deploy.secrets,
+        &mut changes,
+    );
+
+    let status = if changes.is_empty() {
+        RolloutDiffStatus::Unchanged
+    } else {
+        RolloutDiffStatus::Changed
+    };
+
+    Ok(RolloutDiffResponse {
+        service_id: new_config.id.clone(),
+        status,
+        changes,
+    })
+}
+
+fn diff_secrets(
+    old: &Option<SecretsConfig>,
+    new: &Option<SecretsConfig>,
+    changes: &mut Vec<RolloutChange>,
+) {
+    let old_keys = old.as_ref().map(|s| &s.keys);
+    let new_items = new.as_ref().map(|s| &s.items);
+
+    match (old_keys, new_items) {
+        (None, None) => {}
+        (None, Some(new_items)) => {
+            for key in new_items.keys() {
+                changes.push(RolloutChange {
+                    field: format!("secret.{key}"),
+                    from: None,
+                    to: Some("(set)".into()),
+                });
+            }
+        }
+        (Some(old_keys), None) => {
+            for key in old_keys.keys() {
+                changes.push(RolloutChange {
+                    field: format!("secret.{key}"),
+                    from: Some("(set)".into()),
+                    to: None,
+                });
+            }
+        }
+        (Some(old_keys), Some(new_items)) => {
+            for (key, new_val) in new_items {
+                let new_hash = SecretsConfig::compute_value_hash(new_val);
+                if let Some(meta) = old_keys.get(key) {
+                    if meta.hash != new_hash {
+                        changes.push(RolloutChange {
+                            field: format!("secret.{key}"),
+                            from: Some("(changed)".into()),
+                            to: Some("(changed)".into()),
+                        });
+                    }
+                } else {
+                    changes.push(RolloutChange {
+                        field: format!("secret.{key}"),
+                        from: None,
+                        to: Some("(set)".into()),
+                    });
+                }
+            }
+            for key in old_keys.keys() {
+                if !new_items.contains_key(key) {
+                    changes.push(RolloutChange {
+                        field: format!("secret.{key}"),
+                        from: Some("(set)".into()),
+                        to: None,
+                    });
+                }
+            }
+        }
+    }
 }
 
 async fn log_http(request: Request<Body>, next: Next) -> Response {
