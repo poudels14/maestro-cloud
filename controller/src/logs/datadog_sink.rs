@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::sink::LogSink;
-use super::store::LogEntry;
+use super::store::{LogEntry, LogOrigin};
 
 pub struct DatadogSink {
     api_key: String,
@@ -51,7 +51,10 @@ impl LogSink for DatadogSink {
     async fn send(&self, entries: &[LogEntry]) -> Result<()> {
         let dd_entries: Vec<DatadogLogEntry> = entries
             .iter()
-            .filter(|entry| self.include_system_logs || !entry.system)
+            .filter(|entry| {
+                entry.origin == LogOrigin::Service
+                    || (self.include_system_logs && entry.origin == LogOrigin::System)
+            })
             .map(|entry| {
                 let (ddtags, service, hostname) = build_dd_tags(&entry.tags);
                 DatadogLogEntry {

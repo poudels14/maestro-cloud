@@ -45,7 +45,7 @@ pub async fn read_pipe_to_collector(
             stream: stream.clone(),
             text: parsed.text,
             source: source.clone(),
-            system: log_config.system,
+            origin: log_config.origin,
             tags: tags.clone(),
         };
 

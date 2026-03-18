@@ -74,7 +74,14 @@ impl DockerDeploymentProvider {
         args.push(config.context_dir.display().to_string());
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            cmd::run_with_logs("docker", &args, sender, source).await?;
+            cmd::run_with_logs(
+                "docker",
+                &args,
+                sender,
+                source,
+                crate::logs::LogOrigin::Build,
+            )
+            .await?;
         } else {
             cmd::run("docker", &args).await?;
         }
