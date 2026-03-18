@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use tokio::process::Command;
 use tokio::sync::broadcast;
 
 use crate::deployment::store::ClusterStore;
@@ -138,16 +137,7 @@ impl BuildWatcher {
 
 async fn check_remote_head(repo: &str, branch: &str) -> Result<String> {
     let refspec = format!("refs/heads/{branch}");
-    let output = Command::new("git")
-        .args(["ls-remote", repo, &refspec])
-        .output()
-        .await
-        .map_err(|err| anyhow!("failed to run git ls-remote: {err}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("git ls-remote failed for {repo}: {stderr}"));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = crate::utils::cmd::run("git", &["ls-remote", repo, &refspec]).await?;
     let sha = stdout.split_whitespace().next().unwrap_or("").to_string();
     if sha.is_empty() {
         return Err(anyhow!("branch `{branch}` not found on remote `{repo}`"));

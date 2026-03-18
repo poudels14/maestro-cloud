@@ -825,10 +825,7 @@ fn cleanup_deployment_image(deployment: &ServiceDeployment, data_dir: &std::path
     if let Some(build_info) = &deployment.build {
         let image_id = build_info.docker_image_id.clone();
         tokio::spawn(async move {
-            let _ = tokio::process::Command::new("docker")
-                .args(["rmi", &image_id])
-                .output()
-                .await;
+            let _ = crate::utils::cmd::run("docker", &["rmi", &image_id]).await;
         });
     }
     let short_id: String = deployment.id.chars().take(6).collect();

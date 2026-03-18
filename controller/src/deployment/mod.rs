@@ -1,6 +1,7 @@
 use crate::deployment::provider::{DockerBuildConfig, DockerDeploymentProvider};
 use crate::logs::{LogConfig, LogEntry};
 use crate::supervisor::{SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor};
+use crate::utils::cmd;
 
 pub mod controller;
 pub mod etcd;
@@ -79,10 +80,7 @@ pub async fn start_system_jobs(
 }
 
 async fn cleanup_container(name: &str) {
-    let _ = tokio::process::Command::new("docker")
-        .args(["rm", "-f", name])
-        .output()
-        .await;
+    let _ = cmd::run("docker", &["rm", "-f", name]).await;
 }
 
 async fn ensure_docker_network(network: &str, subnet: Option<&str>) {
@@ -93,10 +91,7 @@ async fn ensure_docker_network(network: &str, subnet: Option<&str>) {
         args.push(&subnet_flag);
     }
     args.push(network);
-    let _ = tokio::process::Command::new("docker")
-        .args(&args)
-        .output()
-        .await;
+    let _ = cmd::run("docker", &args).await;
 }
 
 async fn init_etcd(
@@ -392,16 +387,12 @@ async fn init_tailnet(
     )
     .await;
 
-    let _ = tokio::process::Command::new("docker")
-        .args([
-            "exec",
-            container_name,
-            "tailscale",
-            "set",
-            &format!("--advertise-routes={network_cidr}"),
-        ])
-        .output()
-        .await;
+    let routes_arg = format!("--advertise-routes={network_cidr}");
+    let _ = cmd::run(
+        "docker",
+        &["exec", container_name, "tailscale", "set", &routes_arg],
+    )
+    .await;
 
     eprintln!("[maestro]: tailscale subnet router started, advertising route {network_cidr}");
     let nameserver_ip = nameserver_ip.or(get_docker_ip(container_name).await);
@@ -414,19 +405,18 @@ async fn init_tailnet(
 
 async fn get_docker_ip(container_name: &str) -> Option<String> {
     for _ in 0..10 {
-        let output = tokio::process::Command::new("docker")
-            .args([
+        if let Ok(stdout) = cmd::run(
+            "docker",
+            &[
                 "inspect",
                 "-f",
                 "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
                 container_name,
-            ])
-            .output()
-            .await
-            .ok()?;
-
-        if output.status.success() {
-            let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            ],
+        )
+        .await
+        {
+            let ip = stdout.trim().to_string();
             if !ip.is_empty() {
                 return Some(ip);
             }
@@ -437,24 +427,20 @@ async fn get_docker_ip(container_name: &str) -> Option<String> {
 }
 
 async fn get_network_cidr(network: &str) -> Option<String> {
-    let output = tokio::process::Command::new("docker")
-        .args([
+    let stdout = cmd::run(
+        "docker",
+        &[
             "network",
             "inspect",
             network,
             "--format",
             "{{range .IPAM.Config}}{{.Subnet}}{{end}}",
-        ])
-        .output()
-        .await
-        .ok()?;
-
-    if output.status.success() {
-        let cidr = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if cidr.is_empty() { None } else { Some(cidr) }
-    } else {
-        None
-    }
+        ],
+    )
+    .await
+    .ok()?;
+    let cidr = stdout.trim().to_string();
+    if cidr.is_empty() { None } else { Some(cidr) }
 }
 
 fn get_unused_port(preferred: u16) -> u16 {
