@@ -42,6 +42,7 @@ export interface Service {
   deploy: Deploy;
   ingress?: Ingress | null;
   system?: boolean;
+  deployFrozen?: boolean;
 }
 
 export interface ReplicaState {

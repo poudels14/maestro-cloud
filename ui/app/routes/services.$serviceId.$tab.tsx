@@ -19,7 +19,8 @@ import {
   getSystemLogs,
   redeployService,
   cancelDeployment,
-  stopDeployment
+  stopDeployment,
+  freezeService
 } from "../lib/api";
 import { StatusBadge, StatusDot, DeploymentMenu, TabButton, timeAgo } from "../lib/ui";
 
@@ -39,7 +40,7 @@ function useTab(): DetailTab {
 function ServiceDetailPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const [services] = createResource(() => (import.meta.env.SSR ? null : true), getServices);
+  const [services, { refetch: refetchServices }] = createResource(() => (import.meta.env.SSR ? null : true), getServices);
   const tab = useTab();
 
   const selected = () => services()?.find((s) => s.id === params().serviceId);
@@ -85,7 +86,7 @@ function ServiceDetailPage() {
       </Show>
       <Show when={!loading() && selected()}>
         {(service) => (
-          <ServiceDetailPanel service={service()} tab={tab} navigateTab={navigateTab} />
+          <ServiceDetailPanel service={service()} tab={tab} navigateTab={navigateTab} onServiceUpdate={refetchServices} />
         )}
       </Show>
     </div>
@@ -156,6 +157,7 @@ function ServiceDetailPanel(props: {
   service: Service;
   tab: DetailTab;
   navigateTab: (t: DetailTab) => void;
+  onServiceUpdate: () => void;
 }) {
   const s = props.service;
 
@@ -185,10 +187,10 @@ function ServiceDetailPanel(props: {
       <div class="flex-1 overflow-y-auto py-5 bg-[#fafafa]">
         <div class="max-w-4xl mx-auto px-6">
           <Show when={props.tab === "overview"}>
-            <OverviewTab service={s} />
+            <OverviewTab service={s} onServiceUpdate={props.onServiceUpdate} />
           </Show>
           <Show when={props.tab === "deployments"}>
-            <DeploymentsTab serviceId={s.id} hasBuild={!!s.build} />
+            <DeploymentsTab serviceId={s.id} hasBuild={!!s.build} deployFrozen={!!s.deployFrozen} />
           </Show>
           <Show when={props.tab === "logs"}>
             <LogsTab service={s} />
@@ -199,7 +201,7 @@ function ServiceDetailPanel(props: {
   );
 }
 
-function OverviewTab(props: { service: Service }) {
+function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const s = props.service;
 
   const configItems = [
@@ -270,15 +272,82 @@ function OverviewTab(props: { service: Service }) {
           </div>
         </div>
       </Show>
+      <Show when={!s.system}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Deploy freeze</h4>
+          <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex items-center justify-between">
+            <div>
+              <p class="text-sm text-gray-700">
+                {s.deployFrozen ? "Deploys are frozen" : "Deploys are active"}
+              </p>
+              <p class="text-xs text-gray-400 mt-0.5">
+                {s.deployFrozen
+                  ? "Auto-deploys from git watch are paused. Manual deploys require force."
+                  : "Services will auto-deploy when new commits are detected."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                await freezeService(s.id, !s.deployFrozen);
+                props.onServiceUpdate();
+              }}
+              class={clsx("px-3 py-1.5 text-xs font-medium rounded-lg transition-colors outline-none", {
+                "bg-amber-100 text-amber-700 hover:bg-amber-200": s.deployFrozen,
+                "bg-gray-100 text-gray-600 hover:bg-gray-200": !s.deployFrozen
+              })}
+            >
+              {s.deployFrozen ? "Unfreeze" : "Freeze"}
+            </button>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }
 
-function DeploymentsTab(props: { serviceId: string; hasBuild: boolean }) {
+function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
   const [logsOpen, setLogsOpen] = createSignal<string | null>(null);
+  const [showFreezeConfirm, setShowFreezeConfirm] = createSignal(false);
 
   return (
+    <>
+    <Show when={props.deployFrozen}>
+      <div class="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+        <span class="text-xs text-amber-700 font-medium">Deploy is frozen — auto-deploys from git watch are paused</span>
+      </div>
+    </Show>
+    <Show when={showFreezeConfirm()}>
+      <div class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+          <h3 class="text-base font-semibold text-gray-900 mb-2">Deploy is frozen</h3>
+          <p class="text-sm text-gray-500 mb-5">
+            Deploys are frozen for this service. Are you sure you want to force a redeploy?
+          </p>
+          <div class="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowFreezeConfirm(false)}
+              class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setShowFreezeConfirm(false);
+                await redeployService(props.serviceId, true);
+                refetch();
+              }}
+              class="px-3 py-1.5 text-sm text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors outline-none"
+            >
+              Force deploy
+            </button>
+          </div>
+        </div>
+      </div>
+    </Show>
     <Suspense
       fallback={<div class="text-xs text-gray-400 py-8 text-center">Loading deployments…</div>}
     >
@@ -330,9 +399,12 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean }) {
                             await stopDeployment(props.serviceId, d.id);
                             refetch();
                           }}
-                          onRedeploy={async () => {
-                            await redeployService(props.serviceId);
-                            refetch();
+                          onRedeploy={() => {
+                            if (props.deployFrozen) {
+                              setShowFreezeConfirm(true);
+                            } else {
+                              redeployService(props.serviceId).then(() => refetch());
+                            }
                           }}
                         />
                       </div>
@@ -464,6 +536,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean }) {
         </div>
       </Show>
     </Suspense>
+    </>
   );
 }
 

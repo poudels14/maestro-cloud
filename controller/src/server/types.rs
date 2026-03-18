@@ -24,6 +24,8 @@ pub(crate) struct ServiceListItem {
     pub(crate) status: Option<DeploymentStatus>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) system: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) deploy_frozen: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -85,4 +87,16 @@ pub(crate) struct RolloutChange {
     pub(crate) from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) to: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct FreezeRequest {
+    pub(crate) frozen: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FreezeResponse {
+    pub(crate) service_id: String,
+    pub(crate) deploy_frozen: bool,
 }

@@ -477,6 +477,10 @@ impl ClusterStore for EtcdStateStore {
             .await?;
 
         let updated_info = ServiceInfo {
+            deploy_frozen: existing_info
+                .as_ref()
+                .map(|s| s.info.deploy_frozen)
+                .unwrap_or(false),
             config: queued_deployment
                 .deployment
                 .config
@@ -822,7 +826,15 @@ impl ClusterStore for EtcdStateStore {
             let deployment_json = serde_json::to_string(&stripped_deployment)
                 .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
+            let existing_frozen = self
+                .read_service_info(&deployment.config.id)
+                .await
+                .ok()
+                .flatten()
+                .map(|i| i.deploy_frozen)
+                .unwrap_or(false);
             let info = ServiceInfo {
+                deploy_frozen: existing_frozen,
                 config: deployment.config.strip_secrets(&Default::default()),
             };
             let info_json = serde_json::to_string(&info)
@@ -994,6 +1006,29 @@ impl ClusterStore for EtcdStateStore {
         Err(anyhow!(
             "failed to update service config for `{service_id}` due to concurrent updates"
         ))
+    }
+
+    async fn set_deploy_frozen(&self, service_id: &str, frozen: bool) -> anyhow::Result<()> {
+        let key = service_info_key(service_id);
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let kv = response
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("service `{service_id}` not found"))?;
+        let mut info: ServiceInfo = serde_json::from_slice(kv.value())
+            .map_err(|err| anyhow!("invalid service info JSON: {err}"))?;
+        info.deploy_frozen = frozen;
+        let info_json = serde_json::to_string(&info)
+            .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
+        self.txn(
+            vec![compare_mod_revision_or_absent(
+                &key,
+                Some(kv.mod_revision() as u64),
+            )],
+            vec![request_put(&key, &info_json)],
+        )
+        .await?;
+        Ok(())
     }
 
     async fn delete_service(&self, service_id: &str) -> anyhow::Result<()> {

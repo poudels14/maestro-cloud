@@ -139,4 +139,8 @@ pub trait ClusterStore: Send + Sync {
     ) -> Result<Option<ServiceDeployment>> {
         bail!("delete_deployment not implemented")
     }
+
+    async fn set_deploy_frozen(&self, _service_id: &str, _frozen: bool) -> Result<()> {
+        bail!("set_deploy_frozen not implemented")
+    }
 }

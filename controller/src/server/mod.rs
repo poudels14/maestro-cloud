@@ -79,6 +79,10 @@ impl Server {
                 post(Self::redeploy_service),
             )
             .route(
+                "/api/services/{serviceId}/freeze",
+                patch(Self::freeze_service),
+            )
+            .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}",
                 delete(Self::delete_deployment),
             )
@@ -125,6 +129,7 @@ impl Server {
     }
 
     async fn rollout_service(
+        Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
         Json(request): Json<RolloutServiceRequest>,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
@@ -134,6 +139,26 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+
+        if !query.force.unwrap_or(false) {
+            let info = state
+                .store
+                .read_service_info(&service_config.id)
+                .await
+                .ok()
+                .flatten();
+            if let Some(info) = info {
+                if info.deploy_frozen {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        format!(
+                            "deploy is frozen for service `{}`; use ?force=true to override",
+                            service_config.id
+                        ),
+                    ));
+                }
+            }
+        }
 
         let outcome = upsert_config_and_maybe_queue(state.store.as_ref(), service_config)
             .await
@@ -217,6 +242,7 @@ impl Server {
                 .await
                 .unwrap_or(None);
             items.push(ServiceListItem {
+                deploy_frozen: info.deploy_frozen,
                 service: info.config,
                 status,
                 system: false,
@@ -246,6 +272,7 @@ impl Server {
                 },
                 status: Some(crate::deployment::types::DeploymentStatus::Ready),
                 system: true,
+                deploy_frozen: false,
             });
         }
 
@@ -324,8 +351,30 @@ impl Server {
         }
     }
 
+    async fn freeze_service(
+        Path(service_id): Path<String>,
+        State(state): State<AppState>,
+        Json(body): Json<types::FreezeRequest>,
+    ) -> Result<Json<types::FreezeResponse>, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        state
+            .store
+            .set_deploy_frozen(&service_id, body.frozen)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(types::FreezeResponse {
+            service_id,
+            deploy_frozen: body.frozen,
+        }))
+    }
+
     async fn redeploy_service(
         Path(service_id): Path<String>,
+        Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
@@ -344,6 +393,13 @@ impl Server {
                 format!("service `{service_id}` not found"),
             ));
         };
+
+        if info.deploy_frozen && !query.force.unwrap_or(false) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("deploy is frozen for service `{service_id}`; use ?force=true to override"),
+            ));
+        }
 
         let mut config = info.config;
 
@@ -564,6 +620,11 @@ impl Server {
 #[derive(serde::Deserialize)]
 struct LogsQuery {
     tail: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+struct ForceQuery {
+    force: Option<bool>,
 }
 
 fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig, String> {

@@ -606,6 +606,7 @@ impl ClusterStore for InMemoryStore {
         let state = self.state.lock().expect("state lock");
         Ok(state.configs.get(service_id).map(|config| ServiceInfo {
             config: config.clone(),
+            deploy_frozen: false,
         }))
     }
 

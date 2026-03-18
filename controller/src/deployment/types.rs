@@ -323,6 +323,8 @@ pub struct DeploymentBuildInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceInfo {
     pub config: ServiceConfig,
+    #[serde(default)]
+    pub deploy_frozen: bool,
 }
 
 fn default_replicas() -> u32 {
