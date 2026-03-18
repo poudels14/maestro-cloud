@@ -1,16 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use tokio::io::AsyncBufReadExt;
-use tokio::process::Command;
 
 use crate::builder;
 use crate::deployment::types::ServiceDeployment;
 use crate::logs::LogEntry;
 use crate::supervisor::SecretsMount;
+use crate::utils::cmd;
 
 #[derive(Debug)]
 pub struct DeployOutput {
@@ -76,68 +74,9 @@ impl DockerDeploymentProvider {
         args.push(config.context_dir.display().to_string());
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            let source: Arc<str> = Arc::from(source);
-            let mut child = Command::new("docker")
-                .args(&args)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|err| anyhow!("failed to spawn docker build: {err}"))?;
-
-            let stdout = child.stdout.take();
-            let stderr = child.stderr.take();
-            let sender_clone = sender.clone();
-            let source_clone = source.clone();
-
-            let stdout_task = tokio::spawn(async move {
-                if let Some(stdout) = stdout {
-                    let reader = tokio::io::BufReader::new(stdout);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        let entry = build_log_entry(&line, "stdout", &source_clone);
-                        if sender_clone.send_async(entry).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            });
-
-            let sender_clone = sender.clone();
-            let source_clone = source.clone();
-            let stderr_task = tokio::spawn(async move {
-                if let Some(stderr) = stderr {
-                    let reader = tokio::io::BufReader::new(stderr);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        let entry = build_log_entry(&line, "stderr", &source_clone);
-                        if sender_clone.send_async(entry).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            });
-
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-
-            let status = child
-                .wait()
-                .await
-                .map_err(|err| anyhow!("failed to wait for docker build: {err}"))?;
-            if !status.success() {
-                return Err(anyhow!("docker build failed for {}", config.tag));
-            }
+            cmd::run_with_logs("docker", &args, sender, source).await?;
         } else {
-            let output = Command::new("docker")
-                .args(&args)
-                .output()
-                .await
-                .map_err(|err| anyhow!("failed to run docker build: {err}"))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow!("docker build failed for {}: {stderr}", config.tag));
-            }
+            cmd::run("docker", &args).await?;
         }
 
         eprintln!("[maestro]: docker image {} built successfully", config.tag);
@@ -321,21 +260,4 @@ fn docker_run_command(
         args.push_str(&format!(" {flag}"));
     }
     args
-}
-
-fn build_log_entry(text: &str, stream: &str, source: &Arc<str>) -> LogEntry {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-    LogEntry {
-        seq: 0,
-        ts: now,
-        level: Arc::from("info"),
-        stream: Arc::from(stream),
-        text: text.to_string(),
-        source: source.clone(),
-        system: true,
-        tags: Arc::new(serde_json::Value::Null),
-    }
 }

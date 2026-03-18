@@ -402,10 +402,7 @@ async fn force_stop_and_delete(job: &Job) {
 }
 
 async fn docker_kill(container: &str) {
-    let _ = tokio::process::Command::new("docker")
-        .args(["kill", container])
-        .output()
-        .await;
+    let _ = crate::utils::cmd::run("docker", &["kill", container]).await;
 }
 
 async fn is_job_running(job: &Job) -> bool {
