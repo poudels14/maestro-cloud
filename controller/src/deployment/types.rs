@@ -19,17 +19,18 @@ pub struct DeploymentConfig {
     pub subnet: Option<String>,
     pub tailscale_authkey: Option<String>,
     pub secret_key: SecretString,
+    pub tags: Vec<String>,
 }
 
 impl DeploymentConfig {
     #[inline]
-    pub fn deployment_logs_dir(&self) -> PathBuf {
-        self.data_dir.join("logs")
+    pub fn etcd_dir(&self) -> PathBuf {
+        self.data_dir.join("system/etcd/")
     }
 
     #[inline]
-    pub fn etcd_dir(&self) -> PathBuf {
-        self.data_dir.join("system/etcd/")
+    pub fn probe_dir(&self) -> PathBuf {
+        self.data_dir.join("system/probe")
     }
 }
 

@@ -1,19 +1,6 @@
-use std::{
-    io::Write,
-    path::Path,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::sync::Arc;
 
-use anyhow::Result;
 use tokio::io::AsyncBufReadExt;
-
-#[derive(serde::Serialize)]
-struct LogEntry<'a> {
-    ts: u64,
-    level: &'a str,
-    stream: &'a str,
-    text: &'a str,
-}
 
 struct ParsedLine {
     ts: Option<u64>,
@@ -21,59 +8,49 @@ struct ParsedLine {
     text: String,
 }
 
-pub async fn read_jsonl_logs(path: &Path, tail: usize) -> Result<Vec<serde_json::Value>> {
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.into()),
-    };
-
-    let lines: Vec<&str> = content.lines().filter(|line| !line.is_empty()).collect();
-    let start = lines.len().saturating_sub(tail);
-    let entries = lines[start..]
-        .iter()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-
-    Ok(entries)
-}
-
-pub async fn read_pipe_to_jsonl(
+pub async fn read_pipe_to_collector(
     reader: os_pipe::PipeReader,
     stream: &'static str,
-    log_file: Arc<StdMutex<std::fs::File>>,
+    source: Arc<str>,
+    log_config: crate::logs::LogConfig,
 ) {
     use std::os::unix::io::{FromRawFd, IntoRawFd};
 
     let fd = reader.into_raw_fd();
-    // SAFETY: fd is a valid owned file descriptor from os_pipe::PipeReader.
     let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
     let async_file = tokio::fs::File::from_std(std_file);
     let buf_reader = tokio::io::BufReader::new(async_file);
     let mut lines = buf_reader.lines();
 
+    let stream: Arc<str> = Arc::from(stream);
+    let tags = log_config.build_tags();
     let now_millis = || {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as u64
+            .as_millis() as i64
     };
 
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
         let parsed = parse_log_line(&line);
 
-        let entry = LogEntry {
-            ts: parsed.ts.unwrap_or_else(&now_millis),
-            level: parsed.level.as_deref().unwrap_or("info"),
-            stream,
-            text: &parsed.text,
+        let entry = crate::logs::LogEntry {
+            seq: 0,
+            ts: parsed.ts.map(|t| t as i64).unwrap_or_else(&now_millis),
+            level: parsed
+                .level
+                .map(Arc::from)
+                .unwrap_or_else(|| Arc::from("info")),
+            stream: stream.clone(),
+            text: parsed.text,
+            source: source.clone(),
+            system: log_config.system,
+            tags: tags.clone(),
         };
 
-        if let Ok(json) = serde_json::to_string(&entry) {
-            if let Ok(mut file) = log_file.lock() {
-                let _ = writeln!(file, "{json}");
-            }
+        if log_config.sender.send_async(entry).await.is_err() {
+            break;
         }
     }
 }

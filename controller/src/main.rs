@@ -1,6 +1,7 @@
 mod cli;
 mod deployment;
 mod error;
+mod logs;
 mod probe;
 mod server;
 mod signal;
@@ -78,6 +79,27 @@ enum CliCommand {
             help = "Master key for encrypting secrets (required)"
         )]
         secret_key: String,
+        #[arg(
+            long = "tag",
+            help = "Tags for log sinks like Datadog (key:value, can be repeated)"
+        )]
+        tags: Vec<String>,
+        #[arg(
+            long = "dd-api-key",
+            env = "DATADOG_API_KEY",
+            help = "Datadog API key for log forwarding"
+        )]
+        dd_api_key: Option<String>,
+        #[arg(
+            long = "dd-site",
+            help = "Datadog site (e.g. datadoghq.com, us3.datadoghq.com, datadoghq.eu)"
+        )]
+        dd_site: Option<String>,
+        #[arg(
+            long = "dd-include-system-logs",
+            help = "Include maestro system logs in Datadog (excluded by default)"
+        )]
+        dd_include_system_logs: bool,
     },
     /// Deploy services from the config file
     Rollout {
@@ -117,6 +139,21 @@ enum CliCommand {
         #[arg(long = "port", env = "PORT", default_value_t = DEFAULT_API_PORT, help = "Port to listen on")]
         port: u16,
     },
+    /// Read logs from the local log store
+    Logs {
+        #[arg(help = "Source name (e.g., service name). Shows all sources if omitted")]
+        source: Option<String>,
+        #[arg(long = "data-dir", help = "Maestro data directory")]
+        data_dir: PathBuf,
+        #[arg(
+            long = "tail",
+            default_value_t = 100,
+            help = "Number of recent entries"
+        )]
+        tail: usize,
+        #[arg(long = "follow", short = 'f', help = "Follow log output")]
+        follow: bool,
+    },
     /// Create a default maestro.jsonc config file
     Init,
 }
@@ -148,6 +185,10 @@ async fn run() -> crate::error::Result<()> {
             enable_tailscale,
             tailscale_authkey,
             secret_key,
+            tags,
+            dd_api_key,
+            dd_site,
+            dd_include_system_logs,
         }) => {
             if enable_tailscale && tailscale_authkey.is_none() {
                 return Err(Error::invalid_input(
@@ -187,7 +228,7 @@ async fn run() -> crate::error::Result<()> {
                 .parent()
                 .expect("failed to get parent dir")
                 .to_path_buf();
-            let deployment_config = DeploymentConfig {
+            let mut deployment_config = DeploymentConfig {
                 cluster_name,
                 data_dir,
                 etcd_port,
@@ -198,13 +239,46 @@ async fn run() -> crate::error::Result<()> {
                 subnet,
                 tailscale_authkey,
                 secret_key: SecretString::new(secret_key),
+                tags: parse_tags(tags)?,
             };
+            let log_store = Arc::new(
+                logs::LogStore::open(&deployment_config.data_dir.join("logs/logs.db"))
+                    .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?,
+            );
+
+            if let Some(dd_site) = dd_site {
+                let dd_api_key = dd_api_key.ok_or_else(|| {
+                    Error::invalid_input("missing --dd-api-key or DATADOG_API_KEY env var")
+                })?;
+                let dd_sink = logs::DatadogSink::new(dd_api_key, &dd_site, dd_include_system_logs);
+                let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
+                let _dd_handle = dd_worker.spawn();
+                eprintln!("[maestro]: datadog log sink enabled (site: {dd_site})");
+            }
+
+            let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
+            let collector_handle = log_collector.spawn();
+
+            let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
+                let listener =
+                    std::net::TcpListener::bind("0.0.0.0:0").expect("failed to bind probe port");
+                listener
+                    .local_addr()
+                    .expect("failed to get local addr")
+                    .port()
+            });
+            deployment_config.probe_port = Some(probe_host_port);
+
             let mut supervisor = JobSupervisor::new();
-            deployment::start_system_jobs(&deployment_config, &mut supervisor).await;
+            deployment::start_system_jobs(&deployment_config, &log_sender, &mut supervisor).await;
 
             let derived_key = derive_key(deployment_config.secret_key.as_str());
             let store: Arc<dyn deployment::store::ClusterStore> =
                 Arc::new(deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key).await?);
+            let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
+            let http_sink = logs::HttpSink::new("probe", &probe_log_endpoint);
+            let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));
+            let _sink_handle = sink_worker.spawn();
             let deployment_signal_rx = signal_tx.subscribe();
 
             let mut controller = DeploymentController::new(
@@ -212,6 +286,7 @@ async fn run() -> crate::error::Result<()> {
                 store,
                 supervisor,
                 deployment_signal_rx,
+                Some(log_sender),
             );
             let deployment_shutdown_tx = signal_tx.clone();
 
@@ -229,6 +304,8 @@ async fn run() -> crate::error::Result<()> {
                     supervisor
                         .shutdown_all(supervisor::ShutdownRequest::Force)
                         .await;
+                    drop(supervisor);
+                    let _ = collector_handle.await;
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -252,6 +329,47 @@ async fn run() -> crate::error::Result<()> {
         }) => probe::run(&etcd_endpoint, port)
             .await
             .map_err(|err| Error::internal(err.to_string())),
+        Some(CliCommand::Logs {
+            source,
+            data_dir,
+            tail,
+            follow,
+        }) => {
+            let db_path = data_dir.join("logs/logs.db");
+            let store = logs::LogStore::open(&db_path)
+                .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?;
+
+            let entries = if let Some(src) = &source {
+                store.read_tail(src, tail).await
+            } else {
+                store.read_tail_all(tail).await
+            }
+            .map_err(|err| Error::internal(format!("failed to read logs: {err}")))?;
+
+            let show_source = source.is_none();
+            for entry in &entries {
+                print_log_entry(entry, show_source);
+            }
+
+            if follow {
+                let mut last_seq = entries.last().map(|e| e.seq).unwrap_or(0);
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    let new_entries = if let Some(src) = &source {
+                        store.read_after_for_source(src, last_seq, 500).await
+                    } else {
+                        store.read_after_all(last_seq, 500).await
+                    }
+                    .map_err(|err| Error::internal(format!("failed to read logs: {err}")))?;
+                    for entry in &new_entries {
+                        print_log_entry(entry, show_source);
+                        last_seq = entry.seq;
+                    }
+                }
+            }
+
+            Ok(())
+        }
         Some(CliCommand::Init) => cli::init_config(Path::new(DEFAULT_CONFIG_PATH)),
     }
 }
@@ -306,6 +424,22 @@ fn acquire_lock(data_dir: &Path) -> crate::error::Result<std::fs::File> {
     Ok(file)
 }
 
+fn print_log_entry(entry: &logs::LogEntry, show_source: bool) {
+    let ts = chrono::DateTime::from_timestamp_millis(entry.ts)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| entry.ts.to_string());
+    if show_source {
+        println!(
+            "{ts}  {:<5}  [{}]  {}",
+            entry.level.to_uppercase(),
+            entry.source,
+            entry.text
+        );
+    } else {
+        println!("{ts}  {:<5}  {}", entry.level.to_uppercase(), entry.text);
+    }
+}
+
 fn verify_secret_key(data_dir: &Path, secret_key: &str) -> crate::error::Result<()> {
     use sha2::{Digest, Sha256};
 
@@ -330,4 +464,16 @@ fn verify_secret_key(data_dir: &Path, secret_key: &str) -> crate::error::Result<
         })?;
     }
     Ok(())
+}
+
+fn parse_tags(tags: Vec<String>) -> crate::error::Result<Vec<String>> {
+    for tag in &tags {
+        let parts: Vec<&str> = tag.splitn(2, ':').collect();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            return Err(Error::invalid_input(format!(
+                "invalid tag \"{tag}\": expected format key:value"
+            )));
+        }
+    }
+    Ok(tags)
 }

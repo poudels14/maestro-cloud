@@ -1,10 +1,4 @@
-use std::{
-    fs::OpenOptions,
-    path::PathBuf,
-    process::Stdio,
-    sync::{Arc, Mutex as StdMutex},
-    time::Duration,
-};
+use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -12,14 +6,16 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-use super::logs::read_pipe_to_jsonl;
+use crate::logs::LogConfig;
+
+use super::logs::read_pipe_to_collector;
 use watchexec_supervisor::{
     ProcessEnd, Signal,
     command::{Command, Program, Shell, SpawnOptions},
     job::{CommandState, Job, start_job},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct SupervisedJobConfig {
     pub id: String,
     pub name: String,
@@ -27,9 +23,9 @@ pub struct SupervisedJobConfig {
     pub restart_delay_ms: u64,
     pub max_restarts: Option<u32>,
     pub shutdown_grace_period_ms: u64,
-    pub logs_dir: Option<PathBuf>,
     pub docker_container: Option<String>,
     pub secrets_mount: Option<SecretsMount>,
+    pub log_config: Option<LogConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,24 +182,6 @@ impl SupervisedJobRunner {
     }
 
     async fn setup_job(job: &Job, config: &SupervisedJobConfig) -> Option<JoinHandle<()>> {
-        let logs_dir = config.logs_dir.as_ref()?;
-        if let Err(err) = std::fs::create_dir_all(logs_dir) {
-            eprintln!("[maestro]: failed to create logs dir: {err}");
-            return None;
-        }
-
-        let log_path = logs_dir.join("logs.jsonl");
-        let log_file = match OpenOptions::new().create(true).append(true).open(&log_path) {
-            Ok(f) => Arc::new(StdMutex::new(f)),
-            Err(err) => {
-                eprintln!(
-                    "[maestro]: failed to open log file {}: {err}",
-                    log_path.display()
-                );
-                return None;
-            }
-        };
-
         let (pipe_tx, mut pipe_rx) =
             mpsc::unbounded_channel::<(os_pipe::PipeReader, os_pipe::PipeReader)>();
 
@@ -220,18 +198,25 @@ impl SupervisedJobRunner {
         })
         .await;
 
+        let log_config = config.log_config.clone();
+        let log_source: Arc<str> = Arc::from(config.name.as_str());
+
         let collector = tokio::spawn(async move {
             while let Some((stdout_reader, stderr_reader)) = pipe_rx.recv().await {
-                tokio::spawn(read_pipe_to_jsonl(
-                    stdout_reader,
-                    "stdout",
-                    log_file.clone(),
-                ));
-                tokio::spawn(read_pipe_to_jsonl(
-                    stderr_reader,
-                    "stderr",
-                    log_file.clone(),
-                ));
+                if let Some(lc) = &log_config {
+                    tokio::spawn(read_pipe_to_collector(
+                        stdout_reader,
+                        "stdout",
+                        log_source.clone(),
+                        lc.clone(),
+                    ));
+                    tokio::spawn(read_pipe_to_collector(
+                        stderr_reader,
+                        "stderr",
+                        log_source.clone(),
+                        lc.clone(),
+                    ));
+                }
             }
         });
 

@@ -8,6 +8,7 @@ use crate::deployment::types::{
     Deployment, DeploymentConfig, DeploymentStatus, QueuedDeployment, ServiceDeployment,
     ServiceProvider,
 };
+use crate::logs::{LogConfig, LogEntry};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::{
@@ -38,6 +39,7 @@ pub struct DeploymentController {
     shell_provider: ShellDeploymentProvider,
     deployments: HashMap<String, Deployment>,
     shutdown_in_progress: bool,
+    log_sender: Option<flume::Sender<LogEntry>>,
 }
 
 impl DeploymentController {
@@ -46,6 +48,7 @@ impl DeploymentController {
         store: Arc<dyn ClusterStore>,
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
+        log_sender: Option<flume::Sender<LogEntry>>,
     ) -> Self {
         let dns_domain = config
             .tailscale_authkey
@@ -67,6 +70,7 @@ impl DeploymentController {
             shell_provider: ShellDeploymentProvider,
             deployments: HashMap::new(),
             shutdown_in_progress: false,
+            log_sender,
         }
     }
 
@@ -225,17 +229,21 @@ impl DeploymentController {
                 restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
                 max_restarts,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-                logs_dir: Some(
-                    self.config
-                        .deployment_logs_dir()
-                        .join("services")
-                        .join(&service_id)
-                        .join("deployments")
-                        .join(&deployment_id)
-                        .join(format!("replica{replica_index}")),
-                ),
-                docker_container: Some(docker_container),
+                docker_container: Some(docker_container.clone()),
                 secrets_mount: deploy_output.secrets_mount,
+                log_config: self.log_sender.clone().map(|sender| {
+                    let mut tags = self.config.tags.clone();
+                    tags.push(format!("service:{service_id}"));
+                    tags.push(format!("hostname:{docker_container}"));
+                    tags.push(format!("deployment_id:{deployment_id}"));
+                    tags.push(format!("replica:{replica_index}"));
+                    tags.push(format!("cluster:{}", self.config.cluster_name));
+                    LogConfig {
+                        sender,
+                        tags,
+                        system: false,
+                    }
+                }),
             };
 
             if let Some(task_id) = self.supervisor.start_job(job) {
@@ -623,17 +631,21 @@ impl DeploymentController {
             restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
             max_restarts,
             shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-            logs_dir: Some(
-                self.config
-                    .deployment_logs_dir()
-                    .join("services")
-                    .join(service_id)
-                    .join("deployments")
-                    .join(deployment_id)
-                    .join(format!("replica{replica_index}")),
-            ),
-            docker_container: Some(docker_container),
+            docker_container: Some(docker_container.clone()),
             secrets_mount: deploy_output.secrets_mount,
+            log_config: self.log_sender.clone().map(|sender| {
+                let mut tags = self.config.tags.clone();
+                tags.push(format!("service:{service_id}"));
+                tags.push(format!("hostname:{docker_container}"));
+                tags.push(format!("deployment_id:{deployment_id}"));
+                tags.push(format!("replica:{replica_index}"));
+                tags.push(format!("cluster:{}", self.config.cluster_name));
+                LogConfig {
+                    sender,
+                    tags,
+                    system: false,
+                }
+            }),
         };
 
         if let Some(task_id) = self.supervisor.start_job(job) {

@@ -681,10 +681,12 @@ async fn stress_supervisor_updates_deployment_statuses() {
             subnet: None,
             tailscale_authkey: None,
             secret_key: SecretString::new("test".to_string()),
+            tags: Default::default(),
         },
         store.clone(),
         JobSupervisor::new(),
         signal_rx,
+        None,
     );
 
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -758,10 +760,12 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             subnet: None,
             tailscale_authkey: None,
             secret_key: SecretString::new("test".to_string()),
+            tags: Default::default(),
         },
         store.clone(),
         JobSupervisor::new(),
         signal_rx,
+        None,
     );
 
     let start_deadline = Instant::now() + Duration::from_secs(2);
@@ -862,10 +866,12 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             subnet: None,
             tailscale_authkey: None,
             secret_key: SecretString::new("test".to_string()),
+            tags: Default::default(),
         },
         store.clone(),
         JobSupervisor::new(),
         signal_rx,
+        None,
     );
 
     let ready_deadline = Instant::now() + Duration::from_secs(2);
@@ -980,10 +986,12 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             subnet: None,
             tailscale_authkey: None,
             secret_key: SecretString::new("test".to_string()),
+            tags: Default::default(),
         },
         store.clone(),
         JobSupervisor::new(),
         signal_rx,
+        None,
     );
 
     let mut ingress_was_empty_after_first_ready = false;

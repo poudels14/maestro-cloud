@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -23,7 +23,6 @@ use crate::deployment::types::{
     ServiceDeployment, ServiceProvider,
 };
 use crate::signal::ShutdownEvent;
-use crate::supervisor::logs;
 
 mod types;
 
@@ -39,7 +38,7 @@ const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
-    logs_dir: PathBuf,
+    log_store: Option<Arc<crate::logs::LogStore>>,
 }
 
 pub(crate) struct Server {
@@ -47,9 +46,12 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(crate) fn new(store: Arc<dyn ClusterStore>, logs_dir: PathBuf) -> Self {
+    pub(crate) fn new(
+        store: Arc<dyn ClusterStore>,
+        log_store: Option<Arc<crate::logs::LogStore>>,
+    ) -> Self {
         Self {
-            state: AppState { store, logs_dir },
+            state: AppState { store, log_store },
         }
     }
 
@@ -80,6 +82,7 @@ impl Server {
                 get(Self::get_deployment_logs),
             )
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
+            .route("/api/logs", post(Self::ingest_logs))
             .with_state(self.state.clone())
             .layer(middleware::from_fn(log_http))
     }
@@ -439,59 +442,22 @@ impl Server {
             ));
         }
 
-        let deployment_dir = state
-            .logs_dir
-            .join("services")
-            .join(service_id)
-            .join("deployments")
-            .join(deployment_id);
-
-        let deployment = state
-            .store
-            .read_service_deployment(&Deployment {
-                service_id: service_id.to_string(),
-                id: deployment_id.to_string(),
-                replica_index: 0,
-            })
-            .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-
         let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
-        let replicas = deployment
-            .as_ref()
-            .map(|d| d.config.deploy.replicas)
-            .unwrap_or(1);
 
-        let mut all_entries: Vec<serde_json::Value> = Vec::new();
-        for replica_index in 0..replicas {
-            let log_path = deployment_dir
-                .join(format!("replica{replica_index}"))
-                .join("logs.jsonl");
-            let hostname = deployment
-                .as_ref()
-                .map(|d| d.hostname_for_replica(replica_index))
-                .unwrap_or_else(|| format!("replica{replica_index}"));
-            if let Ok(mut entries) = logs::read_jsonl_logs(&log_path, tail).await {
-                for entry in &mut entries {
-                    if let Some(obj) = entry.as_object_mut() {
-                        obj.insert(
-                            "hostname".to_string(),
-                            serde_json::Value::String(hostname.clone()),
-                        );
-                    }
-                }
-                all_entries.extend(entries);
-            }
+        if let Some(log_store) = &state.log_store {
+            let prefix = format!("{service_id}/{deployment_id}/");
+            let entries = log_store
+                .read_tail_by_prefix(&prefix, tail)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let values: Vec<serde_json::Value> = entries
+                .into_iter()
+                .map(|e| serde_json::to_value(e).unwrap_or_default())
+                .collect();
+            return Ok(Json(values));
         }
 
-        all_entries.sort_by(|a, b| {
-            let ts_a = a.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-            let ts_b = b.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-            ts_a.cmp(&ts_b)
-        });
-
-        let start = all_entries.len().saturating_sub(tail);
-        Ok(Json(all_entries[start..].to_vec()))
+        Ok(Json(Vec::new()))
     }
 
     async fn get_system_logs(
@@ -501,12 +467,37 @@ impl Server {
     ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
         let name = name.trim();
         validate_service_id(name, "name").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
 
-        let log_path = state.logs_dir.join("system").join(name).join("logs.jsonl");
-        logs::read_jsonl_logs(&log_path, query.tail.unwrap_or(DEFAULT_LOG_LIMIT))
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let entries = log_store
+            .read_tail(name, tail)
             .await
-            .map(Json)
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let values: Vec<serde_json::Value> = entries
+            .into_iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect();
+        Ok(Json(values))
+    }
+
+    async fn ingest_logs(
+        State(state): State<AppState>,
+        Json(entries): Json<Vec<crate::logs::LogEntry>>,
+    ) -> Result<&'static str, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "log store not configured".to_string(),
+            ));
+        };
+        log_store
+            .append(&entries)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok("ok")
     }
 }
 
