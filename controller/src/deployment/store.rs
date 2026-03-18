@@ -124,4 +124,19 @@ pub trait ClusterStore: Send + Sync {
     async fn update_service_config(&self, _service_id: &str, _config: ServiceConfig) -> Result<()> {
         bail!("update_service_config not implemented")
     }
+
+    async fn update_deployment_build_info(
+        &self,
+        _deployment: &Deployment,
+        _updated: &ServiceDeployment,
+    ) -> Result<()> {
+        bail!("update_deployment_build_info not implemented")
+    }
+
+    async fn delete_deployment(
+        &self,
+        _deployment: &Deployment,
+    ) -> Result<Option<ServiceDeployment>> {
+        bail!("delete_deployment not implemented")
+    }
 }

@@ -1,22 +1,20 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use tokio::{sync::broadcast, time::sleep};
+use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
+use crate::deployment::provider::{
+    BuildOutput, DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
+};
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Deployment, DeploymentConfig, DeploymentStatus, QueuedDeployment, ServiceDeployment,
-    ServiceProvider,
+    Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, GitCommitInfo,
+    QueuedDeployment, ServiceDeployment, ServiceProvider,
 };
 use crate::logs::{LogConfig, LogEntry};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
-use crate::{
-    deployment::provider::{
-        DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
-    },
-    supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus},
-};
+use crate::supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
 
 const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
 const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
@@ -29,6 +27,14 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 #[cfg(test)]
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
+const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+struct PendingBuild {
+    handle: JoinHandle<Result<BuildOutput>>,
+    queued_deployment: QueuedDeployment,
+    build_dir: PathBuf,
+    started_at: std::time::Instant,
+}
 
 pub struct DeploymentController {
     config: DeploymentConfig,
@@ -38,6 +44,7 @@ pub struct DeploymentController {
     docker_provider: DockerDeploymentProvider,
     shell_provider: ShellDeploymentProvider,
     deployments: HashMap<String, Deployment>,
+    pending_builds: HashMap<String, PendingBuild>,
     shutdown_in_progress: bool,
     log_sender: Option<flume::Sender<LogEntry>>,
 }
@@ -69,6 +76,7 @@ impl DeploymentController {
             docker_provider,
             shell_provider: ShellDeploymentProvider,
             deployments: HashMap::new(),
+            pending_builds: HashMap::new(),
             shutdown_in_progress: false,
             log_sender,
         }
@@ -116,6 +124,7 @@ impl DeploymentController {
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
         self.stop_removed_deployments().await;
         self.drain_old_deployments().await;
+        self.check_pending_builds().await;
         self.reconcile_replicas().await;
         let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
@@ -151,6 +160,9 @@ impl DeploymentController {
             self.shutdown_in_progress = true;
             self.mark_deployments_terminated().await;
         }
+        for (_, pending) in self.pending_builds.drain() {
+            pending.handle.abort();
+        }
         let _ = self.supervisor.shutdown_all(request).await;
     }
 
@@ -166,10 +178,11 @@ impl DeploymentController {
         &mut self,
         queued_deployment: QueuedDeployment,
     ) -> Result<()> {
-        let _build_command = match queued_deployment.deployment.config.provider {
-            ServiceProvider::Docker => self.docker_provider.build(&queued_deployment.deployment),
-            ServiceProvider::Shell => self.shell_provider.build(&queued_deployment.deployment),
-        };
+        let deployment_id = queued_deployment.deployment.id.clone();
+
+        if self.pending_builds.contains_key(&deployment_id) {
+            return Ok(());
+        }
 
         let claimed = self
             .store
@@ -179,8 +192,139 @@ impl DeploymentController {
             return Ok(());
         }
 
-        let service_id = queued_deployment.service_id;
-        let deployment_id = queued_deployment.deployment.id.clone();
+        if queued_deployment.deployment.config.build.is_some() {
+            let short_id: String = deployment_id.chars().take(6).collect();
+            let image_tag = format!("{}:{short_id}", queued_deployment.deployment.config.id);
+            let build_dir = self
+                .config
+                .data_dir
+                .join("builds")
+                .join(&queued_deployment.service_id)
+                .join(&short_id);
+
+            let provider = self.docker_provider.clone();
+            let deployment = queued_deployment.deployment.clone();
+            let log_sender = self.log_sender.clone();
+            let build_dir_clone = build_dir.clone();
+
+            let handle = tokio::spawn(async move {
+                provider
+                    .build(&deployment, &build_dir_clone, &image_tag, log_sender)
+                    .await
+            });
+
+            self.pending_builds.insert(
+                deployment_id,
+                PendingBuild {
+                    handle,
+                    queued_deployment,
+                    build_dir,
+                    started_at: std::time::Instant::now(),
+                },
+            );
+            return Ok(());
+        }
+
+        self.start_deployment_replicas(&queued_deployment).await;
+        Ok(())
+    }
+
+    async fn check_pending_builds(&mut self) {
+        let deployment_ids: Vec<String> = self.pending_builds.keys().cloned().collect();
+
+        for deployment_id in deployment_ids {
+            let timed_out = self
+                .pending_builds
+                .get(&deployment_id)
+                .is_some_and(|p| p.started_at.elapsed() > BUILD_TIMEOUT);
+
+            if timed_out {
+                let pending = self.pending_builds.remove(&deployment_id).unwrap();
+                pending.handle.abort();
+                let _ = std::fs::remove_dir_all(&pending.build_dir);
+                eprintln!(
+                    "[maestro]: build timed out for deployment `{deployment_id}` ({}s limit)",
+                    BUILD_TIMEOUT.as_secs()
+                );
+                let deployment_ref = Deployment {
+                    service_id: pending.queued_deployment.service_id,
+                    id: deployment_id,
+                    replica_index: 0,
+                };
+                let _ = self
+                    .store
+                    .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                    .await;
+                continue;
+            }
+
+            let finished = self
+                .pending_builds
+                .get(&deployment_id)
+                .is_some_and(|p| p.handle.is_finished());
+
+            if !finished {
+                continue;
+            }
+
+            let pending = self.pending_builds.remove(&deployment_id).unwrap();
+            let service_id = pending.queued_deployment.service_id.clone();
+            let result = pending.handle.await;
+
+            let build_result = match result {
+                Ok(inner) => inner,
+                Err(err) => Err(anyhow::anyhow!("build task panicked: {err}")),
+            };
+
+            match build_result {
+                Ok(output) => {
+                    let _ = std::fs::remove_dir_all(&pending.build_dir);
+
+                    let mut queued = pending.queued_deployment;
+                    queued.deployment.build = Some(DeploymentBuildInfo {
+                        docker_image_id: output.image_tag,
+                    });
+                    queued.deployment.git_commit = Some(GitCommitInfo {
+                        reference: output.commit_sha,
+                        message: output.commit_message,
+                    });
+                    let deployment_ref = Deployment {
+                        service_id: service_id.clone(),
+                        id: deployment_id.clone(),
+                        replica_index: 0,
+                    };
+                    if let Err(err) = self
+                        .store
+                        .update_deployment_build_info(&deployment_ref, &queued.deployment)
+                        .await
+                    {
+                        eprintln!(
+                            "[maestro]: failed to store build info for deployment `{deployment_id}`: {err}"
+                        );
+                    }
+                    self.start_deployment_replicas(&queued).await;
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[maestro]: build failed for service `{service_id}` deployment `{deployment_id}`: {err}"
+                    );
+                    let deployment_ref = Deployment {
+                        service_id,
+                        id: deployment_id,
+                        replica_index: 0,
+                    };
+                    let _ = self
+                        .store
+                        .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn start_deployment_replicas(&mut self, queued_deployment: &QueuedDeployment) {
+        let service_id = &queued_deployment.service_id;
+        let deployment_id = &queued_deployment.deployment.id;
         let replicas = queued_deployment.deployment.config.deploy.replicas;
         let has_healthcheck = queued_deployment
             .deployment
@@ -212,7 +356,7 @@ impl DeploymentController {
                 continue;
             };
 
-            let replica_job_id = replica_job_id(&deployment_id, replica_index);
+            let replica_job_id = replica_job_id(deployment_id, replica_index);
             let docker_container = queued_deployment
                 .deployment
                 .hostname_for_replica(replica_index);
@@ -264,8 +408,8 @@ impl DeploymentController {
             if let Err(err) = self
                 .store
                 .update_replica_status(
-                    &service_id,
-                    &deployment_id,
+                    service_id,
+                    deployment_id,
                     replica_index,
                     replica_status.clone(),
                 )
@@ -278,8 +422,8 @@ impl DeploymentController {
         }
 
         let deployment_ref = Deployment {
-            service_id,
-            id: deployment_id,
+            service_id: service_id.clone(),
+            id: deployment_id.clone(),
             replica_index: 0,
         };
         if let Err(err) = self
@@ -292,8 +436,6 @@ impl DeploymentController {
                 deployment_ref.id
             );
         }
-
-        Ok(())
     }
 
     async fn update_jobs_status(&mut self, finished: Vec<FinishedJob>) {
@@ -427,11 +569,13 @@ impl DeploymentController {
                     let _ = self
                         .supervisor
                         .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    cleanup_deployment_image(&store_deployment, &self.config.data_dir);
                 }
             } else if store_deployment.status == DeploymentStatus::Removed {
                 let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                cleanup_deployment_image(&store_deployment, &self.config.data_dir);
             }
         }
     }
@@ -674,6 +818,26 @@ impl DeploymentController {
                 .update_replica_status(service_id, deployment_id, replica_index, status)
                 .await;
         }
+    }
+}
+
+fn cleanup_deployment_image(deployment: &ServiceDeployment, data_dir: &std::path::Path) {
+    if let Some(build_info) = &deployment.build {
+        let image_id = build_info.docker_image_id.clone();
+        tokio::spawn(async move {
+            let _ = tokio::process::Command::new("docker")
+                .args(["rmi", &image_id])
+                .output()
+                .await;
+        });
+    }
+    let short_id: String = deployment.id.chars().take(6).collect();
+    let build_dir = data_dir
+        .join("builds")
+        .join(&deployment.config.id)
+        .join(&short_id);
+    if build_dir.exists() {
+        let _ = std::fs::remove_dir_all(&build_dir);
     }
 }
 

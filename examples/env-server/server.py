@@ -44,7 +44,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body.encode())
 
     def log_message(self, format, *args):
-        pass
+        print(format % args, flush=True)
 
 
 if __name__ == "__main__":

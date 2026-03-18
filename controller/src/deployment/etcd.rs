@@ -555,6 +555,68 @@ impl ClusterStore for EtcdStateStore {
         ))
     }
 
+    async fn update_deployment_build_info(
+        &self,
+        deployment: &Deployment,
+        updated: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+            return Err(anyhow!(
+                "deployment `{}` for service `{}` not found",
+                deployment.id,
+                deployment.service_id,
+            ));
+        };
+
+        let mut stored = snapshot.deployment.clone();
+        stored.build = updated.build.clone();
+        stored.git_commit = updated.git_commit.clone();
+
+        let deployment_json = serde_json::to_string(&stored)
+            .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
+
+        self.txn(
+            vec![compare_mod_revision_or_absent(
+                &snapshot.key,
+                Some(snapshot.mod_revision),
+            )],
+            vec![request_put(&snapshot.key, &deployment_json)],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn delete_deployment(
+        &self,
+        deployment: &Deployment,
+    ) -> anyhow::Result<Option<ServiceDeployment>> {
+        let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+            return Ok(None);
+        };
+
+        let mut client = self.client.lock().await;
+        client
+            .delete(snapshot.key.as_bytes(), None)
+            .await
+            .map_err(|err| anyhow!("failed to delete deployment key: {err}"))?;
+
+        let replicas_prefix = replica_states_prefix(&deployment.service_id, &deployment.id);
+        if let Some(range_end) = prefix_range_end(replicas_prefix.as_bytes()) {
+            let _ = client
+                .delete(
+                    replicas_prefix.as_bytes(),
+                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+                )
+                .await;
+        }
+
+        let secrets_key = deployment_secrets_key(&deployment.service_id, &deployment.id);
+        let _ = client.delete(secrets_key.as_bytes(), None).await;
+
+        Ok(Some(snapshot.deployment))
+    }
+
     async fn update_replica_status(
         &self,
         service_id: &str,

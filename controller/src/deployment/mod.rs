@@ -125,7 +125,6 @@ async fn init_etcd(
             "--data-dir=/data",
             "--listen-client-urls=http://0.0.0.0:2379",
             "--advertise-client-urls=http://127.0.0.1:6479",
-            "--listen-client-http-urls=",
         ]
         .join(" "),
         name: "maestro-etcd".to_string(),
@@ -198,11 +197,16 @@ async fn init_admin(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
-    DockerDeploymentProvider::build(&DockerBuildConfig {
-        context_dir: config.project_dir.clone(),
-        tag: ADMIN_IMAGE_TAG.to_string(),
-        dockerfile: Some("Dockerfile.admin".to_string()),
-    })
+    DockerDeploymentProvider::build(
+        &DockerBuildConfig {
+            context_dir: config.project_dir.clone(),
+            tag: ADMIN_IMAGE_TAG.to_string(),
+            dockerfile: Some("Dockerfile.admin".to_string()),
+            build_args: Default::default(),
+        },
+        None,
+        None,
+    )
     .await
     .expect("failed to build admin-ui image");
 
@@ -253,11 +257,16 @@ async fn init_probe(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
-    DockerDeploymentProvider::build(&DockerBuildConfig {
-        context_dir: config.project_dir.clone(),
-        tag: PROBE_IMAGE_TAG.to_string(),
-        dockerfile: Some("Dockerfile.probe".to_string()),
-    })
+    DockerDeploymentProvider::build(
+        &DockerBuildConfig {
+            context_dir: config.project_dir.clone(),
+            tag: PROBE_IMAGE_TAG.to_string(),
+            dockerfile: Some("Dockerfile.probe".to_string()),
+            build_args: Default::default(),
+        },
+        None,
+        None,
+    )
     .await
     .expect("failed to build probe image");
     let probe_dir = config.probe_dir();
@@ -326,11 +335,16 @@ async fn init_tailnet(
         }
     };
 
-    DockerDeploymentProvider::build(&DockerBuildConfig {
-        context_dir: config.project_dir.clone(),
-        tag: TAILSCALE_IMAGE_TAG.to_string(),
-        dockerfile: Some("Dockerfile.tailscale".to_string()),
-    })
+    DockerDeploymentProvider::build(
+        &DockerBuildConfig {
+            context_dir: config.project_dir.clone(),
+            tag: TAILSCALE_IMAGE_TAG.to_string(),
+            dockerfile: Some("Dockerfile.tailscale".to_string()),
+            build_args: Default::default(),
+        },
+        None,
+        None,
+    )
     .await
     .expect("failed to build tailscale image");
 

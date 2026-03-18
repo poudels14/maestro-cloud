@@ -1,3 +1,4 @@
+mod builder;
 mod cli;
 mod deployment;
 mod error;
@@ -101,7 +102,7 @@ enum CliCommand {
         )]
         dd_include_system_logs: bool,
     },
-    /// Deploy services from the config file
+    /// Deploy services from the config file (dry run by default)
     Rollout {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
         host: String,
@@ -110,6 +111,11 @@ enum CliCommand {
             help = "Path to maestro.jsonc (default: maestro.jsonc)"
         )]
         config: Option<PathBuf>,
+        #[arg(
+            long = "apply",
+            help = "Apply the rollout (without this flag, only shows a diff)"
+        )]
+        apply: bool,
     },
     /// Trigger a redeployment of a running service
     Redeploy {
@@ -280,6 +286,14 @@ async fn run() -> crate::error::Result<()> {
             let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));
             let _sink_handle = sink_worker.spawn();
             let deployment_signal_rx = signal_tx.subscribe();
+            let watcher_signal_rx = signal_tx.subscribe();
+
+            let watcher = builder::BuildWatcher::new(
+                store.clone(),
+                deployment_config.data_dir.clone(),
+                watcher_signal_rx,
+            );
+            let watcher_handle = tokio::spawn(watcher.run());
 
             let mut controller = DeploymentController::new(
                 deployment_config,
@@ -297,6 +311,8 @@ async fn run() -> crate::error::Result<()> {
             }
             .await;
 
+            watcher_handle.abort();
+
             signal_task.abort();
             match result {
                 Ok(controller) => {
@@ -311,9 +327,13 @@ async fn run() -> crate::error::Result<()> {
                 Err(err) => Err(err),
             }
         }
-        Some(CliCommand::Rollout { host, config }) => {
+        Some(CliCommand::Rollout {
+            host,
+            config,
+            apply,
+        }) => {
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            cli::run_rollout(&config_path, &host).await
+            cli::run_rollout(&config_path, &host, apply).await
         }
         Some(CliCommand::Redeploy { service_id, host }) => {
             cli::run_redeploy(&host, &service_id).await

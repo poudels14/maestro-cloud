@@ -8,8 +8,8 @@ use crate::error::{Error, Result};
 
 const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../default.jsonc");
 
-pub async fn run_rollout(config_path: &Path, host: &str) -> Result<()> {
-    rollout::run_rollout(config_path, host).await
+pub async fn run_rollout(config_path: &Path, host: &str, apply: bool) -> Result<()> {
+    rollout::run_rollout(config_path, host, apply).await
 }
 
 pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<()> {

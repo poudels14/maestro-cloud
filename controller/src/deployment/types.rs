@@ -109,7 +109,13 @@ pub enum ServiceProvider {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceBuildConfig {
     pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub dockerfile_path: String,
+    #[serde(default)]
+    pub watch: bool,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,7 +172,7 @@ impl SecretsConfig {
         format!("{:x}", hasher.finalize())
     }
 
-    fn compute_value_hash(value: &str) -> String {
+    pub fn compute_value_hash(value: &str) -> String {
         use sha2::{Digest, Sha256};
         format!("{:x}", Sha256::digest(value.as_bytes()))
     }

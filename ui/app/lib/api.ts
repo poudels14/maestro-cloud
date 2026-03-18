@@ -48,7 +48,8 @@ export async function getLogs(
   const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs${params}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
-  return res.json();
+  const raw = await res.json();
+  return mapLogEntries(raw);
 }
 
 export async function getSystemLogs(name: string, tail?: number): Promise<LogEntry[]> {
@@ -56,5 +57,25 @@ export async function getSystemLogs(name: string, tail?: number): Promise<LogEnt
   const url = `/api/system/${encodeURIComponent(name)}/logs${params}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
-  return res.json();
+  const raw = await res.json();
+  return mapLogEntries(raw);
+}
+
+function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
+  return raw.map((entry) => {
+    let hostname: string | undefined;
+    const tags = entry.tags;
+    if (Array.isArray(tags)) {
+      const match = tags.find((tag: string) => tag.startsWith("hostname:"));
+      if (match) hostname = match.slice("hostname:".length);
+    }
+    return {
+      ts: entry.ts as number,
+      level: entry.level as string,
+      stream: entry.stream as LogEntry["stream"],
+      text: entry.text as string,
+      hostname,
+      source: entry.source as string | undefined
+    };
+  });
 }

@@ -59,3 +59,30 @@ pub(crate) struct RemoveDeploymentResponse {
     pub(crate) deployment_id: String,
     pub(crate) status: DeploymentStatus,
 }
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RolloutDiffResponse {
+    pub(crate) service_id: String,
+    pub(crate) status: RolloutDiffStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) changes: Vec<RolloutChange>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RolloutDiffStatus {
+    New,
+    Changed,
+    Unchanged,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RolloutChange {
+    pub(crate) field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) to: Option<String>,
+}
