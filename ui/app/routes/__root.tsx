@@ -50,9 +50,9 @@ function RootDocument({ children }: { children: JSX.Element }) {
     <html lang="en">
       <head>
         <HydrationScript />
+        <HeadContent />
       </head>
       <body>
-        <HeadContent />
         <Suspense>{children}</Suspense>
         <Scripts />
       </body>

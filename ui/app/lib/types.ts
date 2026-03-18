@@ -5,6 +5,7 @@ export interface BuildCommand {
 
 export interface Build {
   repo: string;
+  branch?: string | null;
   dockerfilePath: string;
 }
 
@@ -48,13 +49,18 @@ export interface ReplicaState {
   status: string;
 }
 
+export interface GitCommitInfo {
+  reference: string;
+  message: string;
+}
+
 export interface Deployment {
   id: string;
   createdAt: number;
   status: string;
   replicas?: ReplicaState[];
   config: Service;
-  gitCommit: string | null;
+  gitCommit: GitCommitInfo | null;
   build: unknown | null;
 }
 
