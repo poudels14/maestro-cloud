@@ -9,6 +9,32 @@ fn arc_value_is_null(v: &Arc<serde_json::Value>) -> bool {
     v.is_null()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogOrigin {
+    System,
+    Build,
+    Service,
+}
+
+impl LogOrigin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogOrigin::System => "system",
+            LogOrigin::Build => "build",
+            LogOrigin::Service => "service",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s {
+            "build" => LogOrigin::Build,
+            "service" => LogOrigin::Service,
+            _ => LogOrigin::System,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     #[serde(default)]
@@ -18,13 +44,17 @@ pub struct LogEntry {
     pub stream: Arc<str>,
     pub text: String,
     pub source: Arc<str>,
-    #[serde(default)]
-    pub system: bool,
+    #[serde(default = "default_origin")]
+    pub origin: LogOrigin,
     #[serde(
         default = "default_null_arc",
         skip_serializing_if = "arc_value_is_null"
     )]
     pub tags: Arc<serde_json::Value>,
+}
+
+fn default_origin() -> LogOrigin {
+    LogOrigin::System
 }
 
 fn default_null_arc() -> Arc<serde_json::Value> {
@@ -44,11 +74,15 @@ impl LogStore {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+
+        let has_origin = conn.prepare("SELECT origin FROM logs LIMIT 0").is_ok();
+        if !has_origin {
+            conn.execute_batch("DROP TABLE IF EXISTS logs; DROP TABLE IF EXISTS sink_cursors;")?;
+        }
+
         conn.execute_batch(
             "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-
             CREATE TABLE IF NOT EXISTS logs (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts INTEGER NOT NULL,
@@ -56,7 +90,7 @@ impl LogStore {
                 stream TEXT NOT NULL,
                 text TEXT NOT NULL,
                 source TEXT NOT NULL,
-                system INTEGER NOT NULL DEFAULT 0,
+                origin TEXT NOT NULL DEFAULT 'system',
                 attributes TEXT NOT NULL DEFAULT '{}'
             );
 
@@ -81,7 +115,7 @@ impl LogStore {
         }
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "INSERT INTO logs (ts, level, stream, text, source, system, attributes)
+            "INSERT INTO logs (ts, level, stream, text, source, origin, attributes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for entry in entries {
@@ -92,7 +126,7 @@ impl LogStore {
                 entry.stream,
                 entry.text,
                 entry.source,
-                entry.system,
+                entry.origin.as_str(),
                 attrs,
             ])?;
         }
@@ -105,7 +139,7 @@ impl LogStore {
     pub async fn read_tail_all(&self, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs ORDER BY seq DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
@@ -119,7 +153,7 @@ impl LogStore {
     pub async fn read_after_all(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
@@ -132,7 +166,7 @@ impl LogStore {
         let conn = self.conn.lock().await;
         let pattern = format!("{prefix}%");
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE source LIKE ?1
              ORDER BY seq DESC
              LIMIT ?2",
@@ -148,7 +182,7 @@ impl LogStore {
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE source = ?1
              ORDER BY seq DESC
              LIMIT ?2",
@@ -164,7 +198,7 @@ impl LogStore {
     pub async fn read_after(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE seq > ?1
              ORDER BY seq ASC
              LIMIT ?2",
@@ -183,7 +217,7 @@ impl LogStore {
     ) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, system, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE source = ?1 AND seq > ?2
              ORDER BY seq ASC
              LIMIT ?3",
@@ -235,6 +269,7 @@ impl LogStore {
     }
 
     fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
+        let origin_str: String = row.get(6)?;
         let attrs_str: String = row.get(7)?;
         let tags: serde_json::Value =
             serde_json::from_str(&attrs_str).unwrap_or(serde_json::Value::Null);
@@ -245,7 +280,7 @@ impl LogStore {
             stream: row.get::<_, String>(3)?.into(),
             text: row.get(4)?,
             source: row.get::<_, String>(5)?.into(),
-            system: row.get(6)?,
+            origin: LogOrigin::from_str(&origin_str),
             tags: Arc::new(tags),
         })
     }

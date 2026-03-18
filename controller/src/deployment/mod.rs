@@ -1,5 +1,5 @@
 use crate::deployment::provider::{DockerBuildConfig, DockerDeploymentProvider};
-use crate::logs::{LogConfig, LogEntry};
+use crate::logs::{LogConfig, LogEntry, LogOrigin};
 use crate::supervisor::{SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor};
 use crate::utils::cmd;
 
@@ -131,7 +131,7 @@ async fn init_etcd(
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
-            system: true,
+            origin: LogOrigin::System,
         }),
     };
     await_job_running(supervisor, etcd_job_config).await;
@@ -177,7 +177,7 @@ async fn init_ingress(
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
-            system: true,
+            origin: LogOrigin::System,
         }),
     };
     await_job_running(supervisor, ingress_job_config).await;
@@ -234,7 +234,7 @@ async fn init_admin(
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
-            system: true,
+            origin: LogOrigin::System,
         }),
     };
     await_job_running(supervisor, admin_job_config).await;
@@ -304,7 +304,7 @@ async fn init_probe(
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
-            system: true,
+            origin: LogOrigin::System,
         }),
     };
     await_job_running(supervisor, probe_job_config).await;
@@ -381,7 +381,7 @@ async fn init_tailnet(
             log_config: Some(LogConfig {
                 sender: log_sender.clone(),
                 tags: Default::default(),
-                system: true,
+                origin: LogOrigin::System,
             }),
         },
     )

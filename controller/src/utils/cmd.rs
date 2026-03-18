@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
-use crate::logs::LogEntry;
+use crate::logs::{LogEntry, LogOrigin};
 
 pub async fn run<S: AsRef<OsStr>>(program: &str, args: &[S]) -> Result<String> {
     let output = Command::new(program)
@@ -40,6 +40,7 @@ pub async fn run_with_logs<S: AsRef<OsStr>>(
     args: &[S],
     sender: &flume::Sender<LogEntry>,
     source: &str,
+    origin: LogOrigin,
 ) -> Result<()> {
     let source: Arc<str> = Arc::from(source);
     let mut child = Command::new(program)
@@ -56,7 +57,7 @@ pub async fn run_with_logs<S: AsRef<OsStr>>(
     let source_clone = source.clone();
     let stdout_task = tokio::spawn(async move {
         if let Some(out) = stdout {
-            pipe_to_collector(out, "stdout", &source_clone, &sender_clone).await;
+            pipe_to_collector(out, "stdout", &source_clone, &sender_clone, origin).await;
         }
     });
 
@@ -64,7 +65,7 @@ pub async fn run_with_logs<S: AsRef<OsStr>>(
     let source_clone = source.clone();
     let stderr_task = tokio::spawn(async move {
         if let Some(err_stream) = stderr {
-            pipe_to_collector(err_stream, "stderr", &source_clone, &sender_clone).await;
+            pipe_to_collector(err_stream, "stderr", &source_clone, &sender_clone, origin).await;
         }
     });
 
@@ -86,6 +87,7 @@ async fn pipe_to_collector(
     stream_name: &str,
     source: &Arc<str>,
     sender: &flume::Sender<LogEntry>,
+    origin: LogOrigin,
 ) {
     let stream: Arc<str> = Arc::from(stream_name);
     let mut lines = tokio::io::BufReader::new(reader).lines();
@@ -101,7 +103,7 @@ async fn pipe_to_collector(
             stream: stream.clone(),
             text: line,
             source: source.clone(),
-            system: true,
+            origin,
             tags: Arc::new(serde_json::Value::Null),
         };
         if sender.send_async(entry).await.is_err() {

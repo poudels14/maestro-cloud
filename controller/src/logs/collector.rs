@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::store::{LogEntry, LogStore};
+use super::store::{LogEntry, LogOrigin, LogStore};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
@@ -10,7 +10,7 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 pub struct LogConfig {
     pub sender: flume::Sender<LogEntry>,
     pub tags: Vec<String>,
-    pub system: bool,
+    pub origin: LogOrigin,
 }
 
 impl LogConfig {

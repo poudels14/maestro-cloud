@@ -11,7 +11,7 @@ use crate::deployment::types::{
     Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, GitCommitInfo,
     QueuedDeployment, ServiceDeployment, ServiceProvider,
 };
-use crate::logs::{LogConfig, LogEntry};
+use crate::logs::{LogConfig, LogEntry, LogOrigin};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
@@ -385,7 +385,7 @@ impl DeploymentController {
                     LogConfig {
                         sender,
                         tags,
-                        system: false,
+                        origin: LogOrigin::Service,
                     }
                 }),
             };
@@ -787,7 +787,7 @@ impl DeploymentController {
                 LogConfig {
                     sender,
                     tags,
-                    system: false,
+                    origin: LogOrigin::Service,
                 }
             }),
         };
