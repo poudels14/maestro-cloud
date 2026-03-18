@@ -70,7 +70,7 @@ impl BuildWatcher {
             let Some(build_config) = &info.config.build else {
                 continue;
             };
-            if !build_config.watch {
+            if !build_config.watch || info.deploy_frozen {
                 continue;
             }
             if let Some((retry_at, _)) = self.backoff.get(&service_id) {

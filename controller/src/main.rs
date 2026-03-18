@@ -116,6 +116,8 @@ enum CliCommand {
             help = "Apply the rollout (without this flag, only shows a diff)"
         )]
         apply: bool,
+        #[arg(long = "force", help = "Force rollout even if deploy is frozen")]
+        force: bool,
     },
     /// Trigger a redeployment of a running service
     Redeploy {
@@ -331,9 +333,10 @@ async fn run() -> crate::error::Result<()> {
             host,
             config,
             apply,
+            force,
         }) => {
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            cli::run_rollout(&config_path, &host, apply).await
+            cli::run_rollout(&config_path, &host, apply, force).await
         }
         Some(CliCommand::Redeploy { service_id, host }) => {
             cli::run_redeploy(&host, &service_id).await

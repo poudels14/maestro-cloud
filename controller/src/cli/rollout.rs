@@ -53,7 +53,7 @@ struct PatchServiceResponse {
     version: String,
 }
 
-pub async fn run_rollout(config_path: &Path, host: &str, apply: bool) -> Result<()> {
+pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: bool) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             Error::not_found(format!("{} does not exist", config_path.display()))
@@ -92,12 +92,17 @@ pub async fn run_rollout(config_path: &Path, host: &str, apply: bool) -> Result<
         return Ok(());
     }
 
-    let rollout_url = format!("{base_url}/api/services/rollout");
+    let mut rollout_url = reqwest::Url::parse(&format!("{base_url}/api/services/rollout"))
+        .map_err(|err| Error::invalid_input(format!("invalid rollout URL: {err}")))?;
+    if force {
+        rollout_url.query_pairs_mut().append_pair("force", "true");
+    }
     println!("[maestro]: rolling out services");
 
     for (service_id, service_template) in &cluster.services {
         let payload = service_payload(service_id, service_template)?;
-        let response = call_rollout_endpoint(&client, &rollout_url, &payload, service_id).await?;
+        let response =
+            call_rollout_endpoint(&client, rollout_url.as_str(), &payload, service_id).await?;
 
         if response.queued {
             println!(
@@ -222,6 +227,11 @@ async fn call_rollout_endpoint(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::CONFLICT && body.contains("frozen") {
+            return Err(Error::external(format!(
+                "deploy is frozen for service `{service_id}`; use --force to override"
+            )));
+        }
         return Err(Error::external(format!(
             "rollout failed for service `{service_id}` with status {status}: {body}"
         )));

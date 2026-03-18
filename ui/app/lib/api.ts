@@ -20,11 +20,20 @@ export async function deleteService(serviceId: string) {
   if (!res.ok) throw new Error(`Failed to delete service: ${res.statusText}`);
 }
 
-export async function redeployService(serviceId: string) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, {
-    method: "POST"
-  });
+export async function redeployService(serviceId: string, force?: boolean) {
+  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, location.origin);
+  if (force) url.searchParams.set("force", "true");
+  const res = await fetch(url, { method: "POST" });
   if (!res.ok) throw new Error(`Failed to redeploy: ${res.statusText}`);
+}
+
+export async function freezeService(serviceId: string, frozen: boolean) {
+  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/freeze`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ frozen })
+  });
+  if (!res.ok) throw new Error(`Failed to update freeze status: ${res.statusText}`);
 }
 
 export async function cancelDeployment(serviceId: string, deploymentId: string) {
@@ -44,8 +53,11 @@ export async function getLogs(
   deploymentId: string,
   tail?: number
 ): Promise<LogEntry[]> {
-  const params = tail ? `?tail=${tail}` : "";
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs${params}`;
+  const url = new URL(
+    `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
+    location.origin
+  );
+  if (tail) url.searchParams.set("tail", String(tail));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
   const raw = await res.json();
@@ -53,8 +65,8 @@ export async function getLogs(
 }
 
 export async function getSystemLogs(name: string, tail?: number): Promise<LogEntry[]> {
-  const params = tail ? `?tail=${tail}` : "";
-  const url = `/api/system/${encodeURIComponent(name)}/logs${params}`;
+  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
+  if (tail) url.searchParams.set("tail", String(tail));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
   const raw = await res.json();
