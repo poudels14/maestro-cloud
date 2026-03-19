@@ -1,7 +1,7 @@
-mod cancel;
-mod redeploy;
-mod rollout;
-mod upgrade;
+pub mod cancel;
+pub mod redeploy;
+pub mod rollout;
+pub mod upgrade;
 
 use std::{io::Write, path::Path};
 
@@ -9,28 +9,6 @@ use crate::error::{Error, Result};
 
 const DEFAULT_CLUSTER_TEMPLATE: &str = include_str!("../templates/cluster.jsonc");
 const DEFAULT_START_TEMPLATE: &str = include_str!("../templates/maestro.jsonc");
-
-pub async fn run_rollout(
-    config_path: &Path,
-    host: &str,
-    apply: bool,
-    force: bool,
-    jwt_secret: Option<&str>,
-) -> Result<()> {
-    rollout::run_rollout(config_path, host, apply, force, jwt_secret).await
-}
-
-pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<()> {
-    cancel::run_cancel(host, service_id, deployment_id).await
-}
-
-pub async fn run_redeploy(host: &str, service_id: &str) -> Result<()> {
-    redeploy::run_redeploy(host, service_id).await
-}
-
-pub async fn run_upgrade_system(host: &str) -> Result<()> {
-    upgrade::run_upgrade_system(host).await
-}
 
 pub fn init_config(start_config_path: &Path, cluster_config_path: &Path) -> Result<()> {
     write_template(start_config_path, DEFAULT_START_TEMPLATE)?;

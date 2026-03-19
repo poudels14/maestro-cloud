@@ -207,19 +207,23 @@ enum UpgradeTarget {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run().await {
-        eprintln!("{err}");
-        std::process::exit(2);
+    match run().await {
+        Ok(true) => restart_self(),
+        Ok(false) => {}
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
     }
 }
 
-async fn run() -> crate::error::Result<()> {
+async fn run() -> crate::error::Result<bool> {
     let cli = Cli::try_parse().map_err(|err| Error::invalid_input(err.to_string()))?;
 
     match cli.command {
         None => {
             print!("{}", help_text());
-            Ok(())
+            Ok(false)
         }
         Some(CliCommand::Start {
             config,
@@ -438,7 +442,7 @@ async fn run() -> crate::error::Result<()> {
             let result = async move {
                 let result = controller.run().await.map_err(Into::into);
                 let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
-                result.map(|()| controller)
+                result.map(|exit_reason| (exit_reason, controller))
             }
             .await;
 
@@ -447,14 +451,14 @@ async fn run() -> crate::error::Result<()> {
 
             signal_task.abort();
             match result {
-                Ok(controller) => {
+                Ok((exit_reason, controller)) => {
                     let mut supervisor = controller.into_supervisor();
                     supervisor
                         .shutdown_all(supervisor::ShutdownRequest::Force)
                         .await;
                     drop(supervisor);
                     let _ = collector_handle.await;
-                    Ok(())
+                    Ok(exit_reason == deployment::controller::ControllerExitReason::Restart)
                 }
                 Err(err) => Err(err),
             }
@@ -467,21 +471,28 @@ async fn run() -> crate::error::Result<()> {
             jwt_secret,
         }) => {
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref()).await
+            cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref())
+                .await
+                .map(|()| false)
         }
         Some(CliCommand::Redeploy { service_id, host }) => {
-            cli::run_redeploy(&host, &service_id).await
+            cli::redeploy::run_redeploy(&host, &service_id)
+                .await
+                .map(|()| false)
         }
         Some(CliCommand::Cancel {
             service_id,
             deployment_id,
             host,
-        }) => cli::run_cancel(&host, &service_id, &deployment_id).await,
+        }) => cli::cancel::run_cancel(&host, &service_id, &deployment_id)
+            .await
+            .map(|()| false),
         Some(CliCommand::Probe {
             etcd_endpoint,
             port,
         }) => probe::run(&etcd_endpoint, port)
             .await
+            .map(|()| false)
             .map_err(|err| Error::internal(err.to_string())),
         Some(CliCommand::Logs {
             source,
@@ -522,15 +533,18 @@ async fn run() -> crate::error::Result<()> {
                 }
             }
 
-            Ok(())
+            Ok(false)
         }
         Some(CliCommand::Upgrade {
             target: UpgradeTarget::System { host },
-        }) => cli::run_upgrade_system(&host).await,
+        }) => cli::upgrade::run_upgrade_system(&host)
+            .await
+            .map(|()| false),
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
             Path::new(DEFAULT_CLUSTER_CONFIG_PATH),
-        ),
+        )
+        .map(|()| false),
     }
 }
 
@@ -699,4 +713,14 @@ fn parse_tags(tags: Vec<String>) -> crate::error::Result<Vec<String>> {
         }
     }
     Ok(tags)
+}
+
+fn restart_self() -> ! {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().expect("failed to get current executable path");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    eprintln!("[maestro]: restarting process");
+    let err = std::process::Command::new(&exe).args(&args).exec();
+    eprintln!("[maestro]: exec failed: {err}");
+    std::process::exit(1);
 }

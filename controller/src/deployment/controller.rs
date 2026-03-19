@@ -4,7 +4,8 @@ use anyhow::Result;
 use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
 use crate::deployment::provider::{
-    BuildOutput, DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
+    BuildOutput, DockerBuildConfig, DockerDeploymentProvider, ServiceCommandPlanner,
+    ShellDeploymentProvider,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -28,6 +29,12 @@ const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 #[cfg(test)]
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
 const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControllerExitReason {
+    Shutdown,
+    Restart,
+}
 
 struct PendingBuild {
     handle: JoinHandle<Result<BuildOutput>>,
@@ -82,8 +89,9 @@ impl DeploymentController {
         }
     }
 
-    pub(crate) async fn run(&mut self) -> Result<()> {
+    pub(crate) async fn run(&mut self) -> Result<ControllerExitReason> {
         let mut shutdown_started = false;
+        let mut exit_reason = ControllerExitReason::Shutdown;
         let mut signal_rx = self.signal_rx.resubscribe();
 
         if let Err(err) = self.queue_terminated_active_deployments().await {
@@ -102,17 +110,23 @@ impl DeploymentController {
                         }
                         Ok(ShutdownEvent::Force) | Err(broadcast::error::RecvError::Closed)=> {
                             self.shutdown_all(ShutdownRequest::Force).await;
-                            return Ok(());
+                            return Ok(exit_reason);
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }
                 }
                 _ = sleep(POLL_INTERVAL) => {
-                    self.check_system_upgrade().await;
+                    if let Some(reason) = self.check_system_upgrade().await {
+                        exit_reason = reason;
+                        if !shutdown_started {
+                            self.shutdown_all(ShutdownRequest::Graceful).await;
+                            shutdown_started = true;
+                        }
+                    }
                     self.reap_finished_tasks().await;
                     if shutdown_started {
                         if !self.has_running_services() {
-                            return Ok(());
+                            return Ok(exit_reason);
                         }
                     } else if let Err(err) = self.reconcile_deployments().await {
                         eprintln!("[maestro]: controller queue scan error: {err}");
@@ -134,46 +148,74 @@ impl DeploymentController {
         Ok(())
     }
 
-    async fn check_system_upgrade(&self) {
+    async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
         let request = self.store.read_system_upgrade_request().await;
-        if let Ok(Some(system_type)) = request {
-            let _ = self.store.delete_system_upgrade_request().await;
-            if system_type == "nixos" {
-                eprintln!("[maestro]: starting NixOS system upgrade");
-                let flake_result = tokio::process::Command::new("nix")
-                    .args(["flake", "update", "--flake", "/etc/maestro"])
-                    .output()
-                    .await;
-                if let Err(err) = &flake_result {
-                    eprintln!("[maestro]: nix flake update failed: {err}");
-                    return;
-                }
-                let flake_output = flake_result.unwrap();
-                if !flake_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&flake_output.stderr);
-                    eprintln!("[maestro]: nix flake update failed: {stderr}");
-                    return;
-                }
+        let Some(system_type) = request.ok().flatten() else {
+            return None;
+        };
+        let _ = self.store.delete_system_upgrade_request().await;
 
-                eprintln!("[maestro]: running nixos-rebuild boot");
-                let rebuild_result = tokio::process::Command::new("nixos-rebuild")
-                    .args(["boot", "--flake", "/etc/maestro#default"])
-                    .output()
-                    .await;
-                if let Err(err) = &rebuild_result {
-                    eprintln!("[maestro]: nixos-rebuild failed: {err}");
-                    return;
-                }
-                let rebuild_output = rebuild_result.unwrap();
-                if !rebuild_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
-                    eprintln!("[maestro]: nixos-rebuild failed: {stderr}");
-                    return;
-                }
-
-                eprintln!("[maestro]: NixOS upgrade complete, rebooting");
-                let _ = tokio::process::Command::new("reboot").output().await;
+        if system_type == "nixos" {
+            eprintln!("[maestro]: starting NixOS system upgrade");
+            let flake_result = tokio::process::Command::new("nix")
+                .args(["flake", "update", "--flake", "/etc/maestro"])
+                .output()
+                .await;
+            if let Err(err) = &flake_result {
+                eprintln!("[maestro]: nix flake update failed: {err}");
+                return None;
             }
+            let flake_output = flake_result.unwrap();
+            if !flake_output.status.success() {
+                let stderr = String::from_utf8_lossy(&flake_output.stderr);
+                eprintln!("[maestro]: nix flake update failed: {stderr}");
+                return None;
+            }
+
+            eprintln!("[maestro]: running nixos-rebuild boot");
+            let rebuild_result = tokio::process::Command::new("nixos-rebuild")
+                .args(["boot", "--flake", "/etc/maestro#default"])
+                .output()
+                .await;
+            if let Err(err) = &rebuild_result {
+                eprintln!("[maestro]: nixos-rebuild failed: {err}");
+                return None;
+            }
+            let rebuild_output = rebuild_result.unwrap();
+            if !rebuild_output.status.success() {
+                let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
+                eprintln!("[maestro]: nixos-rebuild failed: {stderr}");
+                return None;
+            }
+
+            eprintln!("[maestro]: NixOS upgrade complete, rebooting");
+            let _ = tokio::process::Command::new("reboot").output().await;
+            None
+        } else {
+            eprintln!("[maestro]: upgrade requested, rebuilding system images");
+            let images = [
+                ("maestro-admin", Some("Dockerfile.admin")),
+                ("maestro-probe", Some("Dockerfile.probe")),
+            ];
+            for (tag, dockerfile) in images {
+                let result = DockerDeploymentProvider::build(
+                    &DockerBuildConfig {
+                        context_dir: self.config.project_dir.clone(),
+                        tag: tag.to_string(),
+                        dockerfile: dockerfile.map(String::from),
+                        build_args: Default::default(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+                if let Err(err) = result {
+                    eprintln!("[maestro]: failed to rebuild {tag}: {err}");
+                    return None;
+                }
+            }
+            eprintln!("[maestro]: system images rebuilt, draining and restarting");
+            Some(ControllerExitReason::Restart)
         }
     }
 
