@@ -12,6 +12,7 @@ Usage: dns-proxy.py <canonical-cluster-name> [cluster-alias]
 """
 
 import json
+import os
 import socket
 import struct
 import subprocess
@@ -19,7 +20,9 @@ import sys
 import threading
 import time
 
-DOCKER_DNS = "127.0.0.11"
+DNS_UPSTREAM_IS_COREDNS = "MAESTRO_DNS_UPSTREAM" in os.environ
+DNS_UPSTREAM = "127.0.0.1" if DNS_UPSTREAM_IS_COREDNS else "127.0.0.11"
+DNS_UPSTREAM_PORT = 5353 if DNS_UPSTREAM_IS_COREDNS else DNS_PORT
 DNS_PORT = 53
 ROOT_DOMAIN = ["maestro", "internal"]
 PEER_REFRESH_INTERVAL = 15
@@ -78,6 +81,21 @@ def resolve_upstream(sock, query_data, upstream_host, upstream_port=DNS_PORT):
     sock.sendto(query_data, (upstream_host, upstream_port))
     response, _ = sock.recvfrom(4096)
     return response
+
+
+def resolve_local(sock, data, original_qname, bare_labels, canonical_cluster, qname_end, upstream=None):
+    if DNS_UPSTREAM_IS_COREDNS and not upstream:
+        canonical_labels = bare_labels + [canonical_cluster] + ROOT_DOMAIN
+        canonical_qname = encode_name(canonical_labels)
+        rewritten = data[:12] + canonical_qname + data[qname_end:]
+        response = resolve_upstream(sock, rewritten, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
+        return response.replace(canonical_qname, original_qname)
+    else:
+        target = upstream or DNS_UPSTREAM
+        bare_qname = encode_name(bare_labels)
+        rewritten = data[:12] + bare_qname + data[qname_end:]
+        response = resolve_upstream(sock, rewritten, target)
+        return response.replace(bare_qname, original_qname)
 
 
 def verify_peer(ip):
@@ -195,10 +213,9 @@ def handle_dns_query(data, my_cluster, state, lock):
             bare_labels = labels[:-3]
 
             if not bare_labels:
-                return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+                return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
 
             original_qname = encode_name(labels)
-            bare_qname = encode_name(bare_labels)
 
             with lock:
                 peers = state.get("peers", {})
@@ -207,21 +224,15 @@ def handle_dns_query(data, my_cluster, state, lock):
                 alias_owner = alias_owners.get(query_cluster)
 
             if query_cluster == my_cluster or alias_owner == my_cluster:
-                rewritten = data[:12] + bare_qname + data[qname_end:]
-                response = resolve_upstream(upstream_sock, rewritten, DOCKER_DNS)
-                return response.replace(bare_qname, original_qname)
+                return resolve_local(upstream_sock, data, original_qname, bare_labels, my_cluster, qname_end)
             elif peer_ip:
-                rewritten = data[:12] + bare_qname + data[qname_end:]
-                response = resolve_upstream(upstream_sock, rewritten, peer_ip)
-                return response.replace(bare_qname, original_qname)
+                return resolve_local(upstream_sock, data, original_qname, bare_labels, query_cluster, qname_end, peer_ip)
             elif alias_owner and alias_owner in peers:
-                rewritten = data[:12] + bare_qname + data[qname_end:]
-                response = resolve_upstream(upstream_sock, rewritten, peers[alias_owner])
-                return response.replace(bare_qname, original_qname)
+                return resolve_local(upstream_sock, data, original_qname, bare_labels, alias_owner, qname_end, peers[alias_owner])
             else:
-                return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+                return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
         else:
-            return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+            return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
     finally:
         upstream_sock.close()
 
@@ -274,7 +285,7 @@ def main():
     alias_status = "active" if alias_owners.get(my_alias) == my_cluster else "conflicted"
 
     print(
-        f"dns proxy started, cluster={my_cluster}, alias={my_alias} ({alias_status}), peers={peers}, upstream={DOCKER_DNS}",
+        f"dns proxy started, cluster={my_cluster}, alias={my_alias} ({alias_status}), peers={peers}, upstream={DNS_UPSTREAM} (coredns={DNS_UPSTREAM_IS_COREDNS})",
         file=sys.stderr,
         flush=True,
     )

@@ -25,6 +25,7 @@ pub struct MetricPoint {
 pub struct MetricsCollector {
     endpoint: String,
     cluster_suffix: String,
+    runtime_cli: String,
     client: reqwest::Client,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
 }
@@ -33,11 +34,13 @@ impl MetricsCollector {
     pub fn new(
         endpoint: String,
         cluster_name: String,
+        runtime_cli: String,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
     ) -> Self {
         Self {
             endpoint,
             cluster_suffix: format!("-{cluster_name}"),
+            runtime_cli,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -82,7 +85,9 @@ impl MetricsCollector {
 
         points.push(collect_node_metrics(now));
 
-        let raw_stats = collect_docker_stats().await.unwrap_or_default();
+        let raw_stats = collect_container_stats(&self.runtime_cli)
+            .await
+            .unwrap_or_default();
         let mut service_agg: HashMap<String, MetricPoint> = HashMap::new();
         let mut cluster = MetricPoint {
             ts: now,
@@ -183,12 +188,12 @@ struct ContainerStats {
     net_tx_bytes: i64,
 }
 
-async fn collect_docker_stats() -> Result<Vec<ContainerStats>> {
-    let output = Command::new("docker")
+async fn collect_container_stats(runtime_cli: &str) -> Result<Vec<ContainerStats>> {
+    let output = Command::new(runtime_cli)
         .args(["stats", "--no-stream", "--format", "{{json .}}"])
         .output()
         .await
-        .map_err(|err| anyhow!("failed to run docker stats: {err}"))?;
+        .map_err(|err| anyhow!("failed to run {runtime_cli} stats: {err}"))?;
 
     if !output.status.success() {
         return Ok(Vec::new());

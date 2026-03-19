@@ -1,7 +1,7 @@
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::{
-    DockerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
+    ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -9,6 +9,7 @@ use crate::deployment::types::{
     ReplicaState, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
     ServiceInfo, ServiceProvider,
 };
+use crate::runtime;
 use crate::supervisor::controller::JobSupervisor;
 use crate::utils::crypto::SecretString;
 use anyhow::Result;
@@ -70,9 +71,11 @@ fn command_planner_uses_image_for_deploy_when_present() {
         }),
     );
 
-    let planner = DockerDeploymentProvider {
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         network: "test-net".to_string(),
         dns_domain: None,
+        dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
@@ -111,9 +114,11 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
         "env=test".to_string(),
     ];
 
-    let planner = DockerDeploymentProvider {
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         network: "test-net".to_string(),
         dns_domain: None,
+        dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
@@ -166,9 +171,11 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
         }),
     );
 
-    let planner = DockerDeploymentProvider {
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         network: "test-net".to_string(),
         dns_domain: None,
+        dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
     };
     let deploy = planner
@@ -740,6 +747,9 @@ async fn stress_supervisor_updates_deployment_statuses() {
         JobSupervisor::new(),
         signal_rx,
         None,
+        runtime::create_provider(crate::config::RuntimeType::Docker),
+        None,
+        None,
     );
 
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -758,17 +768,13 @@ async fn stress_supervisor_updates_deployment_statuses() {
     assert!(
         deployments
             .iter()
-            .all(|deployment| deployment.status == DeploymentStatus::Ready)
+            .all(|deployment| deployment.status == DeploymentStatus::Building)
     );
 
     for history in store.transition_history().values() {
         assert_eq!(
             history.as_slice(),
-            &[
-                DeploymentStatus::Queued,
-                DeploymentStatus::Building,
-                DeploymentStatus::Ready,
-            ]
+            &[DeploymentStatus::Queued, DeploymentStatus::Building,]
         );
     }
 
@@ -823,6 +829,9 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
         JobSupervisor::new(),
         signal_rx,
         None,
+        runtime::create_provider(crate::config::RuntimeType::Docker),
+        None,
+        None,
     );
 
     let start_deadline = Instant::now() + Duration::from_secs(2);
@@ -845,7 +854,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             .find(|deployment| deployment.id == "svc-0-1")
             .expect("second deployment should exist");
 
-        if second.status == DeploymentStatus::Ready {
+        if second.status == DeploymentStatus::Building {
             assert_ne!(first.status, DeploymentStatus::Terminated);
             second_ready = true;
             break;
@@ -869,23 +878,11 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
     let transitions = store.transition_history();
     assert_eq!(
         transitions.get("svc-0-0").map(Vec::as_slice),
-        Some(
-            &[
-                DeploymentStatus::Queued,
-                DeploymentStatus::Building,
-                DeploymentStatus::Ready,
-            ][..]
-        )
+        Some(&[DeploymentStatus::Queued, DeploymentStatus::Building,][..])
     );
     assert_eq!(
         transitions.get("svc-0-1").map(Vec::as_slice),
-        Some(
-            &[
-                DeploymentStatus::Queued,
-                DeploymentStatus::Building,
-                DeploymentStatus::Ready,
-            ][..]
-        )
+        Some(&[DeploymentStatus::Queued, DeploymentStatus::Building,][..])
     );
 
     let _ = std::fs::remove_dir_all(&data_dir);
@@ -933,6 +930,9 @@ async fn stop_requested_active_deployment_is_marked_removed() {
         JobSupervisor::new(),
         signal_rx,
         None,
+        runtime::create_provider(crate::config::RuntimeType::Docker),
+        None,
+        None,
     );
 
     let ready_deadline = Instant::now() + Duration::from_secs(2);
@@ -949,13 +949,13 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             .into_iter()
             .find(|item| item.id == "svc-0-0")
             .expect("deployment should exist");
-        if deployment.status == DeploymentStatus::Ready {
+        if deployment.status == DeploymentStatus::Building && controller.has_running_services() {
             break;
         }
 
         assert!(
             Instant::now() < ready_deadline,
-            "deployment did not reach ready in time"
+            "deployment did not start in time"
         );
     }
 
@@ -999,7 +999,6 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             &[
                 DeploymentStatus::Queued,
                 DeploymentStatus::Building,
-                DeploymentStatus::Ready,
                 DeploymentStatus::Draining,
                 DeploymentStatus::Removed,
             ][..]
@@ -1057,6 +1056,9 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         JobSupervisor::new(),
         signal_rx,
         None,
+        runtime::create_provider(crate::config::RuntimeType::Docker),
+        None,
+        None,
     );
 
     let mut ingress_was_empty_after_first_ready = false;
@@ -1085,14 +1087,14 @@ async fn continuous_redeploy_maintains_ingress_backends() {
 
             let deployments = store.all_deployments();
             let current = deployments.iter().find(|d| d.id == dep_id);
-            if current.is_some_and(|d| d.status == DeploymentStatus::Ready) {
+            if current.is_some_and(|d| d.status == DeploymentStatus::Building) {
                 first_deployment_ready = true;
                 break;
             }
 
             assert!(
                 Instant::now() < ready_deadline,
-                "deployment {dep_id} (round {deploy_round}) did not reach Ready in time"
+                "deployment {dep_id} (round {deploy_round}) did not start in time"
             );
         }
 
@@ -1121,11 +1123,14 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         .iter()
         .filter(|d| d.config.id == service_id)
         .collect();
-    let ready_count = service_deployments
+    let building_count = service_deployments
         .iter()
-        .filter(|d| d.status == DeploymentStatus::Ready)
+        .filter(|d| d.status == DeploymentStatus::Building)
         .count();
-    assert_eq!(ready_count, 1, "exactly one deployment should be Ready");
+    assert_eq!(
+        building_count, 1,
+        "exactly one deployment should be Building (active)"
+    );
 
     let last_dep_id = deployment_ids.last().unwrap();
     let last_dep = service_deployments
@@ -1134,8 +1139,8 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         .expect("last deployment should exist");
     assert_eq!(
         last_dep.status,
-        DeploymentStatus::Ready,
-        "the latest deployment should be the one that is Ready"
+        DeploymentStatus::Building,
+        "the latest deployment should be the active one"
     );
 
     let backends = store.ingress_backends(service_id);

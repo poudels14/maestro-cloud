@@ -3,6 +3,36 @@ use std::fmt;
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuntimeType {
+    #[default]
+    Docker,
+    Nerdctl,
+}
+
+impl fmt::Display for RuntimeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RuntimeType::Docker => write!(f, "docker"),
+            RuntimeType::Nerdctl => write!(f, "nerdctl"),
+        }
+    }
+}
+
+impl std::str::FromStr for RuntimeType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "docker" => Ok(RuntimeType::Docker),
+            "nerdctl" => Ok(RuntimeType::Nerdctl),
+            other => Err(format!(
+                "unsupported runtime: {other} (use 'docker' or 'nerdctl')"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct StartConfig {
@@ -21,6 +51,8 @@ pub struct StartConfig {
     pub datadog: Option<DatadogConfig>,
     #[serde(default)]
     pub system: Option<SystemType>,
+    #[serde(default)]
+    pub runtime: RuntimeType,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

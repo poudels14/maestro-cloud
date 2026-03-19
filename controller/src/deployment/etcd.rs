@@ -773,7 +773,40 @@ impl ClusterStore for EtcdStateStore {
         service_id: &str,
     ) -> anyhow::Result<Option<DeploymentStatus>> {
         let deployments = self.list_service_deployments(service_id).await?;
-        Ok(deployments.first().map(|d| d.status.clone()))
+        let Some(latest) = deployments.first() else {
+            return Ok(None);
+        };
+        if matches!(
+            latest.status,
+            DeploymentStatus::Queued
+                | DeploymentStatus::Draining
+                | DeploymentStatus::Removed
+                | DeploymentStatus::Canceled
+                | DeploymentStatus::Terminated
+        ) {
+            return Ok(Some(latest.status.clone()));
+        }
+        let replicas = self
+            .read_replica_states(service_id, &latest.id)
+            .await
+            .unwrap_or_default();
+        if replicas.is_empty() {
+            return Ok(Some(latest.status.clone()));
+        }
+        let all_ready = replicas.iter().all(|r| r.status == DeploymentStatus::Ready);
+        let any_ready = replicas.iter().any(|r| r.status == DeploymentStatus::Ready);
+        let all_crashed = replicas
+            .iter()
+            .all(|r| r.status == DeploymentStatus::Crashed);
+        if all_ready {
+            Ok(Some(DeploymentStatus::Ready))
+        } else if all_crashed {
+            Ok(Some(DeploymentStatus::Crashed))
+        } else if any_ready {
+            Ok(Some(DeploymentStatus::Ready))
+        } else {
+            Ok(Some(DeploymentStatus::PendingReady))
+        }
     }
 
     async fn read_service_deployment(

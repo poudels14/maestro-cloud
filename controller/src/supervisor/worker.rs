@@ -23,6 +23,12 @@ pub enum JobCommand {
     Shell(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerRef {
+    pub name: String,
+    pub runtime_cli: String,
+}
+
 #[derive(Clone)]
 pub struct SupervisedJobConfig {
     pub id: String,
@@ -33,7 +39,7 @@ pub struct SupervisedJobConfig {
     pub max_restarts: Option<u32>,
 
     pub shutdown_grace_period_ms: u64,
-    pub docker_container: Option<String>,
+    pub container: Option<ContainerRef>,
     pub secrets_mount: Option<SecretsMount>,
     pub log_config: Option<LogConfig>,
 }
@@ -270,7 +276,7 @@ impl SupervisedJobRunner {
             job: &Job,
             grace: Duration,
             shutdown_timeout: Duration,
-            docker_container: Option<&str>,
+            container: Option<&ContainerRef>,
         ) -> bool {
             match request {
                 ShutdownRequest::Force => force_stop_and_delete(job).await,
@@ -279,13 +285,29 @@ impl SupervisedJobRunner {
                 }
                 ShutdownRequest::None => return false,
             }
-            if let Some(container) = docker_container {
-                docker_kill(container).await;
+            if let Some(container) = container {
+                container_kill(&container.name, &container.runtime_cli).await;
             }
             true
         }
 
         loop {
+            let current_shutdown = *shutdown_rx.borrow();
+            if current_shutdown != ShutdownRequest::None {
+                if handle_shutdown(
+                    current_shutdown,
+                    &job,
+                    shutdown_grace,
+                    shutdown_timeout,
+                    config.container.as_ref(),
+                )
+                .await
+                {
+                    exit_status = SupervisedJobStatus::Stopped;
+                    break;
+                }
+            }
+
             if let Some(secrets) = &config.secrets_mount {
                 if let Err(err) = secrets.write() {
                     eprintln!("[maestro]: failed to write secrets for '{name}': {err}");
@@ -307,7 +329,7 @@ impl SupervisedJobRunner {
                         &job,
                         shutdown_grace,
                         shutdown_timeout,
-                        config.docker_container.as_deref(),
+                        config.container.as_ref(),
                     )
                     .await
                     {
@@ -349,7 +371,7 @@ impl SupervisedJobRunner {
                             &job,
                             shutdown_grace,
                             shutdown_timeout,
-                            config.docker_container.as_deref(),
+                            config.container.as_ref(),
                         )
                         .await
                         {
@@ -426,8 +448,8 @@ async fn force_stop_and_delete(job: &Job) {
     let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
 }
 
-async fn docker_kill(container: &str) {
-    let _ = crate::utils::cmd::run("docker", &["kill", container]).await;
+async fn container_kill(container: &str, runtime_cli: &str) {
+    let _ = crate::utils::cmd::run(runtime_cli, &["kill", container]).await;
 }
 
 async fn is_job_running(job: &Job) -> bool {
