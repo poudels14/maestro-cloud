@@ -51,7 +51,7 @@ enum CliCommand {
             help = "Host port for maestro controller (not exposed if not set)"
         )]
         admin_port: Option<u16>,
-        #[arg(long = "port", help = "Host port for ingress")]
+        #[arg(long = "ingress-port", help = "Host port for ingress")]
         web_port: u16,
         #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
         data_dir: PathBuf,
@@ -242,7 +242,8 @@ async fn run() -> crate::error::Result<()> {
                 cluster_name,
                 data_dir,
                 etcd_port,
-                probe_port: admin_port,
+                probe_port: None,
+                admin_port,
                 web_port,
                 project_dir,
                 network,
