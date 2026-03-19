@@ -213,9 +213,7 @@ async fn init_admin(
     .await
     .expect("failed to build admin-ui image");
 
-    let port_flag = config
-        .probe_port
-        .map(|p| format!("127.0.0.1:{}:3000", get_unused_port(p)));
+    let port_flag = config.admin_port.map(|p| format!("127.0.0.1:{}:3000", p));
     let mut admin_flags: Vec<String> = Vec::new();
     if let Some(pf) = &port_flag {
         admin_flags.extend(["-p".to_string(), pf.clone()]);
@@ -386,6 +384,10 @@ async fn init_tailnet(
                     format!("TS_ROUTES={network_cidr}"),
                     "-e".to_string(),
                     "TS_USERSPACE=true".to_string(),
+                    "-e".to_string(),
+                    format!("TS_HOSTNAME=maestro-tailscale-{}", config.cluster_name),
+                    "-e".to_string(),
+                    "TS_EXTRA_ARGS=--accept-dns=false".to_string(),
                 ];
                 if let Some(ip) = &nameserver_ip {
                     flags.extend(["--ip".to_string(), ip.clone()]);
@@ -476,26 +478,13 @@ async fn get_network_cidr(network: &str) -> Option<String> {
     if cidr.is_empty() { None } else { Some(cidr) }
 }
 
-fn get_unused_port(preferred: u16) -> u16 {
-    if std::net::TcpListener::bind(("0.0.0.0", preferred)).is_ok() {
-        preferred
-    } else {
-        let listener =
-            std::net::TcpListener::bind("0.0.0.0:0").expect("failed to bind to random port");
-        listener
-            .local_addr()
-            .expect("failed to get local addr")
-            .port()
-    }
-}
-
 fn default_nameserver_ip(network_cidr: &str) -> Option<String> {
     let base = network_cidr.split('/').next()?;
     let mut octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
     if octets.len() != 4 {
         return None;
     }
-    octets[3] = 255;
+    octets[3] = 254;
     Some(format!(
         "{}.{}.{}.{}",
         octets[0], octets[1], octets[2], octets[3]

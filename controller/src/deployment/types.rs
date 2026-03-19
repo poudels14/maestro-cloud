@@ -13,6 +13,7 @@ pub struct DeploymentConfig {
     pub data_dir: PathBuf,
     pub etcd_port: u16,
     pub probe_port: Option<u16>,
+    pub admin_port: Option<u16>,
     pub web_port: u16,
     pub project_dir: PathBuf,
     pub network: String,
