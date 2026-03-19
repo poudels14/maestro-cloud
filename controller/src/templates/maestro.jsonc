@@ -1,0 +1,19 @@
+{
+  "cluster": {
+    "name": "my-cluster"
+  },
+  "ingress": {
+    "port": 8080
+  },
+  // "subnet": "172.22.0.0/16",
+  "encryption-key": "CHANGE_ME",
+  // "tailscale": {
+  //   "auth-key": ""
+  // },
+  "tags": []
+  // "datadog": {
+  //   "api-key": "",
+  //   "site": "datadoghq.com",
+  //   "include-system-logs": false
+  // }
+}

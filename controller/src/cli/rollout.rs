@@ -250,7 +250,7 @@ async fn call_rollout_endpoint(
 
 fn parse_config(raw: &str) -> Result<ClusterConfig> {
     let parsed = json5::from_str(raw)
-        .map_err(|err| Error::invalid_config(format!("failed to parse maestro.jsonc: {err}")))?;
+        .map_err(|err| Error::invalid_config(format!("failed to parse config: {err}")))?;
     Ok(parsed)
 }
 

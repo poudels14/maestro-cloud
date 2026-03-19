@@ -27,7 +27,7 @@ const MAX_TXN_RETRIES: usize = 16;
 #[derive(Clone)]
 pub struct EtcdStateStore {
     client: Arc<tokio::sync::Mutex<EtcdClient>>,
-    secret_key: crate::utils::crypto::SecretKey,
+    encryption_key: crate::utils::crypto::EncryptionKey,
 }
 
 struct DeploymentSnapshot {
@@ -50,7 +50,10 @@ struct InfoSnapshot {
 }
 
 impl EtcdStateStore {
-    pub async fn new(endpoint: &str, secret_key: crate::utils::crypto::SecretKey) -> Result<Self> {
+    pub async fn new(
+        endpoint: &str,
+        encryption_key: crate::utils::crypto::EncryptionKey,
+    ) -> Result<Self> {
         let backoff = ConstantBuilder::default()
             .with_delay(Duration::from_secs(1))
             .with_max_times(15);
@@ -66,7 +69,7 @@ impl EtcdStateStore {
 
         Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
-            secret_key,
+            encryption_key,
         })
     }
 
@@ -113,7 +116,7 @@ impl EtcdStateStore {
             Ok(json) => json,
             Err(_) => return,
         };
-        let value = match crate::utils::crypto::encrypt_string(&self.secret_key, &items_json) {
+        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &items_json) {
             Ok(encrypted) => encrypted,
             Err(_) => return,
         };
@@ -795,7 +798,7 @@ impl ClusterStore for EtcdStateStore {
         };
         let value = String::from_utf8_lossy(kv.value()).to_string();
         let items_json =
-            crate::utils::crypto::decrypt_string(&self.secret_key, &value).unwrap_or(value);
+            crate::utils::crypto::decrypt_string(&self.encryption_key, &value).unwrap_or(value);
         Ok(serde_json::from_str(&items_json).unwrap_or_default())
     }
 

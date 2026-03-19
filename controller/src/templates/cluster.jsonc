@@ -1,0 +1,12 @@
+{
+  "services": {
+    "service-1": {
+      "name": "Service 1",
+      "image": "traefik/whoami",
+      "deploy": {
+        "healthcheckPath": "/health",
+        "replicas": 1
+      }
+    }
+  }
+}

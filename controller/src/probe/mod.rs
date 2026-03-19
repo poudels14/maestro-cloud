@@ -18,11 +18,11 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     eprintln!("starting probe etcd={etcd_endpoint} port={port}");
 
-    let secret_key = std::env::var("MAESTRO_SECRET_KEY_FILE")
+    let encryption_key = std::env::var("MAESTRO_ENCRYPTION_KEY_FILE")
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .unwrap_or_default();
-    let derived_key = crate::utils::crypto::derive_key(secret_key.trim());
+    let derived_key = crate::utils::crypto::derive_key(encryption_key.trim());
     let store = EtcdStateStore::new(etcd_endpoint, derived_key).await?;
     let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
 

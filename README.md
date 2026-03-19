@@ -18,27 +18,11 @@ cargo build --release
 
 ### 1. Create a config file
 
-Create `maestro.jsonc` in your working directory:
-
-```jsonc
-{
-  "$schema": "./maestro.schema.json",
-  "services": {
-    "my-app": {
-      "name": "My App",
-      "image": "traefik/whoami",
-      "ingress": {
-        "host": "example.com",
-        "port": 80
-      },
-      "deploy": {
-        "replicas": 1,
-        "healthcheckPath": "/health"
-      }
-    }
-  }
-}
+```bash
+maestro init
 ```
+
+This generates a `maestro.jsonc` file in your working directory with a sample service configuration.
 
 ### 2. Start the cluster
 
@@ -132,3 +116,65 @@ maestro start --cluster-name cluster-2 --port 8889 --data-dir ./data2 --subnet 1
 ```
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
+
+## Deploy to AWS (NixOS on EC2)
+
+### Step 1: Generate and store the cluster config
+
+Run `maestro init` to generate a `maestro.jsonc` config, then update it for your environment and store it in AWS Secrets Manager:
+
+```bash
+aws secretsmanager create-secret \
+  --name <your-secret-id> \
+  --secret-string file://maestro.jsonc
+```
+
+### Step 2: Launch an EC2 instance
+
+- Use a [NixOS AMI](https://nixos.org/download#nixos-amazon)
+- Attach an IAM role with `secretsmanager:GetSecretValue` permission for the secret created above
+- Set the following user data:
+
+```bash
+#!/bin/bash
+echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+
+mkdir -p /etc/maestro
+cat > /etc/maestro/flake.nix << 'EOF'
+{
+  inputs.maestro.url = "github:poudels14/maestro-cloud";
+  inputs.nixpkgs.follows = "maestro/nixpkgs";
+
+  outputs = { maestro, nixpkgs, ... }: {
+    nixosConfigurations.default = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        maestro.nixosModules.default
+        ({ modulesPath, ... }: {
+          imports = [ "${modulesPath}/virtualisation/amazon-image.nix" ];
+          nix.settings.experimental-features = [ "nix-command" "flakes" ];
+          services.maestro = {
+            enable = true;
+            config = "aws-secret://<your-secret-id>";
+          };
+          networking.firewall.allowedTCPPorts = [ 80 443 22 ];
+          system.stateVersion = "25.05";
+        })
+      ];
+    };
+  };
+}
+EOF
+
+nixos-rebuild switch --flake /etc/maestro#default
+```
+
+Replace `<your-secret-id>` with the secret name from step 1.
+
+### Step 3: Manage the service
+
+```bash
+journalctl -u maestro        # view logs
+systemctl restart maestro     # restart
+systemctl status maestro      # check status
+```

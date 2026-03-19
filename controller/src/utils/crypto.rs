@@ -29,29 +29,29 @@ impl SecretString {
 }
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SecretKey {
+pub struct EncryptionKey {
     inner: Vec<u8>,
 }
 
 const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 
-impl SecretKey {
+impl EncryptionKey {
     fn aes_key(&self) -> &Key<Aes256Gcm> {
         Key::<Aes256Gcm>::from_slice(&self.inner)
     }
 }
 
-pub fn derive_key(master_secret: &str) -> SecretKey {
+pub fn derive_key(master_secret: &str) -> EncryptionKey {
     let salt = Sha256::digest(KDF_SALT);
     let argon2 = Argon2::default();
     let mut key = vec![0u8; 32];
     argon2
         .hash_password_into(master_secret.as_bytes(), &salt, &mut key)
         .expect("argon2 key derivation failed");
-    SecretKey { inner: key }
+    EncryptionKey { inner: key }
 }
 
-pub fn encrypt(key: &SecretKey, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn encrypt(key: &EncryptionKey, plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new(key.aes_key());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -65,7 +65,7 @@ pub fn encrypt(key: &SecretKey, plaintext: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[allow(dead_code)]
-pub fn decrypt(key: &SecretKey, data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decrypt(key: &EncryptionKey, data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() < 12 {
         return Err("encrypted data too short".to_string());
     }
@@ -77,13 +77,13 @@ pub fn decrypt(key: &SecretKey, data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|err| format!("decryption failed: {err}"))
 }
 
-pub fn encrypt_string(key: &SecretKey, plaintext: &str) -> Result<String, String> {
+pub fn encrypt_string(key: &EncryptionKey, plaintext: &str) -> Result<String, String> {
     let encrypted = encrypt(key, plaintext.as_bytes())?;
     Ok(base64_encode(&encrypted))
 }
 
 #[allow(dead_code)]
-pub fn decrypt_string(key: &SecretKey, encoded: &str) -> Result<String, String> {
+pub fn decrypt_string(key: &EncryptionKey, encoded: &str) -> Result<String, String> {
     let data = base64_decode(encoded)?;
     let decrypted = decrypt(key, &data)?;
     String::from_utf8(decrypted).map_err(|err| format!("decrypted data is not utf8: {err}"))

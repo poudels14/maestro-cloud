@@ -1,5 +1,6 @@
 mod builder;
 mod cli;
+mod config;
 mod deployment;
 mod error;
 mod logs;
@@ -27,7 +28,7 @@ use crate::{
     supervisor::controller::JobSupervisor,
 };
 
-const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
+const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:3001";
 
@@ -42,8 +43,13 @@ struct Cli {
 enum CliCommand {
     /// Start the cluster controller and all system services
     Start {
+        #[arg(
+            long = "config",
+            help = "Config source: file path, file://path, or aws-secrets://secret-name"
+        )]
+        config: Option<String>,
         #[arg(long = "cluster-name", help = "Unique name for this cluster")]
-        cluster_name: String,
+        cluster_name: Option<String>,
         #[arg(long = "etcd-port", help = "Host port for etcd (random if not set)")]
         etcd_port: Option<u16>,
         #[arg(
@@ -52,7 +58,7 @@ enum CliCommand {
         )]
         admin_port: Option<u16>,
         #[arg(long = "ingress-port", help = "Host port for ingress")]
-        web_port: u16,
+        web_port: Option<u16>,
         #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
         data_dir: PathBuf,
         #[arg(
@@ -71,35 +77,35 @@ enum CliCommand {
         )]
         enable_tailscale: bool,
         #[arg(
-            long = "tailscale-authkey",
+            long = "tailscale-auth-key",
             env = "TS_AUTHKEY",
             help = "Tailscale auth key"
         )]
         tailscale_authkey: Option<String>,
         #[arg(
-            long = "secret-key",
-            env = "MAESTRO_SECRET_KEY",
-            help = "Master key for encrypting secrets (required)"
+            long = "encryption-key",
+            env = "MAESTRO_ENCRYPTION_KEY",
+            help = "Master key for encrypting secrets"
         )]
-        secret_key: String,
+        encryption_key: Option<String>,
         #[arg(
             long = "tag",
             help = "Tags for log sinks like Datadog (key:value, can be repeated)"
         )]
         tags: Vec<String>,
         #[arg(
-            long = "dd-api-key",
+            long = "datadog-api-key",
             env = "DATADOG_API_KEY",
             help = "Datadog API key for log forwarding"
         )]
         dd_api_key: Option<String>,
         #[arg(
-            long = "dd-site",
+            long = "datadog-site",
             help = "Datadog site (e.g. datadoghq.com, us3.datadoghq.com, datadoghq.eu)"
         )]
         dd_site: Option<String>,
         #[arg(
-            long = "dd-include-system-logs",
+            long = "datadog-include-system-logs",
             help = "Include maestro system logs in Datadog (excluded by default)"
         )]
         dd_include_system_logs: bool,
@@ -110,7 +116,7 @@ enum CliCommand {
         host: String,
         #[arg(
             long = "config",
-            help = "Path to maestro.jsonc (default: maestro.jsonc)"
+            help = "Path to maestro.cluster.jsonc (default: maestro.cluster.jsonc)"
         )]
         config: Option<PathBuf>,
         #[arg(
@@ -164,7 +170,7 @@ enum CliCommand {
         #[arg(long = "follow", short = 'f', help = "Follow log output")]
         follow: bool,
     },
-    /// Create a default maestro.jsonc config file
+    /// Create a default maestro.cluster.jsonc config file
     Init,
 }
 
@@ -185,6 +191,7 @@ async fn run() -> crate::error::Result<()> {
             Ok(())
         }
         Some(CliCommand::Start {
+            config,
             cluster_name,
             admin_port,
             web_port,
@@ -194,23 +201,64 @@ async fn run() -> crate::error::Result<()> {
             subnet,
             enable_tailscale,
             tailscale_authkey,
-            secret_key,
+            encryption_key,
             tags,
             dd_api_key,
             dd_site,
             dd_include_system_logs,
         }) => {
-            if enable_tailscale && tailscale_authkey.is_none() {
+            let cfg = match config {
+                Some(source) => {
+                    let mut cfg = config::load_config(&source)
+                        .await
+                        .map_err(|err| Error::invalid_config(err.to_string()))?;
+                    if let Some(key) = encryption_key {
+                        cfg.encryption_key = key;
+                    }
+                    if let Some(authkey) = tailscale_authkey {
+                        cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
+                    }
+                    if let Some(api_key) = dd_api_key {
+                        let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
+                            api_key: String::new(),
+                            site: None,
+                            include_system_logs: false,
+                        });
+                        dd.api_key = api_key;
+                    }
+                    cfg
+                }
+                None => config::StartConfig {
+                    cluster: config::ClusterConfig {
+                        name: cluster_name
+                            .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
+                    },
+                    ingress: config::IngressConfig {
+                        port: web_port
+                            .ok_or_else(|| Error::invalid_input("--ingress-port is required"))?,
+                    },
+                    subnet,
+                    encryption_key: encryption_key
+                        .ok_or_else(|| Error::invalid_input("--encryption-key is required"))?,
+                    tailscale: tailscale_authkey
+                        .map(|key| config::TailscaleConfig { auth_key: key }),
+                    tags,
+                    datadog: dd_api_key.map(|api_key| config::DatadogConfig {
+                        api_key,
+                        site: dd_site,
+                        include_system_logs: dd_include_system_logs,
+                    }),
+                },
+            };
+
+            let enable_tailscale = enable_tailscale || cfg.tailscale.is_some();
+            if enable_tailscale && cfg.tailscale.is_none() {
                 return Err(Error::invalid_input(
-                    "--enable-tailscale requires --tailscale-authkey or TS_AUTHKEY env var",
+                    "tailscale requires --tailscale-auth-key, TS_AUTHKEY env var, or tailscale.auth-key in config",
                 ));
             }
-            let tailscale_authkey = if enable_tailscale {
-                tailscale_authkey
-            } else {
-                None
-            };
-            let cluster_name = cluster_name.to_lowercase();
+
+            let cluster_name = cfg.cluster.name.to_lowercase();
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
@@ -218,7 +266,7 @@ async fn run() -> crate::error::Result<()> {
                     data_dir.display()
                 ))
             })?;
-            verify_secret_key(&data_dir, &secret_key)?;
+            verify_encryption_key(&data_dir, &cfg.encryption_key)?;
             let _lock = acquire_lock(&data_dir)?;
             let etcd_port = etcd_port.unwrap_or_else(|| {
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")
@@ -238,33 +286,36 @@ async fn run() -> crate::error::Result<()> {
                 .parent()
                 .expect("failed to get parent dir")
                 .to_path_buf();
+            let tailscale_authkey = if enable_tailscale {
+                cfg.tailscale.map(|t| t.auth_key)
+            } else {
+                None
+            };
             let mut deployment_config = DeploymentConfig {
                 cluster_name,
                 data_dir,
                 etcd_port,
                 probe_port: None,
                 admin_port,
-                web_port,
+                web_port: cfg.ingress.port,
                 project_dir,
                 network,
-                subnet,
+                subnet: cfg.subnet,
                 tailscale_authkey,
-                secret_key: SecretString::new(secret_key),
-                tags: parse_tags(tags)?,
+                encryption_key: SecretString::new(cfg.encryption_key),
+                tags: parse_tags(cfg.tags)?,
             };
             let log_store = Arc::new(
                 logs::LogStore::open(&deployment_config.data_dir.join("logs/logs.db"))
                     .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?,
             );
 
-            if let Some(dd_site) = dd_site {
-                let dd_api_key = dd_api_key.ok_or_else(|| {
-                    Error::invalid_input("missing --dd-api-key or DATADOG_API_KEY env var")
-                })?;
-                let dd_sink = logs::DatadogSink::new(dd_api_key, &dd_site, dd_include_system_logs);
+            if let Some(dd) = cfg.datadog {
+                let site = dd.site.unwrap_or_default();
+                let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
                 let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
                 let _dd_handle = dd_worker.spawn();
-                eprintln!("[maestro]: datadog log sink enabled (site: {dd_site})");
+                eprintln!("[maestro]: datadog log sink enabled (site: {site})");
             }
 
             let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
@@ -283,7 +334,7 @@ async fn run() -> crate::error::Result<()> {
             let mut supervisor = JobSupervisor::new();
             deployment::start_system_jobs(&deployment_config, &log_sender, &mut supervisor).await;
 
-            let derived_key = derive_key(deployment_config.secret_key.as_str());
+            let derived_key = derive_key(deployment_config.encryption_key.as_str());
             let store: Arc<dyn deployment::store::ClusterStore> =
                 Arc::new(deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key).await?);
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
@@ -348,7 +399,7 @@ async fn run() -> crate::error::Result<()> {
             apply,
             force,
         }) => {
-            let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
             cli::run_rollout(&config_path, &host, apply, force).await
         }
         Some(CliCommand::Redeploy { service_id, host }) => {
@@ -406,7 +457,10 @@ async fn run() -> crate::error::Result<()> {
 
             Ok(())
         }
-        Some(CliCommand::Init) => cli::init_config(Path::new(DEFAULT_CONFIG_PATH)),
+        Some(CliCommand::Init) => cli::init_config(
+            Path::new("maestro.jsonc"),
+            Path::new(DEFAULT_CLUSTER_CONFIG_PATH),
+        ),
     }
 }
 
@@ -476,27 +530,27 @@ fn print_log_entry(entry: &logs::LogEntry, show_source: bool) {
     }
 }
 
-fn verify_secret_key(data_dir: &Path, secret_key: &str) -> crate::error::Result<()> {
+fn verify_encryption_key(data_dir: &Path, encryption_key: &str) -> crate::error::Result<()> {
     use sha2::{Digest, Sha256};
 
-    let key_file = data_dir.join(".secret-key-hash");
+    let key_file = data_dir.join(".encryption-key-hash");
     let key_hash = format!(
         "{:x}",
-        Sha256::digest(format!("maestro-key-verify:{secret_key}"))
+        Sha256::digest(format!("maestro-key-verify:{encryption_key}"))
     );
 
     if key_file.exists() {
         let stored = std::fs::read_to_string(&key_file).map_err(|err| {
-            Error::internal(format!("failed to read secret key hash file: {err}"))
+            Error::internal(format!("failed to read encryption key hash file: {err}"))
         })?;
         if stored.trim() != key_hash {
             return Err(Error::invalid_input(
-                "secret key does not match the one used to initialize this data directory",
+                "encryption key does not match the one used to initialize this data directory",
             ));
         }
     } else {
         std::fs::write(&key_file, &key_hash).map_err(|err| {
-            Error::internal(format!("failed to write secret key hash file: {err}"))
+            Error::internal(format!("failed to write encryption key hash file: {err}"))
         })?;
     }
     Ok(())
