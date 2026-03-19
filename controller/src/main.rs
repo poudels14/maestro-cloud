@@ -278,9 +278,6 @@ async fn run() -> crate::error::Result<()> {
                 ));
             }
 
-            let cluster_alias = cfg.cluster.name.to_lowercase();
-            let cluster_suffix = utils::nanoid::unique_id(4).to_lowercase();
-            let cluster_name = format!("{cluster_alias}-{cluster_suffix}");
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
@@ -290,6 +287,9 @@ async fn run() -> crate::error::Result<()> {
             })?;
             verify_encryption_key(&data_dir, &cfg.encryption_key)?;
             let _lock = acquire_lock(&data_dir)?;
+            let cluster_alias = cfg.cluster.name.to_lowercase();
+            let cluster_suffix = load_or_create_cluster_suffix(&data_dir)?;
+            let cluster_name = format!("{cluster_alias}-{cluster_suffix}");
             let etcd_port = etcd_port.unwrap_or_else(|| {
                 let listener = std::net::TcpListener::bind("127.0.0.1:0")
                     .expect("failed to bind to random port for etcd");
@@ -507,6 +507,69 @@ fn help_text() -> String {
         Ok(text) => format!("{text}\n"),
         Err(err) => format!("{}\n", String::from_utf8_lossy(err.as_bytes())),
     }
+}
+
+fn load_or_create_cluster_suffix(data_dir: &Path) -> crate::error::Result<String> {
+    let system_dir = data_dir.join("system");
+    std::fs::create_dir_all(&system_dir).map_err(|err| {
+        Error::internal(format!(
+            "failed to create system directory {}: {err}",
+            system_dir.display()
+        ))
+    })?;
+
+    let suffix_path = system_dir.join("cluster-instance-id");
+    if suffix_path.exists() {
+        let raw = std::fs::read_to_string(&suffix_path).map_err(|err| {
+            Error::internal(format!(
+                "failed to read cluster instance id {}: {err}",
+                suffix_path.display()
+            ))
+        })?;
+        let suffix = raw.trim().to_lowercase();
+        if is_valid_cluster_suffix(&suffix) {
+            return Ok(suffix);
+        }
+        return Err(Error::invalid_config(format!(
+            "invalid cluster instance id in {}: expected 4 lowercase letters or digits",
+            suffix_path.display()
+        )));
+    }
+
+    let suffix = utils::nanoid::unique_id(4).to_lowercase();
+    if !is_valid_cluster_suffix(&suffix) {
+        return Err(Error::internal(
+            "generated invalid cluster instance id".to_string(),
+        ));
+    }
+
+    let tmp_path = suffix_path.with_extension("tmp");
+    std::fs::write(&tmp_path, format!("{suffix}\n")).map_err(|err| {
+        Error::internal(format!(
+            "failed to write cluster instance id temp file {}: {err}",
+            tmp_path.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp_path, &suffix_path).map_err(|err| {
+        Error::internal(format!(
+            "failed to persist cluster instance id {}: {err}",
+            suffix_path.display()
+        ))
+    })?;
+
+    Ok(suffix)
+}
+
+fn is_valid_cluster_suffix(value: &str) -> bool {
+    value.len() == 4
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
 }
 
 fn acquire_lock(data_dir: &Path) -> crate::error::Result<std::fs::File> {
