@@ -278,10 +278,10 @@ async fn init_probe(
     std::fs::create_dir_all(&probe_data_dir).expect("Failed to create probe data dir");
     let probe_data_abs =
         std::fs::canonicalize(&probe_data_dir).expect("failed to canonicalize probe data dir");
-    let secret_key_path = probe_dir.join("secret-key");
-    let secret_key_abs = std::fs::canonicalize(&probe_dir)
+    let encryption_key_path = probe_dir.join("encryption-key");
+    let encryption_key_abs = std::fs::canonicalize(&probe_dir)
         .expect("failed to canonicalize probe dir")
-        .join("secret-key");
+        .join("encryption-key");
     let probe_host_port = config.probe_port.expect("probe_port should be resolved");
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
@@ -296,11 +296,14 @@ async fn init_probe(
                 "-v",
                 &format!("{}:/data", probe_data_abs.display()),
                 "-v",
-                &format!("{}:/run/secrets/secret-key:ro", secret_key_abs.display()),
+                &format!(
+                    "{}:/run/secrets/encryption-key:ro",
+                    encryption_key_abs.display()
+                ),
                 "-e",
                 &format!("ETCD_ENDPOINT=http://{etcd_container}:2379"),
                 "-e",
-                "MAESTRO_SECRET_KEY_FILE=/run/secrets/secret-key",
+                "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key",
                 "-e",
                 "PORT=3001",
             ],
@@ -313,9 +316,9 @@ async fn init_probe(
         shutdown_grace_period_ms: 60_000,
         docker_container: Some(container_name.to_string()),
         secrets_mount: Some(crate::supervisor::SecretsMount {
-            host_path: secret_key_path,
-            container_path: "/run/secrets/secret-key".to_string(),
-            content: config.secret_key.as_str().to_string(),
+            host_path: encryption_key_path,
+            container_path: "/run/secrets/encryption-key".to_string(),
+            content: config.encryption_key.as_str().to_string(),
         }),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
