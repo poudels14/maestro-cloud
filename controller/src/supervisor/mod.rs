@@ -4,4 +4,6 @@ pub mod controller;
 pub mod logs;
 mod worker;
 
-pub use worker::{SecretsMount, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
+pub use worker::{
+    JobCommand, SecretsMount, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus,
+};

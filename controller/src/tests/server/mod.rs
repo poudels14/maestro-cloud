@@ -1,5 +1,6 @@
 use super::*;
 use crate::deployment::types::{Command, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
+use crate::validation::validate_service_id;
 
 fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
     RolloutServiceRequest {

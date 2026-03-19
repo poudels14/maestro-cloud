@@ -10,9 +10,11 @@ use crate::logs::LogEntry;
 use crate::supervisor::SecretsMount;
 use crate::utils::cmd;
 
+use crate::supervisor::JobCommand;
+
 #[derive(Debug)]
 pub struct DeployOutput {
-    pub command: String,
+    pub command: JobCommand,
     pub secrets_mount: Option<SecretsMount>,
 }
 
@@ -185,8 +187,17 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
                 }),
             })
         } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
+            let shell_cmd = if deploy_command.args.is_empty() {
+                deploy_command.command.clone()
+            } else {
+                format!(
+                    "{} {}",
+                    deploy_command.command,
+                    deploy_command.args.join(" ")
+                )
+            };
             Some(DeployOutput {
-                command: to_shell_command(&deploy_command.command, &deploy_command.args),
+                command: JobCommand::Shell(shell_cmd),
                 secrets_mount: None,
             })
         } else {
@@ -213,18 +224,15 @@ impl ServiceCommandPlanner for ShellDeploymentProvider {
         if command.is_empty() {
             return None;
         }
+        let shell_cmd = if deploy_command.args.is_empty() {
+            command.to_string()
+        } else {
+            format!("{} {}", command, deploy_command.args.join(" "))
+        };
         Some(DeployOutput {
-            command: to_shell_command(command, &deploy_command.args),
+            command: JobCommand::Shell(shell_cmd),
             secrets_mount: None,
         })
-    }
-}
-
-fn to_shell_command(command: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        command.to_string()
-    } else {
-        format!("{} {}", command, args.join(" "))
     }
 }
 
@@ -239,7 +247,7 @@ fn docker_run_command(
     env: &HashMap<String, String>,
     secrets_mount: Option<&(String, String)>,
     flags: &[String],
-) -> String {
+) -> JobCommand {
     let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
     let container_name = if replica_index == 0 {
         format!("{service_id}-{short_deployment_id}")
@@ -247,24 +255,34 @@ fn docker_run_command(
         format!("{service_id}-{short_deployment_id}-{replica_index}")
     };
 
-    let mut args = format!(
-        "exec docker run --rm --name {container_name} --hostname {container_name} --network {network}"
-    );
+    let mut args = vec![
+        "run".to_string(),
+        "--rm".to_string(),
+        "--name".to_string(),
+        container_name.clone(),
+        "--hostname".to_string(),
+        container_name,
+        "--network".to_string(),
+        network.to_string(),
+    ];
     if let Some(domain) = dns_domain {
-        args.push_str(&format!(" --domainname {domain}"));
+        args.extend(["--domainname".to_string(), domain.to_string()]);
     }
     for port in expose_ports {
-        args.push_str(&format!(" -p 0:{port}"));
+        args.extend(["-p".to_string(), format!("0:{port}")]);
     }
     for (key, value) in env {
-        args.push_str(&format!(" -e {key}={value}"));
+        args.extend(["-e".to_string(), format!("{key}={value}")]);
     }
     if let Some((host_path, container_path)) = secrets_mount {
-        args.push_str(&format!(" -v {host_path}:{container_path}:ro"));
+        args.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
     }
-    args.push_str(&format!(" {image}"));
+    args.push(image.to_string());
     for flag in flags {
-        args.push_str(&format!(" {flag}"));
+        args.push(flag.clone());
     }
-    args
+    JobCommand::Exec {
+        program: "docker".to_string(),
+        args,
+    }
 }

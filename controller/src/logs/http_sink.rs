@@ -1,7 +1,11 @@
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use flate2::{Compression, write::GzEncoder};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
+use serde::Serialize;
 
 use super::sink::LogSink;
 use super::store::LogEntry;
@@ -32,10 +36,13 @@ impl LogSink for HttpSink {
     }
 
     async fn send(&self, entries: &[LogEntry]) -> Result<()> {
+        let compressed_body = gzip_json(entries)?;
         let response = self
             .client
             .post(&self.endpoint)
-            .json(entries)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_ENCODING, "gzip")
+            .body(compressed_body)
             .send()
             .await?;
         if !response.status().is_success() {
@@ -45,4 +52,14 @@ impl LogSink for HttpSink {
         }
         Ok(())
     }
+}
+
+fn gzip_json<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(value)?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&payload)?;
+    let compressed = encoder
+        .finish()
+        .map_err(|err| anyhow::anyhow!("failed to finish gzip stream: {err}"))?;
+    Ok(compressed)
 }

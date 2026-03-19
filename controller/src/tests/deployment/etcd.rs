@@ -80,7 +80,23 @@ fn command_planner_uses_image_for_deploy_when_present() {
         .expect("deploy command should exist");
     assert_eq!(
         deploy.command,
-        "exec docker run --rm --name svc-1-A1B2C3 --hostname svc-1-A1B2C3 --network test-net traefik/whoami"
+        crate::supervisor::JobCommand::Exec {
+            program: "docker".to_string(),
+            args: vec![
+                "run",
+                "--rm",
+                "--name",
+                "svc-1-A1B2C3",
+                "--hostname",
+                "svc-1-A1B2C3",
+                "--network",
+                "test-net",
+                "traefik/whoami",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        }
     );
 }
 
@@ -106,7 +122,30 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 
     assert_eq!(
         deploy.command,
-        "exec docker run --rm --name svc-1-ABCDEF --hostname svc-1-ABCDEF --network test-net -p 0:80 -p 0:443 traefik/whoami --network=host --label env=test",
+        crate::supervisor::JobCommand::Exec {
+            program: "docker".to_string(),
+            args: vec![
+                "run",
+                "--rm",
+                "--name",
+                "svc-1-ABCDEF",
+                "--hostname",
+                "svc-1-ABCDEF",
+                "--network",
+                "test-net",
+                "-p",
+                "0:80",
+                "-p",
+                "0:443",
+                "traefik/whoami",
+                "--network=host",
+                "--label",
+                "env=test",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        }
     );
 }
 
@@ -135,7 +174,10 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
-    assert_eq!(deploy.command, "arc deploy --service svc-1");
+    assert_eq!(
+        deploy.command,
+        crate::supervisor::JobCommand::Shell("arc deploy --service svc-1".to_string())
+    );
 }
 
 #[test]
@@ -177,7 +219,10 @@ fn shell_command_planner_uses_explicit_deploy_command() {
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("deploy command should exist");
-    assert_eq!(deploy.command, "echo ok");
+    assert_eq!(
+        deploy.command,
+        crate::supervisor::JobCommand::Shell("echo ok".to_string())
+    );
 }
 
 #[derive(Default)]

@@ -3,6 +3,7 @@ use aes_gcm::{
     aead::rand_core::RngCore,
     aead::{Aead, KeyInit, OsRng},
 };
+use argon2::Argon2;
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -32,21 +33,22 @@ pub struct SecretKey {
     inner: Vec<u8>,
 }
 
-impl SecretKey {
-    pub fn new(master_secret: &str) -> Self {
-        let hash = Sha256::digest(master_secret.as_bytes());
-        Self {
-            inner: hash.to_vec(),
-        }
-    }
+const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 
+impl SecretKey {
     fn aes_key(&self) -> &Key<Aes256Gcm> {
         Key::<Aes256Gcm>::from_slice(&self.inner)
     }
 }
 
 pub fn derive_key(master_secret: &str) -> SecretKey {
-    SecretKey::new(master_secret)
+    let salt = Sha256::digest(KDF_SALT);
+    let argon2 = Argon2::default();
+    let mut key = vec![0u8; 32];
+    argon2
+        .hash_password_into(master_secret.as_bytes(), &salt, &mut key)
+        .expect("argon2 key derivation failed");
+    SecretKey { inner: key }
 }
 
 pub fn encrypt(key: &SecretKey, plaintext: &[u8]) -> Result<Vec<u8>, String> {
