@@ -142,6 +142,84 @@ def peer_refresh_loop(my_cluster, peers_ref, lock):
             print(f"peer refresh error: {err}", file=sys.stderr, flush=True)
 
 
+def handle_dns_query(data, my_cluster, peers, lock):
+    """Process a DNS query and return the response bytes, or None."""
+    if len(data) < 12:
+        return None
+
+    labels, qname_end = read_name(data, 12)
+    lower_labels = [l.lower() for l in labels]
+
+    if lower_labels == [MAGIC_QUERY] + ROOT_DOMAIN:
+        qtype = struct.unpack("!H", data[qname_end : qname_end + 2])[0]
+        if qtype == 16:
+            return build_txt_response(data, qname_end, MAGIC_RESPONSE)
+
+    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    upstream_sock.settimeout(5)
+
+    try:
+        if len(lower_labels) >= 3 and lower_labels[-2:] == ROOT_DOMAIN:
+            query_cluster = lower_labels[-3]
+            bare_labels = labels[:-3]
+
+            if not bare_labels:
+                return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+
+            original_qname = encode_name(labels)
+            bare_qname = encode_name(bare_labels)
+
+            with lock:
+                peer_ip = peers.get(query_cluster)
+
+            if query_cluster == my_cluster:
+                rewritten = data[:12] + bare_qname + data[qname_end:]
+                response = resolve_upstream(upstream_sock, rewritten, DOCKER_DNS)
+                return response.replace(bare_qname, original_qname)
+            elif peer_ip:
+                rewritten = data[:12] + bare_qname + data[qname_end:]
+                response = resolve_upstream(upstream_sock, rewritten, peer_ip)
+                return response.replace(bare_qname, original_qname)
+            else:
+                return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+        else:
+            return resolve_upstream(upstream_sock, data, DOCKER_DNS)
+    finally:
+        upstream_sock.close()
+
+
+def handle_tcp_client(conn, my_cluster, peers, lock):
+    try:
+        conn.settimeout(5)
+        length_bytes = conn.recv(2)
+        if len(length_bytes) < 2:
+            return
+        msg_len = struct.unpack("!H", length_bytes)[0]
+        data = conn.recv(msg_len)
+        if len(data) < msg_len:
+            return
+        response = handle_dns_query(data, my_cluster, peers, lock)
+        if response:
+            conn.sendall(struct.pack("!H", len(response)) + response)
+    except Exception as err:
+        print(f"tcp dns error: {err}", file=sys.stderr, flush=True)
+    finally:
+        conn.close()
+
+
+def tcp_listener_loop(tcp_server, my_cluster, peers, lock):
+    while True:
+        try:
+            conn, _ = tcp_server.accept()
+            threading.Thread(
+                target=handle_tcp_client,
+                args=(conn, my_cluster, peers, lock),
+                daemon=True,
+            ).start()
+        except Exception as err:
+            print(f"tcp accept error: {err}", file=sys.stderr, flush=True)
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: dns-proxy.py <cluster-name>", file=sys.stderr)
@@ -165,58 +243,24 @@ def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server.bind(("0.0.0.0", DNS_PORT))
 
-    upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    upstream.settimeout(5)
+    tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tcp_server.bind(("0.0.0.0", DNS_PORT))
+    tcp_server.listen(16)
+
+    tcp_thread = threading.Thread(
+        target=tcp_listener_loop,
+        args=(tcp_server, my_cluster, peers, lock),
+        daemon=True,
+    )
+    tcp_thread.start()
 
     while True:
         data, addr = server.recvfrom(4096)
         try:
-            if len(data) < 12:
-                continue
-
-            labels, qname_end = read_name(data, 12)
-            lower_labels = [l.lower() for l in labels]
-
-            # Respond to magic health check query
-            if lower_labels == [MAGIC_QUERY] + ROOT_DOMAIN:
-                qtype = struct.unpack("!H", data[qname_end : qname_end + 2])[0]
-                if qtype == 16:
-                    response = build_txt_response(data, qname_end, MAGIC_RESPONSE)
-                    server.sendto(response, addr)
-                    continue
-
-            if len(lower_labels) >= 3 and lower_labels[-2:] == ROOT_DOMAIN:
-                query_cluster = lower_labels[-3]
-                bare_labels = labels[:-3]
-
-                if not bare_labels:
-                    upstream.sendto(data, (DOCKER_DNS, DNS_PORT))
-                    response, _ = upstream.recvfrom(4096)
-                    server.sendto(response, addr)
-                    continue
-
-                original_qname = encode_name(labels)
-                bare_qname = encode_name(bare_labels)
-
-                with lock:
-                    peer_ip = peers.get(query_cluster)
-
-                if query_cluster == my_cluster:
-                    rewritten = data[:12] + bare_qname + data[qname_end:]
-                    response = resolve_upstream(upstream, rewritten, DOCKER_DNS)
-                    response = response.replace(bare_qname, original_qname)
-                elif peer_ip:
-                    rewritten = data[:12] + bare_qname + data[qname_end:]
-                    response = resolve_upstream(upstream, rewritten, peer_ip)
-                    response = response.replace(bare_qname, original_qname)
-                else:
-                    upstream.sendto(data, (DOCKER_DNS, DNS_PORT))
-                    response, _ = upstream.recvfrom(4096)
-            else:
-                upstream.sendto(data, (DOCKER_DNS, DNS_PORT))
-                response, _ = upstream.recvfrom(4096)
-
-            server.sendto(response, addr)
+            response = handle_dns_query(data, my_cluster, peers, lock)
+            if response:
+                server.sendto(response, addr)
         except Exception as err:
             print(f"dns error for {addr}: {err}", file=sys.stderr, flush=True)
 
