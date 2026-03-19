@@ -93,6 +93,17 @@ impl Server {
             )
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
             .route("/api/logs", post(Self::ingest_logs))
+            .route("/api/metrics", post(Self::ingest_metrics))
+            .route("/api/metrics/node", get(Self::get_node_metrics))
+            .route("/api/metrics/cluster", get(Self::get_cluster_metrics))
+            .route(
+                "/api/services/{serviceId}/metrics",
+                get(Self::get_service_metrics),
+            )
+            .route(
+                "/api/services/{serviceId}/metrics/containers",
+                get(Self::get_container_metrics),
+            )
             .with_state(self.state.clone())
             .layer(middleware::from_fn(log_http))
     }
@@ -615,6 +626,110 @@ impl Server {
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok("ok")
     }
+
+    async fn ingest_metrics(
+        State(state): State<AppState>,
+        Json(entries): Json<Vec<crate::metrics::MetricPoint>>,
+    ) -> Result<&'static str, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "log store not configured".to_string(),
+            ));
+        };
+        log_store
+            .append_metrics(&entries)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let _ = log_store.cleanup_old_metrics(7 * 24 * 60 * 60 * 1000).await;
+        Ok("ok")
+    }
+
+    async fn get_node_metrics(
+        Query(query): Query<MetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let (from, to) = metrics_time_range(&query);
+        let entries = log_store
+            .read_metrics("node", from, to)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(entries))
+    }
+
+    async fn get_cluster_metrics(
+        Query(query): Query<MetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let (from, to) = metrics_time_range(&query);
+        let entries = log_store
+            .read_metrics("cluster", from, to)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(entries))
+    }
+
+    async fn get_service_metrics(
+        Path(service_id): Path<String>,
+        Query(query): Query<MetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let (from, to) = metrics_time_range(&query);
+        let source = format!("service:{service_id}");
+        let entries = log_store
+            .read_metrics(&source, from, to)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(entries))
+    }
+
+    async fn get_container_metrics(
+        Path(service_id): Path<String>,
+        Query(query): Query<MetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let (from, to) = metrics_time_range(&query);
+        let prefix = format!("container:{service_id}-");
+        let entries = log_store
+            .read_metrics_by_prefix(&prefix, from, to)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(entries))
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MetricsQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+}
+
+fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let from = query.from.unwrap_or(now - 3_600_000);
+    let to = query.to.unwrap_or(now);
+    (from, to)
 }
 
 #[derive(serde::Deserialize)]

@@ -4,7 +4,6 @@ async function proxy(request: Request): Promise<Response> {
   const apiHost = process.env.MAESTRO_API_HOST || "http://127.0.0.1:3001";
   const url = new URL(request.url);
   const target = new URL(url.pathname + url.search, apiHost);
-  console.log(`[proxy] ${request.method} ${url.pathname} -> ${target.toString()}`);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const headers = new Headers(request.headers);
   headers.delete("host");

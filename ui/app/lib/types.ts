@@ -65,6 +65,16 @@ export interface Deployment {
   build: unknown | null;
 }
 
+export interface MetricPoint {
+  ts: number;
+  source: string;
+  cpuPercent: number;
+  memoryBytes: number;
+  memoryLimitBytes: number;
+  netRxBytes: number;
+  netTxBytes: number;
+}
+
 export interface LogEntry {
   ts: number;
   level: string;

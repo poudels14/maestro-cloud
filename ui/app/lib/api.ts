@@ -1,4 +1,4 @@
-import type { Deployment, LogEntry, Service } from "./types";
+import type { Deployment, LogEntry, MetricPoint, Service } from "./types";
 
 export async function getServices(): Promise<Service[]> {
   const res = await fetch("/api/services");
@@ -57,7 +57,7 @@ export async function getLogs(
     `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
     location.origin
   );
-  if (tail) url.searchParams.set("tail", String(tail));
+  if (tail != null) url.searchParams.set("tail", String(tail));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
   const raw = await res.json();
@@ -66,7 +66,7 @@ export async function getLogs(
 
 export async function getSystemLogs(name: string, tail?: number): Promise<LogEntry[]> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
-  if (tail) url.searchParams.set("tail", String(tail));
+  if (tail != null) url.searchParams.set("tail", String(tail));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
   const raw = await res.json();
@@ -90,4 +90,51 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
       source: entry.source as string | undefined
     };
   });
+}
+
+export async function getServiceMetrics(
+  serviceId: string,
+  from?: number,
+  to?: number
+): Promise<MetricPoint[]> {
+  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/metrics`, location.origin);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch metrics: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getNodeMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
+  const url = new URL("/api/metrics/node", location.origin);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch node metrics: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getClusterMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
+  const url = new URL("/api/metrics/cluster", location.origin);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch cluster metrics: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getContainerMetrics(
+  serviceId: string,
+  from?: number,
+  to?: number
+): Promise<MetricPoint[]> {
+  const url = new URL(
+    `/api/services/${encodeURIComponent(serviceId)}/metrics/containers`,
+    location.origin
+  );
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch container metrics: ${res.statusText}`);
+  return res.json();
 }
