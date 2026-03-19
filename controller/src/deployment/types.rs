@@ -9,6 +9,7 @@ use crate::utils::crypto::SecretString;
 
 #[derive(Debug, Clone)]
 pub struct DeploymentConfig {
+    pub cluster_alias: String,
     pub cluster_name: String,
     pub data_dir: PathBuf,
     pub etcd_port: u16,
@@ -287,7 +288,7 @@ impl ServiceDeployment {
 
     pub fn new(config: ServiceConfig) -> Result<Self> {
         Ok(ServiceDeployment {
-            id: utils::nanoid::unique_id(),
+            id: utils::nanoid::unique_id(10),
             created_at: utils::time::current_time_millis()?,
             deployed_at: None,
             drained_at: None,

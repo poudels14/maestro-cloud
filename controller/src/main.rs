@@ -48,7 +48,10 @@ enum CliCommand {
             help = "Config source: file path, file://path, or aws-secret://secret-name"
         )]
         config: Option<String>,
-        #[arg(long = "cluster-name", help = "Unique name for this cluster")]
+        #[arg(
+            long = "cluster-name",
+            help = "Human-readable cluster name (maestro adds a random -xxxx suffix for canonical DNS)"
+        )]
         cluster_name: Option<String>,
         #[arg(long = "etcd-port", help = "Host port for etcd (random if not set)")]
         etcd_port: Option<u16>,
@@ -63,7 +66,7 @@ enum CliCommand {
         data_dir: PathBuf,
         #[arg(
             long = "network",
-            help = "Docker network name (default: maestro-{cluster-name})"
+            help = "Docker network name (default: maestro-{clustername-xxxx})"
         )]
         network: Option<String>,
         #[arg(
@@ -275,7 +278,9 @@ async fn run() -> crate::error::Result<()> {
                 ));
             }
 
-            let cluster_name = cfg.cluster.name.to_lowercase();
+            let cluster_alias = cfg.cluster.name.to_lowercase();
+            let cluster_suffix = utils::nanoid::unique_id(4).to_lowercase();
+            let cluster_name = format!("{cluster_alias}-{cluster_suffix}");
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
@@ -297,6 +302,14 @@ async fn run() -> crate::error::Result<()> {
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
             let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
             println!("[maestro]: docker network {network}");
+            println!(
+                "[maestro]: cluster domains\n           canonical: {cluster_name}.maestro.internal (active)\n           alias: {cluster_alias}.maestro.internal ({})",
+                if enable_tailscale {
+                    "pending peer conflict check"
+                } else {
+                    "inactive (tailscale disabled)"
+                }
+            );
 
             let project_dir = std::env::current_dir()
                 .expect("failed to get current dir")
@@ -309,6 +322,7 @@ async fn run() -> crate::error::Result<()> {
                 None
             };
             let mut deployment_config = DeploymentConfig {
+                cluster_alias,
                 cluster_name,
                 data_dir,
                 etcd_port,

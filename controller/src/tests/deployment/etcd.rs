@@ -722,6 +722,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_alias: "test".to_string(),
             cluster_name: "test".to_string(),
             probe_port: None,
             admin_port: None,
@@ -803,6 +804,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_alias: "test".to_string(),
             cluster_name: "test".to_string(),
             probe_port: None,
             admin_port: None,
@@ -911,6 +913,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_alias: "test".to_string(),
             cluster_name: "test".to_string(),
             probe_port: None,
             admin_port: None,
@@ -1033,6 +1036,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         DeploymentConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
+            cluster_alias: "test".to_string(),
             cluster_name: "test".to_string(),
             probe_port: None,
             admin_port: None,

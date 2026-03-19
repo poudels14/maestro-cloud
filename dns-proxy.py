@@ -8,7 +8,7 @@ For cross-cluster queries, peers are auto-discovered via `tailscale status --jso
 and verified with a magic TXT query. Queries for remote clusters are forwarded
 to the peer's DNS proxy over the Tailscale network.
 
-Usage: dns-proxy.py <cluster-name>
+Usage: dns-proxy.py <canonical-cluster-name> [cluster-alias]
 """
 
 import json
@@ -99,6 +99,15 @@ def verify_peer(ip):
         return False
 
 
+def derive_alias(cluster_name):
+    if "-" not in cluster_name:
+        return cluster_name
+    base, suffix = cluster_name.rsplit("-", 1)
+    if base and len(suffix) == 4 and suffix.isalnum():
+        return base
+    return cluster_name
+
+
 def discover_peers(my_cluster):
     peers = {}
     try:
@@ -128,21 +137,43 @@ def discover_peers(my_cluster):
     return peers
 
 
-def peer_refresh_loop(my_cluster, peers_ref, lock):
+def compute_alias_owners(my_cluster, my_alias, peers):
+    claims = {}
+
+    def add_claim(alias, canonical):
+        claims.setdefault(alias, set()).add(canonical)
+
+    add_claim(my_alias, my_cluster)
+    for canonical in peers.keys():
+        add_claim(derive_alias(canonical), canonical)
+
+    alias_owners = {}
+    for alias, claimants in claims.items():
+        if len(claimants) == 1:
+            alias_owners[alias] = next(iter(claimants))
+    return alias_owners
+
+
+def peer_refresh_loop(my_cluster, my_alias, state_ref, lock):
     while True:
         time.sleep(PEER_REFRESH_INTERVAL)
         try:
             new_peers = discover_peers(my_cluster)
+            alias_owners = compute_alias_owners(my_cluster, my_alias, new_peers)
             with lock:
-                peers_ref.clear()
-                peers_ref.update(new_peers)
+                state_ref["peers"] = new_peers
+                state_ref["alias_owners"] = alias_owners
             if new_peers:
-                print(f"peers refreshed: {new_peers}", file=sys.stderr, flush=True)
+                print(
+                    f"peers refreshed: {new_peers}, alias_owners={alias_owners}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         except Exception as err:
             print(f"peer refresh error: {err}", file=sys.stderr, flush=True)
 
 
-def handle_dns_query(data, my_cluster, peers, lock):
+def handle_dns_query(data, my_cluster, state, lock):
     """Process a DNS query and return the response bytes, or None."""
     if len(data) < 12:
         return None
@@ -170,15 +201,22 @@ def handle_dns_query(data, my_cluster, peers, lock):
             bare_qname = encode_name(bare_labels)
 
             with lock:
+                peers = state.get("peers", {})
+                alias_owners = state.get("alias_owners", {})
                 peer_ip = peers.get(query_cluster)
+                alias_owner = alias_owners.get(query_cluster)
 
-            if query_cluster == my_cluster:
+            if query_cluster == my_cluster or alias_owner == my_cluster:
                 rewritten = data[:12] + bare_qname + data[qname_end:]
                 response = resolve_upstream(upstream_sock, rewritten, DOCKER_DNS)
                 return response.replace(bare_qname, original_qname)
             elif peer_ip:
                 rewritten = data[:12] + bare_qname + data[qname_end:]
                 response = resolve_upstream(upstream_sock, rewritten, peer_ip)
+                return response.replace(bare_qname, original_qname)
+            elif alias_owner and alias_owner in peers:
+                rewritten = data[:12] + bare_qname + data[qname_end:]
+                response = resolve_upstream(upstream_sock, rewritten, peers[alias_owner])
                 return response.replace(bare_qname, original_qname)
             else:
                 return resolve_upstream(upstream_sock, data, DOCKER_DNS)
@@ -188,7 +226,7 @@ def handle_dns_query(data, my_cluster, peers, lock):
         upstream_sock.close()
 
 
-def handle_tcp_client(conn, my_cluster, peers, lock):
+def handle_tcp_client(conn, my_cluster, state, lock):
     try:
         conn.settimeout(5)
         length_bytes = conn.recv(2)
@@ -198,7 +236,7 @@ def handle_tcp_client(conn, my_cluster, peers, lock):
         data = conn.recv(msg_len)
         if len(data) < msg_len:
             return
-        response = handle_dns_query(data, my_cluster, peers, lock)
+        response = handle_dns_query(data, my_cluster, state, lock)
         if response:
             conn.sendall(struct.pack("!H", len(response)) + response)
     except Exception as err:
@@ -207,13 +245,13 @@ def handle_tcp_client(conn, my_cluster, peers, lock):
         conn.close()
 
 
-def tcp_listener_loop(tcp_server, my_cluster, peers, lock):
+def tcp_listener_loop(tcp_server, my_cluster, state, lock):
     while True:
         try:
             conn, _ = tcp_server.accept()
             threading.Thread(
                 target=handle_tcp_client,
-                args=(conn, my_cluster, peers, lock),
+                args=(conn, my_cluster, state, lock),
                 daemon=True,
             ).start()
         except Exception as err:
@@ -222,21 +260,27 @@ def tcp_listener_loop(tcp_server, my_cluster, peers, lock):
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: dns-proxy.py <cluster-name>", file=sys.stderr)
+        print("usage: dns-proxy.py <canonical-cluster-name> [cluster-alias]", file=sys.stderr)
         sys.exit(1)
 
     my_cluster = sys.argv[1].lower()
+    my_alias = (
+        sys.argv[2].lower() if len(sys.argv) >= 3 and sys.argv[2] else derive_alias(my_cluster)
+    )
     peers = discover_peers(my_cluster)
+    alias_owners = compute_alias_owners(my_cluster, my_alias, peers)
+    state = {"peers": peers, "alias_owners": alias_owners}
     lock = threading.Lock()
+    alias_status = "active" if alias_owners.get(my_alias) == my_cluster else "conflicted"
 
     print(
-        f"dns proxy started, cluster={my_cluster}, peers={peers}, upstream={DOCKER_DNS}",
+        f"dns proxy started, cluster={my_cluster}, alias={my_alias} ({alias_status}), peers={peers}, upstream={DOCKER_DNS}",
         file=sys.stderr,
         flush=True,
     )
 
     refresh_thread = threading.Thread(
-        target=peer_refresh_loop, args=(my_cluster, peers, lock), daemon=True
+        target=peer_refresh_loop, args=(my_cluster, my_alias, state, lock), daemon=True
     )
     refresh_thread.start()
 
@@ -250,7 +294,7 @@ def main():
 
     tcp_thread = threading.Thread(
         target=tcp_listener_loop,
-        args=(tcp_server, my_cluster, peers, lock),
+        args=(tcp_server, my_cluster, state, lock),
         daemon=True,
     )
     tcp_thread.start()
@@ -258,7 +302,7 @@ def main():
     while True:
         data, addr = server.recvfrom(4096)
         try:
-            response = handle_dns_query(data, my_cluster, peers, lock)
+            response = handle_dns_query(data, my_cluster, state, lock)
             if response:
                 server.sendto(response, addr)
         except Exception as err:
