@@ -7,6 +7,6 @@ const URL_SAFE_ALPHABET: [char; 62] = [
     'V', 'W', 'X', 'Y', 'Z',
 ];
 
-pub fn unique_id() -> String {
-    nanoid!(10, &URL_SAFE_ALPHABET)
+pub fn unique_id(len: usize) -> String {
+    nanoid!(len, &URL_SAFE_ALPHABET)
 }

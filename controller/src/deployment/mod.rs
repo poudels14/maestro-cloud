@@ -409,7 +409,11 @@ async fn init_tailnet(
                     dns_domain,
                     &config.network,
                     &flag_refs,
-                    &[TAILSCALE_IMAGE_TAG, &config.cluster_name],
+                    &[
+                        TAILSCALE_IMAGE_TAG,
+                        &config.cluster_name,
+                        &config.cluster_alias,
+                    ],
                 )
             },
             name: "maestro-tailscale".to_string(),
@@ -446,6 +450,15 @@ async fn init_tailnet(
             "[maestro]: dns server running at {nameserver_ip}\n           configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"maestro.internal\""
         );
     }
+    eprintln!("[maestro]: tailscale DNS aliases");
+    eprintln!(
+        "[maestro]: canonical: {}.maestro.internal (active)",
+        config.cluster_name
+    );
+    eprintln!(
+        "[maestro]: alias: {}.maestro.internal (pending peer conflict check)",
+        config.cluster_alias
+    );
 }
 
 async fn get_docker_ip(container_name: &str) -> Option<String> {
