@@ -157,6 +157,7 @@ cat > /etc/maestro/flake.nix << 'EOF'
             enable = true;
             config = "aws-secret://<your-secret-id>";
           };
+          services.amazon-ssm-agent.enable = true;
           networking.firewall.allowedTCPPorts = [ 80 443 22 ];
           system.stateVersion = "25.05";
         })
@@ -170,6 +171,8 @@ nixos-rebuild switch --flake /etc/maestro#default
 ```
 
 Replace `<your-secret-id>` with the secret name from step 1.
+
+Use `maestro upgrade system` to trigger updates remotely.
 
 ### Step 3: Manage the service
 
