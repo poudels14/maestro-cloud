@@ -3,9 +3,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Result;
 use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
+use crate::deployment::dns::DnsManager;
 use crate::deployment::provider::{
-    BuildOutput, DockerBuildConfig, DockerDeploymentProvider, ServiceCommandPlanner,
-    ShellDeploymentProvider,
+    BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -13,9 +13,10 @@ use crate::deployment::types::{
     QueuedDeployment, ServiceDeployment, ServiceProvider,
 };
 use crate::logs::{LogConfig, LogEntry, LogOrigin};
+use crate::runtime::{BuildSpec, RuntimeProvider};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
-use crate::supervisor::{ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
+use crate::supervisor::{ContainerRef, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
 
 const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
 const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
@@ -45,10 +46,13 @@ struct PendingBuild {
 
 pub struct DeploymentController {
     config: DeploymentConfig,
+    runtime: Arc<dyn RuntimeProvider>,
+    dns_manager: Option<Arc<DnsManager>>,
+    dns_domain: Option<String>,
     store: Arc<dyn ClusterStore>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     supervisor: JobSupervisor,
-    docker_provider: DockerDeploymentProvider,
+    container_provider: ContainerDeploymentProvider,
     shell_provider: ShellDeploymentProvider,
     deployments: HashMap<String, Deployment>,
     pending_builds: HashMap<String, PendingBuild>,
@@ -63,24 +67,37 @@ impl DeploymentController {
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
         log_sender: Option<flume::Sender<LogEntry>>,
+        runtime: Arc<dyn RuntimeProvider>,
+        dns_manager: Option<Arc<DnsManager>>,
+        coredns_ip: Option<String>,
     ) -> Self {
         let dns_domain = config
             .tailscale_authkey
             .as_ref()
             .map(|_| format!("{}.maestro.internal", config.cluster_name));
-        let docker_provider = DockerDeploymentProvider {
+        let dns_server = if runtime.requires_explicit_dns() {
+            coredns_ip
+        } else {
+            None
+        };
+        let container_provider = ContainerDeploymentProvider {
+            runtime: runtime.clone(),
             network: config.network.clone(),
-            dns_domain,
+            dns_domain: dns_domain.clone(),
+            dns_server,
             secrets_dir: std::fs::canonicalize(&config.data_dir)
                 .unwrap_or_else(|_| config.data_dir.clone())
                 .join("secrets"),
         };
         Self {
             config,
+            runtime,
+            dns_manager,
+            dns_domain,
             store,
             signal_rx,
             supervisor,
-            docker_provider,
+            container_provider,
             shell_provider: ShellDeploymentProvider,
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
@@ -198,17 +215,19 @@ impl DeploymentController {
                 ("maestro-probe", Some("Dockerfile.probe")),
             ];
             for (tag, dockerfile) in images {
-                let result = DockerDeploymentProvider::build(
-                    &DockerBuildConfig {
-                        context_dir: self.config.project_dir.clone(),
-                        tag: tag.to_string(),
-                        dockerfile: dockerfile.map(String::from),
-                        build_args: Default::default(),
-                    },
-                    None,
-                    None,
-                )
-                .await;
+                let result = self
+                    .runtime
+                    .build_image(
+                        &BuildSpec {
+                            context_dir: self.config.project_dir.clone(),
+                            tag: tag.to_string(),
+                            dockerfile: dockerfile.map(String::from),
+                            build_args: Default::default(),
+                        },
+                        None,
+                        None,
+                    )
+                    .await;
                 if let Err(err) = result {
                     eprintln!("[maestro]: failed to rebuild {tag}: {err}");
                     return None;
@@ -288,7 +307,7 @@ impl DeploymentController {
                 .join(&queued_deployment.service_id)
                 .join(&short_id);
 
-            let provider = self.docker_provider.clone();
+            let provider = self.container_provider.clone();
             let deployment = queued_deployment.deployment.clone();
             let log_sender = self.log_sender.clone();
             let build_dir_clone = build_dir.clone();
@@ -429,7 +448,7 @@ impl DeploymentController {
         for replica_index in 0..replicas {
             let deploy_output = match queued_deployment.deployment.config.provider {
                 ServiceProvider::Docker => self
-                    .docker_provider
+                    .container_provider
                     .deploy(&queued_deployment.deployment, replica_index),
                 ServiceProvider::Shell => self
                     .shell_provider
@@ -443,7 +462,7 @@ impl DeploymentController {
             };
 
             let replica_job_id = replica_job_id(deployment_id, replica_index);
-            let docker_container = queued_deployment
+            let container_hostname = queued_deployment
                 .deployment
                 .hostname_for_replica(replica_index);
             let max_restarts = queued_deployment
@@ -460,12 +479,15 @@ impl DeploymentController {
                 max_restart_delay_ms: None,
                 max_restarts,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-                docker_container: Some(docker_container.clone()),
+                container: Some(ContainerRef {
+                    name: container_hostname.clone(),
+                    runtime_cli: self.runtime.cli_name().to_string(),
+                }),
                 secrets_mount: deploy_output.secrets_mount,
                 log_config: self.log_sender.clone().map(|sender| {
                     let mut tags = self.config.tags.clone();
                     tags.push(format!("service:{service_id}"));
-                    tags.push(format!("hostname:{docker_container}"));
+                    tags.push(format!("hostname:{container_hostname}"));
                     tags.push(format!("deployment_id:{deployment_id}"));
                     tags.push(format!("replica:{replica_index}"));
                     tags.push(format!("cluster:{}", self.config.cluster_name));
@@ -485,6 +507,12 @@ impl DeploymentController {
                         id: deployment_id.clone(),
                         replica_index,
                     },
+                );
+                register_container_dns(
+                    &container_hostname,
+                    &self.dns_domain,
+                    &self.dns_manager,
+                    &self.runtime,
                 );
             } else {
                 eprintln!(
@@ -506,22 +534,6 @@ impl DeploymentController {
                     "[maestro]: failed to update replica{replica_index} of deployment `{deployment_id}` status: {err}",
                 );
             }
-        }
-
-        let deployment_ref = Deployment {
-            service_id: service_id.clone(),
-            id: deployment_id.clone(),
-            replica_index: 0,
-        };
-        if let Err(err) = self
-            .store
-            .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
-            .await
-        {
-            eprintln!(
-                "[maestro]: failed to update deployment `{}` to Ready: {err}",
-                deployment_ref.id
-            );
         }
     }
 
@@ -665,13 +677,21 @@ impl DeploymentController {
                     let _ = self
                         .supervisor
                         .shutdown_job(&job_id, ShutdownRequest::Graceful);
-                    cleanup_deployment_image(&store_deployment, &self.config.data_dir);
+                    let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
+                    deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                    cleanup_deployment_image(
+                        &store_deployment,
+                        &self.config.data_dir,
+                        &self.runtime,
+                    );
                 }
             } else if store_deployment.status == DeploymentStatus::Removed {
                 let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
-                cleanup_deployment_image(&store_deployment, &self.config.data_dir);
+                let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
+                deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                cleanup_deployment_image(&store_deployment, &self.config.data_dir, &self.runtime);
             }
         }
     }
@@ -849,7 +869,7 @@ impl DeploymentController {
     ) {
         let deploy_output = match deployment_record.config.provider {
             ServiceProvider::Docker => self
-                .docker_provider
+                .container_provider
                 .deploy(deployment_record, replica_index),
             ServiceProvider::Shell => self.shell_provider.deploy(deployment_record, replica_index),
         };
@@ -858,7 +878,7 @@ impl DeploymentController {
         };
 
         let job_id = replica_job_id(deployment_id, replica_index);
-        let docker_container = deployment_record.hostname_for_replica(replica_index);
+        let container_hostname = deployment_record.hostname_for_replica(replica_index);
         let max_restarts = deployment_record
             .config
             .deploy
@@ -872,12 +892,15 @@ impl DeploymentController {
             max_restart_delay_ms: None,
             max_restarts,
             shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-            docker_container: Some(docker_container.clone()),
+            container: Some(ContainerRef {
+                name: container_hostname.clone(),
+                runtime_cli: self.runtime.cli_name().to_string(),
+            }),
             secrets_mount: deploy_output.secrets_mount,
             log_config: self.log_sender.clone().map(|sender| {
                 let mut tags = self.config.tags.clone();
                 tags.push(format!("service:{service_id}"));
-                tags.push(format!("hostname:{docker_container}"));
+                tags.push(format!("hostname:{container_hostname}"));
                 tags.push(format!("deployment_id:{deployment_id}"));
                 tags.push(format!("replica:{replica_index}"));
                 tags.push(format!("cluster:{}", self.config.cluster_name));
@@ -897,6 +920,12 @@ impl DeploymentController {
                     id: deployment_id.to_string(),
                     replica_index,
                 },
+            );
+            register_container_dns(
+                &container_hostname,
+                &self.dns_domain,
+                &self.dns_manager,
+                &self.runtime,
             );
 
             let has_healthcheck = deployment_record
@@ -918,11 +947,16 @@ impl DeploymentController {
     }
 }
 
-fn cleanup_deployment_image(deployment: &ServiceDeployment, data_dir: &std::path::Path) {
+fn cleanup_deployment_image(
+    deployment: &ServiceDeployment,
+    data_dir: &std::path::Path,
+    runtime: &Arc<dyn RuntimeProvider>,
+) {
     if let Some(build_info) = &deployment.build {
         let image_id = build_info.docker_image_id.clone();
+        let runtime = runtime.clone();
         tokio::spawn(async move {
-            let _ = crate::utils::cmd::run("docker", &["rmi", &image_id]).await;
+            let _ = runtime.remove_image(&image_id).await;
         });
     }
     let short_id: String = deployment.id.chars().take(6).collect();
@@ -937,4 +971,35 @@ fn cleanup_deployment_image(deployment: &ServiceDeployment, data_dir: &std::path
 
 fn replica_job_id(deployment_id: &str, replica_index: u32) -> String {
     format!("{deployment_id}-replica-{replica_index}")
+}
+
+fn register_container_dns(
+    hostname: &str,
+    dns_domain: &Option<String>,
+    dns_manager: &Option<Arc<DnsManager>>,
+    runtime: &Arc<dyn RuntimeProvider>,
+) {
+    if let (Some(domain), Some(dns)) = (dns_domain.as_deref(), dns_manager.as_ref()) {
+        let hostname = hostname.to_string();
+        let domain = domain.to_string();
+        let runtime = runtime.clone();
+        let dns = dns.clone();
+        tokio::spawn(async move {
+            if let Some(ip) = runtime.inspect_container_ip(&hostname).await {
+                dns.set_record(&hostname, &domain, &ip);
+                let _ = dns.flush();
+            }
+        });
+    }
+}
+
+fn deregister_container_dns(
+    hostname: &str,
+    dns_domain: &Option<String>,
+    dns_manager: &Option<Arc<DnsManager>>,
+) {
+    if let (Some(domain), Some(dns)) = (dns_domain.as_deref(), dns_manager.as_ref()) {
+        dns.remove_records_for_hostname(hostname, domain);
+        let _ = dns.flush();
+    }
 }

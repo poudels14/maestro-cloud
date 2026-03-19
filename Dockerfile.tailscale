@@ -1,5 +1,6 @@
 FROM ghcr.io/tailscale/tailscale:latest
 RUN apk add --no-cache python3
+COPY --from=coredns/coredns:1.12.1 /coredns /usr/local/bin/coredns
 COPY dns-proxy.py /dns-proxy.py
 COPY tailscale-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

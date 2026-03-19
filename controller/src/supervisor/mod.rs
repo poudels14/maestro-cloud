@@ -5,5 +5,6 @@ pub mod logs;
 mod worker;
 
 pub use worker::{
-    JobCommand, SecretsMount, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus,
+    ContainerRef, JobCommand, SecretsMount, ShutdownRequest, SupervisedJobConfig,
+    SupervisedJobStatus,
 };

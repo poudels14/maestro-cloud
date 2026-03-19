@@ -78,10 +78,21 @@
               description = "Directory for etcd data, logs, and state";
             };
 
+            runtime = lib.mkOption {
+              type = lib.types.enum [ "docker" "nerdctl" ];
+              default = "nerdctl";
+              description = "Container runtime to use (docker or nerdctl)";
+            };
+
           };
 
           config = lib.mkIf cfg.enable {
-            virtualisation.docker.enable = true;
+            virtualisation.docker.enable = lib.mkIf (cfg.runtime == "docker") true;
+            virtualisation.containerd.enable = lib.mkIf (cfg.runtime == "nerdctl") true;
+            environment.systemPackages = lib.mkIf (cfg.runtime == "nerdctl") [
+              pkgs.nerdctl
+              pkgs.cni-plugins
+            ];
 
             system.activationScripts.maestro-source = ''
               rm -rf /etc/maestro/source
@@ -91,10 +102,12 @@
 
             systemd.services.maestro = {
               description = "Maestro deployment controller";
-              after = [ "network-online.target" "docker.service" ];
+              after = [ "network-online.target" (if cfg.runtime == "nerdctl" then "containerd.service" else "docker.service") ];
               wants = [ "network-online.target" ];
               wantedBy = [ "multi-user.target" ];
-              path = [ pkgs.docker ];
+              path = if cfg.runtime == "nerdctl"
+                then [ pkgs.nerdctl pkgs.cni-plugins ]
+                else [ pkgs.docker ];
 
               serviceConfig = {
                 Type = "simple";
@@ -106,6 +119,7 @@
                   "--config" cfg.config
                   "--data-dir" (toString cfg.dataDir)
                   "--system" "nixos"
+                  "--runtime" cfg.runtime
                   "--project-dir" "/etc/maestro/source"
                 ]);
               };

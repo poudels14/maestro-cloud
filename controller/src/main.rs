@@ -6,6 +6,7 @@ mod error;
 mod logs;
 mod metrics;
 mod probe;
+mod runtime;
 mod server;
 mod signal;
 mod supervisor;
@@ -66,12 +67,12 @@ enum CliCommand {
         data_dir: PathBuf,
         #[arg(
             long = "network",
-            help = "Docker network name (default: maestro-{clustername-xxxx})"
+            help = "Container network name (default: maestro-{clustername-xxxx})"
         )]
         network: Option<String>,
         #[arg(
             long = "subnet",
-            help = "Docker network subnet CIDR (e.g., 172.22.0.0/16)"
+            help = "Container network subnet CIDR (e.g., 172.22.0.0/16)"
         )]
         subnet: Option<String>,
         #[arg(
@@ -120,6 +121,8 @@ enum CliCommand {
         dd_include_system_logs: bool,
         #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
         system: Option<config::SystemType>,
+        #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
+        runtime: Option<config::RuntimeType>,
         #[arg(long = "project-dir", help = "Path to the maestro project directory")]
         project_dir: PathBuf,
     },
@@ -245,6 +248,7 @@ async fn run() -> crate::error::Result<bool> {
             dd_site,
             dd_include_system_logs,
             system,
+            runtime: runtime_flag,
             project_dir,
         }) => {
             let explicit_datadog_site = dd_site
@@ -299,6 +303,7 @@ async fn run() -> crate::error::Result<bool> {
                         include_system_logs: dd_include_system_logs,
                     }),
                     system: None,
+                    runtime: Default::default(),
                 },
             };
 
@@ -336,7 +341,7 @@ async fn run() -> crate::error::Result<bool> {
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
             println!("[maestro]: etcd endpoint {etcd_endpoint}");
             let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
-            println!("[maestro]: docker network {network}");
+            println!("[maestro]: container network {network}");
             println!(
                 "[maestro]: cluster domains\n           canonical: {cluster_name}.maestro.internal (active)\n           alias: {cluster_alias}.maestro.internal ({})",
                 if enable_tailscale {
@@ -356,6 +361,15 @@ async fn run() -> crate::error::Result<bool> {
             } else {
                 None
             };
+            let runtime_type = runtime_flag.unwrap_or(cfg.runtime);
+            if runtime_type == config::RuntimeType::Nerdctl && cfg.subnet.is_none() {
+                return Err(Error::invalid_input(
+                    "nerdctl runtime requires --subnet to be set for deterministic CNI network addressing",
+                ));
+            }
+            let runtime = runtime::create_provider(runtime_type);
+            eprintln!("[maestro]: container runtime: {runtime_type}");
+
             let mut deployment_config = DeploymentConfig {
                 cluster_alias,
                 cluster_name,
@@ -405,7 +419,13 @@ async fn run() -> crate::error::Result<bool> {
             deployment_config.probe_port = Some(probe_host_port);
 
             let mut supervisor = JobSupervisor::new();
-            deployment::start_system_jobs(&deployment_config, &log_sender, &mut supervisor).await;
+            let system_info = deployment::start_system_jobs(
+                &deployment_config,
+                &runtime,
+                &log_sender,
+                &mut supervisor,
+            )
+            .await;
 
             let derived_key = derive_key(deployment_config.encryption_key.as_str());
             let store: Arc<dyn deployment::store::ClusterStore> =
@@ -429,6 +449,7 @@ async fn run() -> crate::error::Result<bool> {
             let metrics_collector = metrics::MetricsCollector::new(
                 metrics_endpoint,
                 deployment_config.cluster_name.clone(),
+                runtime.cli_name().to_string(),
                 metrics_signal_rx,
             );
             let metrics_handle = tokio::spawn(metrics_collector.run());
@@ -439,6 +460,9 @@ async fn run() -> crate::error::Result<bool> {
                 supervisor,
                 deployment_signal_rx,
                 Some(log_sender),
+                runtime,
+                Some(system_info.dns_manager),
+                system_info.coredns_ip,
             );
             let deployment_shutdown_tx = signal_tx.clone();
 

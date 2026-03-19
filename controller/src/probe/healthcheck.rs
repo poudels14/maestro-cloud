@@ -21,7 +21,12 @@ pub async fn check_deployments(
         let deployments = store.list_service_deployments(&service_id).await?;
 
         for deployment in deployments {
-            if deployment.status != DeploymentStatus::Ready {
+            if !matches!(
+                deployment.status,
+                DeploymentStatus::Ready
+                    | DeploymentStatus::Building
+                    | DeploymentStatus::PendingReady
+            ) {
                 continue;
             }
 

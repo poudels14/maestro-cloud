@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use crate::builder;
 use crate::deployment::types::ServiceDeployment;
 use crate::logs::LogEntry;
+use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
 use crate::supervisor::SecretsMount;
-use crate::utils::cmd;
 
 use crate::supervisor::JobCommand;
 
@@ -36,65 +36,18 @@ pub trait ServiceCommandPlanner: Send + Sync {
     fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput>;
 }
 
-pub struct DockerBuildConfig {
-    pub context_dir: PathBuf,
-    pub tag: String,
-    pub dockerfile: Option<String>,
-    pub build_args: HashMap<String, String>,
-}
-
 #[derive(Clone)]
-pub struct DockerDeploymentProvider {
+pub struct ContainerDeploymentProvider {
+    pub runtime: Arc<dyn RuntimeProvider>,
     pub network: String,
     pub dns_domain: Option<String>,
-    pub secrets_dir: PathBuf,
+    pub dns_server: Option<String>,
+    pub secrets_dir: std::path::PathBuf,
 }
 pub struct ShellDeploymentProvider;
 
-impl DockerDeploymentProvider {
-    pub async fn build(
-        config: &DockerBuildConfig,
-        log_sender: Option<&flume::Sender<LogEntry>>,
-        log_source: Option<&str>,
-    ) -> Result<()> {
-        eprintln!(
-            "[maestro]: building docker image {} from {}",
-            config.tag,
-            config.context_dir.display()
-        );
-
-        let mut args = vec!["build".to_string(), "-t".to_string(), config.tag.clone()];
-        if let Some(ref dockerfile) = config.dockerfile {
-            let dockerfile_path = config.context_dir.join(dockerfile).display().to_string();
-            args.push("-f".to_string());
-            args.push(dockerfile_path);
-        }
-        for (key, value) in &config.build_args {
-            args.push("--build-arg".to_string());
-            args.push(format!("{key}={value}"));
-        }
-        args.push(config.context_dir.display().to_string());
-
-        if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            cmd::run_with_logs(
-                "docker",
-                &args,
-                sender,
-                source,
-                crate::logs::LogOrigin::Build,
-            )
-            .await?;
-        } else {
-            cmd::run("docker", &args).await?;
-        }
-
-        eprintln!("[maestro]: docker image {} built successfully", config.tag);
-        Ok(())
-    }
-}
-
 #[async_trait]
-impl ServiceCommandPlanner for DockerDeploymentProvider {
+impl ServiceCommandPlanner for ContainerDeploymentProvider {
     async fn build(
         &self,
         deployment: &ServiceDeployment,
@@ -115,17 +68,18 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
         .await?;
         let (commit_sha, commit_message) = builder::get_head_commit(build_dir).await?;
         let log_source = format!("{}/{}/build", deployment.config.id, deployment.id);
-        DockerDeploymentProvider::build(
-            &DockerBuildConfig {
-                context_dir: build_dir.to_path_buf(),
-                tag: image_tag.to_string(),
-                dockerfile: Some(build_config.dockerfile_path.clone()),
-                build_args: build_config.env.clone(),
-            },
-            log_sender.as_ref(),
-            Some(&log_source),
-        )
-        .await?;
+        self.runtime
+            .build_image(
+                &BuildSpec {
+                    context_dir: build_dir.to_path_buf(),
+                    tag: image_tag.to_string(),
+                    dockerfile: Some(build_config.dockerfile_path.clone()),
+                    build_args: build_config.env.clone(),
+                },
+                log_sender.as_ref(),
+                Some(&log_source),
+            )
+            .await?;
         Ok(BuildOutput {
             image_tag: image_tag.to_string(),
             commit_sha,
@@ -165,19 +119,45 @@ impl ServiceCommandPlanner for DockerDeploymentProvider {
             let mount_arg = secrets_info.as_ref().map(|(host_path, container_path, _)| {
                 (host_path.display().to_string(), container_path.clone())
             });
+
+            let short_deployment_id = deployment.id.chars().take(6).collect::<String>();
+            let container_name = if replica_index == 0 {
+                format!("{}-{short_deployment_id}", deployment.config.id)
+            } else {
+                format!(
+                    "{}-{short_deployment_id}-{replica_index}",
+                    deployment.config.id
+                )
+            };
+
+            let mut extra_flags = Vec::new();
+            if let Some(dns) = &self.dns_server {
+                extra_flags.extend(["--dns".to_string(), dns.clone()]);
+            }
+            for port in &deployment.config.deploy.expose_ports {
+                extra_flags.extend(["-p".to_string(), format!("0:{port}")]);
+            }
+            for (key, value) in &deployment.config.deploy.env {
+                extra_flags.extend(["-e".to_string(), format!("{key}={value}")]);
+            }
+            if let Some((host_path, container_path)) = &mount_arg {
+                extra_flags.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
+            }
+
+            let mut image_and_args = vec![image.to_string()];
+            for flag in &deployment.config.deploy.flags {
+                image_and_args.push(flag.clone());
+            }
+
             Some(DeployOutput {
-                command: docker_run_command(
-                    &deployment.config.id,
-                    &deployment.id,
-                    replica_index,
-                    image,
-                    &self.network,
-                    self.dns_domain.as_deref(),
-                    &deployment.config.deploy.expose_ports,
-                    &deployment.config.deploy.env,
-                    mount_arg.as_ref(),
-                    &deployment.config.deploy.flags,
-                ),
+                command: self.runtime.run_command(&RunSpec {
+                    container_name: container_name.clone(),
+                    hostname: container_name,
+                    dns_domain: self.dns_domain.clone(),
+                    network: self.network.clone(),
+                    extra_flags,
+                    image_and_args,
+                }),
                 secrets_mount: secrets_info.map(|(host_path, container_path, content)| {
                     SecretsMount {
                         host_path,
@@ -233,56 +213,5 @@ impl ServiceCommandPlanner for ShellDeploymentProvider {
             command: JobCommand::Shell(shell_cmd),
             secrets_mount: None,
         })
-    }
-}
-
-fn docker_run_command(
-    service_id: &str,
-    deployment_id: &str,
-    replica_index: u32,
-    image: &str,
-    network: &str,
-    dns_domain: Option<&str>,
-    expose_ports: &[u16],
-    env: &HashMap<String, String>,
-    secrets_mount: Option<&(String, String)>,
-    flags: &[String],
-) -> JobCommand {
-    let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
-    let container_name = if replica_index == 0 {
-        format!("{service_id}-{short_deployment_id}")
-    } else {
-        format!("{service_id}-{short_deployment_id}-{replica_index}")
-    };
-
-    let mut args = vec![
-        "run".to_string(),
-        "--rm".to_string(),
-        "--name".to_string(),
-        container_name.clone(),
-        "--hostname".to_string(),
-        container_name,
-        "--network".to_string(),
-        network.to_string(),
-    ];
-    if let Some(domain) = dns_domain {
-        args.extend(["--domainname".to_string(), domain.to_string()]);
-    }
-    for port in expose_ports {
-        args.extend(["-p".to_string(), format!("0:{port}")]);
-    }
-    for (key, value) in env {
-        args.extend(["-e".to_string(), format!("{key}={value}")]);
-    }
-    if let Some((host_path, container_path)) = secrets_mount {
-        args.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
-    }
-    args.push(image.to_string());
-    for flag in flags {
-        args.push(flag.clone());
-    }
-    JobCommand::Exec {
-        program: "docker".to_string(),
-        args,
     }
 }
