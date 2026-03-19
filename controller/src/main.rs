@@ -9,6 +9,7 @@ mod server;
 mod signal;
 mod supervisor;
 mod utils;
+mod validation;
 
 use utils::crypto::{SecretString, derive_key};
 

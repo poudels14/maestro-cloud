@@ -6,6 +6,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+use backon::{BackoffBuilder, ExponentialBuilder};
+
 use crate::logs::LogConfig;
 
 use super::logs::read_pipe_to_collector;
@@ -15,13 +17,21 @@ use watchexec_supervisor::{
     job::{CommandState, Job, start_job},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobCommand {
+    Exec { program: String, args: Vec<String> },
+    Shell(String),
+}
+
 #[derive(Clone)]
 pub struct SupervisedJobConfig {
     pub id: String,
     pub name: String,
-    pub command: String,
+    pub command: JobCommand,
     pub restart_delay_ms: u64,
+    pub max_restart_delay_ms: Option<u64>,
     pub max_restarts: Option<u32>,
+
     pub shutdown_grace_period_ms: u64,
     pub docker_container: Option<String>,
     pub secrets_mount: Option<SecretsMount>,
@@ -155,12 +165,19 @@ impl SupervisedJobRunner {
     }
 
     pub fn spawn(&self, config: SupervisedJobConfig) -> SupervisedJob {
-        let command = Arc::new(Command {
-            program: Program::Shell {
+        let program = match &config.command {
+            JobCommand::Exec { program, args } => Program::Exec {
+                prog: program.clone().into(),
+                args: args.iter().map(|a| a.clone().into()).collect(),
+            },
+            JobCommand::Shell(cmd) => Program::Shell {
                 shell: Shell::new("sh"),
-                command: config.command.clone(),
+                command: cmd.clone(),
                 args: Vec::new(),
             },
+        };
+        let command = Arc::new(Command {
+            program,
             options: SpawnOptions {
                 grouped: true,
                 ..Default::default()
@@ -233,8 +250,16 @@ impl SupervisedJobRunner {
         let name = config.name.clone();
 
         let shutdown_grace = Duration::from_millis(config.shutdown_grace_period_ms);
-        let restart_delay = Duration::from_millis(config.restart_delay_ms);
         let shutdown_timeout = shutdown_grace.saturating_add(Duration::from_secs(3));
+        let max_delay = config
+            .max_restart_delay_ms
+            .unwrap_or(config.restart_delay_ms);
+        let mut backoff = ExponentialBuilder::default()
+            .with_min_delay(Duration::from_millis(config.restart_delay_ms))
+            .with_max_delay(Duration::from_millis(max_delay))
+            .with_factor(2.0)
+            .without_max_times()
+            .build();
 
         let mut restart_count = 0_u32;
         let mut exit_status = SupervisedJobStatus::Completed;
@@ -302,20 +327,20 @@ impl SupervisedJobRunner {
                     }
 
                     restart_count += 1;
+                    let delay = backoff.next().unwrap_or(Duration::from_millis(max_delay));
+                    let delay_ms = delay.as_millis();
                     match config.max_restarts {
                         Some(max) => eprintln!(
-                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{max} in {}ms",
-                            config.restart_delay_ms
+                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count}/{max} in {delay_ms}ms",
                         ),
                         None => eprintln!(
-                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count} in {}ms",
-                            config.restart_delay_ms
+                            "[maestro]: service '{name}' failed with {status:?}; restart {restart_count} in {delay_ms}ms",
                         ),
                     }
 
                     let delay_outcome = tokio::select! {
                         _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
-                        _ = sleep(restart_delay) => WorkerOutcome::DelayElapsed,
+                        _ = sleep(delay) => WorkerOutcome::DelayElapsed,
                     };
 
                     if let WorkerOutcome::Shutdown(request) = delay_outcome {

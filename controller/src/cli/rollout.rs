@@ -274,9 +274,8 @@ fn service_payload(
     service_template: &ServiceTemplate,
 ) -> Result<PatchServiceRequest> {
     let id = service_id.trim();
-    if id.is_empty() {
-        return Err(Error::invalid_config("service id cannot be empty"));
-    }
+    crate::validation::validate_service_id(id, "service id")
+        .map_err(|err| Error::invalid_config(err))?;
 
     let name = service_template.name.trim();
     if name.is_empty() {
@@ -284,7 +283,7 @@ fn service_payload(
             "service `{service_id}` has empty name"
         )));
     }
-    let (build, image, deploy) = validate_service_provider_config(
+    let (build, image, deploy) = crate::validation::validate_service_provider_config(
         service_template.provider,
         &service_template.build,
         &service_template.image,
@@ -336,67 +335,6 @@ fn service_payload(
         deploy,
         ingress: service_template.ingress.clone(),
     })
-}
-
-fn validate_build_config(
-    build: &Option<ServiceBuildConfig>,
-    image: &Option<String>,
-) -> std::result::Result<(Option<ServiceBuildConfig>, Option<String>), String> {
-    match (build, image) {
-        (Some(build), None) => {
-            if build.repo.trim().is_empty() {
-                return Err("has empty build.repo".to_string());
-            }
-            if build.dockerfile_path.trim().is_empty() {
-                return Err("has empty build.dockerfilePath".to_string());
-            }
-            Ok((Some(build.clone()), None))
-        }
-        (None, Some(image)) => {
-            if image.trim().is_empty() {
-                return Err("has empty image".to_string());
-            }
-            Ok((None, Some(image.clone())))
-        }
-        (Some(_), Some(_)) => Err("must set either `build` or `image`, not both".to_string()),
-        (None, None) => Err("must set either `build` or `image`".to_string()),
-    }
-}
-
-fn validate_service_provider_config(
-    provider: ServiceProvider,
-    build: &Option<ServiceBuildConfig>,
-    image: &Option<String>,
-    deploy: &ServiceDeployConfig,
-) -> std::result::Result<
-    (
-        Option<ServiceBuildConfig>,
-        Option<String>,
-        ServiceDeployConfig,
-    ),
-    String,
-> {
-    match provider {
-        ServiceProvider::Docker => {
-            let (build, image) = validate_build_config(build, image)?;
-            Ok((build, image, deploy.clone()))
-        }
-        ServiceProvider::Shell => {
-            if build.is_some() || image.is_some() {
-                return Err("must not set `build` or `image` when provider is `shell`".to_string());
-            }
-            let Some(command) = deploy.command.as_ref() else {
-                return Err("must set deploy.command when provider is `shell`".to_string());
-            };
-            if command.command.trim().is_empty() {
-                return Err(
-                    "must set non-empty deploy.command.command when provider is `shell`"
-                        .to_string(),
-                );
-            }
-            Ok((None, None, deploy.clone()))
-        }
-    }
 }
 
 fn expand_env_value(value: &str) -> std::result::Result<String, String> {

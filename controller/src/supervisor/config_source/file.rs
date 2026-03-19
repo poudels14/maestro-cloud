@@ -44,8 +44,9 @@ impl FileServiceConfigSource {
                 SupervisedJobConfig {
                     id: name.clone(),
                     name,
-                    command: self.command,
+                    command: super::super::JobCommand::Shell(self.command),
                     restart_delay_ms: self.restart_delay_ms,
+                    max_restart_delay_ms: None,
                     max_restarts: self.max_restarts,
                     shutdown_grace_period_ms: self.shutdown_grace_period_ms,
                     docker_container: None,

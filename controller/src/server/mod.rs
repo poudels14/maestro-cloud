@@ -1,14 +1,17 @@
+use std::io::Read;
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, patch, post},
 };
+use flate2::read::GzDecoder;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -19,8 +22,8 @@ use self::types::{
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, SecretsConfig, ServiceBuildConfig, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    CancelDeploymentOutcome, Deployment, SecretsConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceDeployment, ServiceProvider,
 };
 use crate::signal::ShutdownEvent;
 
@@ -296,7 +299,7 @@ impl Server {
     ) -> Result<Json<Vec<crate::deployment::types::DeploymentWithReplicas>>, (StatusCode, String)>
     {
         let service_id = service_id.trim();
-        validate_service_id(service_id, "serviceId")
+        crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
         let mut deployments = state
@@ -321,7 +324,7 @@ impl Server {
     ) -> Result<Json<CancelDeploymentResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
         let deployment_id = deployment_id.trim().to_string();
-        validate_service_id(&service_id, "serviceId")
+        crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         if deployment_id.is_empty() {
             return Err((
@@ -368,7 +371,7 @@ impl Server {
         Json(body): Json<types::FreezeRequest>,
     ) -> Result<Json<types::FreezeResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
-        validate_service_id(&service_id, "serviceId")
+        crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
         state
@@ -389,7 +392,7 @@ impl Server {
         State(state): State<AppState>,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
-        validate_service_id(&service_id, "serviceId")
+        crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
         let info = state
@@ -454,7 +457,7 @@ impl Server {
         State(state): State<AppState>,
     ) -> Result<StatusCode, (StatusCode, String)> {
         let service_id = service_id.trim();
-        validate_service_id(service_id, "serviceId")
+        crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
         state
@@ -472,7 +475,7 @@ impl Server {
     ) -> Result<Json<RemoveDeploymentResponse>, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
         let deployment_id = deployment_id.trim().to_string();
-        validate_service_id(&service_id, "serviceId")
+        crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         if deployment_id.is_empty() {
             return Err((
@@ -523,7 +526,7 @@ impl Server {
     ) -> Result<StatusCode, (StatusCode, String)> {
         let service_id = service_id.trim().to_string();
         let deployment_id = deployment_id.trim().to_string();
-        validate_service_id(&service_id, "serviceId")
+        crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         if deployment_id.is_empty() {
             return Err((
@@ -560,7 +563,7 @@ impl Server {
     ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
         let service_id = service_id.trim();
         let deployment_id = deployment_id.trim();
-        validate_service_id(service_id, "serviceId")
+        crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         if deployment_id.is_empty() {
             return Err((
@@ -593,7 +596,8 @@ impl Server {
         State(state): State<AppState>,
     ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
         let name = name.trim();
-        validate_service_id(name, "name").map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        crate::validation::validate_service_id(name, "name")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
 
         let Some(log_store) = &state.log_store else {
@@ -612,8 +616,10 @@ impl Server {
 
     async fn ingest_logs(
         State(state): State<AppState>,
-        Json(entries): Json<Vec<crate::logs::LogEntry>>,
+        headers: HeaderMap,
+        body: Bytes,
     ) -> Result<&'static str, (StatusCode, String)> {
+        let entries: Vec<crate::logs::LogEntry> = parse_json_body(&headers, body)?;
         let Some(log_store) = &state.log_store else {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -629,8 +635,10 @@ impl Server {
 
     async fn ingest_metrics(
         State(state): State<AppState>,
-        Json(entries): Json<Vec<crate::metrics::MetricPoint>>,
+        headers: HeaderMap,
+        body: Bytes,
     ) -> Result<&'static str, (StatusCode, String)> {
+        let entries: Vec<crate::metrics::MetricPoint> = parse_json_body(&headers, body)?;
         let Some(log_store) = &state.log_store else {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -681,7 +689,7 @@ impl Server {
         State(state): State<AppState>,
     ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
         let service_id = service_id.trim();
-        validate_service_id(service_id, "serviceId")
+        crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
@@ -701,7 +709,7 @@ impl Server {
         State(state): State<AppState>,
     ) -> Result<Json<Vec<crate::metrics::MetricPoint>>, (StatusCode, String)> {
         let service_id = service_id.trim();
-        validate_service_id(service_id, "serviceId")
+        crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
@@ -742,6 +750,42 @@ struct ForceQuery {
     force: Option<bool>,
 }
 
+fn parse_json_body<T: DeserializeOwned>(
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<T, (StatusCode, String)> {
+    let is_gzip = headers
+        .get(axum::http::header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .any(|encoding| encoding.trim().eq_ignore_ascii_case("gzip"))
+        })
+        .unwrap_or(false);
+
+    let bytes = if is_gzip {
+        let mut decoder = GzDecoder::new(body.as_ref());
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode gzip request body: {err}"),
+            )
+        })?;
+        decompressed
+    } else {
+        body.to_vec()
+    };
+
+    serde_json::from_slice::<T>(&bytes).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid JSON request body: {err}"),
+        )
+    })
+}
+
 fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig, String> {
     let RolloutServiceRequest {
         id,
@@ -754,13 +798,14 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     } = request;
 
     let service_id = id.trim().to_string();
-    validate_service_id(&service_id, "id")?;
+    crate::validation::validate_service_id(&service_id, "id")?;
 
     let service_name = name.trim().to_string();
     if service_name.is_empty() {
         return Err("name cannot be empty".to_string());
     }
-    let (build, image, deploy) = validate_service_provider_config(provider, build, image, deploy)?;
+    let (build, image, deploy) =
+        crate::validation::validate_service_provider_config(provider, &build, &image, &deploy)?;
 
     let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
     let version_payload = json!({
@@ -859,79 +904,6 @@ fn is_active_service_status(status: Option<&crate::deployment::types::Deployment
     )
 }
 
-fn validate_build_config(
-    build: Option<ServiceBuildConfig>,
-    image: Option<String>,
-) -> Result<(Option<ServiceBuildConfig>, Option<String>), String> {
-    match (build, image) {
-        (Some(build), None) => {
-            let repo = build.repo.trim().to_string();
-            if repo.is_empty() {
-                return Err("build.repo cannot be empty".to_string());
-            }
-            let dockerfile_path = build.dockerfile_path.trim().to_string();
-            if dockerfile_path.is_empty() {
-                return Err("build.dockerfilePath cannot be empty".to_string());
-            }
-            Ok((
-                Some(ServiceBuildConfig {
-                    repo,
-                    branch: build.branch,
-                    dockerfile_path,
-                    watch: build.watch,
-                    env: build.env,
-                }),
-                None,
-            ))
-        }
-        (None, Some(image)) => {
-            let image = image.trim().to_string();
-            if image.is_empty() {
-                return Err("image cannot be empty".to_string());
-            }
-            Ok((None, Some(image)))
-        }
-        (Some(_), Some(_)) => Err("set either `build` or `image`, not both".to_string()),
-        (None, None) => Err("set either `build` or `image`".to_string()),
-    }
-}
-
-fn validate_service_provider_config(
-    provider: ServiceProvider,
-    build: Option<ServiceBuildConfig>,
-    image: Option<String>,
-    deploy: ServiceDeployConfig,
-) -> Result<
-    (
-        Option<ServiceBuildConfig>,
-        Option<String>,
-        ServiceDeployConfig,
-    ),
-    String,
-> {
-    match provider {
-        ServiceProvider::Docker => {
-            let (build, image) = validate_build_config(build, image)?;
-            Ok((build, image, deploy))
-        }
-        ServiceProvider::Shell => {
-            if build.is_some() || image.is_some() {
-                return Err(
-                    "shell provider does not allow `build` or `image`; set deploy.command instead"
-                        .to_string(),
-                );
-            }
-            let Some(command) = deploy.command.as_ref() else {
-                return Err("shell provider requires deploy.command".to_string());
-            };
-            if command.command.trim().is_empty() {
-                return Err("shell provider requires non-empty deploy.command.command".to_string());
-            }
-            Ok((None, None, deploy))
-        }
-    }
-}
-
 fn hex_lower(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -939,21 +911,6 @@ fn hex_lower(bytes: &[u8]) -> String {
         output.push(char::from_digit((byte & 0x0f) as u32, 16).expect("hex nibble"));
     }
     output
-}
-
-fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
-    if service_id.is_empty() {
-        return Err(format!("{field_name} cannot be empty"));
-    }
-    let is_id_url_safe = service_id
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
-    if !is_id_url_safe {
-        return Err(format!(
-            "{field_name} must be URL-safe and contain only letters, numbers, '-' or '_'"
-        ));
-    }
-    Ok(())
 }
 
 async fn compute_rollout_diff(
