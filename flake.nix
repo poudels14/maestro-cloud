@@ -94,6 +94,7 @@
               after = [ "network-online.target" "docker.service" ];
               wants = [ "network-online.target" ];
               wantedBy = [ "multi-user.target" ];
+              path = [ pkgs.docker ];
 
               serviceConfig = {
                 Type = "simple";
