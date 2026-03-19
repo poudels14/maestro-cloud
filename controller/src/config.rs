@@ -12,6 +12,8 @@ pub struct StartConfig {
     #[serde(default)]
     pub tailscale: Option<TailscaleConfig>,
     #[serde(default)]
+    pub jwt_secret: Option<String>,
+    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub datadog: Option<DatadogConfig>,
@@ -46,7 +48,7 @@ pub struct DatadogConfig {
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {
-    if let Some(secret_name) = source.strip_prefix("aws-secrets://") {
+    if let Some(secret_name) = source.strip_prefix("aws-secret://") {
         load_from_aws(secret_name).await
     } else {
         let path = source.strip_prefix("file://").unwrap_or(source);

@@ -285,30 +285,37 @@ async fn init_probe(
     let probe_host_port = config.probe_port.expect("probe_port should be resolved");
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
-        command: docker_run_exec(
-            container_name,
-            "maestro-probe",
-            dns_domain,
-            &config.network,
-            &[
-                "-p",
-                &format!("127.0.0.1:{probe_host_port}:3001"),
-                "-v",
-                &format!("{}:/data", probe_data_abs.display()),
-                "-v",
-                &format!(
+        command: {
+            let mut probe_flags: Vec<String> = vec![
+                "-p".into(),
+                format!("127.0.0.1:{probe_host_port}:3001"),
+                "-v".into(),
+                format!("{}:/data", probe_data_abs.display()),
+                "-v".into(),
+                format!(
                     "{}:/run/secrets/encryption-key:ro",
                     encryption_key_abs.display()
                 ),
-                "-e",
-                &format!("ETCD_ENDPOINT=http://{etcd_container}:2379"),
-                "-e",
-                "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key",
-                "-e",
-                "PORT=3001",
-            ],
-            &[PROBE_IMAGE_TAG],
-        ),
+                "-e".into(),
+                format!("ETCD_ENDPOINT=http://{etcd_container}:2379"),
+                "-e".into(),
+                "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
+                "-e".into(),
+                "PORT=3001".into(),
+            ];
+            if let Some(secret) = &config.jwt_secret {
+                probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
+            }
+            let refs: Vec<&str> = probe_flags.iter().map(|s| s.as_str()).collect();
+            docker_run_exec(
+                container_name,
+                "maestro-probe",
+                dns_domain,
+                &config.network,
+                &refs,
+                &[PROBE_IMAGE_TAG],
+            )
+        },
         name: "maestro-probe".to_string(),
         max_restarts: None,
         restart_delay_ms: 1_000,

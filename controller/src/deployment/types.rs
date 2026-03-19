@@ -20,6 +20,7 @@ pub struct DeploymentConfig {
     pub subnet: Option<String>,
     pub tailscale_authkey: Option<String>,
     pub encryption_key: SecretString,
+    pub jwt_secret: Option<String>,
     pub tags: Vec<String>,
 }
 

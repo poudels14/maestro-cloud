@@ -32,7 +32,8 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         crate::logs::LogStore::open(std::path::Path::new("/data/logs.db"))
             .expect("failed to open probe log store"),
     );
-    let server = server::Server::new(store.clone(), Some(log_store));
+    let jwt_secret = std::env::var("MAESTRO_JWT_SECRET").ok();
+    let server = server::Server::new(store.clone(), Some(log_store), jwt_secret);
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
     let server_shutdown_tx = shutdown_tx.clone();
