@@ -531,7 +531,16 @@ impl DeploymentController {
 
             let store_deployment = match self.store.read_service_deployment(deployment).await {
                 Ok(Some(d)) => d,
-                Ok(None) => continue,
+                Ok(None) => {
+                    eprintln!(
+                        "[maestro]: deployment `{}` for service `{}` no longer exists in store, stopping",
+                        deployment.id, deployment.service_id
+                    );
+                    let _ = self
+                        .supervisor
+                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    continue;
+                }
                 Err(err) => {
                     eprintln!(
                         "[maestro]: failed to read deployment `{}` stop state: {err}",

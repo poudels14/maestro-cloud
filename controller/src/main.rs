@@ -3,6 +3,7 @@ mod cli;
 mod deployment;
 mod error;
 mod logs;
+mod metrics;
 mod probe;
 mod server;
 mod signal;
@@ -297,6 +298,15 @@ async fn run() -> crate::error::Result<()> {
             );
             let watcher_handle = tokio::spawn(watcher.run());
 
+            let metrics_signal_rx = signal_tx.subscribe();
+            let metrics_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/metrics");
+            let metrics_collector = metrics::MetricsCollector::new(
+                metrics_endpoint,
+                deployment_config.cluster_name.clone(),
+                metrics_signal_rx,
+            );
+            let metrics_handle = tokio::spawn(metrics_collector.run());
+
             let mut controller = DeploymentController::new(
                 deployment_config,
                 store,
@@ -314,6 +324,7 @@ async fn run() -> crate::error::Result<()> {
             .await;
 
             watcher_handle.abort();
+            metrics_handle.abort();
 
             signal_task.abort();
             match result {

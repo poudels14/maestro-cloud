@@ -1,5 +1,6 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import { EllipsisVertical, Ban, RotateCw, Square } from "lucide-solid";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { EllipsisVertical, Ban, RotateCw, Square, AlertTriangle } from "lucide-solid";
+import clsx from "clsx";
 
 export function timeAgo(ms: number): string {
   const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -33,9 +34,13 @@ export function StatusBadge(props: { status: string }) {
   const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.STOPPED!;
   return (
     <span
-      class={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${colors().bg} ${colors().text}`}
+      class={clsx(
+        "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full",
+        colors().bg,
+        colors().text
+      )}
     >
-      <span class={`size-1.5 rounded-full ${colors().dot} inline-block`} />
+      <span class={clsx("size-1.5 rounded-full inline-block", colors().dot)} />
       {props.status.toLowerCase()}
     </span>
   );
@@ -43,7 +48,7 @@ export function StatusBadge(props: { status: string }) {
 
 export function StatusDot(props: { status: string }) {
   const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.STOPPED!;
-  return <span class={`size-2 rounded-full ${colors().dot} inline-block shrink-0`} />;
+  return <span class={clsx("size-2 rounded-full inline-block shrink-0", colors().dot)} />;
 }
 
 export function TabButton(props: {
@@ -56,15 +61,19 @@ export function TabButton(props: {
     <button
       type="button"
       onClick={props.onClick}
-      class={`px-1 pb-2.5 text-sm font-medium border-b-2 transition-colors outline-none ${
-        props.active
-          ? "border-indigo-500 text-indigo-600"
-          : "border-transparent text-gray-400 hover:text-gray-600"
-      }`}
+      class={clsx("px-1 pb-2.5 text-sm font-medium border-b-2 transition-colors outline-none", {
+        "border-indigo-500 text-indigo-600": props.active,
+        "border-transparent text-gray-400 hover:text-gray-600": !props.active
+      })}
     >
       {props.label}
       <Show when={props.count !== undefined}>
-        <span class={`ml-1.5 text-xs ${props.active ? "text-indigo-400" : "text-gray-400"}`}>
+        <span
+          class={clsx("ml-1.5 text-xs", {
+            "text-indigo-400": props.active,
+            "text-gray-400": !props.active
+          })}
+        >
           {props.count}
         </span>
       </Show>
@@ -84,14 +93,17 @@ export function DeploymentMenu(props: {
   const [open, setOpen] = createSignal(false);
   let menuRef: HTMLDivElement | undefined;
 
-  const handleClickOutside = (e: MouseEvent) => {
-    if (menuRef && !menuRef.contains(e.target as Node)) {
-      setOpen(false);
+  createEffect(() => {
+    if (open()) {
+      const handleClickOutside = (e: MouseEvent) => {
+        if (menuRef && !menuRef.contains(e.target as Node)) {
+          setOpen(false);
+        }
+      };
+      document.addEventListener("click", handleClickOutside);
+      onCleanup(() => document.removeEventListener("click", handleClickOutside));
     }
-  };
-
-  onMount(() => document.addEventListener("click", handleClickOutside));
-  onCleanup(() => document.removeEventListener("click", handleClickOutside));
+  });
 
   const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
   const canStop = () => STOPPABLE_STATUSES.has(props.status);
@@ -150,6 +162,24 @@ export function DeploymentMenu(props: {
             </button>
           </Show>
         </div>
+      </Show>
+    </div>
+  );
+}
+
+export function ErrorBanner(props: { message: string; onRetry?: () => void }) {
+  return (
+    <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-center gap-3">
+      <AlertTriangle class="size-4 text-red-500 shrink-0" />
+      <span class="text-sm text-red-700 flex-1">{props.message}</span>
+      <Show when={props.onRetry}>
+        <button
+          type="button"
+          onClick={props.onRetry}
+          class="text-xs font-medium text-red-600 hover:text-red-700 outline-none"
+        >
+          Retry
+        </button>
       </Show>
     </div>
   );

@@ -100,6 +100,18 @@ impl LogStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_logs_source_seq ON logs (source, seq);
+
+            CREATE TABLE IF NOT EXISTS metrics (
+                ts INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cpu_percent REAL NOT NULL,
+                memory_bytes INTEGER NOT NULL,
+                memory_limit_bytes INTEGER NOT NULL,
+                net_rx_bytes INTEGER NOT NULL,
+                net_tx_bytes INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_metrics_source_ts ON metrics (source, ts);
             ",
         )?;
         Ok(Self {
@@ -266,6 +278,96 @@ impl LogStore {
 
     pub fn notifier(&self) -> Arc<Notify> {
         self.notify.clone()
+    }
+
+    pub async fn append_metrics(&self, entries: &[crate::metrics::MetricPoint]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO metrics (ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        for entry in entries {
+            stmt.execute(rusqlite::params![
+                entry.ts,
+                entry.source,
+                entry.cpu_percent,
+                entry.memory_bytes,
+                entry.memory_limit_bytes,
+                entry.net_rx_bytes,
+                entry.net_tx_bytes,
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub async fn read_metrics(
+        &self,
+        source: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<crate::metrics::MetricPoint>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare_cached(
+            "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
+             FROM metrics WHERE source = ?1 AND ts >= ?2 AND ts <= ?3
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![source, from, to], |row| {
+            Ok(crate::metrics::MetricPoint {
+                ts: row.get(0)?,
+                source: row.get(1)?,
+                cpu_percent: row.get(2)?,
+                memory_bytes: row.get(3)?,
+                memory_limit_bytes: row.get(4)?,
+                net_rx_bytes: row.get(5)?,
+                net_tx_bytes: row.get(6)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub async fn read_metrics_by_prefix(
+        &self,
+        prefix: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<crate::metrics::MetricPoint>> {
+        let conn = self.conn.lock().await;
+        let pattern = format!("{prefix}%");
+        let mut stmt = conn.prepare_cached(
+            "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
+             FROM metrics WHERE source LIKE ?1 AND ts >= ?2 AND ts <= ?3
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![pattern, from, to], |row| {
+            Ok(crate::metrics::MetricPoint {
+                ts: row.get(0)?,
+                source: row.get(1)?,
+                cpu_percent: row.get(2)?,
+                memory_bytes: row.get(3)?,
+                memory_limit_bytes: row.get(4)?,
+                net_rx_bytes: row.get(5)?,
+                net_tx_bytes: row.get(6)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub async fn cleanup_old_metrics(&self, max_age_ms: i64) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+            - max_age_ms;
+        let deleted = conn.execute(
+            "DELETE FROM metrics WHERE ts < ?1",
+            rusqlite::params![cutoff],
+        )?;
+        Ok(deleted)
     }
 
     fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {

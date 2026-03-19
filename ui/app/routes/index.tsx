@@ -1,11 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createResource, createSignal, For, Show, Suspense } from "solid-js";
+import { createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
 import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Dialog } from "@kobalte/core/dialog";
-import type { Service } from "../lib/types";
-import { deleteService, getServices } from "../lib/api";
-import { StatusBadge } from "../lib/ui";
+import type { MetricPoint, Service } from "../lib/types";
+import { deleteService, getClusterMetrics, getNodeMetrics, getServices } from "../lib/api";
+import { ErrorBanner, StatusBadge } from "../lib/ui";
+import { TimelineChart } from "../components/TimelineChart";
 
 export const Route = createFileRoute("/")({
   component: ServicesPage
@@ -112,6 +113,98 @@ function DeleteConfirmDialog(props: {
   );
 }
 
+function HomeMetrics() {
+  const metricsSource = () => {
+    const now = Date.now();
+    return { from: now - 3_600_000, to: now };
+  };
+
+  const [nodeMetrics, { refetch: refetchNode }] = createResource(metricsSource, ({ from, to }) =>
+    getNodeMetrics(from, to)
+  );
+  const [clusterMetrics, { refetch: refetchCluster }] = createResource(
+    metricsSource,
+    ({ from, to }) => getClusterMetrics(from, to)
+  );
+
+  const pollTimer = setInterval(() => {
+    refetchNode();
+    refetchCluster();
+  }, 10_000);
+  onCleanup(() => clearInterval(pollTimer));
+
+  const formatBytes = (v: number) => {
+    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)} GB`;
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} MB`;
+    return `${Math.round(v / 1_000)} KB`;
+  };
+  const formatPct = (v: number) => `${v.toFixed(1)}%`;
+
+  return (
+    <div class="mb-10 space-y-6">
+      <Show when={nodeMetrics.error || clusterMetrics.error}>
+        <ErrorBanner
+          message="Failed to load metrics"
+          onRetry={() => {
+            refetchNode();
+            refetchCluster();
+          }}
+        />
+      </Show>
+      <div>
+        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Node</h2>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">CPU</h3>
+            <TimelineChart
+              data={(nodeMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
+              label="CPU"
+              color="#6366f1"
+              yFormat={formatPct}
+              height={140}
+            />
+          </div>
+          <div class="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Memory</h3>
+            <TimelineChart
+              data={(nodeMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
+              label="Memory"
+              color="#8b5cf6"
+              yFormat={formatBytes}
+              height={140}
+            />
+          </div>
+        </div>
+      </div>
+      <div>
+        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Cluster</h2>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">CPU</h3>
+            <TimelineChart
+              data={(clusterMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
+              label="CPU"
+              color="#0ea5e9"
+              yFormat={formatPct}
+              height={140}
+            />
+          </div>
+          <div class="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Memory</h3>
+            <TimelineChart
+              data={(clusterMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
+              label="Memory"
+              color="#14b8a6"
+              yFormat={formatBytes}
+              height={140}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ServicesPage() {
   const [services, { refetch }] = createResource(
     () => (import.meta.env.SSR ? null : true),
@@ -147,6 +240,11 @@ function ServicesPage() {
           when={!import.meta.env.SSR}
           fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
         >
+          <Show when={services.error}>
+            <div class="mb-6">
+              <ErrorBanner message="Failed to load services" onRetry={refetch} />
+            </div>
+          </Show>
           <Suspense
             fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
           >
@@ -157,6 +255,8 @@ function ServicesPage() {
 
                 return (
                   <>
+                    <HomeMetrics />
+
                     <div class="flex items-baseline gap-2 mb-6">
                       <h1 class="text-xl font-semibold text-gray-900">Services</h1>
                       <span class="text-sm text-gray-400">{userServices().length}</span>

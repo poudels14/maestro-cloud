@@ -29,6 +29,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 shellexpand = "3.1.2"
 strip-ansi-escapes = "0.2"
+sysinfo = "0.38.4"
 tokio = { version = "1.48", features = [
   "macros",
   "net",
