@@ -108,6 +108,7 @@ impl DeploymentController {
                     }
                 }
                 _ = sleep(POLL_INTERVAL) => {
+                    self.check_system_upgrade().await;
                     self.reap_finished_tasks().await;
                     if shutdown_started {
                         if !self.has_running_services() {
@@ -131,6 +132,49 @@ impl DeploymentController {
             self.process_queued_deployment(queued_deployment).await?;
         }
         Ok(())
+    }
+
+    async fn check_system_upgrade(&self) {
+        let request = self.store.read_system_upgrade_request().await;
+        if let Ok(Some(system_type)) = request {
+            let _ = self.store.delete_system_upgrade_request().await;
+            if system_type == "nixos" {
+                eprintln!("[maestro]: starting NixOS system upgrade");
+                let flake_result = tokio::process::Command::new("nix")
+                    .args(["flake", "update", "--flake", "/etc/maestro"])
+                    .output()
+                    .await;
+                if let Err(err) = &flake_result {
+                    eprintln!("[maestro]: nix flake update failed: {err}");
+                    return;
+                }
+                let flake_output = flake_result.unwrap();
+                if !flake_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&flake_output.stderr);
+                    eprintln!("[maestro]: nix flake update failed: {stderr}");
+                    return;
+                }
+
+                eprintln!("[maestro]: running nixos-rebuild boot");
+                let rebuild_result = tokio::process::Command::new("nixos-rebuild")
+                    .args(["boot", "--flake", "/etc/maestro#default"])
+                    .output()
+                    .await;
+                if let Err(err) = &rebuild_result {
+                    eprintln!("[maestro]: nixos-rebuild failed: {err}");
+                    return;
+                }
+                let rebuild_output = rebuild_result.unwrap();
+                if !rebuild_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
+                    eprintln!("[maestro]: nixos-rebuild failed: {stderr}");
+                    return;
+                }
+
+                eprintln!("[maestro]: NixOS upgrade complete, rebooting");
+                let _ = tokio::process::Command::new("reboot").output().await;
+            }
+        }
     }
 
     async fn queue_terminated_active_deployments(&self) -> Result<()> {

@@ -97,6 +97,7 @@
                   "start"
                   "--config" cfg.config
                   "--data-dir" (toString cfg.dataDir)
+                  "--system" "nixos"
                 ];
               };
             };

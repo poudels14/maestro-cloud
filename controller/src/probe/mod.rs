@@ -33,7 +33,8 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             .expect("failed to open probe log store"),
     );
     let jwt_secret = std::env::var("MAESTRO_JWT_SECRET").ok();
-    let server = server::Server::new(store.clone(), Some(log_store), jwt_secret);
+    let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
+    let server = server::Server::new(store.clone(), Some(log_store), jwt_secret, system_type);
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
     let server_shutdown_tx = shutdown_tx.clone();

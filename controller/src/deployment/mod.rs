@@ -86,14 +86,26 @@ async fn cleanup_container(name: &str) {
 }
 
 async fn ensure_docker_network(network: &str, subnet: Option<&str>) {
+    if cmd::run("docker", &["network", "inspect", network])
+        .await
+        .is_ok()
+    {
+        return;
+    }
+
     let mut args = vec!["network", "create"];
-    let subnet_flag;
-    if let Some(s) = subnet {
-        subnet_flag = format!("--subnet={s}");
-        args.push(&subnet_flag);
+    let subnet_flag = subnet.map(|s| format!("--subnet={s}"));
+    if let Some(flag) = &subnet_flag {
+        args.push(flag);
     }
     args.push(network);
-    let _ = cmd::run("docker", &args).await;
+
+    if let Err(err) = cmd::run("docker", &args).await {
+        panic!(
+            "[maestro]: failed to create docker network `{network}`: {err}. \
+             Check for subnet overlap/conflicts or set --subnet/--network explicitly."
+        );
+    }
 }
 
 async fn init_etcd(
@@ -305,6 +317,9 @@ async fn init_probe(
             ];
             if let Some(secret) = &config.jwt_secret {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
+            }
+            if let Some(system_type) = &config.system_type {
+                probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
             }
             let refs: Vec<&str> = probe_flags.iter().map(|s| s.as_str()).collect();
             docker_run_exec(
