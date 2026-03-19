@@ -45,7 +45,7 @@ enum CliCommand {
     Start {
         #[arg(
             long = "config",
-            help = "Config source: file path, file://path, or aws-secrets://secret-name"
+            help = "Config source: file path, file://path, or aws-secret://secret-name"
         )]
         config: Option<String>,
         #[arg(long = "cluster-name", help = "Unique name for this cluster")]
@@ -89,6 +89,12 @@ enum CliCommand {
         )]
         encryption_key: Option<String>,
         #[arg(
+            long = "jwt-secret",
+            env = "MAESTRO_JWT_SECRET",
+            help = "Secret for signing JWT auth tokens (enables rollout authentication)"
+        )]
+        jwt_secret: Option<String>,
+        #[arg(
             long = "tag",
             help = "Tags for log sinks like Datadog (key:value, can be repeated)"
         )]
@@ -126,6 +132,12 @@ enum CliCommand {
         apply: bool,
         #[arg(long = "force", help = "Force rollout even if deploy is frozen")]
         force: bool,
+        #[arg(
+            long = "jwt-secret",
+            env = "MAESTRO_JWT_SECRET",
+            help = "Secret for signing JWT auth tokens"
+        )]
+        jwt_secret: Option<String>,
     },
     /// Trigger a redeployment of a running service
     Redeploy {
@@ -202,6 +214,7 @@ async fn run() -> crate::error::Result<()> {
             enable_tailscale,
             tailscale_authkey,
             encryption_key,
+            jwt_secret,
             tags,
             dd_api_key,
             dd_site,
@@ -214,6 +227,9 @@ async fn run() -> crate::error::Result<()> {
                         .map_err(|err| Error::invalid_config(err.to_string()))?;
                     if let Some(key) = encryption_key {
                         cfg.encryption_key = key;
+                    }
+                    if let Some(secret) = jwt_secret {
+                        cfg.jwt_secret = Some(secret);
                     }
                     if let Some(authkey) = tailscale_authkey {
                         cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
@@ -240,6 +256,7 @@ async fn run() -> crate::error::Result<()> {
                     subnet,
                     encryption_key: encryption_key
                         .ok_or_else(|| Error::invalid_input("--encryption-key is required"))?,
+                    jwt_secret,
                     tailscale: tailscale_authkey
                         .map(|key| config::TailscaleConfig { auth_key: key }),
                     tags,
@@ -303,6 +320,7 @@ async fn run() -> crate::error::Result<()> {
                 subnet: cfg.subnet,
                 tailscale_authkey,
                 encryption_key: SecretString::new(cfg.encryption_key),
+                jwt_secret: cfg.jwt_secret,
                 tags: parse_tags(cfg.tags)?,
             };
             let log_store = Arc::new(
@@ -398,9 +416,10 @@ async fn run() -> crate::error::Result<()> {
             config,
             apply,
             force,
+            jwt_secret,
         }) => {
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::run_rollout(&config_path, &host, apply, force).await
+            cli::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref()).await
         }
         Some(CliCommand::Redeploy { service_id, host }) => {
             cli::run_redeploy(&host, &service_id).await

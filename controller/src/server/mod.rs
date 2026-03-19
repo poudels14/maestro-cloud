@@ -43,6 +43,7 @@ const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
 struct AppState {
     store: Arc<dyn ClusterStore>,
     log_store: Option<Arc<crate::logs::LogStore>>,
+    jwt_secret: Option<String>,
 }
 
 pub(crate) struct Server {
@@ -53,9 +54,14 @@ impl Server {
     pub(crate) fn new(
         store: Arc<dyn ClusterStore>,
         log_store: Option<Arc<crate::logs::LogStore>>,
+        jwt_secret: Option<String>,
     ) -> Self {
         Self {
-            state: AppState { store, log_store },
+            state: AppState {
+                store,
+                log_store,
+                jwt_secret,
+            },
         }
     }
 
@@ -143,10 +149,13 @@ impl Server {
     }
 
     async fn rollout_service(
+        headers: HeaderMap,
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
-        Json(request): Json<RolloutServiceRequest>,
+        body: Bytes,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+        verify_jwt(&state.jwt_secret, &headers)?;
+        let request: RolloutServiceRequest = parse_json_body(&headers, body)?;
         let service_config = build_service_config(request).map_err(|err| {
             (
                 StatusCode::BAD_REQUEST,
@@ -748,6 +757,34 @@ struct LogsQuery {
 #[derive(serde::Deserialize)]
 struct ForceQuery {
     force: Option<bool>,
+}
+
+fn verify_jwt(
+    jwt_secret: &Option<String>,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, String)> {
+    let Some(secret) = jwt_secret else {
+        return Ok(());
+    };
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid Authorization header".to_string(),
+            )
+        })?;
+    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).map_err(|err| {
+        (
+            StatusCode::UNAUTHORIZED,
+            format!("invalid auth token: {err}"),
+        )
+    })?;
+    Ok(())
 }
 
 fn parse_json_body<T: DeserializeOwned>(

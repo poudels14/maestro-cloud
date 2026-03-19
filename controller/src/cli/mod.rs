@@ -9,8 +9,14 @@ use crate::error::{Error, Result};
 const DEFAULT_CLUSTER_TEMPLATE: &str = include_str!("../templates/cluster.jsonc");
 const DEFAULT_START_TEMPLATE: &str = include_str!("../templates/maestro.jsonc");
 
-pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: bool) -> Result<()> {
-    rollout::run_rollout(config_path, host, apply, force).await
+pub async fn run_rollout(
+    config_path: &Path,
+    host: &str,
+    apply: bool,
+    force: bool,
+    jwt_secret: Option<&str>,
+) -> Result<()> {
+    rollout::run_rollout(config_path, host, apply, force, jwt_secret).await
 }
 
 pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Result<()> {

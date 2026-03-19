@@ -53,7 +53,13 @@ struct PatchServiceResponse {
     version: String,
 }
 
-pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: bool) -> Result<()> {
+pub async fn run_rollout(
+    config_path: &Path,
+    host: &str,
+    apply: bool,
+    force: bool,
+    jwt_secret: Option<&str>,
+) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             Error::not_found(format!("{} does not exist", config_path.display()))
@@ -97,12 +103,22 @@ pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: boo
     if force {
         rollout_url.query_pairs_mut().append_pair("force", "true");
     }
+    let auth_token = jwt_secret
+        .map(|secret| generate_jwt(secret))
+        .transpose()
+        .map_err(|err| Error::internal(format!("failed to generate auth token: {err}")))?;
     println!("[maestro]: rolling out services");
 
     for (service_id, service_template) in &cluster.services {
         let payload = service_payload(service_id, service_template)?;
-        let response =
-            call_rollout_endpoint(&client, rollout_url.as_str(), &payload, service_id).await?;
+        let response = call_rollout_endpoint(
+            &client,
+            rollout_url.as_str(),
+            &payload,
+            service_id,
+            auth_token.as_deref(),
+        )
+        .await?;
 
         if response.queued {
             println!(
@@ -212,17 +228,17 @@ async fn call_rollout_endpoint(
     endpoint: &str,
     payload: &PatchServiceRequest,
     service_id: &str,
+    auth_token: Option<&str>,
 ) -> Result<PatchServiceResponse> {
-    let response = client
-        .post(endpoint)
-        .json(payload)
-        .send()
-        .await
-        .map_err(|err| {
-            Error::external(format!(
-                "failed to call rollout endpoint for service `{service_id}`: {err}"
-            ))
-        })?;
+    let mut req = client.post(endpoint).json(payload);
+    if let Some(token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = req.send().await.map_err(|err| {
+        Error::external(format!(
+            "failed to call rollout endpoint for service `{service_id}`: {err}"
+        ))
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -341,6 +357,17 @@ fn expand_env_value(value: &str) -> std::result::Result<String, String> {
     shellexpand::env(value)
         .map(|s| s.into_owned())
         .map_err(|err| err.to_string())
+}
+
+fn generate_jwt(secret: &str) -> std::result::Result<String, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let claims = serde_json::json!({ "iat": now, "exp": now + 60 });
+    let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    jsonwebtoken::encode(&header, &claims, &key).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

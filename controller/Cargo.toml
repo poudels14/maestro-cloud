@@ -46,3 +46,4 @@ watchexec-supervisor = "4.0"
 zeroize = { version = "1.8.2", features = ["derive"] }
 aws-sdk-secretsmanager = "1.99.0"
 aws-config = "1.8.13"
+jsonwebtoken = "10.3.0"
