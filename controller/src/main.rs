@@ -120,6 +120,8 @@ enum CliCommand {
         dd_include_system_logs: bool,
         #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
         system: Option<config::SystemType>,
+        #[arg(long = "project-dir", help = "Path to the maestro project directory")]
+        project_dir: PathBuf,
     },
     /// Deploy services from the config file (dry run by default)
     Rollout {
@@ -243,6 +245,7 @@ async fn run() -> crate::error::Result<bool> {
             dd_site,
             dd_include_system_logs,
             system,
+            project_dir,
         }) => {
             let explicit_datadog_site = dd_site
                 .as_deref()
@@ -343,11 +346,11 @@ async fn run() -> crate::error::Result<bool> {
                 }
             );
 
-            let project_dir = std::env::current_dir()
-                .expect("failed to get current dir")
-                .parent()
-                .expect("failed to get parent dir")
-                .to_path_buf();
+            let project_dir = std::fs::canonicalize(&project_dir).unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .expect("failed to get current dir")
+                    .join(&project_dir)
+            });
             let tailscale_authkey = if enable_tailscale {
                 cfg.tailscale.map(|t| t.auth_key)
             } else {

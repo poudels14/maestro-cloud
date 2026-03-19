@@ -77,10 +77,17 @@
               default = "/data/maestro";
               description = "Directory for etcd data, logs, and state";
             };
+
           };
 
           config = lib.mkIf cfg.enable {
             virtualisation.docker.enable = true;
+
+            system.activationScripts.maestro-source = ''
+              rm -rf /etc/maestro/source
+              cp -r ${cfg.package.src} /etc/maestro/source
+              chmod -R u+w /etc/maestro/source
+            '';
 
             systemd.services.maestro = {
               description = "Maestro deployment controller";
@@ -92,13 +99,14 @@
                 Type = "simple";
                 Restart = "on-failure";
                 RestartSec = 5;
-                ExecStart = lib.concatStringsSep " " [
+                ExecStart = lib.concatStringsSep " " ([
                   "${cfg.package}/bin/maestro"
                   "start"
                   "--config" cfg.config
                   "--data-dir" (toString cfg.dataDir)
                   "--system" "nixos"
-                ];
+                  "--project-dir" "/etc/maestro/source"
+                ]);
               };
             };
           };
