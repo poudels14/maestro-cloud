@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
@@ -17,6 +19,34 @@ pub struct StartConfig {
     pub tags: Vec<String>,
     #[serde(default)]
     pub datadog: Option<DatadogConfig>,
+    #[serde(default)]
+    pub system: Option<SystemType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemType {
+    Nixos,
+}
+
+impl fmt::Display for SystemType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SystemType::Nixos => write!(f, "nixos"),
+        }
+    }
+}
+
+impl std::str::FromStr for SystemType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "nixos" => Ok(SystemType::Nixos),
+            other => Err(format!(
+                "unsupported system type: {other} (only 'nixos' is supported)"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

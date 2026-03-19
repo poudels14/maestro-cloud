@@ -1,6 +1,7 @@
 mod cancel;
 mod redeploy;
 mod rollout;
+mod upgrade;
 
 use std::{io::Write, path::Path};
 
@@ -25,6 +26,10 @@ pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Re
 
 pub async fn run_redeploy(host: &str, service_id: &str) -> Result<()> {
     redeploy::run_redeploy(host, service_id).await
+}
+
+pub async fn run_upgrade_system(host: &str) -> Result<()> {
+    upgrade::run_upgrade_system(host).await
 }
 
 pub fn init_config(start_config_path: &Path, cluster_config_path: &Path) -> Result<()> {

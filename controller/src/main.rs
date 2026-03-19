@@ -118,6 +118,8 @@ enum CliCommand {
             help = "Include maestro system logs in Datadog (excluded by default)"
         )]
         dd_include_system_logs: bool,
+        #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
+        system: Option<config::SystemType>,
     },
     /// Deploy services from the config file (dry run by default)
     Rollout {
@@ -185,8 +187,22 @@ enum CliCommand {
         #[arg(long = "follow", short = 'f', help = "Follow log output")]
         follow: bool,
     },
+    /// Upgrade system components
+    Upgrade {
+        #[command(subcommand)]
+        target: UpgradeTarget,
+    },
     /// Create a default maestro.cluster.jsonc config file
     Init,
+}
+
+#[derive(Debug, Subcommand)]
+enum UpgradeTarget {
+    /// Upgrade the host operating system
+    System {
+        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
+        host: String,
+    },
 }
 
 #[tokio::main]
@@ -222,8 +238,15 @@ async fn run() -> crate::error::Result<()> {
             dd_api_key,
             dd_site,
             dd_include_system_logs,
+            system,
         }) => {
-            let cfg = match config {
+            let explicit_datadog_site = dd_site
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+
+            let mut cfg = match config {
                 Some(source) => {
                     let mut cfg = config::load_config(&source)
                         .await
@@ -265,11 +288,16 @@ async fn run() -> crate::error::Result<()> {
                     tags,
                     datadog: dd_api_key.map(|api_key| config::DatadogConfig {
                         api_key,
-                        site: dd_site,
+                        site: explicit_datadog_site.clone(),
                         include_system_logs: dd_include_system_logs,
                     }),
+                    system: None,
                 },
             };
+
+            if let (Some(site), Some(dd)) = (explicit_datadog_site.clone(), cfg.datadog.as_mut()) {
+                dd.site = Some(site);
+            }
 
             let enable_tailscale = enable_tailscale || cfg.tailscale.is_some();
             if enable_tailscale && cfg.tailscale.is_none() {
@@ -336,6 +364,7 @@ async fn run() -> crate::error::Result<()> {
                 encryption_key: SecretString::new(cfg.encryption_key),
                 jwt_secret: cfg.jwt_secret,
                 tags: parse_tags(cfg.tags)?,
+                system_type: system.or(cfg.system),
             };
             let log_store = Arc::new(
                 logs::LogStore::open(&deployment_config.data_dir.join("logs/logs.db"))
@@ -343,11 +372,16 @@ async fn run() -> crate::error::Result<()> {
             );
 
             if let Some(dd) = cfg.datadog {
-                let site = dd.site.unwrap_or_default();
-                let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
-                let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
-                let _dd_handle = dd_worker.spawn();
-                eprintln!("[maestro]: datadog log sink enabled (site: {site})");
+                if let Some(site) = explicit_datadog_site {
+                    let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
+                    let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
+                    let _dd_handle = dd_worker.spawn();
+                    eprintln!("[maestro]: datadog log sink enabled (site: {site})");
+                } else {
+                    eprintln!(
+                        "[maestro]: datadog config present but sink is disabled; pass --datadog-site to enable"
+                    );
+                }
             }
 
             let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
@@ -490,6 +524,9 @@ async fn run() -> crate::error::Result<()> {
 
             Ok(())
         }
+        Some(CliCommand::Upgrade {
+            target: UpgradeTarget::System { host },
+        }) => cli::run_upgrade_system(&host).await,
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
             Path::new(DEFAULT_CLUSTER_CONFIG_PATH),

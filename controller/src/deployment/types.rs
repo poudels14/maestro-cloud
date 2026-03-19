@@ -23,6 +23,7 @@ pub struct DeploymentConfig {
     pub encryption_key: SecretString,
     pub jwt_secret: Option<String>,
     pub tags: Vec<String>,
+    pub system_type: Option<crate::config::SystemType>,
 }
 
 impl DeploymentConfig {

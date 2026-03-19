@@ -143,4 +143,16 @@ pub trait ClusterStore: Send + Sync {
     async fn set_deploy_frozen(&self, _service_id: &str, _frozen: bool) -> Result<()> {
         bail!("set_deploy_frozen not implemented")
     }
+
+    async fn read_system_upgrade_request(&self) -> Result<Option<String>> {
+        bail!("read_system_upgrade_request not implemented")
+    }
+
+    async fn put_system_upgrade_request(&self, _system_type: &str) -> Result<()> {
+        bail!("put_system_upgrade_request not implemented")
+    }
+
+    async fn delete_system_upgrade_request(&self) -> Result<()> {
+        bail!("delete_system_upgrade_request not implemented")
+    }
 }

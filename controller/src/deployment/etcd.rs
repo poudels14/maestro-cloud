@@ -8,10 +8,10 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, deployment_secrets_key, replica_state_key,
-    replica_states_prefix, service_deployment_history_key, service_deployment_history_prefix,
-    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
-    service_info_key, service_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_secrets_key,
+    replica_state_key, replica_states_prefix, service_deployment_history_key,
+    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
+    service_id_from_info_key, service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -1048,6 +1048,41 @@ impl ClusterStore for EtcdStateStore {
             .await
             .map_err(|err| anyhow!("failed to delete service keys: {err}"))?;
 
+        Ok(())
+    }
+
+    async fn read_system_upgrade_request(&self) -> anyhow::Result<Option<String>> {
+        let response = self
+            .get(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes().to_vec(), None)
+            .await?;
+        if let Some(kv) = response.kvs().first() {
+            let value = String::from_utf8(kv.value().to_vec())
+                .map_err(|err| anyhow!("invalid upgrade request value: {err}"))?;
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn put_system_upgrade_request(&self, system_type: &str) -> anyhow::Result<()> {
+        let mut client = self.client.lock().await;
+        client
+            .put(
+                SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(),
+                system_type.as_bytes(),
+                None,
+            )
+            .await
+            .map_err(|err| anyhow!("failed to write upgrade request: {err}"))?;
+        Ok(())
+    }
+
+    async fn delete_system_upgrade_request(&self) -> anyhow::Result<()> {
+        let mut client = self.client.lock().await;
+        client
+            .delete(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(), None)
+            .await
+            .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
         Ok(())
     }
 }

@@ -44,6 +44,7 @@ struct AppState {
     store: Arc<dyn ClusterStore>,
     log_store: Option<Arc<crate::logs::LogStore>>,
     jwt_secret: Option<String>,
+    system_type: Option<String>,
 }
 
 pub(crate) struct Server {
@@ -55,12 +56,14 @@ impl Server {
         store: Arc<dyn ClusterStore>,
         log_store: Option<Arc<crate::logs::LogStore>>,
         jwt_secret: Option<String>,
+        system_type: Option<String>,
     ) -> Self {
         Self {
             state: AppState {
                 store,
                 log_store,
                 jwt_secret,
+                system_type,
             },
         }
     }
@@ -100,6 +103,7 @@ impl Server {
                 "/api/services/{serviceId}/deployments/{deploymentId}/logs",
                 get(Self::get_deployment_logs),
             )
+            .route("/api/system/upgrade", post(Self::upgrade_system))
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
             .route("/api/logs", post(Self::ingest_logs))
             .route("/api/metrics", post(Self::ingest_metrics))
@@ -730,6 +734,30 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok(Json(entries))
+    }
+
+    async fn upgrade_system(
+        headers: HeaderMap,
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        verify_jwt(&state.jwt_secret, &headers)?;
+        if let Some(system_type) = &state.system_type {
+            state
+                .store
+                .put_system_upgrade_request(system_type)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+            Ok(Json(json!({
+                "accepted": true,
+                "system": system_type,
+            })))
+        } else {
+            Err((
+                StatusCode::BAD_REQUEST,
+                "system upgrades not configured; start maestro with --system nixos".to_string(),
+            ))
+        }
     }
 }
 
