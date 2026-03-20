@@ -65,10 +65,7 @@ pub async fn check_deployments(
             )
             .await
             {
-                eprintln!(
-                    "[probe] error checking {}/{}: {err}",
-                    service_id, deployment.id
-                );
+                eprintln!("error checking {}/{}: {err}", service_id, deployment.id);
             }
         }
     }
@@ -106,7 +103,7 @@ async fn check_replicas(
             dns_domain,
         ) else {
             eprintln!(
-                "[probe] skipping {}/{}/replica{} healthcheck: ingress.port is not set; marking replica ready",
+                "skipping {}/{}/replica{} healthcheck: ingress.port is not set; marking replica ready",
                 service_id, deployment.id, replica.replica_index
             );
             state.remove(&key);
@@ -127,7 +124,7 @@ async fn check_replicas(
             Ok(resp) if resp.status().is_success() => true,
             Ok(resp) => {
                 eprintln!(
-                    "[probe] healthcheck failed {}/{}/replica{} url={} status={}",
+                    "healthcheck failed {}/{}/replica{} url={} status={}",
                     service_id,
                     deployment.id,
                     replica.replica_index,
@@ -138,7 +135,7 @@ async fn check_replicas(
             }
             Err(err) => {
                 eprintln!(
-                    "[probe] healthcheck error {}/{}/replica{} url={} err={}",
+                    "healthcheck error {}/{}/replica{} url={} err={}",
                     service_id, deployment.id, replica.replica_index, url, err
                 );
                 false
@@ -150,12 +147,12 @@ async fn check_replicas(
         if was_healthy != Some(is_healthy) {
             if is_healthy {
                 eprintln!(
-                    "[probe] {}/{}/replica{} became healthy",
+                    "{}/{}/replica{} became healthy",
                     service_id, deployment.id, replica.replica_index
                 );
             } else {
                 eprintln!(
-                    "[probe] {}/{}/replica{} became unhealthy",
+                    "{}/{}/replica{} became unhealthy",
                     service_id, deployment.id, replica.replica_index
                 );
             }

@@ -86,7 +86,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
                 )
                 .await
                 {
-                    eprintln!("[probe] poll error: {err}");
+                    eprintln!("poll error: {err}");
                     poll_interval = unhealthy_backoff.next().unwrap_or(HEALTHY_POLL_INTERVAL);
                     return;
                 }
@@ -107,11 +107,11 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
 
             tokio::select! {
                 _ = sigterm.recv() => {
-                    eprintln!("[probe] received SIGTERM, shutting down");
+                    eprintln!("received SIGTERM, shutting down");
                     break;
                 }
                 _ = sigint.recv() => {
-                    eprintln!("[probe] received SIGINT, shutting down");
+                    eprintln!("received SIGINT, shutting down");
                     break;
                 }
                 _ = poll => {}
