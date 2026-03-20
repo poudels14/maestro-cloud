@@ -122,3 +122,21 @@ fn logrus_format_info() {
     assert_eq!(parsed.text, "server started");
     assert!(parsed.ts.is_some());
 }
+
+#[test]
+fn logrus_format_with_extra_attrs() {
+    let line = r#"time="2026-03-20T01:00:00Z" level=error msg="the service does not exist" entryPointName=web routerName=service-1@etcd"#;
+    let parsed = parse_log_line(line);
+    assert_eq!(parsed.level.as_deref(), Some("error"));
+    assert_eq!(parsed.text, "the service does not exist");
+    assert_eq!(parsed.attrs.len(), 2);
+    assert_eq!(
+        parsed.attrs[0],
+        ("entryPointName".to_string(), "web".to_string())
+    );
+    assert_eq!(
+        parsed.attrs[1],
+        ("routerName".to_string(), "service-1@etcd".to_string())
+    );
+    assert!(parsed.ts.is_some());
+}

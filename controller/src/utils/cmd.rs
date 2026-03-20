@@ -105,6 +105,7 @@ async fn pipe_to_collector(
             source: source.clone(),
             origin,
             tags: Arc::new(serde_json::Value::Null),
+            attrs: vec![],
         };
         if sender.send_async(entry).await.is_err() {
             break;

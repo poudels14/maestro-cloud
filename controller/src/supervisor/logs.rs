@@ -6,6 +6,7 @@ struct ParsedLine {
     ts: Option<u64>,
     level: Option<String>,
     text: String,
+    attrs: Vec<(String, String)>,
 }
 
 pub async fn read_pipe_to_collector(
@@ -47,6 +48,7 @@ pub async fn read_pipe_to_collector(
             source: source.clone(),
             origin: log_config.origin,
             tags: tags.clone(),
+            attrs: parsed.attrs,
         };
 
         if log_config.sender.send_async(entry).await.is_err() {
@@ -83,7 +85,12 @@ fn parse_log_line(line: &str) -> ParsedLine {
             .unwrap_or(line)
             .to_string();
 
-        return ParsedLine { ts, level, text };
+        return ParsedLine {
+            ts,
+            level,
+            text,
+            attrs: vec![],
+        };
     }
 
     // Try "2026-03-15T20:28:36Z ERR message..." format
@@ -99,6 +106,7 @@ fn parse_log_line(line: &str) -> ParsedLine {
                         ts: Some(ts),
                         level: Some(normalize_level(level_str)),
                         text: text.to_string(),
+                        attrs: vec![],
                     };
                 }
             }
@@ -120,6 +128,7 @@ fn parse_log_line(line: &str) -> ParsedLine {
                 ts: Some(ts),
                 level: None,
                 text,
+                attrs: vec![],
             };
         }
     }
@@ -128,41 +137,72 @@ fn parse_log_line(line: &str) -> ParsedLine {
         ts: None,
         level: None,
         text: line.to_string(),
+        attrs: vec![],
     }
 }
 
 fn parse_logrus_line(line: &str) -> Option<ParsedLine> {
-    let extract_quoted = |key: &str| -> Option<String> {
-        let prefix = format!("{key}=\"");
-        let start = line.find(&prefix)? + prefix.len();
-        let mut end = start;
-        while end < line.len() {
-            if line.as_bytes()[end] == b'"' && (end == start || line.as_bytes()[end - 1] != b'\\') {
-                break;
-            }
-            end += 1;
-        }
-        Some(line[start..end].replace("\\\"", "\""))
-    };
-    let extract_bare = |key: &str| -> Option<&str> {
-        let prefix = format!("{key}=");
-        let start = line.find(&prefix)? + prefix.len();
-        let end = line[start..]
-            .find(' ')
-            .map(|i| i + start)
-            .unwrap_or(line.len());
-        Some(&line[start..end])
-    };
+    let mut ts = None;
+    let mut level = None;
+    let mut msg = None;
+    let mut attrs: Vec<(&str, String)> = Vec::new();
 
-    let ts = extract_quoted("time")
-        .as_deref()
-        .and_then(|s| parse_iso_timestamp(s));
-    let level = extract_bare("level").map(normalize_level);
-    let msg = extract_quoted("msg").unwrap_or_else(|| line.to_string());
+    let mut pos = 0;
+    let bytes = line.as_bytes();
+    while pos < bytes.len() {
+        while pos < bytes.len() && bytes[pos] == b' ' {
+            pos += 1;
+        }
+        let key_start = pos;
+        while pos < bytes.len() && bytes[pos] != b'=' {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            break;
+        }
+        let key = &line[key_start..pos];
+        pos += 1;
+
+        let value = if pos < bytes.len() && bytes[pos] == b'"' {
+            pos += 1;
+            let val_start = pos;
+            while pos < bytes.len() {
+                if bytes[pos] == b'"' && (pos == val_start || bytes[pos - 1] != b'\\') {
+                    break;
+                }
+                pos += 1;
+            }
+            let val = line[val_start..pos].replace("\\\"", "\"");
+            if pos < bytes.len() {
+                pos += 1;
+            }
+            val
+        } else {
+            let val_start = pos;
+            while pos < bytes.len() && bytes[pos] != b' ' {
+                pos += 1;
+            }
+            line[val_start..pos].to_string()
+        };
+
+        match key {
+            "time" => ts = parse_iso_timestamp(&value),
+            "level" => level = Some(normalize_level(&value)),
+            "msg" => msg = Some(value),
+            _ => attrs.push((key, value)),
+        }
+    }
+
+    let text = msg.unwrap_or_else(|| line.to_string());
+    let attrs = attrs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
     Some(ParsedLine {
         ts,
         level,
-        text: msg,
+        text,
+        attrs,
     })
 }
 
