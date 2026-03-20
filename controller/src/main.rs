@@ -498,7 +498,16 @@ async fn run() -> crate::error::Result<bool> {
                         .shutdown_all(supervisor::ShutdownRequest::Force)
                         .await;
                     drop(supervisor);
-                    let _ = collector_handle.await;
+                    match tokio::time::timeout(std::time::Duration::from_secs(15), collector_handle)
+                        .await
+                    {
+                        Ok(_join_result) => {}
+                        Err(_) => {
+                            eprintln!(
+                                "[maestro]: timed out waiting for log collector shutdown after 15s; continuing"
+                            );
+                        }
+                    }
                     Ok(exit_reason == deployment::controller::ControllerExitReason::Restart)
                 }
                 Err(err) => Err(err),
