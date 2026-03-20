@@ -171,6 +171,7 @@
                   "--data-dir" (toString cfg.dataDir)
                   "--system" "nixos"
                   "--runtime" cfg.runtime
+                  "--force"
                   "--project-dir" "/etc/maestro/source"
                 ] ++ cfg.extraArgs);
               } // lib.optionalAttrs isNerdctl {

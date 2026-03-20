@@ -126,6 +126,8 @@ enum CliCommand {
         system: Option<config::SystemType>,
         #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
         runtime: Option<config::RuntimeType>,
+        #[arg(long = "force", help = "Force recreate network if it conflicts")]
+        force: bool,
         #[arg(long = "project-dir", help = "Path to the maestro project directory")]
         project_dir: PathBuf,
     },
@@ -255,6 +257,7 @@ async fn run() -> crate::error::Result<bool> {
             dd_include_system_logs,
             system,
             runtime: runtime_flag,
+            force,
             project_dir,
         }) => {
             let explicit_datadog_site = dd_site
@@ -436,6 +439,7 @@ async fn run() -> crate::error::Result<bool> {
                 jwt_secret: cfg.jwt_secret,
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
+                force,
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {

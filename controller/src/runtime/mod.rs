@@ -36,6 +36,8 @@ pub trait RuntimeProvider: Send + Sync {
 
     async fn ensure_network(&self, name: &str, subnet: Option<&str>) -> Result<()>;
 
+    async fn remove_network(&self, name: &str) -> Result<()>;
+
     async fn remove_container(&self, name: &str) -> Result<()>;
 
     fn run_command(&self, spec: &RunSpec) -> JobCommand;

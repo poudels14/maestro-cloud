@@ -49,6 +49,9 @@ pub async fn start_system_jobs(
     let _ = runtime.remove_container(&ingress_container).await;
     let _ = runtime.remove_container(&admin_container).await;
     let _ = runtime.remove_container(&tailscale_container).await;
+    if config.force {
+        let _ = runtime.remove_network(&config.network).await;
+    }
     if let Err(err) = runtime
         .ensure_network(&config.network, config.subnet.as_deref())
         .await
