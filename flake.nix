@@ -95,7 +95,9 @@
           config = lib.mkIf cfg.enable {
             virtualisation.docker.enable = lib.mkIf (cfg.runtime == "docker") true;
             virtualisation.containerd.enable = lib.mkIf (cfg.runtime == "nerdctl") true;
-            environment.systemPackages = lib.mkIf (cfg.runtime == "nerdctl") [
+            environment.systemPackages = [
+              cfg.package
+            ] ++ lib.optionals (cfg.runtime == "nerdctl") [
               pkgs.nerdctl
               pkgs.cni-plugins
               pkgs.buildkit
@@ -140,6 +142,8 @@
                   "--runtime" cfg.runtime
                   "--project-dir" "/etc/maestro/source"
                 ] ++ cfg.extraArgs);
+              } // lib.optionalAttrs (cfg.runtime == "nerdctl") {
+                Environment = "CONTAINERD_ADDRESS=/run/containerd/containerd.sock";
               };
             };
           };
