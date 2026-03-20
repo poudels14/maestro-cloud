@@ -345,7 +345,7 @@ async fn run() -> crate::error::Result<bool> {
                     .port()
             });
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
-            let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
+            let network = network.unwrap_or_else(|| format!("maestro-{cluster_alias}"));
 
             let project_dir = std::fs::canonicalize(&project_dir).unwrap_or_else(|_| {
                 std::env::current_dir()
