@@ -98,7 +98,19 @@
             environment.systemPackages = lib.mkIf (cfg.runtime == "nerdctl") [
               pkgs.nerdctl
               pkgs.cni-plugins
+              pkgs.buildkit
             ];
+            virtualisation.containerd.settings.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = lib.mkIf (cfg.runtime == "nerdctl") true;
+            systemd.services.buildkitd = lib.mkIf (cfg.runtime == "nerdctl") {
+              description = "BuildKit daemon";
+              after = [ "containerd.service" ];
+              wantedBy = [ "multi-user.target" ];
+              serviceConfig = {
+                Type = "simple";
+                ExecStart = "${pkgs.buildkit}/bin/buildkitd --oci-worker=false --containerd-worker=true";
+                Restart = "on-failure";
+              };
+            };
 
             system.activationScripts.maestro-source = ''
               rm -rf /etc/maestro/source
