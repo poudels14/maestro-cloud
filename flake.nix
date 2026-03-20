@@ -156,6 +156,8 @@
                 pkgs.buildkit
                 pkgs.util-linux
                 pkgs.kmod
+                pkgs.nix
+                pkgs.nixos-rebuild
               ];
 
               serviceConfig = {
