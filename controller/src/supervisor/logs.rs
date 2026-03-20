@@ -105,6 +105,13 @@ fn parse_log_line(line: &str) -> ParsedLine {
         }
     }
 
+    // Try logrus format: time="2026-03-20T05:35:46Z" level=fatal msg="..."
+    if line.starts_with("time=\"") {
+        if let Some(parsed) = parse_logrus_line(line) {
+            return parsed;
+        }
+    }
+
     // Try "2026/03/18 08:39:04 message..." format
     if line.len() > 19 && line.as_bytes()[4] == b'/' && line.as_bytes()[7] == b'/' {
         if let Some(ts) = parse_slash_timestamp(&line[..19]) {
@@ -122,6 +129,41 @@ fn parse_log_line(line: &str) -> ParsedLine {
         level: None,
         text: line.to_string(),
     }
+}
+
+fn parse_logrus_line(line: &str) -> Option<ParsedLine> {
+    let extract_quoted = |key: &str| -> Option<String> {
+        let prefix = format!("{key}=\"");
+        let start = line.find(&prefix)? + prefix.len();
+        let mut end = start;
+        while end < line.len() {
+            if line.as_bytes()[end] == b'"' && (end == start || line.as_bytes()[end - 1] != b'\\') {
+                break;
+            }
+            end += 1;
+        }
+        Some(line[start..end].replace("\\\"", "\""))
+    };
+    let extract_bare = |key: &str| -> Option<&str> {
+        let prefix = format!("{key}=");
+        let start = line.find(&prefix)? + prefix.len();
+        let end = line[start..]
+            .find(' ')
+            .map(|i| i + start)
+            .unwrap_or(line.len());
+        Some(&line[start..end])
+    };
+
+    let ts = extract_quoted("time")
+        .as_deref()
+        .and_then(|s| parse_iso_timestamp(s));
+    let level = extract_bare("level").map(normalize_level);
+    let msg = extract_quoted("msg").unwrap_or_else(|| line.to_string());
+    Some(ParsedLine {
+        ts,
+        level,
+        text: msg,
+    })
 }
 
 fn parse_iso_timestamp(s: &str) -> Option<u64> {
@@ -157,111 +199,5 @@ fn strip_ansi(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn json_with_ts_level_msg() {
-        let line = r#"{"ts":"2026-03-15T20:28:36Z","level":"error","msg":"connection refused"}"#;
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "connection refused");
-        assert_eq!(parsed.level.as_deref(), Some("error"));
-        assert!(parsed.ts.is_some());
-    }
-
-    #[test]
-    fn json_with_timestamp_and_message_fields() {
-        let line = r#"{"timestamp":"2026-01-01T00:00:00Z","level":"warn","message":"disk full"}"#;
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "disk full");
-        assert_eq!(parsed.level.as_deref(), Some("warn"));
-        assert!(parsed.ts.is_some());
-    }
-
-    #[test]
-    fn json_with_numeric_ts() {
-        let line = r#"{"ts":1710000000000,"level":"info","msg":"started"}"#;
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "started");
-        assert_eq!(parsed.ts, Some(1710000000000));
-    }
-
-    #[test]
-    fn json_without_msg_uses_full_line() {
-        let line = r#"{"level":"debug","data":"something"}"#;
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, line);
-        assert_eq!(parsed.level.as_deref(), Some("debug"));
-    }
-
-    #[test]
-    fn iso_prefixed_with_level() {
-        let line = "2026-03-15T20:28:36Z ERR Provider error, retrying in 5s";
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "Provider error, retrying in 5s");
-        assert_eq!(parsed.level.as_deref(), Some("error"));
-        assert!(parsed.ts.is_some());
-    }
-
-    #[test]
-    fn iso_prefixed_with_info_level() {
-        let line = "2026-03-15T20:28:36.123Z INFO server listening on :8080";
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "server listening on :8080");
-        assert_eq!(parsed.level.as_deref(), Some("info"));
-        assert!(parsed.ts.is_some());
-    }
-
-    #[test]
-    fn slash_timestamp_format() {
-        let line = "2026/03/18 08:39:04 Starting up on port 80";
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "Starting up on port 80");
-        assert!(parsed.ts.is_some());
-        assert!(parsed.level.is_none());
-    }
-
-    #[test]
-    fn slash_timestamp_with_extra_spaces() {
-        let line = "2026/03/18 08:39:04   padded message";
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "padded message");
-        assert!(parsed.ts.is_some());
-    }
-
-    #[test]
-    fn plain_text() {
-        let line = "just a plain log message";
-        let parsed = parse_log_line(line);
-        assert_eq!(parsed.text, "just a plain log message");
-        assert!(parsed.ts.is_none());
-        assert!(parsed.level.is_none());
-    }
-
-    #[test]
-    fn empty_line() {
-        let parsed = parse_log_line("");
-        assert_eq!(parsed.text, "");
-        assert!(parsed.ts.is_none());
-        assert!(parsed.level.is_none());
-    }
-
-    #[test]
-    fn normalize_level_aliases() {
-        assert_eq!(normalize_level("ERR"), "error");
-        assert_eq!(normalize_level("fatal"), "error");
-        assert_eq!(normalize_level("PANIC"), "error");
-        assert_eq!(normalize_level("warning"), "warn");
-        assert_eq!(normalize_level("DBG"), "debug");
-        assert_eq!(normalize_level("INFO"), "info");
-        assert_eq!(normalize_level("TRACE"), "trace");
-        assert_eq!(normalize_level("custom"), "custom");
-    }
-
-    #[test]
-    fn strip_ansi_codes() {
-        let input = "\x1b[31mred text\x1b[0m";
-        let stripped = strip_ansi(input);
-        assert_eq!(stripped, "red text");
-    }
-}
+#[path = "../tests/supervisor/logs.rs"]
+mod tests;
