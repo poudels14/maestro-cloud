@@ -883,18 +883,18 @@ function DeploymentLogViewer(props: {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        class="p-4 font-mono text-xs leading-6 max-h-[600px] overflow-x-auto overflow-y-auto"
+        class="max-h-[600px] overflow-y-auto"
       >
         <Show
           when={!loading() && filteredLines().length > 0}
           fallback={
-            <div class="text-gray-400 text-center py-8">
+            <div class="text-gray-400 text-center py-8 font-mono text-xs">
               {loading() ? "Loading logs…" : "No logs available."}
             </div>
           }
         >
           <Show when={hasMore()}>
-            <div class="text-center pb-3">
+            <div class="text-center py-3">
               <button
                 type="button"
                 onClick={loadMore}
@@ -904,34 +904,42 @@ function DeploymentLogViewer(props: {
               </button>
             </div>
           </Show>
-          <For each={filteredLines()}>
-            {(line) => (
-              <div class="flex gap-3 whitespace-nowrap">
-                <span class="text-gray-400 select-none shrink-0">{formatTs(line.ts)}</span>
-                <Show when={line.hostname || line.source}>
-                  <span class="text-violet-400 shrink-0 truncate max-w-48" title={line.hostname || line.source}>
-                    {line.hostname || line.source}
-                  </span>
-                </Show>
-                <span
-                  class={clsx("w-12 shrink-0 uppercase text-right", {
-                    "text-red-500": line.level === "error",
-                    "text-amber-500": line.level === "warn",
-                    "text-gray-400": line.level === "debug",
-                    "text-gray-300": line.level === "trace",
-                    "text-blue-400":
-                      line.level !== "error" &&
-                      line.level !== "warn" &&
-                      line.level !== "debug" &&
-                      line.level !== "trace"
-                  })}
-                >
-                  {line.level}
-                </span>
-                <span class="text-gray-700">{line.text}</span>
-              </div>
-            )}
-          </For>
+          <table class="w-full font-mono text-xs border-collapse" style="table-layout: fixed">
+            <colgroup>
+              <col style="width: 155px" />
+              <col style="width: 160px" />
+              <col style="width: 46px" />
+              <col />
+            </colgroup>
+            <tbody>
+              <For each={filteredLines()}>
+                {(line) => (
+                  <tr class="align-top border-b border-gray-50 hover:bg-gray-50/50">
+                    <td class="text-gray-400 select-none py-1 pl-4 pr-2 whitespace-nowrap">{formatTs(line.ts)}</td>
+                    <td class="text-violet-400 py-1 px-2 truncate" title={line.hostname || line.source}>
+                      {line.hostname || line.source}
+                    </td>
+                    <td
+                      class={clsx("py-1 px-2 uppercase text-right whitespace-nowrap", {
+                        "text-red-500": line.level === "error",
+                        "text-amber-500": line.level === "warn",
+                        "text-gray-400": line.level === "debug",
+                        "text-gray-300": line.level === "trace",
+                        "text-blue-400":
+                          line.level !== "error" &&
+                          line.level !== "warn" &&
+                          line.level !== "debug" &&
+                          line.level !== "trace"
+                      })}
+                    >
+                      {line.level}
+                    </td>
+                    <td class="text-gray-700 py-1 pl-2 pr-4 break-all">{line.text}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
         </Show>
       </div>
     </div>
