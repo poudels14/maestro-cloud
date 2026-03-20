@@ -61,9 +61,7 @@ impl DnsManager {
     hosts /data/dns/hosts {
         reload 5s
         no_reverse
-        fallthrough
     }
-    forward . /etc/resolv.conf
     cache 30
     log
     errors
@@ -120,7 +118,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.join("Corefile")).unwrap();
         assert!(content.contains("hosts /data/dns/hosts"));
         assert!(content.contains("reload 5s"));
-        assert!(content.contains("forward . /etc/resolv.conf"));
+        assert!(!content.contains("forward"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -28,6 +28,7 @@ pub struct MetricsCollector {
     runtime_cli: String,
     client: reqwest::Client,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
+    logger: crate::logs::SystemLogger,
 }
 
 impl MetricsCollector {
@@ -36,6 +37,7 @@ impl MetricsCollector {
         cluster_name: String,
         runtime_cli: String,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
+        logger: crate::logs::SystemLogger,
     ) -> Self {
         Self {
             endpoint,
@@ -46,13 +48,17 @@ impl MetricsCollector {
                 .build()
                 .expect("failed to build metrics http client"),
             signal_rx,
+            logger,
         }
     }
 
     pub async fn run(mut self) {
-        eprintln!(
-            "[maestro]: metrics collector started (interval: {}s)",
-            COLLECT_INTERVAL.as_secs()
+        self.logger.emit(
+            "info",
+            &format!(
+                "metrics collector started (interval: {}s)",
+                COLLECT_INTERVAL.as_secs()
+            ),
         );
         loop {
             tokio::select! {
@@ -60,7 +66,7 @@ impl MetricsCollector {
                     match signal {
                         Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
                         | Err(broadcast::error::RecvError::Closed) => {
-                            eprintln!("[maestro]: metrics collector shutting down");
+                            self.logger.emit("info", "metrics collector shutting down");
                             return;
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -68,7 +74,7 @@ impl MetricsCollector {
                 }
                 _ = tokio::time::sleep(COLLECT_INTERVAL) => {
                     if let Err(err) = self.collect_and_send().await {
-                        eprintln!("[maestro]: metrics collection error: {err}");
+                        self.logger.emit("error", &format!("metrics collection error: {err}"));
                     }
                 }
             }
@@ -190,7 +196,13 @@ struct ContainerStats {
 
 async fn collect_container_stats(runtime_cli: &str) -> Result<Vec<ContainerStats>> {
     let output = Command::new(runtime_cli)
-        .args(["stats", "--no-stream", "--format", "{{json .}}"])
+        .args([
+            "stats",
+            "--no-stream",
+            "--no-trunc",
+            "--format",
+            "{{json .}}",
+        ])
         .output()
         .await
         .map_err(|err| anyhow!("failed to run {runtime_cli} stats: {err}"))?;

@@ -3,11 +3,9 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::{Body, Bytes},
+    body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, Request, StatusCode},
-    middleware::{self, Next},
-    response::Response,
+    http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
@@ -34,7 +32,7 @@ const DEFAULT_LOG_LIMIT: usize = 1000;
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
     ("maestro-ingress", "ingress", "traefik:v3.6"),
-    ("maestro-probe", "probe", "maestro-probe"),
+    ("maestro-probe", "controller", "maestro-probe"),
     ("maestro-admin", "admin", "maestro-admin"),
     ("maestro-tailscale", "tailscale", "maestro-tailscale"),
 ];
@@ -118,7 +116,6 @@ impl Server {
                 get(Self::get_container_metrics),
             )
             .with_state(self.state.clone())
-            .layer(middleware::from_fn(log_http))
     }
 
     pub(crate) async fn serve(
@@ -166,6 +163,12 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        eprintln!(
+            "[probe] rollout request service_id={} version={} force={}",
+            service_config.id,
+            service_config.version,
+            query.force.unwrap_or(false)
+        );
 
         if !query.force.unwrap_or(false) {
             let info = state
@@ -195,40 +198,52 @@ impl Server {
             UpsertServiceOutcome::Queued {
                 deployment_index,
                 deployment,
-            } => RolloutServiceResponse {
-                queued: true,
-                replicas: None,
-                deployment_id: Some(deployment.id.clone()),
-                deployment_index: Some(deployment_index),
-                service_id: deployment.config.id.clone(),
-                status: Some(deployment.status),
-                version: deployment.config.version.clone(),
-            },
+            } => {
+                eprintln!(
+                    "[probe] rollout queued service_id={} deployment_id={} index={deployment_index}",
+                    deployment.config.id, deployment.id
+                );
+                RolloutServiceResponse {
+                    queued: true,
+                    replicas: None,
+                    deployment_id: Some(deployment.id.clone()),
+                    deployment_index: Some(deployment_index),
+                    service_id: deployment.config.id.clone(),
+                    status: Some(deployment.status),
+                    version: deployment.config.version.clone(),
+                }
+            }
             UpsertServiceOutcome::Unchanged {
                 service_id,
                 version,
-            } => RolloutServiceResponse {
-                queued: false,
-                replicas: None,
-                deployment_id: None,
-                deployment_index: None,
-                service_id,
-                status: None,
-                version,
-            },
+            } => {
+                eprintln!("[probe] rollout unchanged service_id={service_id}");
+                RolloutServiceResponse {
+                    queued: false,
+                    replicas: None,
+                    deployment_id: None,
+                    deployment_index: None,
+                    service_id,
+                    status: None,
+                    version,
+                }
+            }
             UpsertServiceOutcome::Scaled {
                 service_id,
                 version,
                 replicas,
-            } => RolloutServiceResponse {
-                queued: false,
-                replicas: Some(replicas),
-                deployment_id: None,
-                deployment_index: None,
-                service_id,
-                status: None,
-                version,
-            },
+            } => {
+                eprintln!("[probe] rollout scaled service_id={service_id} replicas={replicas}");
+                RolloutServiceResponse {
+                    queued: false,
+                    replicas: Some(replicas),
+                    deployment_id: None,
+                    deployment_index: None,
+                    service_id,
+                    status: None,
+                    version,
+                }
+            }
         };
 
         Ok(Json(response))
@@ -616,10 +631,14 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let entries = log_store
-            .read_tail(name, tail)
-            .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let entries = if name == "maestro-probe" {
+            log_store
+                .read_tail_sources(&["maestro-probe", "maestro-controller"], tail)
+                .await
+        } else {
+            log_store.read_tail(name, tail).await
+        }
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let values: Vec<serde_json::Value> = entries
             .into_iter()
             .filter_map(|e| serde_json::to_value(e).ok())
@@ -742,11 +761,13 @@ impl Server {
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
         verify_jwt(&state.jwt_secret, &headers)?;
         let system_type = state.system_type.as_deref().unwrap_or("controller");
+        eprintln!("[probe] upgrade request system={system_type}");
         state
             .store
             .put_system_upgrade_request(system_type)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        eprintln!("[probe] upgrade request accepted system={system_type}");
         Ok(Json(json!({
             "accepted": true,
             "system": system_type,
@@ -1153,18 +1174,6 @@ fn diff_secrets(
             }
         }
     }
-}
-
-async fn log_http(request: Request<Body>, next: Next) -> Response {
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let started = std::time::Instant::now();
-    let response = next.run(request).await;
-    let status = response.status();
-    let elapsed_ms = started.elapsed().as_millis();
-
-    println!("{method} {path} -> {status} ({elapsed_ms}ms)");
-    response
 }
 
 #[cfg(test)]

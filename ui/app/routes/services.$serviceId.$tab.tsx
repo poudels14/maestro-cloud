@@ -908,9 +908,9 @@ function DeploymentLogViewer(props: {
             {(line) => (
               <div class="flex gap-3 whitespace-nowrap">
                 <span class="text-gray-400 select-none shrink-0">{formatTs(line.ts)}</span>
-                <Show when={line.hostname}>
-                  <span class="text-violet-400 shrink-0 truncate max-w-48" title={line.hostname}>
-                    {line.hostname}
+                <Show when={line.hostname || line.source}>
+                  <span class="text-violet-400 shrink-0 truncate max-w-48" title={line.hostname || line.source}>
+                    {line.hostname || line.source}
                   </span>
                 </Show>
                 <span

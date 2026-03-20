@@ -316,7 +316,7 @@ impl InMemoryStore {
                     flags: vec![],
                     expose_ports: vec![],
                     command: Some(deploy_command.clone()),
-                    healthcheck_path: Some("/_healthy".to_string()),
+                    healthcheck_path: None,
                     replicas: 1,
                     max_restarts: None,
                     env: Default::default(),
@@ -366,7 +366,7 @@ impl InMemoryStore {
                     flags: vec![],
                     expose_ports: vec![],
                     command: Some(deploy_command),
-                    healthcheck_path: Some("/_healthy".to_string()),
+                    healthcheck_path: None,
                     replicas: 1,
                     max_restarts: None,
                     env: Default::default(),
@@ -765,16 +765,22 @@ async fn stress_supervisor_updates_deployment_statuses() {
 
     let deployments = store.all_deployments();
     assert_eq!(deployments.len(), 180);
-    assert!(
-        deployments
-            .iter()
-            .all(|deployment| deployment.status == DeploymentStatus::Building)
-    );
+    for deployment in &deployments {
+        assert!(
+            matches!(
+                deployment.status,
+                DeploymentStatus::Ready | DeploymentStatus::Draining | DeploymentStatus::Removed
+            ),
+            "deployment {} has unexpected status {:?}",
+            deployment.id,
+            deployment.status,
+        );
+    }
 
     for history in store.transition_history().values() {
-        assert_eq!(
-            history.as_slice(),
-            &[DeploymentStatus::Queued, DeploymentStatus::Building,]
+        assert!(
+            history.starts_with(&[DeploymentStatus::Queued, DeploymentStatus::Building]),
+            "unexpected transition history: {history:?}",
         );
     }
 
@@ -854,7 +860,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             .find(|deployment| deployment.id == "svc-0-1")
             .expect("second deployment should exist");
 
-        if second.status == DeploymentStatus::Building {
+        if second.status == DeploymentStatus::Ready {
             assert_ne!(first.status, DeploymentStatus::Terminated);
             second_ready = true;
             break;
@@ -876,13 +882,23 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
     }
 
     let transitions = store.transition_history();
-    assert_eq!(
-        transitions.get("svc-0-0").map(Vec::as_slice),
-        Some(&[DeploymentStatus::Queued, DeploymentStatus::Building,][..])
+    let svc_0_0 = transitions.get("svc-0-0").expect("svc-0-0 history");
+    assert!(
+        svc_0_0.starts_with(&[
+            DeploymentStatus::Queued,
+            DeploymentStatus::Building,
+            DeploymentStatus::Ready
+        ]),
+        "unexpected svc-0-0 history: {svc_0_0:?}",
     );
-    assert_eq!(
-        transitions.get("svc-0-1").map(Vec::as_slice),
-        Some(&[DeploymentStatus::Queued, DeploymentStatus::Building,][..])
+    let svc_0_1 = transitions.get("svc-0-1").expect("svc-0-1 history");
+    assert!(
+        svc_0_1.starts_with(&[
+            DeploymentStatus::Queued,
+            DeploymentStatus::Building,
+            DeploymentStatus::Ready
+        ]),
+        "unexpected svc-0-1 history: {svc_0_1:?}",
     );
 
     let _ = std::fs::remove_dir_all(&data_dir);
@@ -949,13 +965,13 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             .into_iter()
             .find(|item| item.id == "svc-0-0")
             .expect("deployment should exist");
-        if deployment.status == DeploymentStatus::Building && controller.has_running_services() {
+        if deployment.status == DeploymentStatus::Ready {
             break;
         }
 
         assert!(
             Instant::now() < ready_deadline,
-            "deployment did not start in time"
+            "deployment did not reach ready in time"
         );
     }
 
@@ -999,6 +1015,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             &[
                 DeploymentStatus::Queued,
                 DeploymentStatus::Building,
+                DeploymentStatus::Ready,
                 DeploymentStatus::Draining,
                 DeploymentStatus::Removed,
             ][..]
@@ -1087,14 +1104,14 @@ async fn continuous_redeploy_maintains_ingress_backends() {
 
             let deployments = store.all_deployments();
             let current = deployments.iter().find(|d| d.id == dep_id);
-            if current.is_some_and(|d| d.status == DeploymentStatus::Building) {
+            if current.is_some_and(|d| d.status == DeploymentStatus::Ready) {
                 first_deployment_ready = true;
                 break;
             }
 
             assert!(
                 Instant::now() < ready_deadline,
-                "deployment {dep_id} (round {deploy_round}) did not start in time"
+                "deployment {dep_id} (round {deploy_round}) did not reach Ready in time"
             );
         }
 
@@ -1123,14 +1140,11 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         .iter()
         .filter(|d| d.config.id == service_id)
         .collect();
-    let building_count = service_deployments
+    let ready_count = service_deployments
         .iter()
-        .filter(|d| d.status == DeploymentStatus::Building)
+        .filter(|d| d.status == DeploymentStatus::Ready)
         .count();
-    assert_eq!(
-        building_count, 1,
-        "exactly one deployment should be Building (active)"
-    );
+    assert_eq!(ready_count, 1, "exactly one deployment should be Ready");
 
     let last_dep_id = deployment_ids.last().unwrap();
     let last_dep = service_deployments
@@ -1139,8 +1153,8 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         .expect("last deployment should exist");
     assert_eq!(
         last_dep.status,
-        DeploymentStatus::Building,
-        "the latest deployment should be the active one"
+        DeploymentStatus::Ready,
+        "the latest deployment should be the one that is Ready"
     );
 
     let backends = store.ingress_backends(service_id);

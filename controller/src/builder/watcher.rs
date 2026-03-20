@@ -20,6 +20,7 @@ pub struct BuildWatcher {
     data_dir: PathBuf,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     backoff: HashMap<String, (Instant, Duration)>,
+    logger: crate::logs::SystemLogger,
 }
 
 impl BuildWatcher {
@@ -27,19 +28,24 @@ impl BuildWatcher {
         store: Arc<dyn ClusterStore>,
         data_dir: PathBuf,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
+        logger: crate::logs::SystemLogger,
     ) -> Self {
         Self {
             store,
             data_dir,
             signal_rx,
             backoff: HashMap::new(),
+            logger,
         }
     }
 
     pub async fn run(mut self) {
-        eprintln!(
-            "[maestro]: build watcher started (poll interval: {}s)",
-            WATCH_POLL_INTERVAL.as_secs()
+        self.logger.emit(
+            "info",
+            &format!(
+                "build watcher started (poll interval: {}s)",
+                WATCH_POLL_INTERVAL.as_secs()
+            ),
         );
         loop {
             tokio::select! {
@@ -47,7 +53,7 @@ impl BuildWatcher {
                     match signal {
                         Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
                         | Err(broadcast::error::RecvError::Closed) => {
-                            eprintln!("[maestro]: build watcher shutting down");
+                            self.logger.emit("info", "build watcher shutting down");
                             return;
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -55,7 +61,7 @@ impl BuildWatcher {
                 }
                 _ = tokio::time::sleep(WATCH_POLL_INTERVAL) => {
                     if let Err(err) = self.poll_services().await {
-                        eprintln!("[maestro]: build watcher poll error: {err}");
+                        self.logger.emit("error", &format!("build watcher poll error: {err}"));
                     }
                 }
             }
@@ -83,7 +89,10 @@ impl BuildWatcher {
                     self.backoff.remove(&service_id);
                 }
                 Err(err) => {
-                    eprintln!("[maestro]: build watcher error for `{service_id}`: {err}");
+                    self.logger.emit(
+                        "error",
+                        &format!("build watcher error for `{service_id}`: {err}"),
+                    );
                     let current_backoff = self
                         .backoff
                         .get(&service_id)
@@ -125,9 +134,12 @@ impl BuildWatcher {
             return Ok(());
         }
 
-        eprintln!(
-            "[maestro]: build watcher detected new commit for `{service_id}` on branch `{branch}` ({})",
-            &remote_sha[..7.min(remote_sha.len())]
+        self.logger.emit(
+            "info",
+            &format!(
+                "build watcher detected new commit for `{service_id}` on branch `{branch}` ({})",
+                &remote_sha[..7.min(remote_sha.len())]
+            ),
         );
         let deployment = ServiceDeployment::new(info.config.clone())?;
         self.store.queue_deployment(deployment).await?;

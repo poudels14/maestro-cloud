@@ -179,7 +179,10 @@ enum CliCommand {
     },
     /// Read logs from the local log store
     Logs {
-        #[arg(help = "Source name (e.g., service name). Shows all sources if omitted")]
+        #[arg(
+            long = "source",
+            help = "Source name (e.g., service name). Shows all sources if omitted"
+        )]
         source: Option<String>,
         #[arg(long = "data-dir", help = "Maestro data directory")]
         data_dir: PathBuf,
@@ -279,6 +282,9 @@ async fn run() -> crate::error::Result<bool> {
                         });
                         dd.api_key = api_key;
                     }
+                    if subnet.is_some() {
+                        cfg.subnet = subnet;
+                    }
                     cfg
                 }
                 None => config::StartConfig {
@@ -339,17 +345,7 @@ async fn run() -> crate::error::Result<bool> {
                     .port()
             });
             let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
-            println!("[maestro]: etcd endpoint {etcd_endpoint}");
             let network = network.unwrap_or_else(|| format!("maestro-{cluster_name}"));
-            println!("[maestro]: container network {network}");
-            println!(
-                "[maestro]: cluster domains\n           canonical: {cluster_name}.maestro.internal (active)\n           alias: {cluster_alias}.maestro.internal ({})",
-                if enable_tailscale {
-                    "pending peer conflict check"
-                } else {
-                    "inactive (tailscale disabled)"
-                }
-            );
 
             let project_dir = std::fs::canonicalize(&project_dir).unwrap_or_else(|_| {
                 std::env::current_dir()
@@ -368,7 +364,42 @@ async fn run() -> crate::error::Result<bool> {
                 ));
             }
             let runtime = runtime::create_provider(runtime_type);
-            eprintln!("[maestro]: container runtime: {runtime_type}");
+
+            let log_store = Arc::new(
+                logs::LogStore::open(&data_dir.join("logs/logs.db"))
+                    .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?,
+            );
+            let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
+            let collector_handle = log_collector.spawn();
+
+            let tailscale_status = if enable_tailscale {
+                "pending peer conflict check"
+            } else {
+                "inactive (tailscale disabled)"
+            };
+            let logger = logs::SystemLogger::new(Some(log_sender.clone()));
+            logger.emit("info", &format!("etcd endpoint {etcd_endpoint}"));
+            logger.emit("info", &format!("container network {network}"));
+            logger.emit(
+                "info",
+                &format!("canonical domain: {cluster_name}.maestro.internal (active)"),
+            );
+            logger.emit(
+                "info",
+                &format!("alias domain: {cluster_alias}.maestro.internal ({tailscale_status})"),
+            );
+            logger.emit("info", &format!("container runtime: {runtime_type}"));
+
+            if let Some(dd) = cfg.datadog {
+                if let Some(site) = explicit_datadog_site {
+                    let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
+                    let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
+                    let _dd_handle = dd_worker.spawn();
+                    logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
+                } else {
+                    logger.emit("warn", "datadog config present but sink is disabled; pass --datadog-site to enable");
+                }
+            }
 
             let mut deployment_config = DeploymentConfig {
                 cluster_alias,
@@ -387,26 +418,6 @@ async fn run() -> crate::error::Result<bool> {
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
             };
-            let log_store = Arc::new(
-                logs::LogStore::open(&deployment_config.data_dir.join("logs/logs.db"))
-                    .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?,
-            );
-
-            if let Some(dd) = cfg.datadog {
-                if let Some(site) = explicit_datadog_site {
-                    let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
-                    let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
-                    let _dd_handle = dd_worker.spawn();
-                    eprintln!("[maestro]: datadog log sink enabled (site: {site})");
-                } else {
-                    eprintln!(
-                        "[maestro]: datadog config present but sink is disabled; pass --datadog-site to enable"
-                    );
-                }
-            }
-
-            let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
-            let collector_handle = log_collector.spawn();
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
                 let listener =
@@ -423,6 +434,7 @@ async fn run() -> crate::error::Result<bool> {
                 &deployment_config,
                 &runtime,
                 &log_sender,
+                &logger,
                 &mut supervisor,
             )
             .await;
@@ -431,7 +443,7 @@ async fn run() -> crate::error::Result<bool> {
             let store: Arc<dyn deployment::store::ClusterStore> =
                 Arc::new(deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key).await?);
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
-            let http_sink = logs::HttpSink::new("probe", &probe_log_endpoint);
+            let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
             let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));
             let _sink_handle = sink_worker.spawn();
             let deployment_signal_rx = signal_tx.subscribe();
@@ -441,6 +453,7 @@ async fn run() -> crate::error::Result<bool> {
                 store.clone(),
                 deployment_config.data_dir.clone(),
                 watcher_signal_rx,
+                logger.clone(),
             );
             let watcher_handle = tokio::spawn(watcher.run());
 
@@ -451,6 +464,7 @@ async fn run() -> crate::error::Result<bool> {
                 deployment_config.cluster_name.clone(),
                 runtime.cli_name().to_string(),
                 metrics_signal_rx,
+                logger,
             );
             let metrics_handle = tokio::spawn(metrics_collector.run());
 
@@ -459,10 +473,10 @@ async fn run() -> crate::error::Result<bool> {
                 store,
                 supervisor,
                 deployment_signal_rx,
-                Some(log_sender),
+                Some(log_sender.clone()),
                 runtime,
                 Some(system_info.dns_manager),
-                system_info.coredns_ip,
+                system_info.nameserver_ip,
             );
             let deployment_shutdown_tx = signal_tx.clone();
 
