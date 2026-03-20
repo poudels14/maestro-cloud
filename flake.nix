@@ -84,6 +84,12 @@
               description = "Container runtime to use (docker or nerdctl)";
             };
 
+            extraArgs = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              description = "Extra arguments to pass to maestro start";
+            };
+
           };
 
           config = lib.mkIf cfg.enable {
@@ -121,7 +127,7 @@
                   "--system" "nixos"
                   "--runtime" cfg.runtime
                   "--project-dir" "/etc/maestro/source"
-                ]);
+                ] ++ cfg.extraArgs);
               };
             };
           };
