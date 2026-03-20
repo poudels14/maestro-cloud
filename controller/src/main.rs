@@ -336,6 +336,8 @@ async fn run() -> crate::error::Result<bool> {
             }
 
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
+            let cluster_alias = cfg.cluster.name.to_lowercase();
+            let data_dir = data_dir.join(&cluster_alias);
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
                     "failed to create data directory {}: {err}",
@@ -344,7 +346,6 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             verify_encryption_key(&data_dir, &cfg.encryption_key)?;
             let _lock = acquire_lock(&data_dir)?;
-            let cluster_alias = cfg.cluster.name.to_lowercase();
             let cluster_suffix = load_or_create_cluster_suffix(&data_dir)?;
             let cluster_name = format!("{cluster_alias}-{cluster_suffix}");
             let etcd_port = etcd_port.unwrap_or_else(|| {
