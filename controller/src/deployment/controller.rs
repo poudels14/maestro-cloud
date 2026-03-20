@@ -215,6 +215,34 @@ impl DeploymentController {
             }
 
             self.logger
+                .emit("info", "NixOS rebuild complete, pre-building system images");
+            let images = [
+                ("maestro-admin", Some("Dockerfile.admin")),
+                ("maestro-probe", Some("Dockerfile.probe")),
+            ];
+            for (tag, dockerfile) in &images {
+                let result = self
+                    .runtime
+                    .build_image(
+                        &BuildSpec {
+                            context_dir: self.config.project_dir.clone(),
+                            tag: tag.to_string(),
+                            dockerfile: dockerfile.map(String::from),
+                            build_args: Default::default(),
+                        },
+                        None,
+                        None,
+                    )
+                    .await;
+                if let Err(err) = result {
+                    self.logger.emit(
+                        "warn",
+                        &format!("failed to pre-build {tag}: {err} (will rebuild on next start)"),
+                    );
+                }
+            }
+
+            self.logger
                 .emit("info", "NixOS upgrade complete, rebooting");
             let _ = tokio::process::Command::new("reboot").output().await;
             None

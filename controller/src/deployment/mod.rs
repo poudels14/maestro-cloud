@@ -417,6 +417,10 @@ async fn init_probe(
                 "PORT=3001".into(),
                 "-e".into(),
                 format!("MAESTRO_DNS_DOMAIN={dns_domain}"),
+                "-e".into(),
+                format!("MAESTRO_CLUSTER_NAME={}", config.cluster_name),
+                "-e".into(),
+                format!("MAESTRO_CLUSTER_ALIAS={}", config.cluster_alias),
             ];
             if let Some(secret) = &config.jwt_secret {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
