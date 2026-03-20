@@ -61,11 +61,25 @@ pub async fn start_system_jobs(
     DnsManager::write_corefile(&dns_dir);
 
     let network_cidr = runtime.inspect_network_cidr(&config.network).await;
-    let nameserver_ip = network_cidr.as_deref().and_then(default_nameserver_ip);
+    let system_ips = network_cidr.as_deref().and_then(system_ips_from_cidr);
+
+    if let Some(ips) = &system_ips {
+        dns_manager.set_record("maestro-etcd", &dns_domain, &ips.etcd);
+        dns_manager.set_record("web", &dns_domain, &ips.ingress);
+        dns_manager.set_record("maestro-probe", &dns_domain, &ips.probe);
+        dns_manager.set_record("admin", &dns_domain, &ips.admin);
+        let _ = dns_manager.flush();
+    }
+
+    let ip_flag = |ip: &str| vec!["--ip".to_string(), ip.to_string()];
 
     init_etcd(
         &etcd_container,
         &dns_domain,
+        system_ips
+            .as_ref()
+            .map(|ips| ip_flag(&ips.etcd))
+            .unwrap_or_default(),
         config,
         runtime,
         log_sender,
@@ -73,16 +87,12 @@ pub async fn start_system_jobs(
     )
     .await;
 
-    if let Some(ip) = runtime.inspect_container_ip(&etcd_container).await {
-        dns_manager.set_record("maestro-etcd", &dns_domain, &ip);
-        let _ = dns_manager.flush();
-    }
-
     if config.tailscale_authkey.is_some() {
         init_tailnet(
             &tailscale_container,
             &dns_domain,
             logger,
+            system_ips.as_ref().map(|ips| ips.tailscale.as_str()),
             config,
             runtime,
             log_sender,
@@ -91,6 +101,7 @@ pub async fn start_system_jobs(
         .await;
     }
 
+    let nameserver_ip = system_ips.as_ref().map(|ips| ips.tailscale.clone());
     let dns_flag = dns_flag_for_runtime(runtime.as_ref(), nameserver_ip.as_deref());
 
     init_ingress(
@@ -98,6 +109,10 @@ pub async fn start_system_jobs(
         &etcd_container,
         &dns_domain,
         &dns_flag,
+        system_ips
+            .as_ref()
+            .map(|ips| ip_flag(&ips.ingress))
+            .unwrap_or_default(),
         logger,
         config,
         runtime,
@@ -105,32 +120,32 @@ pub async fn start_system_jobs(
         supervisor,
     )
     .await;
-    if let Some(ip) = runtime.inspect_container_ip(&ingress_container).await {
-        dns_manager.set_record("web", &dns_domain, &ip);
-        let _ = dns_manager.flush();
-    }
 
     init_probe(
         &probe_container,
         &etcd_container,
         &dns_domain,
         &dns_flag,
+        system_ips
+            .as_ref()
+            .map(|ips| ip_flag(&ips.probe))
+            .unwrap_or_default(),
         config,
         runtime,
         log_sender,
         supervisor,
     )
     .await;
-    if let Some(ip) = runtime.inspect_container_ip(&probe_container).await {
-        dns_manager.set_record("maestro-probe", &dns_domain, &ip);
-        let _ = dns_manager.flush();
-    }
 
     init_admin(
         &admin_container,
         &probe_container,
         &dns_domain,
         &dns_flag,
+        system_ips
+            .as_ref()
+            .map(|ips| ip_flag(&ips.admin))
+            .unwrap_or_default(),
         logger,
         config,
         runtime,
@@ -138,10 +153,6 @@ pub async fn start_system_jobs(
         supervisor,
     )
     .await;
-    if let Some(ip) = runtime.inspect_container_ip(&admin_container).await {
-        dns_manager.set_record("admin", &dns_domain, &ip);
-        let _ = dns_manager.flush();
-    }
 
     SystemStartupInfo {
         dns_manager,
@@ -160,6 +171,7 @@ fn dns_flag_for_runtime(runtime: &dyn RuntimeProvider, coredns_ip: Option<&str>)
 async fn init_etcd(
     container_name: &str,
     dns_domain: &str,
+    ip_flags: Vec<String>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -169,6 +181,13 @@ async fn init_etcd(
     std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
     let etcd_data_path =
         std::fs::canonicalize(&etcd_data_dir).expect("error canonicalizing etcd data dir");
+    let mut extra_flags = vec![
+        "-p".into(),
+        format!("127.0.0.1:{}:2379", config.etcd_port),
+        "-v".into(),
+        format!("{}:/data", etcd_data_path.display()),
+    ];
+    extra_flags.extend(ip_flags);
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
         command: runtime.run_command(&RunSpec {
@@ -176,12 +195,7 @@ async fn init_etcd(
             hostname: "maestro-etcd".to_string(),
             dns_domain: Some(dns_domain.to_string()),
             network: config.network.clone(),
-            extra_flags: vec![
-                "-p".into(),
-                format!("127.0.0.1:{}:2379", config.etcd_port),
-                "-v".into(),
-                format!("{}:/data", etcd_data_path.display()),
-            ],
+            extra_flags,
             image_and_args: vec![
                 "quay.io/coreos/etcd:v3.6.8".into(),
                 "etcd".into(),
@@ -215,6 +229,7 @@ async fn init_ingress(
     etcd_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    ip_flags: Vec<String>,
     logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
@@ -229,6 +244,7 @@ async fn init_ingress(
     let web_port = config.web_port;
     let mut extra_flags = vec!["-p".into(), format!("{web_port}:8888")];
     extra_flags.extend_from_slice(dns_flag);
+    extra_flags.extend(ip_flags);
 
     let ingress_job_config = SupervisedJobConfig {
         id: "maestro-ingress".to_string(),
@@ -274,6 +290,7 @@ async fn init_admin(
     probe_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    ip_flags: Vec<String>,
     logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
@@ -304,6 +321,7 @@ async fn init_admin(
         format!("MAESTRO_API_HOST=http://{probe_container}:3001"),
     ]);
     admin_flags.extend_from_slice(dns_flag);
+    admin_flags.extend(ip_flags);
 
     let admin_job_config = SupervisedJobConfig {
         id: "maestro-admin".to_string(),
@@ -349,6 +367,7 @@ async fn init_probe(
     etcd_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    ip_flags: Vec<String>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -406,6 +425,7 @@ async fn init_probe(
                 probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
             }
             probe_flags.extend_from_slice(dns_flag);
+            probe_flags.extend(ip_flags);
             runtime.run_command(&RunSpec {
                 container_name: container_name.to_string(),
                 hostname: "maestro-probe".to_string(),
@@ -442,6 +462,7 @@ async fn init_tailnet(
     container_name: &str,
     dns_domain: &str,
     logger: &crate::logs::SystemLogger,
+    static_ip: Option<&str>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -483,8 +504,6 @@ async fn init_tailnet(
     let ts_authkey_abs = std::fs::canonicalize(config.data_dir.join("system/tailscale"))
         .expect("failed to canonicalize tailscale dir")
         .join("authkey");
-    let nameserver_ip = default_nameserver_ip(&network_cidr);
-
     await_job_running(
         supervisor,
         SupervisedJobConfig {
@@ -511,8 +530,8 @@ async fn init_tailnet(
                     "-e".to_string(),
                     "MAESTRO_DNS_UPSTREAM=coredns".to_string(),
                 ];
-                if let Some(ip) = &nameserver_ip {
-                    flags.extend(["--ip".to_string(), ip.clone()]);
+                if let Some(ip) = static_ip {
+                    flags.extend(["--ip".to_string(), ip.to_string()]);
                 }
                 runtime.run_command(&RunSpec {
                     container_name: container_name.to_string(),
@@ -559,10 +578,17 @@ async fn init_tailnet(
         "info",
         &format!("tailscale subnet router started, advertising route {network_cidr}"),
     );
-    let nameserver_ip = nameserver_ip.or(runtime.inspect_container_ip(container_name).await);
-    if let Some(nameserver_ip) = &nameserver_ip {
-        logger.emit("info", &format!("dns server running at {nameserver_ip}"));
-        logger.emit("info", &format!("configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"maestro.internal\""));
+    let resolved_ip = static_ip
+        .map(String::from)
+        .or(runtime.inspect_container_ip(container_name).await);
+    if let Some(ip) = &resolved_ip {
+        logger.emit("info", &format!("dns server running at {ip}"));
+        logger.emit(
+            "info",
+            &format!(
+                "configure split DNS in Tailscale admin: nameserver {ip} for \"maestro.internal\""
+            ),
+        );
     }
     logger.emit(
         "info",
@@ -580,17 +606,29 @@ async fn init_tailnet(
     );
 }
 
-fn default_nameserver_ip(network_cidr: &str) -> Option<String> {
+struct SystemIps {
+    etcd: String,
+    ingress: String,
+    probe: String,
+    admin: String,
+    tailscale: String,
+}
+
+fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
     let base = network_cidr.split('/').next()?;
-    let mut octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
+    let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
     if octets.len() != 4 {
-        return None;
+        None
+    } else {
+        let prefix = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+        Some(SystemIps {
+            admin: format!("{prefix}.250"),
+            etcd: format!("{prefix}.251"),
+            ingress: format!("{prefix}.252"),
+            probe: format!("{prefix}.253"),
+            tailscale: format!("{prefix}.254"),
+        })
     }
-    octets[3] = 254;
-    Some(format!(
-        "{}.{}.{}.{}",
-        octets[0], octets[1], octets[2], octets[3]
-    ))
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {
