@@ -241,8 +241,8 @@ async fn init_ingress(
         let _ = client.put("traefik", "", None).await;
     }
 
-    let web_port = config.web_port;
-    let mut extra_flags = vec!["-p".into(), format!("{web_port}:8888")];
+    let ingress_port = config.ingress_port;
+    let mut extra_flags = vec!["-p".into(), format!("0.0.0.0:{ingress_port}:8888")];
     extra_flags.extend_from_slice(dns_flag);
     extra_flags.extend(ip_flags);
 
@@ -281,7 +281,7 @@ async fn init_ingress(
     await_job_running(supervisor, ingress_job_config).await;
     logger.emit(
         "info",
-        &format!("ingress listening on http://127.0.0.1:{web_port}"),
+        &format!("ingress listening on http://0.0.0.0:{ingress_port}"),
     );
 }
 
