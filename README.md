@@ -1,10 +1,10 @@
 # Maestro
 
-A deployment controller that manages Docker containers with zero-downtime redeployments, ingress routing via Traefik, and optional Tailscale networking for remote access.
+A deployment controller that manages containers with zero-downtime redeployments, ingress routing via Traefik, and optional Tailscale networking for remote access. Supports both Docker and containerd/nerdctl runtimes.
 
 ## Prerequisites
 
-- Docker
+- Docker **or** containerd + nerdctl + buildkit (for nerdctl runtime)
 - Rust toolchain (for building from source)
 
 ## Installation
@@ -27,8 +27,18 @@ This generates a `maestro.jsonc` file in your working directory with a sample se
 ### 2. Start the cluster
 
 ```bash
-maestro start --cluster-name my-cluster --port 8888 --data-dir ./data
+maestro start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
 ```
+
+Flags:
+- `--runtime docker|nerdctl` — container runtime (default: docker)
+- `--ingress-port` — host port(s) mapped to the ingress (can be repeated for multiple ports)
+- `--subnet` — container network subnet CIDR (required for nerdctl)
+- `--force` — recreate the container network if it already exists or conflicts
+- `--encryption-key` — master key for encrypting secrets
+- `--datadog-api-key` — Datadog API key for log forwarding (or `DATADOG_API_KEY` env var)
+- `--datadog-site` — Datadog site (e.g. `datadoghq.com`, `us3.datadoghq.com`)
+- `--datadog-include-system-logs` — include maestro system logs in Datadog
 
 ### 3. Deploy services
 
@@ -42,6 +52,33 @@ maestro rollout
 maestro redeploy my-app
 ```
 
+## Config file
+
+The config file (`maestro.jsonc`) supports:
+
+```jsonc
+{
+  "cluster": { "name": "my-cluster" },
+  "ingress": {
+    // single port
+    "port": 8080,
+    // or multiple ports (both map to the internal ingress port 8888)
+    "ports": [80, 443]
+  },
+  "subnet": "172.22.0.0/16",
+  "encryption-key": "your-secret-key",
+  "runtime": "nerdctl",  // "docker" (default) or "nerdctl"
+  "tailscale": { "auth-key": "tskey-auth-..." },
+  "datadog": {
+    "api-key": "your-dd-api-key",
+    "site": "datadoghq.com",
+    "include-system-logs": false
+  }
+}
+```
+
+Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
+
 ## Tailscale setup
 
 Tailscale enables remote access to your containers from any device on your tailnet.
@@ -52,10 +89,11 @@ Tailscale enables remote access to your containers from any device on your tailn
 export TS_AUTHKEY=tskey-auth-...
 maestro start \
   --cluster-name my-cluster \
-  --port 8888 \
+  --ingress-port 80 --ingress-port 443 \
   --data-dir ./data \
   --subnet 172.22.0.0/16 \
-  --enable-tailscale
+  --enable-tailscale \
+  --project-dir .
 ```
 
 ### 2. Approve the subnet route
@@ -109,10 +147,10 @@ Each cluster needs its own subnet to avoid IP conflicts:
 
 ```bash
 # Cluster 1
-maestro start --cluster-name cluster-1 --port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
+maestro start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
 
 # Cluster 2
-maestro start --cluster-name cluster-2 --port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
+maestro start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
 ```
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
@@ -156,6 +194,7 @@ cat > /etc/maestro/flake.nix << 'EOF'
           services.maestro = {
             enable = true;
             config = "aws-secret://<your-secret-id>";
+            runtime = "nerdctl";  # or "docker"
           };
           services.amazon-ssm-agent.enable = true;
           networking.firewall.allowedTCPPorts = [ 80 443 22 ];
