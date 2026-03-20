@@ -135,7 +135,7 @@ impl Server {
             .await
             .map_err(|err| format!("failed to bind {bind_addr}: {err}"))?;
         println!(
-            "[probe] server listening on http://{bind_addr} [pid={}]",
+            "server listening on http://{bind_addr} [pid={}]",
             std::process::id()
         );
         axum::serve(listener, app)
@@ -182,7 +182,7 @@ impl Server {
             )
         })?;
         eprintln!(
-            "[probe] rollout request service_id={} version={} force={}",
+            "rollout request service_id={} version={} force={}",
             service_config.id,
             service_config.version,
             query.force.unwrap_or(false)
@@ -218,7 +218,7 @@ impl Server {
                 deployment,
             } => {
                 eprintln!(
-                    "[probe] rollout queued service_id={} deployment_id={} index={deployment_index}",
+                    "rollout queued service_id={} deployment_id={} index={deployment_index}",
                     deployment.config.id, deployment.id
                 );
                 RolloutServiceResponse {
@@ -235,7 +235,7 @@ impl Server {
                 service_id,
                 version,
             } => {
-                eprintln!("[probe] rollout unchanged service_id={service_id}");
+                eprintln!("rollout unchanged service_id={service_id}");
                 RolloutServiceResponse {
                     queued: false,
                     replicas: None,
@@ -251,7 +251,7 @@ impl Server {
                 version,
                 replicas,
             } => {
-                eprintln!("[probe] rollout scaled service_id={service_id} replicas={replicas}");
+                eprintln!("rollout scaled service_id={service_id} replicas={replicas}");
                 RolloutServiceResponse {
                     queued: false,
                     replicas: Some(replicas),
@@ -779,13 +779,13 @@ impl Server {
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
         verify_jwt(&state.jwt_secret, &headers)?;
         let system_type = state.system_type.as_deref().unwrap_or("controller");
-        eprintln!("[probe] upgrade request system={system_type}");
+        eprintln!("upgrade request system={system_type}");
         state
             .store
             .put_system_upgrade_request(system_type)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        eprintln!("[probe] upgrade request accepted system={system_type}");
+        eprintln!("upgrade request accepted system={system_type}");
         Ok(Json(json!({
             "accepted": true,
             "system": system_type,

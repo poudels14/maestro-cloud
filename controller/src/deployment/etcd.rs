@@ -244,7 +244,7 @@ impl EtcdStateStore {
             .map(|c| format!("http://{c}:{port}"))
             .collect();
         eprintln!(
-            "[probe] configured ingress for `{service_id}`: {} -> [{}]",
+            "configured ingress for `{service_id}`: {} -> [{}]",
             ingress.host,
             urls.join(", ")
         );
