@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::broadcast;
 use tokio::time::sleep;
@@ -12,7 +13,8 @@ use crate::deployment::etcd::EtcdStateStore;
 use crate::server;
 use crate::signal::ShutdownEvent;
 
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const UNHEALTHY_MIN_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const HEALTHY_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
@@ -32,6 +34,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         crate::logs::LogStore::open(std::path::Path::new("/data/logs.db"))
             .expect("failed to open probe log store"),
     );
+    let dns_domain = std::env::var("MAESTRO_DNS_DOMAIN").ok();
     let jwt_secret = std::env::var("MAESTRO_JWT_SECRET").ok();
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
     let server = server::Server::new(store.clone(), Some(log_store), jwt_secret, system_type);
@@ -55,15 +58,41 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         let mut sigterm =
             signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+        let mut unhealthy_backoff = ExponentialBuilder::default()
+            .with_min_delay(UNHEALTHY_MIN_POLL_INTERVAL)
+            .with_max_delay(HEALTHY_POLL_INTERVAL)
+            .with_factor(2.0)
+            .without_max_times()
+            .build();
+        let mut poll_interval = UNHEALTHY_MIN_POLL_INTERVAL;
 
         loop {
             let poll = async {
-                sleep(POLL_INTERVAL).await;
-                if let Err(err) =
-                    healthcheck::check_deployments(store.as_ref(), &http_client, &mut health_state)
-                        .await
+                sleep(poll_interval).await;
+                if let Err(err) = healthcheck::check_deployments(
+                    store.as_ref(),
+                    &http_client,
+                    &mut health_state,
+                    dns_domain.as_deref(),
+                )
+                .await
                 {
                     eprintln!("[probe] poll error: {err}");
+                    poll_interval = unhealthy_backoff.next().unwrap_or(HEALTHY_POLL_INTERVAL);
+                    return;
+                }
+
+                let has_unhealthy = health_state.values().any(|healthy| !healthy);
+                if has_unhealthy {
+                    poll_interval = unhealthy_backoff.next().unwrap_or(HEALTHY_POLL_INTERVAL);
+                } else {
+                    poll_interval = HEALTHY_POLL_INTERVAL;
+                    unhealthy_backoff = ExponentialBuilder::default()
+                        .with_min_delay(UNHEALTHY_MIN_POLL_INTERVAL)
+                        .with_max_delay(HEALTHY_POLL_INTERVAL)
+                        .with_factor(2.0)
+                        .without_max_times()
+                        .build();
                 }
             };
 

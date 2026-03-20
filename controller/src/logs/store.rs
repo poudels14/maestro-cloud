@@ -53,6 +53,37 @@ pub struct LogEntry {
     pub tags: Arc<serde_json::Value>,
 }
 
+#[derive(Clone)]
+pub struct SystemLogger {
+    sender: Option<flume::Sender<LogEntry>>,
+}
+
+impl SystemLogger {
+    pub fn new(sender: Option<flume::Sender<LogEntry>>) -> Self {
+        Self { sender }
+    }
+
+    pub fn emit(&self, level: &str, text: &str) {
+        eprintln!("[maestro]: {text}");
+        if let Some(sender) = &self.sender {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let _ = sender.try_send(LogEntry {
+                seq: 0,
+                ts: now,
+                level: Arc::from(level),
+                stream: Arc::from("stderr"),
+                text: text.to_string(),
+                source: Arc::from("maestro-controller"),
+                origin: LogOrigin::System,
+                tags: Arc::new(serde_json::Value::Array(vec![])),
+            });
+        }
+    }
+}
+
 fn default_origin() -> LogOrigin {
     LogOrigin::System
 }
@@ -202,6 +233,31 @@ impl LogStore {
         let rows = stmt.query_map(rusqlite::params![source, limit as i64], |row| {
             Self::row_to_entry(row)
         })?;
+        let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+        entries.reverse();
+        Ok(entries)
+    }
+
+    pub async fn read_tail_sources(&self, sources: &[&str], limit: usize) -> Result<Vec<LogEntry>> {
+        let conn = self.conn.lock().await;
+        let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
+        let query = format!(
+            "SELECT seq, ts, level, stream, text, source, origin, attributes
+             FROM logs WHERE source IN ({})
+             ORDER BY seq DESC
+             LIMIT ?{}",
+            placeholders.join(", "),
+            sources.len() + 1
+        );
+        let mut stmt = conn.prepare(&query)?;
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
+            .iter()
+            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        params.push(Box::new(limit as i64));
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
         let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
         entries.reverse();
         Ok(entries)

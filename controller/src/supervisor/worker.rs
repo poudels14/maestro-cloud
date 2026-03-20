@@ -8,7 +8,7 @@ use tokio::{
 
 use backon::{BackoffBuilder, ExponentialBuilder};
 
-use crate::logs::LogConfig;
+use crate::logs::{LogConfig, LogEntry, LogOrigin};
 
 use super::logs::read_pipe_to_collector;
 use watchexec_supervisor::{
@@ -314,7 +314,7 @@ impl SupervisedJobRunner {
                 }
             }
             job.start().await;
-            log_service_process_ids(&name, &job).await;
+            log_service_process_ids(&name, &job, config.log_config.as_ref()).await;
 
             let outcome = tokio::select! {
                 biased;
@@ -480,7 +480,7 @@ async fn wait_for_job_exit(job: &Job) -> Option<ProcessEnd> {
     rx.await.ok().flatten()
 }
 
-async fn log_service_process_ids(name: &str, job: &Job) {
+async fn log_service_process_ids(name: &str, job: &Job, log_config: Option<&LogConfig>) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     job.run(move |ctx| {
         let pid = match ctx.current {
@@ -494,7 +494,24 @@ async fn log_service_process_ids(name: &str, job: &Job) {
 
     if let Ok((Some(pid), pgid)) = rx.await {
         let pgid_str = pgid.map_or("unknown".to_string(), |g| g.to_string());
-        eprintln!("[maestro]: service '{name}' started: pid={pid} pgid={pgid_str}");
+        let text = format!("service '{name}' started: pid={pid} pgid={pgid_str}");
+        eprintln!("[maestro]: {text}");
+        if let Some(cfg) = log_config {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let _ = cfg.sender.try_send(LogEntry {
+                seq: 0,
+                ts: now,
+                level: Arc::from("info"),
+                stream: Arc::from("stderr"),
+                text,
+                source: Arc::from(name.to_string()),
+                origin: LogOrigin::System,
+                tags: cfg.build_tags(),
+            });
+        }
     }
 }
 

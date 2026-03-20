@@ -8,4 +8,4 @@ pub use collector::{LogCollector, LogConfig};
 pub use datadog_sink::DatadogSink;
 pub use http_sink::HttpSink;
 pub use sink::SinkWorker;
-pub use store::{LogEntry, LogOrigin, LogStore};
+pub use store::{LogEntry, LogOrigin, LogStore, SystemLogger};

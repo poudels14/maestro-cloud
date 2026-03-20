@@ -22,13 +22,14 @@ const ADMIN_IMAGE_TAG: &str = "maestro-admin";
 const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 pub struct SystemStartupInfo {
     pub dns_manager: Arc<DnsManager>,
-    pub coredns_ip: Option<String>,
+    pub nameserver_ip: Option<String>,
 }
 
 pub async fn start_system_jobs(
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
+    logger: &crate::logs::SystemLogger,
     supervisor: &mut JobSupervisor,
 ) -> SystemStartupInfo {
     let secrets_dir = config.data_dir.join("secrets");
@@ -60,7 +61,7 @@ pub async fn start_system_jobs(
     DnsManager::write_corefile(&dns_dir);
 
     let network_cidr = runtime.inspect_network_cidr(&config.network).await;
-    let coredns_ip = network_cidr.as_deref().and_then(coredns_ip_from_cidr);
+    let nameserver_ip = network_cidr.as_deref().and_then(default_nameserver_ip);
 
     init_etcd(
         &etcd_container,
@@ -81,6 +82,7 @@ pub async fn start_system_jobs(
         init_tailnet(
             &tailscale_container,
             &dns_domain,
+            logger,
             config,
             runtime,
             log_sender,
@@ -89,13 +91,14 @@ pub async fn start_system_jobs(
         .await;
     }
 
-    let dns_flag = dns_flag_for_runtime(runtime.as_ref(), coredns_ip.as_deref());
+    let dns_flag = dns_flag_for_runtime(runtime.as_ref(), nameserver_ip.as_deref());
 
     init_ingress(
         &ingress_container,
         &etcd_container,
         &dns_domain,
         &dns_flag,
+        logger,
         config,
         runtime,
         log_sender,
@@ -128,6 +131,7 @@ pub async fn start_system_jobs(
         &probe_container,
         &dns_domain,
         &dns_flag,
+        logger,
         config,
         runtime,
         log_sender,
@@ -141,7 +145,7 @@ pub async fn start_system_jobs(
 
     SystemStartupInfo {
         dns_manager,
-        coredns_ip,
+        nameserver_ip,
     }
 }
 
@@ -211,6 +215,7 @@ async fn init_ingress(
     etcd_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -258,7 +263,10 @@ async fn init_ingress(
         }),
     };
     await_job_running(supervisor, ingress_job_config).await;
-    eprintln!("[maestro]: ingress listening on http://127.0.0.1:{web_port}");
+    logger.emit(
+        "info",
+        &format!("ingress listening on http://127.0.0.1:{web_port}"),
+    );
 }
 
 async fn init_admin(
@@ -266,6 +274,7 @@ async fn init_admin(
     probe_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -324,9 +333,15 @@ async fn init_admin(
     };
     await_job_running(supervisor, admin_job_config).await;
     if let Some(port) = config.probe_port {
-        eprintln!("[maestro]: admin ui listening on http://127.0.0.1:{port}");
+        logger.emit(
+            "info",
+            &format!("admin ui listening on http://127.0.0.1:{port}"),
+        );
     }
-    eprintln!("[maestro]: admin ui running at http://admin.{dns_domain}:3000");
+    logger.emit(
+        "info",
+        &format!("admin ui running at http://admin.{dns_domain}:3000"),
+    );
 }
 
 async fn init_probe(
@@ -381,6 +396,8 @@ async fn init_probe(
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
                 "PORT=3001".into(),
+                "-e".into(),
+                format!("MAESTRO_DNS_DOMAIN={dns_domain}"),
             ];
             if let Some(secret) = &config.jwt_secret {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
@@ -424,6 +441,7 @@ async fn init_probe(
 async fn init_tailnet(
     container_name: &str,
     dns_domain: &str,
+    logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -435,7 +453,10 @@ async fn init_tailnet(
     let network_cidr = match runtime.inspect_network_cidr(&config.network).await {
         Some(cidr) => cidr,
         None => {
-            eprintln!("[maestro]: failed to discover network CIDR; skipping tailscale setup");
+            logger.emit(
+                "warn",
+                "failed to discover network CIDR; skipping tailscale setup",
+            );
             return;
         }
     };
@@ -534,36 +555,29 @@ async fn init_tailnet(
         .exec_in_container(container_name, &["tailscale", "set", &routes_arg])
         .await;
 
-    eprintln!("[maestro]: tailscale subnet router started, advertising route {network_cidr}");
+    logger.emit(
+        "info",
+        &format!("tailscale subnet router started, advertising route {network_cidr}"),
+    );
     let nameserver_ip = nameserver_ip.or(runtime.inspect_container_ip(container_name).await);
     if let Some(nameserver_ip) = &nameserver_ip {
-        eprintln!(
-            "[maestro]: dns server running at {nameserver_ip}\n           configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"maestro.internal\""
-        );
+        logger.emit("info", &format!("dns server running at {nameserver_ip}"));
+        logger.emit("info", &format!("configure split DNS in Tailscale admin: nameserver {nameserver_ip} for \"maestro.internal\""));
     }
-    eprintln!("[maestro]: tailscale DNS aliases");
-    eprintln!(
-        "[maestro]: canonical: {}.maestro.internal (active)",
-        config.cluster_name
+    logger.emit(
+        "info",
+        &format!(
+            "canonical: {}.maestro.internal (active)",
+            config.cluster_name
+        ),
     );
-    eprintln!(
-        "[maestro]: alias: {}.maestro.internal (pending peer conflict check)",
-        config.cluster_alias
+    logger.emit(
+        "info",
+        &format!(
+            "alias: {}.maestro.internal (pending peer conflict check)",
+            config.cluster_alias
+        ),
     );
-}
-
-fn coredns_ip_from_cidr(network_cidr: &str) -> Option<String> {
-    let base = network_cidr.split('/').next()?;
-    let mut octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() == 4 {
-        octets[3] = 253;
-        Some(format!(
-            "{}.{}.{}.{}",
-            octets[0], octets[1], octets[2], octets[3]
-        ))
-    } else {
-        None
-    }
 }
 
 fn default_nameserver_ip(network_cidr: &str) -> Option<String> {

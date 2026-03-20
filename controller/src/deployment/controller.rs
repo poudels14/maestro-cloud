@@ -57,6 +57,7 @@ pub struct DeploymentController {
     deployments: HashMap<String, Deployment>,
     pending_builds: HashMap<String, PendingBuild>,
     shutdown_in_progress: bool,
+    logger: crate::logs::SystemLogger,
     log_sender: Option<flume::Sender<LogEntry>>,
 }
 
@@ -102,6 +103,7 @@ impl DeploymentController {
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
             shutdown_in_progress: false,
+            logger: crate::logs::SystemLogger::new(log_sender.clone()),
             log_sender,
         }
     }
@@ -112,7 +114,10 @@ impl DeploymentController {
         let mut signal_rx = self.signal_rx.resubscribe();
 
         if let Err(err) = self.queue_terminated_active_deployments().await {
-            eprintln!("[maestro]: failed to queue terminated deployments on startup: {err}");
+            self.logger.emit(
+                "error",
+                &format!("failed to queue terminated deployments on startup: {err}"),
+            );
         }
 
         loop {
@@ -146,7 +151,7 @@ impl DeploymentController {
                             return Ok(exit_reason);
                         }
                     } else if let Err(err) = self.reconcile_deployments().await {
-                        eprintln!("[maestro]: controller queue scan error: {err}");
+                        self.logger.emit("error", &format!("controller queue scan error: {err}"));
                     }
                 }
             }
@@ -173,43 +178,49 @@ impl DeploymentController {
         let _ = self.store.delete_system_upgrade_request().await;
 
         if system_type == "nixos" {
-            eprintln!("[maestro]: starting NixOS system upgrade");
+            self.logger.emit("info", "starting NixOS system upgrade");
             let flake_result = tokio::process::Command::new("nix")
                 .args(["flake", "update", "--flake", "/etc/maestro"])
                 .output()
                 .await;
             if let Err(err) = &flake_result {
-                eprintln!("[maestro]: nix flake update failed: {err}");
+                self.logger
+                    .emit("error", &format!("nix flake update failed: {err}"));
                 return None;
             }
             let flake_output = flake_result.unwrap();
             if !flake_output.status.success() {
                 let stderr = String::from_utf8_lossy(&flake_output.stderr);
-                eprintln!("[maestro]: nix flake update failed: {stderr}");
+                self.logger
+                    .emit("error", &format!("nix flake update failed: {stderr}"));
                 return None;
             }
 
-            eprintln!("[maestro]: running nixos-rebuild boot");
+            self.logger.emit("info", "running nixos-rebuild boot");
             let rebuild_result = tokio::process::Command::new("nixos-rebuild")
                 .args(["boot", "--flake", "/etc/maestro#default"])
                 .output()
                 .await;
             if let Err(err) = &rebuild_result {
-                eprintln!("[maestro]: nixos-rebuild failed: {err}");
+                self.logger
+                    .emit("error", &format!("nixos-rebuild failed: {err}"));
                 return None;
             }
             let rebuild_output = rebuild_result.unwrap();
             if !rebuild_output.status.success() {
                 let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
-                eprintln!("[maestro]: nixos-rebuild failed: {stderr}");
+                self.logger
+                    .emit("error", &format!("nixos-rebuild failed: {stderr}"));
                 return None;
             }
 
-            eprintln!("[maestro]: NixOS upgrade complete, rebooting");
+            self.logger
+                .emit("info", "NixOS upgrade complete, rebooting");
             let _ = tokio::process::Command::new("reboot").output().await;
             None
         } else {
-            eprintln!("[maestro]: upgrade requested, rebuilding system images");
+            self.logger
+                .emit("info", "upgrade requested, rebuilding system images");
             let images = [
                 ("maestro-admin", Some("Dockerfile.admin")),
                 ("maestro-probe", Some("Dockerfile.probe")),
@@ -229,11 +240,13 @@ impl DeploymentController {
                     )
                     .await;
                 if let Err(err) = result {
-                    eprintln!("[maestro]: failed to rebuild {tag}: {err}");
+                    self.logger
+                        .emit("error", &format!("failed to rebuild {tag}: {err}"));
                     return None;
                 }
             }
-            eprintln!("[maestro]: system images rebuilt, draining and restarting");
+            self.logger
+                .emit("info", "system images rebuilt, draining and restarting");
             Some(ControllerExitReason::Restart)
         }
     }
@@ -331,6 +344,38 @@ impl DeploymentController {
         }
 
         self.start_deployment_replicas(&queued_deployment).await;
+
+        let has_healthcheck = queued_deployment
+            .deployment
+            .config
+            .deploy
+            .healthcheck_path
+            .as_ref()
+            .is_some_and(|p| !p.trim().is_empty());
+        let deployment_status = if has_healthcheck {
+            DeploymentStatus::PendingReady
+        } else {
+            DeploymentStatus::Ready
+        };
+        let deployment_ref = Deployment {
+            service_id: queued_deployment.service_id.clone(),
+            id: queued_deployment.deployment.id.clone(),
+            replica_index: 0,
+        };
+        if let Err(err) = self
+            .store
+            .update_deployment_status(&deployment_ref, deployment_status)
+            .await
+        {
+            self.logger.emit(
+                "error",
+                &format!(
+                    "failed to update deployment `{}` status: {err}",
+                    queued_deployment.deployment.id
+                ),
+            );
+        }
+
         Ok(())
     }
 
@@ -347,9 +392,12 @@ impl DeploymentController {
                 let pending = self.pending_builds.remove(&deployment_id).unwrap();
                 pending.handle.abort();
                 let _ = std::fs::remove_dir_all(&pending.build_dir);
-                eprintln!(
-                    "[maestro]: build timed out for deployment `{deployment_id}` ({}s limit)",
-                    BUILD_TIMEOUT.as_secs()
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "build timed out for deployment `{deployment_id}` ({}s limit)",
+                        BUILD_TIMEOUT.as_secs()
+                    ),
                 );
                 let deployment_ref = Deployment {
                     service_id: pending.queued_deployment.service_id,
@@ -403,15 +451,21 @@ impl DeploymentController {
                         .update_deployment_build_info(&deployment_ref, &queued.deployment)
                         .await
                     {
-                        eprintln!(
-                            "[maestro]: failed to store build info for deployment `{deployment_id}`: {err}"
+                        self.logger.emit(
+                            "error",
+                            &format!(
+                                "failed to store build info for deployment `{deployment_id}`: {err}"
+                            ),
                         );
                     }
                     self.start_deployment_replicas(&queued).await;
                 }
                 Err(err) => {
-                    eprintln!(
-                        "[maestro]: build failed for service `{service_id}` deployment `{deployment_id}`: {err}"
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "build failed for service `{service_id}` deployment `{deployment_id}`: {err}"
+                        ),
                     );
                     let deployment_ref = Deployment {
                         service_id,
@@ -455,8 +509,11 @@ impl DeploymentController {
                     .deploy(&queued_deployment.deployment, replica_index),
             };
             let Some(deploy_output) = deploy_output else {
-                eprintln!(
-                    "[maestro]: skipping replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: no deploy command",
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "skipping replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: no deploy command"
+                    ),
                 );
                 continue;
             };
@@ -515,8 +572,11 @@ impl DeploymentController {
                     &self.runtime,
                 );
             } else {
-                eprintln!(
-                    "[maestro]: failed to start replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: job already exists"
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "failed to start replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: job already exists"
+                    ),
                 );
             }
 
@@ -530,10 +590,25 @@ impl DeploymentController {
                 )
                 .await
             {
-                eprintln!(
-                    "[maestro]: failed to update replica{replica_index} of deployment `{deployment_id}` status: {err}",
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "failed to update replica{replica_index} of deployment `{deployment_id}` status: {err}"
+                    ),
                 );
             }
+        }
+
+        if replica_status == DeploymentStatus::Ready {
+            let deployment_ref = Deployment {
+                service_id: service_id.clone(),
+                id: deployment_id.clone(),
+                replica_index: 0,
+            };
+            let _ = self
+                .store
+                .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
+                .await;
         }
     }
 
@@ -550,9 +625,15 @@ impl DeploymentController {
                 .filter(|d| d.id == deployment.id)
                 .count();
 
-            eprintln!(
-                "[maestro]: service `{}` deployment `{}` replica{} finished ({} replicas still running)",
-                deployment.service_id, deployment.id, deployment.replica_index, remaining_replicas
+            self.logger.emit(
+                "info",
+                &format!(
+                    "service `{}` deployment `{}` replica{} finished ({} replicas still running)",
+                    deployment.service_id,
+                    deployment.id,
+                    deployment.replica_index,
+                    remaining_replicas
+                ),
             );
 
             if self.shutdown_in_progress {
@@ -593,9 +674,12 @@ impl DeploymentController {
                     )
                     .await
                 {
-                    eprintln!(
-                        "[maestro]: failed to update replica{} of deployment `{}` to {new_status:?}: {err}",
-                        deployment.replica_index, deployment.id
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "failed to update replica{} of deployment `{}` to {new_status:?}: {err}",
+                            deployment.replica_index, deployment.id
+                        ),
                     );
                 }
             }
@@ -613,9 +697,12 @@ impl DeploymentController {
                 .update_deployment_status(deployment, DeploymentStatus::Terminated)
                 .await
             {
-                eprintln!(
-                    "[maestro]: failed to pre-mark deployment `{}` terminated during shutdown: {err}",
-                    deployment.id
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "failed to pre-mark deployment `{}` terminated during shutdown: {err}",
+                        deployment.id
+                    ),
                 );
             }
         }
@@ -631,9 +718,12 @@ impl DeploymentController {
             let store_deployment = match self.store.read_service_deployment(deployment).await {
                 Ok(Some(d)) => d,
                 Ok(None) => {
-                    eprintln!(
-                        "[maestro]: deployment `{}` for service `{}` no longer exists in store, stopping",
-                        deployment.id, deployment.service_id
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "deployment `{}` for service `{}` no longer exists in store, stopping",
+                            deployment.id, deployment.service_id
+                        ),
                     );
                     let _ = self
                         .supervisor
@@ -641,9 +731,12 @@ impl DeploymentController {
                     continue;
                 }
                 Err(err) => {
-                    eprintln!(
-                        "[maestro]: failed to read deployment `{}` stop state: {err}",
-                        deployment.id
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "failed to read deployment `{}` stop state: {err}",
+                            deployment.id
+                        ),
                     );
                     continue;
                 }
@@ -758,9 +851,12 @@ impl DeploymentController {
                     replica_index: 0,
                 };
 
-                eprintln!(
-                    "[maestro]: draining old deployment `{}` for service `{service_id}` (new deployment `{}` has ready replica)",
-                    old.id, latest.id
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "draining old deployment `{}` for service `{service_id}` (new deployment `{}` has ready replica)",
+                        old.id, latest.id
+                    ),
                 );
 
                 if let Err(err) = self
@@ -768,9 +864,12 @@ impl DeploymentController {
                     .update_deployment_status(&deployment_ref, DeploymentStatus::Draining)
                     .await
                 {
-                    eprintln!(
-                        "[maestro]: failed to mark old deployment `{}` as draining: {err}",
-                        old.id
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "failed to mark old deployment `{}` as draining: {err}",
+                            old.id
+                        ),
                     );
                 }
             }
@@ -804,8 +903,11 @@ impl DeploymentController {
             let running_count = running_indices.len() as u32;
 
             if desired != running_count {
-                eprintln!(
-                    "[maestro]: reconcile_replicas for `{service_id}/{deployment_id}`: desired={desired}, running={running_count}, running_indices={running_indices:?}"
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "reconcile_replicas for `{service_id}/{deployment_id}`: desired={desired}, running={running_count}, running_indices={running_indices:?}"
+                    ),
                 );
             }
 

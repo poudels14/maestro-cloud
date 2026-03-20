@@ -13,6 +13,7 @@ pub async fn check_deployments(
     store: &dyn ClusterStore,
     http: &reqwest::Client,
     state: &mut HealthState,
+    dns_domain: Option<&str>,
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
@@ -35,26 +36,32 @@ pub async fn check_deployments(
                 .await
                 .unwrap_or_default();
 
-            let pending_replicas: Vec<&ReplicaState> = replica_states
+            let checkable_replicas: Vec<&ReplicaState> = replica_states
                 .iter()
-                .filter(|r| r.status == DeploymentStatus::PendingReady)
+                .filter(|r| {
+                    matches!(
+                        r.status,
+                        DeploymentStatus::PendingReady | DeploymentStatus::Ready
+                    )
+                })
                 .collect();
-            if pending_replicas.is_empty() {
+            if checkable_replicas.is_empty() {
                 continue;
             }
 
-            for replica in &pending_replicas {
+            for replica in &checkable_replicas {
                 let key = replica_health_key(&deployment.id, replica.replica_index);
                 active_keys.insert(key.clone());
             }
 
-            if let Err(err) = check_and_promote_replicas(
+            if let Err(err) = check_replicas(
                 store,
                 http,
                 state,
                 &service_id,
                 &deployment,
-                &pending_replicas,
+                &checkable_replicas,
+                dns_domain,
             )
             .await
             {
@@ -70,13 +77,14 @@ pub async fn check_deployments(
     Ok(())
 }
 
-async fn check_and_promote_replicas(
+async fn check_replicas(
     store: &dyn ClusterStore,
     http: &reqwest::Client,
     state: &mut HealthState,
     service_id: &str,
     deployment: &ServiceDeployment,
-    pending_replicas: &[&ReplicaState],
+    replicas: &[&ReplicaState],
+    dns_domain: Option<&str>,
 ) -> Result<()> {
     let health_path = deployment
         .config
@@ -89,20 +97,53 @@ async fn check_and_promote_replicas(
         return Ok(());
     };
 
-    for replica in pending_replicas {
-        let Some(url) =
-            build_health_url_for_replica(deployment, replica.replica_index, health_path)
-        else {
+    for replica in replicas {
+        let key = replica_health_key(&deployment.id, replica.replica_index);
+        let Some(url) = build_health_url_for_replica(
+            deployment,
+            replica.replica_index,
+            health_path,
+            dns_domain,
+        ) else {
+            eprintln!(
+                "[probe] skipping {}/{}/replica{} healthcheck: ingress.port is not set; marking replica ready",
+                service_id, deployment.id, replica.replica_index
+            );
+            state.remove(&key);
+            if replica.status != DeploymentStatus::Ready {
+                store
+                    .update_replica_status(
+                        service_id,
+                        &deployment.id,
+                        replica.replica_index,
+                        DeploymentStatus::Ready,
+                    )
+                    .await?;
+            }
             continue;
         };
 
-        let key = replica_health_key(&deployment.id, replica.replica_index);
-
-        let is_healthy = http
-            .get(&url)
-            .send()
-            .await
-            .is_ok_and(|resp| resp.status().is_success());
+        let is_healthy = match http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                eprintln!(
+                    "[probe] healthcheck failed {}/{}/replica{} url={} status={}",
+                    service_id,
+                    deployment.id,
+                    replica.replica_index,
+                    url,
+                    resp.status()
+                );
+                false
+            }
+            Err(err) => {
+                eprintln!(
+                    "[probe] healthcheck error {}/{}/replica{} url={} err={}",
+                    service_id, deployment.id, replica.replica_index, url, err
+                );
+                false
+            }
+        };
 
         let was_healthy = state.get(&key).copied();
 
@@ -122,13 +163,19 @@ async fn check_and_promote_replicas(
 
         state.insert(key, is_healthy);
 
-        if is_healthy {
+        let new_status = if is_healthy {
+            DeploymentStatus::Ready
+        } else {
+            DeploymentStatus::PendingReady
+        };
+
+        if replica.status != new_status {
             store
                 .update_replica_status(
                     service_id,
                     &deployment.id,
                     replica.replica_index,
-                    DeploymentStatus::Ready,
+                    new_status,
                 )
                 .await?;
         }
@@ -141,15 +188,19 @@ fn build_health_url_for_replica(
     deployment: &ServiceDeployment,
     replica_index: u32,
     health_path: &str,
+    dns_domain: Option<&str>,
 ) -> Option<String> {
     let hostname = deployment.hostname_for_replica(replica_index);
-    let port = deployment
-        .config
-        .ingress
-        .as_ref()
-        .map(|i| i.port.unwrap_or(80))?;
-    Some(format!("http://{hostname}:{port}{health_path}"))
+    let target = dns_domain
+        .map(|domain| format!("{hostname}.{domain}"))
+        .unwrap_or(hostname);
+    let port = deployment.config.ingress.as_ref().and_then(|i| i.port)?;
+    Some(format!("http://{target}:{port}{health_path}"))
 }
+
+#[cfg(test)]
+#[path = "../tests/probe/healthcheck.rs"]
+mod tests;
 
 fn replica_health_key(deployment_id: &str, replica_index: u32) -> String {
     format!("{deployment_id}-replica{replica_index}")
