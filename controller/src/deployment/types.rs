@@ -24,6 +24,7 @@ pub struct DeploymentConfig {
     pub jwt_secret: Option<String>,
     pub tags: Vec<String>,
     pub system_type: Option<crate::config::SystemType>,
+    pub force: bool,
 }
 
 impl DeploymentConfig {

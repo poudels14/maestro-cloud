@@ -40,6 +40,11 @@ impl RuntimeProvider for DockerRuntimeProvider {
         Ok(())
     }
 
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        let _ = cmd::run("docker", &["network", "rm", name]).await;
+        Ok(())
+    }
+
     async fn remove_container(&self, name: &str) -> Result<()> {
         let _ = cmd::run("docker", &["rm", "-f", name]).await;
         Ok(())

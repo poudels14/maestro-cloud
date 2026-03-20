@@ -40,6 +40,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         Ok(())
     }
 
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        let _ = cmd::run("nerdctl", &["network", "rm", name]).await;
+        Ok(())
+    }
+
     async fn remove_container(&self, name: &str) -> Result<()> {
         let _ = cmd::run("nerdctl", &["rm", "-f", name]).await;
         Ok(())
