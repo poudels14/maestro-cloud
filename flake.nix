@@ -57,6 +57,8 @@
       nixosModules.default = { config, lib, pkgs, ... }:
         let
           cfg = config.services.maestro;
+          isNerdctl = cfg.runtime == "nerdctl";
+          isDocker = cfg.runtime == "docker";
         in {
           options.services.maestro = {
             enable = lib.mkEnableOption "Maestro deployment controller";
@@ -93,41 +95,68 @@
           };
 
           config = lib.mkIf cfg.enable {
-            virtualisation.docker.enable = lib.mkIf (cfg.runtime == "docker") true;
-            virtualisation.containerd.enable = lib.mkIf (cfg.runtime == "nerdctl") true;
-            environment.systemPackages = [
-              cfg.package
-            ] ++ lib.optionals (cfg.runtime == "nerdctl") [
-              pkgs.nerdctl
-              pkgs.cni-plugins
-              pkgs.buildkit
-            ];
-            virtualisation.containerd.settings.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = lib.mkIf (cfg.runtime == "nerdctl") true;
-            systemd.services.buildkitd = lib.mkIf (cfg.runtime == "nerdctl") {
+
+            # --- Docker runtime ---
+            virtualisation.docker.enable = lib.mkIf isDocker true;
+
+            # --- Containerd/nerdctl runtime ---
+            virtualisation.containerd.enable = lib.mkIf isNerdctl true;
+            virtualisation.containerd.settings = lib.mkIf isNerdctl {
+              plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
+            };
+
+            # BuildKit daemon for nerdctl build
+            systemd.services.buildkitd = lib.mkIf isNerdctl {
               description = "BuildKit daemon";
               after = [ "containerd.service" ];
+              requires = [ "containerd.service" ];
               wantedBy = [ "multi-user.target" ];
               serviceConfig = {
                 Type = "simple";
-                ExecStart = "${pkgs.buildkit}/bin/buildkitd --oci-worker=false --containerd-worker=true";
+                ExecStart = "${pkgs.buildkit}/bin/buildkitd --oci-worker=false --containerd-worker=true --addr unix:///run/buildkit/buildkitd.sock";
                 Restart = "on-failure";
+                RestartSec = 3;
+                StateDirectory = "buildkit";
+                RuntimeDirectory = "buildkit";
               };
             };
 
+            # System packages available on the host
+            environment.systemPackages = [
+              cfg.package
+            ] ++ lib.optionals isNerdctl [
+              pkgs.nerdctl
+              pkgs.buildkit
+            ];
+
+            # Copy maestro source for Dockerfile builds
             system.activationScripts.maestro-source = ''
               rm -rf /etc/maestro/source
               cp -r ${cfg.package.src} /etc/maestro/source
               chmod -R u+w /etc/maestro/source
             '';
 
+            # --- Maestro service ---
             systemd.services.maestro = {
               description = "Maestro deployment controller";
-              after = [ "network-online.target" (if cfg.runtime == "nerdctl" then "containerd.service" else "docker.service") ];
+              after = [
+                "network-online.target"
+              ] ++ (if isNerdctl
+                then [ "containerd.service" "buildkitd.service" ]
+                else [ "docker.service" ]);
               wants = [ "network-online.target" ];
               wantedBy = [ "multi-user.target" ];
-              path = if cfg.runtime == "nerdctl"
-                then [ pkgs.nerdctl pkgs.cni-plugins ]
-                else [ pkgs.docker ];
+
+              path = [
+                pkgs.docker
+                pkgs.nerdctl
+                pkgs.cni-plugins
+                pkgs.iptables
+                pkgs.iproute2
+                pkgs.buildkit
+                pkgs.util-linux
+                pkgs.kmod
+              ];
 
               serviceConfig = {
                 Type = "simple";
@@ -142,10 +171,19 @@
                   "--runtime" cfg.runtime
                   "--project-dir" "/etc/maestro/source"
                 ] ++ cfg.extraArgs);
-              } // lib.optionalAttrs (cfg.runtime == "nerdctl") {
-                Environment = "CONTAINERD_ADDRESS=/run/containerd/containerd.sock";
+              } // lib.optionalAttrs isNerdctl {
+                Environment = [
+                  "CONTAINERD_ADDRESS=/run/containerd/containerd.sock"
+                  "CNI_PATH=${pkgs.cni-plugins}/bin"
+                  "NETCONFPATH=/etc/cni/net.d"
+                ];
               };
             };
+
+            # Ensure CNI config directory exists
+            systemd.tmpfiles.rules = lib.mkIf isNerdctl [
+              "d /etc/cni/net.d 0755 root root -"
+            ];
           };
         };
     };
