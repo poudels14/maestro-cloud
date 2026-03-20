@@ -510,6 +510,7 @@ async fn log_service_process_ids(name: &str, job: &Job, log_config: Option<&LogC
                 source: Arc::from(name.to_string()),
                 origin: LogOrigin::System,
                 tags: cfg.build_tags(),
+                attrs: vec![],
             });
         }
     }

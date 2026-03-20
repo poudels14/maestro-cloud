@@ -51,6 +51,8 @@ pub struct LogEntry {
         skip_serializing_if = "arc_value_is_null"
     )]
     pub tags: Arc<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attrs: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -79,6 +81,7 @@ impl SystemLogger {
                 source: Arc::from("maestro-controller"),
                 origin: LogOrigin::System,
                 tags: Arc::new(serde_json::Value::Array(vec![])),
+                attrs: vec![],
             });
         }
     }
@@ -440,6 +443,7 @@ impl LogStore {
             source: row.get::<_, String>(5)?.into(),
             origin: LogOrigin::from_str(&origin_str),
             tags: Arc::new(tags),
+            attrs: vec![],
         })
     }
 }
