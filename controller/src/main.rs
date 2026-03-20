@@ -62,7 +62,7 @@ enum CliCommand {
         )]
         admin_port: Option<u16>,
         #[arg(long = "ingress-port", help = "Host port for ingress")]
-        web_port: Option<u16>,
+        ingress_port: Option<u16>,
         #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
         data_dir: PathBuf,
         #[arg(
@@ -237,7 +237,7 @@ async fn run() -> crate::error::Result<bool> {
             config,
             cluster_name,
             admin_port,
-            web_port,
+            ingress_port,
             etcd_port,
             data_dir,
             network,
@@ -293,7 +293,7 @@ async fn run() -> crate::error::Result<bool> {
                             .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
                     },
                     ingress: config::IngressConfig {
-                        port: web_port
+                        port: ingress_port
                             .ok_or_else(|| Error::invalid_input("--ingress-port is required"))?,
                     },
                     subnet,
@@ -408,7 +408,7 @@ async fn run() -> crate::error::Result<bool> {
                 etcd_port,
                 probe_port: None,
                 admin_port,
-                web_port: cfg.ingress.port,
+                ingress_port: cfg.ingress.port,
                 project_dir,
                 network,
                 subnet: cfg.subnet,
