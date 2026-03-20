@@ -90,7 +90,20 @@ pub struct ClusterConfig {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct IngressConfig {
-    pub port: u16,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub ports: Vec<u16>,
+}
+
+impl IngressConfig {
+    pub fn resolved_ports(&self) -> Vec<u16> {
+        if self.ports.is_empty() {
+            self.port.into_iter().collect()
+        } else {
+            self.ports.clone()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

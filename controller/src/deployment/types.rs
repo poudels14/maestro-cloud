@@ -15,7 +15,7 @@ pub struct DeploymentConfig {
     pub etcd_port: u16,
     pub probe_port: Option<u16>,
     pub admin_port: Option<u16>,
-    pub ingress_port: u16,
+    pub ingress_ports: Vec<u16>,
     pub project_dir: PathBuf,
     pub network: String,
     pub subnet: Option<String>,

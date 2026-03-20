@@ -61,8 +61,11 @@ enum CliCommand {
             help = "Host port for maestro controller (not exposed if not set)"
         )]
         admin_port: Option<u16>,
-        #[arg(long = "ingress-port", help = "Host port for ingress")]
-        ingress_port: Option<u16>,
+        #[arg(
+            long = "ingress-port",
+            help = "Host port(s) for ingress (can be repeated)"
+        )]
+        ingress_port: Vec<u16>,
         #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
         data_dir: PathBuf,
         #[arg(
@@ -293,8 +296,13 @@ async fn run() -> crate::error::Result<bool> {
                             .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
                     },
                     ingress: config::IngressConfig {
-                        port: ingress_port
-                            .ok_or_else(|| Error::invalid_input("--ingress-port is required"))?,
+                        port: None,
+                        ports: {
+                            if ingress_port.is_empty() {
+                                return Err(Error::invalid_input("--ingress-port is required"));
+                            }
+                            ingress_port.clone()
+                        },
                     },
                     subnet,
                     encryption_key: encryption_key
@@ -408,7 +416,18 @@ async fn run() -> crate::error::Result<bool> {
                 etcd_port,
                 probe_port: None,
                 admin_port,
-                ingress_port: cfg.ingress.port,
+                ingress_ports: {
+                    let mut ports = cfg.ingress.resolved_ports();
+                    if !ingress_port.is_empty() {
+                        ports = ingress_port;
+                    }
+                    if ports.is_empty() {
+                        return Err(Error::invalid_input(
+                            "ingress port is required (set ingress.port or ingress.ports in config, or pass --ingress-port)",
+                        ));
+                    }
+                    ports
+                },
                 project_dir,
                 network,
                 subnet: cfg.subnet,
