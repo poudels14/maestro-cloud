@@ -1,5 +1,18 @@
 import type { Deployment, LogEntry, MetricPoint, Service } from "./types";
 
+export interface ClusterInfo {
+  clusterName: string;
+  clusterAlias: string;
+  canonicalDomain: string;
+  aliasDomain: string;
+}
+
+export async function getClusterInfo(): Promise<ClusterInfo> {
+  const res = await fetch("/api/cluster");
+  if (!res.ok) throw new Error(`Failed to fetch cluster info: ${res.statusText}`);
+  return res.json();
+}
+
 export async function getServices(): Promise<Service[]> {
   const res = await fetch("/api/services");
   if (!res.ok) throw new Error(`Failed to fetch services: ${res.statusText}`);

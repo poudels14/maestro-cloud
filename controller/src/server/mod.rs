@@ -43,6 +43,8 @@ struct AppState {
     log_store: Option<Arc<crate::logs::LogStore>>,
     jwt_secret: Option<String>,
     system_type: Option<String>,
+    cluster_name: String,
+    cluster_alias: String,
 }
 
 pub(crate) struct Server {
@@ -55,6 +57,8 @@ impl Server {
         log_store: Option<Arc<crate::logs::LogStore>>,
         jwt_secret: Option<String>,
         system_type: Option<String>,
+        cluster_name: String,
+        cluster_alias: String,
     ) -> Self {
         Self {
             state: AppState {
@@ -62,6 +66,8 @@ impl Server {
                 log_store,
                 jwt_secret,
                 system_type,
+                cluster_name,
+                cluster_alias,
             },
         }
     }
@@ -69,6 +75,7 @@ impl Server {
     fn app(&self) -> Router {
         Router::new()
             .route("/_healthy", get(Self::healthy))
+            .route("/api/cluster", get(Self::get_cluster_info))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout", post(Self::rollout_service))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
@@ -147,6 +154,17 @@ impl Server {
 
     async fn healthy() -> &'static str {
         "ok"
+    }
+
+    async fn get_cluster_info(State(state): State<AppState>) -> Json<serde_json::Value> {
+        let canonical_domain = format!("{}.maestro.internal", state.cluster_name);
+        let alias_domain = format!("{}.maestro.internal", state.cluster_alias);
+        Json(serde_json::json!({
+            "clusterName": state.cluster_name,
+            "clusterAlias": state.cluster_alias,
+            "canonicalDomain": canonical_domain,
+            "aliasDomain": alias_domain,
+        }))
     }
 
     async fn rollout_service(
