@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::deployment::dns::DnsManager;
 use crate::logs::{LogConfig, LogEntry, LogOrigin};
@@ -655,6 +656,7 @@ async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJob
                 }
                 None => break,
             }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 }

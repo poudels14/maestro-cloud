@@ -29,6 +29,7 @@ use crate::{
     supervisor::controller::JobSupervisor,
 };
 
+const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
 const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:3001";
@@ -191,6 +192,11 @@ enum CliCommand {
         source: Option<String>,
         #[arg(long = "data-dir", help = "Maestro data directory")]
         data_dir: PathBuf,
+        #[arg(
+            long = "cluster-name",
+            help = "Cluster name (read from maestro.jsonc if omitted)"
+        )]
+        cluster_name: Option<String>,
         #[arg(
             long = "tail",
             default_value_t = 100,
@@ -402,11 +408,13 @@ async fn run() -> crate::error::Result<bool> {
             );
             logger.emit("info", &format!("container runtime: {runtime_type}"));
 
+            let mut background_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
             if let Some(dd) = cfg.datadog {
                 if let Some(site) = explicit_datadog_site {
                     let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
                     let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
-                    let _dd_handle = dd_worker.spawn();
+                    background_handles.push(dd_worker.spawn());
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
                 } else {
                     logger.emit("warn", "datadog config present but sink is disabled; pass --datadog-site to enable");
@@ -454,14 +462,21 @@ async fn run() -> crate::error::Result<bool> {
             deployment_config.probe_port = Some(probe_host_port);
 
             let mut supervisor = JobSupervisor::new();
-            let system_info = deployment::start_system_jobs(
-                &deployment_config,
-                &runtime,
-                &log_sender,
-                &logger,
-                &mut supervisor,
-            )
-            .await;
+            let mut startup_shutdown_rx = signal_tx.subscribe();
+            let system_info = tokio::select! {
+                info = deployment::start_system_jobs(
+                    &deployment_config,
+                    &runtime,
+                    &log_sender,
+                    &logger,
+                    &mut supervisor,
+                ) => info,
+                _ = startup_shutdown_rx.recv() => {
+                    eprintln!("[maestro]: shutdown requested during startup");
+                    supervisor.shutdown_all(supervisor::ShutdownRequest::Force).await;
+                    return Ok(false);
+                }
+            };
 
             let derived_key = derive_key(deployment_config.encryption_key.as_str());
             let store: Arc<dyn deployment::store::ClusterStore> =
@@ -469,7 +484,7 @@ async fn run() -> crate::error::Result<bool> {
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
             let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
             let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));
-            let _sink_handle = sink_worker.spawn();
+            background_handles.push(sink_worker.spawn());
             let deployment_signal_rx = signal_tx.subscribe();
             let watcher_signal_rx = signal_tx.subscribe();
 
@@ -513,6 +528,9 @@ async fn run() -> crate::error::Result<bool> {
 
             watcher_handle.abort();
             metrics_handle.abort();
+            for handle in &background_handles {
+                handle.abort();
+            }
 
             signal_task.abort();
             match result {
@@ -571,10 +589,20 @@ async fn run() -> crate::error::Result<bool> {
         Some(CliCommand::Logs {
             source,
             data_dir,
+            cluster_name,
             tail,
             follow,
         }) => {
-            let db_path = data_dir.join("logs/logs.db");
+            let cluster_name = if let Some(name) = cluster_name {
+                name
+            } else if let Ok(cfg) = config::load_config(DEFAULT_CONFIG_PATH).await {
+                cfg.cluster.name.to_lowercase()
+            } else {
+                return Err(Error::invalid_input(
+                    "provide --cluster-name or create maestro.jsonc with cluster.name",
+                ));
+            };
+            let db_path = data_dir.join(&cluster_name).join("logs/logs.db");
             let store = logs::LogStore::open(&db_path)
                 .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?;
 

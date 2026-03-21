@@ -41,7 +41,29 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
+        if let Ok(output) = cmd::run("nerdctl", &["ps", "-a", "--format", "{{.Names}}"]).await {
+            for container in output.lines().map(str::trim).filter(|s| !s.is_empty()) {
+                let on_network = cmd::run(
+                    "nerdctl",
+                    &[
+                        "inspect",
+                        "--format",
+                        "{{json .NetworkSettings.Networks}}",
+                        container,
+                    ],
+                )
+                .await
+                .is_ok_and(|out| out.contains(name));
+                if on_network {
+                    let _ = cmd::run("nerdctl", &["rm", "-f", container]).await;
+                }
+            }
+        }
         let _ = cmd::run("nerdctl", &["network", "rm", name]).await;
+        let cni_state = std::path::Path::new("/var/lib/cni/networks").join(name);
+        if cni_state.exists() {
+            let _ = std::fs::remove_dir_all(&cni_state);
+        }
         Ok(())
     }
 
