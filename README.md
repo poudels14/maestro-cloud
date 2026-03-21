@@ -31,9 +31,10 @@ maestro start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --
 ```
 
 Flags:
+
 - `--runtime docker|nerdctl` — container runtime (default: docker)
 - `--ingress-port` — host port(s) mapped to the ingress (can be repeated for multiple ports)
-- `--subnet` — container network subnet CIDR (required for nerdctl)
+- `--subnet` — container network subnet CIDR, e.g. `172.22.0.0/16` (required)
 - `--force` — recreate the container network if it already exists or conflicts
 - `--encryption-key` — master key for encrypting secrets
 - `--datadog-api-key` — Datadog API key for log forwarding (or `DATADOG_API_KEY` env var)
@@ -67,7 +68,7 @@ The config file (`maestro.jsonc`) supports:
   },
   "subnet": "172.22.0.0/16",
   "encryption-key": "your-secret-key",
-  "runtime": "nerdctl",  // "docker" (default) or "nerdctl"
+  "runtime": "nerdctl", // "docker" (default) or "nerdctl"
   "tailscale": { "auth-key": "tskey-auth-..." },
   "datadog": {
     "api-key": "your-dd-api-key",

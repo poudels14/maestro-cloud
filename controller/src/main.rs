@@ -16,6 +16,7 @@ mod validation;
 use utils::crypto::{SecretString, derive_key};
 
 use std::{
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -340,6 +341,11 @@ async fn run() -> crate::error::Result<bool> {
                     "tailscale requires --tailscale-auth-key, TS_AUTHKEY env var, or tailscale.auth-key in config",
                 ));
             }
+            let subnet = cfg.subnet.clone().ok_or_else(|| {
+                Error::invalid_input("--subnet is required (format: 172.22.0.0/16)")
+            })?;
+            validate_subnet_cidr(&subnet)?;
+            cfg.subnet = Some(subnet);
 
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             let cluster_alias = cfg.cluster.name.to_lowercase();
@@ -376,11 +382,6 @@ async fn run() -> crate::error::Result<bool> {
                 None
             };
             let runtime_type = runtime_flag.unwrap_or(cfg.runtime);
-            if runtime_type == config::RuntimeType::Nerdctl && cfg.subnet.is_none() {
-                return Err(Error::invalid_input(
-                    "nerdctl runtime requires --subnet to be set for deterministic CNI network addressing",
-                ));
-            }
             let runtime = runtime::create_provider(runtime_type);
 
             let log_store = Arc::new(
@@ -776,6 +777,17 @@ fn print_log_entry(entry: &logs::LogEntry, show_source: bool) {
         );
     } else {
         println!("{ts}  {:<5}  {}", entry.level.to_uppercase(), entry.text);
+    }
+}
+
+fn validate_subnet_cidr(cidr: &str) -> crate::error::Result<()> {
+    let err = || Error::invalid_input("invalid --subnet format; expected CIDR like 172.22.0.0/16");
+    match cidr.split_once('/') {
+        Some((ip, prefix)) => match (ip.parse::<Ipv4Addr>(), prefix.parse::<u8>()) {
+            (Ok(_), Ok(p)) if p <= 32 => Ok(()),
+            _ => Err(err()),
+        },
+        None => Err(err()),
     }
 }
 

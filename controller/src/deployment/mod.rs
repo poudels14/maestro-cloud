@@ -124,7 +124,6 @@ pub async fn start_system_jobs(
 
     init_ingress(
         &ingress_container,
-        &etcd_container,
         &dns_domain,
         &dns_flag,
         system_ips
@@ -141,7 +140,6 @@ pub async fn start_system_jobs(
 
     init_probe(
         &probe_container,
-        &etcd_container,
         &dns_domain,
         &dns_flag,
         system_ips
@@ -157,7 +155,7 @@ pub async fn start_system_jobs(
 
     init_admin(
         &admin_container,
-        &probe_container,
+        system_ips.as_ref().map(|ips| ips.probe.as_str()),
         &dns_domain,
         &dns_flag,
         system_ips
@@ -244,7 +242,6 @@ async fn init_etcd(
 
 async fn init_ingress(
     container_name: &str,
-    etcd_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
@@ -278,7 +275,7 @@ async fn init_ingress(
                 "traefik:v3.6".into(),
                 "--providers.etcd=true".into(),
                 "--providers.etcd.rootKey=traefik".into(),
-                format!("--providers.etcd.endpoints={etcd_container}:2379"),
+                "--providers.etcd.endpoints=maestro-etcd:2379".into(),
                 "--entrypoints.web.address=:8888".into(),
             ],
         }),
@@ -309,7 +306,7 @@ async fn init_ingress(
 
 async fn init_admin(
     container_name: &str,
-    probe_container: &str,
+    probe_ip: Option<&str>,
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
@@ -338,10 +335,10 @@ async fn init_admin(
     if let Some(pf) = &port_flag {
         admin_flags.extend(["-p".to_string(), pf.clone()]);
     }
-    admin_flags.extend([
-        "-e".to_string(),
-        format!("MAESTRO_API_HOST=http://{probe_container}:3001"),
-    ]);
+    let api_host = probe_ip
+        .map(|ip| format!("http://{ip}:3001"))
+        .unwrap_or_else(|| "http://maestro-probe:3001".to_string());
+    admin_flags.extend(["-e".to_string(), format!("MAESTRO_API_HOST={api_host}")]);
     admin_flags.extend_from_slice(dns_flag);
     admin_flags.extend(ip_flags);
 
@@ -392,7 +389,6 @@ async fn init_admin(
 
 async fn init_probe(
     container_name: &str,
-    etcd_container: &str,
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
@@ -438,7 +434,7 @@ async fn init_probe(
                     encryption_key_abs.display()
                 ),
                 "-e".into(),
-                format!("ETCD_ENDPOINT=http://{etcd_container}:2379"),
+                "ETCD_ENDPOINT=http://maestro-etcd:2379".into(),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
