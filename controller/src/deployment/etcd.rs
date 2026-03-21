@@ -8,10 +8,11 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_secrets_key,
-    replica_state_key, replica_states_prefix, service_deployment_history_key,
-    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
-    service_id_from_info_key, service_info_key, service_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_env_key,
+    deployment_secrets_key, replica_state_key, replica_states_prefix,
+    service_deployment_history_key, service_deployment_history_prefix,
+    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
+    service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -89,6 +90,10 @@ impl EtcdStateStore {
         if let Some(secrets) = &d.config.deploy.secrets {
             d.config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
         }
+        d.config.deploy.env.clear();
+        if let Some(build) = &mut d.config.build {
+            build.env.clear();
+        }
         d
     }
 
@@ -132,6 +137,95 @@ impl EtcdStateStore {
         let _ = client
             .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
             .await;
+    }
+
+    async fn write_deployment_env(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        deployment: &ServiceDeployment,
+    ) {
+        let deploy_env = &deployment.config.deploy.env;
+        let build_env = deployment
+            .config
+            .build
+            .as_ref()
+            .map(|b| &b.env)
+            .cloned()
+            .unwrap_or_default();
+        if deploy_env.is_empty() && build_env.is_empty() {
+            return;
+        }
+        let env_data = serde_json::json!({
+            "deploy": deploy_env,
+            "build": build_env,
+        });
+        let env_json = match serde_json::to_string(&env_data) {
+            Ok(json) => json,
+            Err(_) => return,
+        };
+        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &env_json) {
+            Ok(encrypted) => encrypted,
+            Err(_) => return,
+        };
+        let key = deployment_env_key(service_id, deployment_id);
+        let mut client = self.client.lock().await;
+        let _ = client
+            .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
+            .await;
+    }
+
+    async fn read_deployment_env(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> (
+        std::collections::HashMap<String, String>,
+        std::collections::HashMap<String, String>,
+    ) {
+        let key = deployment_env_key(service_id, deployment_id);
+        let response = match self.get(key.as_bytes().to_vec(), None).await {
+            Ok(r) => r,
+            Err(_) => return Default::default(),
+        };
+        let Some(kv) = response.kvs().first() else {
+            return Default::default();
+        };
+        let value = String::from_utf8_lossy(kv.value()).to_string();
+        let env_json =
+            crate::utils::crypto::decrypt_string(&self.encryption_key, &value).unwrap_or(value);
+        let parsed: serde_json::Value = match serde_json::from_str(&env_json) {
+            Ok(v) => v,
+            Err(_) => return Default::default(),
+        };
+        let deploy_env = parsed
+            .get("deploy")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let build_env = parsed
+            .get("build")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        (deploy_env, build_env)
+    }
+
+    async fn restore_deployment_env(&self, service_id: &str, deployment: &mut ServiceDeployment) {
+        if !deployment.config.deploy.env.is_empty() {
+            return;
+        }
+        let has_build_env = deployment
+            .config
+            .build
+            .as_ref()
+            .is_some_and(|b| !b.env.is_empty());
+        if has_build_env {
+            return;
+        }
+        let (deploy_env, build_env) = self.read_deployment_env(service_id, &deployment.id).await;
+        deployment.config.deploy.env = deploy_env;
+        if let Some(build) = &mut deployment.config.build {
+            build.env = build_env;
+        }
     }
 
     async fn get(
@@ -450,6 +544,8 @@ impl ClusterStore for EtcdStateStore {
                     secrets.items = items;
                 }
             }
+            self.restore_deployment_env(&service_id, &mut deployment)
+                .await;
             queued.push(QueuedDeployment {
                 service_id,
                 key,
@@ -475,6 +571,8 @@ impl ClusterStore for EtcdStateStore {
         let mut building = queued_deployment.deployment.clone();
         building.status = DeploymentStatus::Building;
         self.write_deployment_secrets(&queued_deployment.service_id, &building.id, &building)
+            .await;
+        self.write_deployment_env(&queued_deployment.service_id, &building.id, &building)
             .await;
         let prev_keys = self.prev_secret_keys(&queued_deployment.service_id).await;
         let building = self.strip_deployment_with_metadata(&building, &prev_keys);
@@ -627,6 +725,8 @@ impl ClusterStore for EtcdStateStore {
 
         let secrets_key = deployment_secrets_key(&deployment.service_id, &deployment.id);
         let _ = client.delete(secrets_key.as_bytes(), None).await;
+        let env_key = deployment_env_key(&deployment.service_id, &deployment.id);
+        let _ = client.delete(env_key.as_bytes(), None).await;
 
         Ok(Some(snapshot.deployment))
     }
@@ -693,7 +793,9 @@ impl ClusterStore for EtcdStateStore {
     ) -> anyhow::Result<Vec<DeploymentWithReplicas>> {
         let deployments = self.list_service_deployments(service_id).await?;
         let mut result = Vec::with_capacity(deployments.len());
-        for deployment in deployments {
+        for mut deployment in deployments {
+            self.restore_deployment_env(service_id, &mut deployment)
+                .await;
             let replicas: Vec<ReplicaState> = self
                 .read_replica_states(service_id, &deployment.id)
                 .await
@@ -928,6 +1030,8 @@ impl ClusterStore for EtcdStateStore {
             if committed {
                 let service_id = &deployment.config.id;
                 self.write_deployment_secrets(service_id, &deployment.id, &deployment)
+                    .await;
+                self.write_deployment_env(service_id, &deployment.id, &deployment)
                     .await;
                 return Ok(ForceQueueOutcome {
                     deployment_index,
