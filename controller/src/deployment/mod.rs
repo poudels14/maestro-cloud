@@ -7,6 +7,7 @@ use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
 use crate::supervisor::{
     ContainerRef, SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor,
 };
+use crate::utils::certs::EtcdCerts;
 
 pub mod controller;
 pub mod dns;
@@ -37,6 +38,25 @@ pub async fn start_system_jobs(
     if secrets_dir.exists() {
         let _ = std::fs::remove_dir_all(&secrets_dir);
     }
+
+    let etcd_certs = if config.disable_etcd_cert {
+        logger.emit(
+            "warn",
+            "etcd mTLS disabled (--disable-etcd-cert); etcd traffic is unencrypted",
+        );
+        None
+    } else {
+        let certs_dir = config.certs_dir();
+        if certs_dir.exists() {
+            let _ = std::fs::remove_dir_all(&certs_dir);
+        }
+        let certs = crate::utils::certs::generate_etcd_certs()
+            .expect("failed to generate etcd TLS certificates");
+        crate::utils::certs::write_etcd_certs(&certs_dir, &certs)
+            .expect("failed to write etcd TLS certificates");
+        logger.emit("info", "generated etcd mTLS certificates");
+        Some(certs)
+    };
 
     let suffix = &config.cluster_name;
     let dns_domain = format!("{suffix}.maestro.internal");
@@ -94,6 +114,7 @@ pub async fn start_system_jobs(
             .as_ref()
             .map(|ips| ip_flag(&ips.etcd))
             .unwrap_or_default(),
+        etcd_certs.as_ref(),
         config,
         runtime,
         log_sender,
@@ -130,6 +151,7 @@ pub async fn start_system_jobs(
             .as_ref()
             .map(|ips| ip_flag(&ips.ingress))
             .unwrap_or_default(),
+        etcd_certs.as_ref(),
         logger,
         config,
         runtime,
@@ -146,6 +168,7 @@ pub async fn start_system_jobs(
             .as_ref()
             .map(|ips| ip_flag(&ips.probe))
             .unwrap_or_default(),
+        etcd_certs.as_ref(),
         config,
         runtime,
         log_sender,
@@ -188,6 +211,7 @@ async fn init_etcd(
     container_name: &str,
     dns_domain: &str,
     ip_flags: Vec<String>,
+    etcd_certs: Option<&EtcdCerts>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -203,7 +227,35 @@ async fn init_etcd(
         "-v".into(),
         format!("{}:/data", etcd_data_path.display()),
     ];
+    if etcd_certs.is_some() {
+        let certs_abs =
+            std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
+        extra_flags.extend(["-v".into(), format!("{}:/certs:ro", certs_abs.display())]);
+    }
     extra_flags.extend(ip_flags);
+
+    let scheme = if etcd_certs.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    let mut image_and_args = vec![
+        "quay.io/coreos/etcd:v3.6.8".into(),
+        "etcd".into(),
+        format!("--name=maestro-{}", config.cluster_name),
+        "--data-dir=/data".into(),
+        format!("--listen-client-urls={scheme}://0.0.0.0:2379"),
+        format!("--advertise-client-urls={scheme}://127.0.0.1:6479"),
+    ];
+    if etcd_certs.is_some() {
+        image_and_args.extend([
+            "--cert-file=/certs/server.pem".into(),
+            "--key-file=/certs/server-key.pem".into(),
+            "--trusted-ca-file=/certs/ca.pem".into(),
+            "--client-cert-auth=true".into(),
+        ]);
+    }
+
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
         command: runtime.run_command(&RunSpec {
@@ -212,14 +264,7 @@ async fn init_etcd(
             dns_domain: Some(dns_domain.to_string()),
             network: config.network.clone(),
             extra_flags,
-            image_and_args: vec![
-                "quay.io/coreos/etcd:v3.6.8".into(),
-                "etcd".into(),
-                format!("--name=maestro-{}", config.cluster_name),
-                "--data-dir=/data".into(),
-                "--listen-client-urls=http://0.0.0.0:2379".into(),
-                "--advertise-client-urls=http://127.0.0.1:6479".into(),
-            ],
+            image_and_args,
         }),
         name: "maestro-etcd".to_string(),
         max_restarts: None,
@@ -245,14 +290,22 @@ async fn init_ingress(
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
+    etcd_certs: Option<&EtcdCerts>,
     logger: &crate::logs::SystemLogger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
-    let endpoint = format!("http://127.0.0.1:{}", config.etcd_port);
-    if let Ok(mut client) = etcd_client::Client::connect([&endpoint], None).await {
+    let tls = build_etcd_tls_options(etcd_certs);
+    let scheme = if etcd_certs.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    let endpoint = format!("{scheme}://127.0.0.1:{}", config.etcd_port);
+    let connect_options = tls.map(|tls_opts| etcd_client::ConnectOptions::new().with_tls(tls_opts));
+    if let Ok(mut client) = etcd_client::Client::connect([&endpoint], connect_options).await {
         let _ = client.put("traefik", "", None).await;
     }
 
@@ -260,8 +313,28 @@ async fn init_ingress(
     for port in &config.ingress_ports {
         extra_flags.extend(["-p".into(), format!("0.0.0.0:{port}:8888")]);
     }
+    if etcd_certs.is_some() {
+        let certs_abs =
+            std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
+        extra_flags.extend(["-v".into(), format!("{}:/certs:ro", certs_abs.display())]);
+    }
     extra_flags.extend_from_slice(dns_flag);
     extra_flags.extend(ip_flags);
+
+    let mut image_and_args = vec![
+        "traefik:v3.6".into(),
+        "--providers.etcd=true".into(),
+        "--providers.etcd.rootKey=traefik".into(),
+        "--providers.etcd.endpoints=maestro-etcd:2379".into(),
+        "--entrypoints.web.address=:8888".into(),
+    ];
+    if etcd_certs.is_some() {
+        image_and_args.extend([
+            "--providers.etcd.tls.cert=/certs/client.pem".into(),
+            "--providers.etcd.tls.key=/certs/client-key.pem".into(),
+            "--providers.etcd.tls.ca=/certs/ca.pem".into(),
+        ]);
+    }
 
     let ingress_job_config = SupervisedJobConfig {
         id: "maestro-ingress".to_string(),
@@ -271,13 +344,7 @@ async fn init_ingress(
             dns_domain: Some(dns_domain.to_string()),
             network: config.network.clone(),
             extra_flags,
-            image_and_args: vec![
-                "traefik:v3.6".into(),
-                "--providers.etcd=true".into(),
-                "--providers.etcd.rootKey=traefik".into(),
-                "--providers.etcd.endpoints=maestro-etcd:2379".into(),
-                "--entrypoints.web.address=:8888".into(),
-            ],
+            image_and_args,
         }),
         name: "maestro-ingress".to_string(),
         max_restarts: None,
@@ -392,6 +459,7 @@ async fn init_probe(
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
+    etcd_certs: Option<&EtcdCerts>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -420,6 +488,11 @@ async fn init_probe(
         .expect("failed to canonicalize probe dir")
         .join("encryption-key");
     let probe_host_port = config.probe_port.expect("probe_port should be resolved");
+    let etcd_scheme = if etcd_certs.is_some() {
+        "https"
+    } else {
+        "http"
+    };
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: {
@@ -434,7 +507,7 @@ async fn init_probe(
                     encryption_key_abs.display()
                 ),
                 "-e".into(),
-                "ETCD_ENDPOINT=http://maestro-etcd:2379".into(),
+                format!("ETCD_ENDPOINT={etcd_scheme}://maestro-etcd:2379"),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
@@ -446,6 +519,20 @@ async fn init_probe(
                 "-e".into(),
                 format!("MAESTRO_CLUSTER_ALIAS={}", config.cluster_alias),
             ];
+            if etcd_certs.is_some() {
+                let certs_abs = std::fs::canonicalize(config.certs_dir())
+                    .expect("failed to canonicalize certs dir");
+                probe_flags.extend([
+                    "-v".into(),
+                    format!("{}:/certs:ro", certs_abs.display()),
+                    "-e".into(),
+                    "ETCD_CA_FILE=/certs/ca.pem".into(),
+                    "-e".into(),
+                    "ETCD_CERT_FILE=/certs/client.pem".into(),
+                    "-e".into(),
+                    "ETCD_KEY_FILE=/certs/client-key.pem".into(),
+                ]);
+            }
             if let Some(secret) = &config.jwt_secret {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
             }
@@ -657,6 +744,36 @@ fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
     } else {
         None
     }
+}
+
+pub fn build_etcd_tls_options(certs: Option<&EtcdCerts>) -> Option<etcd_client::TlsOptions> {
+    certs.map(|certs| {
+        let ca = etcd_client::Certificate::from_pem(certs.ca_pem.clone());
+        let identity = etcd_client::Identity::from_pem(
+            certs.client_cert_pem.clone(),
+            certs.client_key_pem.clone(),
+        );
+        etcd_client::TlsOptions::new()
+            .ca_certificate(ca)
+            .identity(identity)
+    })
+}
+
+pub fn build_etcd_tls_from_files(
+    ca_path: &str,
+    cert_path: &str,
+    key_path: &str,
+) -> Option<etcd_client::TlsOptions> {
+    let ca_pem = std::fs::read_to_string(ca_path).ok()?;
+    let cert_pem = std::fs::read_to_string(cert_path).ok()?;
+    let key_pem = std::fs::read_to_string(key_path).ok()?;
+    let ca = etcd_client::Certificate::from_pem(ca_pem);
+    let identity = etcd_client::Identity::from_pem(cert_pem, key_pem);
+    Some(
+        etcd_client::TlsOptions::new()
+            .ca_certificate(ca)
+            .identity(identity),
+    )
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {

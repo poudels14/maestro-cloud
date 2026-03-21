@@ -17,7 +17,7 @@ backon = "1.6.0"
 base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive", "env"] }
-etcd-client = "0.14"
+etcd-client = { version = "0.14", features = ["tls"] }
 flume = "0.12.0"
 flate2 = "1.1"
 json5 = "0.4"
@@ -47,3 +47,5 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 aws-sdk-secretsmanager = "1.99.0"
 aws-config = "1.8.13"
 jsonwebtoken = "10.3.0"
+rcgen = { version = "0.14.7", features = ["pem"] }
+rustls = { version = "0.23.37", features = ["ring"] }

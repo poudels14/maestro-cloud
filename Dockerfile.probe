@@ -1,5 +1,5 @@
 FROM rust:1.90-alpine AS builder
-RUN apk add --no-cache musl-dev protoc
+RUN apk add --no-cache musl-dev protoc cmake make perl gcc
 WORKDIR /app
 COPY controller/Cargo.toml controller/Cargo.lock ./
 COPY controller/src/ src/

@@ -130,6 +130,11 @@ enum CliCommand {
         runtime: Option<config::RuntimeType>,
         #[arg(long = "force", help = "Force recreate network if it conflicts")]
         force: bool,
+        #[arg(
+            long = "disable-etcd-cert",
+            help = "Disable mTLS for etcd (insecure, for development only)"
+        )]
+        disable_etcd_cert: bool,
         #[arg(long = "project-dir", help = "Path to the maestro project directory")]
         project_dir: PathBuf,
     },
@@ -227,6 +232,7 @@ enum UpgradeTarget {
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     match run().await {
         Ok(true) => restart_self(),
         Ok(false) => {}
@@ -265,6 +271,7 @@ async fn run() -> crate::error::Result<bool> {
             system,
             runtime: runtime_flag,
             force,
+            disable_etcd_cert,
             project_dir,
         }) => {
             let explicit_datadog_site = dd_site
@@ -328,6 +335,7 @@ async fn run() -> crate::error::Result<bool> {
                     }),
                     system: None,
                     runtime: Default::default(),
+                    disable_etcd_cert,
                 },
             };
 
@@ -368,7 +376,8 @@ async fn run() -> crate::error::Result<bool> {
                     .expect("failed to get local addr")
                     .port()
             });
-            let etcd_endpoint = format!("http://127.0.0.1:{}", etcd_port);
+            let etcd_scheme = if disable_etcd_cert { "http" } else { "https" };
+            let etcd_endpoint = format!("{etcd_scheme}://127.0.0.1:{}", etcd_port);
             let network = network.unwrap_or_else(|| format!("maestro-{cluster_alias}"));
 
             let project_dir = std::fs::canonicalize(&project_dir).unwrap_or_else(|_| {
@@ -450,6 +459,7 @@ async fn run() -> crate::error::Result<bool> {
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
                 force,
+                disable_etcd_cert: disable_etcd_cert || cfg.disable_etcd_cert,
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
@@ -480,8 +490,20 @@ async fn run() -> crate::error::Result<bool> {
             };
 
             let derived_key = derive_key(deployment_config.encryption_key.as_str());
-            let store: Arc<dyn deployment::store::ClusterStore> =
-                Arc::new(deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key).await?);
+            let etcd_tls = if disable_etcd_cert {
+                None
+            } else {
+                let certs_dir = deployment_config.certs_dir();
+                deployment::build_etcd_tls_from_files(
+                    &certs_dir.join("ca.pem").to_string_lossy(),
+                    &certs_dir.join("client.pem").to_string_lossy(),
+                    &certs_dir.join("client-key.pem").to_string_lossy(),
+                )
+            };
+            let store: Arc<dyn deployment::store::ClusterStore> = Arc::new(
+                deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key, etcd_tls)
+                    .await?,
+            );
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
             let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
             let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));

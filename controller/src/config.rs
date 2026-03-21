@@ -53,6 +53,8 @@ pub struct StartConfig {
     pub system: Option<SystemType>,
     #[serde(default)]
     pub runtime: RuntimeType,
+    #[serde(default)]
+    pub disable_etcd_cert: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
