@@ -51,6 +51,16 @@ pub async fn start_system_jobs(
     let _ = runtime.remove_container(&admin_container).await;
     let _ = runtime.remove_container(&tailscale_container).await;
     if config.force {
+        let static_ips = config
+            .subnet
+            .as_deref()
+            .and_then(system_ips_from_cidr)
+            .map(|ips| vec![ips.etcd, ips.probe, ips.ingress, ips.admin, ips.tailscale])
+            .unwrap_or_default();
+        let no_names: Vec<String> = Vec::new();
+        let _ = runtime
+            .remove_conflicting_containers(&config.network, &no_names, &static_ips)
+            .await;
         let _ = runtime.remove_network(&config.network).await;
     }
     if let Err(err) = runtime
@@ -105,7 +115,11 @@ pub async fn start_system_jobs(
         .await;
     }
 
-    let nameserver_ip = system_ips.as_ref().map(|ips| ips.tailscale.clone());
+    let nameserver_ip = if config.tailscale_authkey.is_some() {
+        system_ips.as_ref().map(|ips| ips.tailscale.clone())
+    } else {
+        None
+    };
     let dns_flag = dns_flag_for_runtime(runtime.as_ref(), nameserver_ip.as_deref());
 
     init_ingress(
@@ -629,9 +643,7 @@ struct SystemIps {
 fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
     let base = network_cidr.split('/').next()?;
     let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        None
-    } else {
+    if octets.len() == 4 {
         let prefix = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
         Some(SystemIps {
             admin: format!("{prefix}.250"),
@@ -640,6 +652,8 @@ fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
             probe: format!("{prefix}.253"),
             tailscale: format!("{prefix}.254"),
         })
+    } else {
+        None
     }
 }
 

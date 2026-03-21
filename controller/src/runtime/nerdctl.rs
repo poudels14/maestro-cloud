@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use std::collections::HashSet;
 
 use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
@@ -68,6 +69,7 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     }
 
     async fn remove_container(&self, name: &str) -> Result<()> {
+        let _ = cmd::run("nerdctl", &["kill", name]).await;
         let _ = cmd::run("nerdctl", &["rm", "-f", name]).await;
         Ok(())
     }
@@ -135,6 +137,56 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         .ok()?;
         let cidr = stdout.trim().to_string();
         if cidr.is_empty() { None } else { Some(cidr) }
+    }
+
+    async fn remove_conflicting_containers(
+        &self,
+        network: &str,
+        names: &[String],
+        ips: &[String],
+    ) -> Result<()> {
+        let tracked_names = names.iter().map(String::as_str).collect::<HashSet<_>>();
+        let tracked_ips = ips.iter().map(String::as_str).collect::<HashSet<_>>();
+
+        let containers = cmd::run("nerdctl", &["ps", "-a", "--format", "{{.Names}}"])
+            .await
+            .unwrap_or_default();
+        for container in containers.lines().map(str::trim).filter(|s| !s.is_empty()) {
+            let on_network = cmd::run(
+                "nerdctl",
+                &[
+                    "inspect",
+                    "--format",
+                    "{{json .NetworkSettings.Networks}}",
+                    container,
+                ],
+            )
+            .await
+            .is_ok_and(|out| out.contains(network));
+
+            if !on_network && !tracked_names.contains(container) {
+                continue;
+            }
+
+            let ip = cmd::run(
+                "nerdctl",
+                &[
+                    "inspect",
+                    "-f",
+                    "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                    container,
+                ],
+            )
+            .await
+            .unwrap_or_default();
+            let ip = ip.trim();
+
+            if tracked_names.contains(container) || (on_network && tracked_ips.contains(ip)) {
+                let _ = cmd::run("nerdctl", &["rm", "-f", container]).await;
+            }
+        }
+
+        Ok(())
     }
 
     async fn build_image(

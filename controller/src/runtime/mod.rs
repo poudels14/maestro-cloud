@@ -46,6 +46,15 @@ pub trait RuntimeProvider: Send + Sync {
 
     async fn inspect_network_cidr(&self, name: &str) -> Option<String>;
 
+    async fn remove_conflicting_containers(
+        &self,
+        _network: &str,
+        _names: &[String],
+        _ips: &[String],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn build_image(
         &self,
         spec: &BuildSpec,
