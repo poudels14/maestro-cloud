@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use tokio::io::AsyncBufReadExt;
 
+use crate::logs::LogOrigin;
+
 struct ParsedLine {
     ts: Option<u64>,
     level: Option<String>,
@@ -23,6 +25,7 @@ pub async fn read_pipe_to_collector(
     let buf_reader = tokio::io::BufReader::new(async_file);
     let mut lines = buf_reader.lines();
 
+    let tee_to_stderr = log_config.origin == LogOrigin::System;
     let stream: Arc<str> = Arc::from(stream);
     let tags = log_config.build_tags();
     let now_millis = || {
@@ -34,6 +37,9 @@ pub async fn read_pipe_to_collector(
 
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
+        if tee_to_stderr {
+            eprintln!("[{source}]: {line}");
+        }
         let parsed = parse_log_line(&line);
 
         let entry = crate::logs::LogEntry {
