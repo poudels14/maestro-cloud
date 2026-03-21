@@ -45,6 +45,10 @@ pub fn deployment_secrets_key(service_id: &str, deployment_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/secrets/{deployment_id}")
 }
 
+pub fn deployment_env_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/env/{deployment_id}")
+}
+
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
 
 pub fn service_id_from_info_key(key: &str) -> Option<String> {

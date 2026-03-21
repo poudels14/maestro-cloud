@@ -96,6 +96,10 @@ impl ServiceConfig {
         if let Some(secrets) = &config.deploy.secrets {
             config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
         }
+        config.deploy.env.clear();
+        if let Some(build) = &mut config.build {
+            build.env.clear();
+        }
         config
     }
 }
