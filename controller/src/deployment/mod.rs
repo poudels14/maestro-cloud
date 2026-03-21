@@ -375,6 +375,12 @@ async fn init_admin(
     if let Some(port) = config.probe_port {
         logger.emit(
             "info",
+            &format!("probe api listening on http://127.0.0.1:{port}"),
+        );
+    }
+    if let Some(port) = config.admin_port {
+        logger.emit(
+            "info",
             &format!("admin ui listening on http://127.0.0.1:{port}"),
         );
     }
