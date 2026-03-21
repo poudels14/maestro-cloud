@@ -4,7 +4,13 @@ import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Dialog } from "@kobalte/core/dialog";
 import type { MetricPoint, Service } from "../lib/types";
-import { deleteService, getClusterInfo, getClusterMetrics, getNodeMetrics, getServices } from "../lib/api";
+import {
+  deleteService,
+  getClusterInfo,
+  getClusterMetrics,
+  getNodeMetrics,
+  getServices
+} from "../lib/api";
 import { ErrorBanner, StatusBadge } from "../lib/ui";
 import { TimelineChart } from "../components/TimelineChart";
 
@@ -167,7 +173,9 @@ function HomeMetrics() {
             <div class="flex items-baseline justify-between mb-3">
               <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</h3>
               <Show when={latestNode()}>
-                {(node) => <span class="text-xs text-gray-400">{formatPct(node().cpuPercent)}</span>}
+                {(node) => (
+                  <span class="text-xs text-gray-400">{formatPct(node().cpuPercent)}</span>
+                )}
               </Show>
             </div>
             <TimelineChart
@@ -206,7 +214,9 @@ function HomeMetrics() {
             <div class="flex items-baseline justify-between mb-3">
               <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</h3>
               <Show when={latestCluster()}>
-                {(cluster) => <span class="text-xs text-gray-400">{formatPct(cluster().cpuPercent)}</span>}
+                {(cluster) => (
+                  <span class="text-xs text-gray-400">{formatPct(cluster().cpuPercent)}</span>
+                )}
               </Show>
             </div>
             <TimelineChart
@@ -259,10 +269,7 @@ function ServicesPage() {
     }
   };
 
-  const [clusterInfo] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getClusterInfo
-  );
+  const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
 
   return (
     <div class="min-h-screen bg-[#fafafa]">
@@ -279,7 +286,9 @@ function ServicesPage() {
               <div class="flex items-center gap-4 text-xs text-gray-400 font-mono">
                 <span>{info().clusterName}</span>
                 <span title="Canonical domain">{info().canonicalDomain}</span>
-                <span title="Alias domain" class="text-gray-300">{info().aliasDomain}</span>
+                <span title="Alias domain" class="text-gray-300">
+                  {info().aliasDomain}
+                </span>
               </div>
             )}
           </Show>

@@ -880,11 +880,7 @@ function DeploymentLogViewer(props: {
           </Show>
         </div>
       </Show>
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        class="max-h-[600px] overflow-y-auto"
-      >
+      <div ref={scrollRef} onScroll={onScroll} class="max-h-[600px] overflow-y-auto">
         <Show
           when={!loading() && filteredLines().length > 0}
           fallback={
@@ -915,8 +911,13 @@ function DeploymentLogViewer(props: {
               <For each={filteredLines()}>
                 {(line) => (
                   <tr class="align-top border-b border-gray-50 hover:bg-gray-50/50">
-                    <td class="text-gray-400 select-none py-1 pl-4 pr-2 whitespace-nowrap">{formatTs(line.ts)}</td>
-                    <td class="text-violet-400 py-1 px-2 truncate" title={line.hostname || line.source}>
+                    <td class="text-gray-400 select-none py-1 pl-4 pr-2 whitespace-nowrap">
+                      {formatTs(line.ts)}
+                    </td>
+                    <td
+                      class="text-violet-400 py-1 px-2 truncate"
+                      title={line.hostname || line.source}
+                    >
                       {line.hostname || line.source}
                     </td>
                     <td
