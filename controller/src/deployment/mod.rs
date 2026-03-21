@@ -330,7 +330,7 @@ async fn init_admin(
         .await
         .expect("failed to build admin-ui image");
 
-    let port_flag = config.admin_port.map(|p| format!("127.0.0.1:{}:3000", p));
+    let port_flag = config.admin_port.map(|p| format!("127.0.0.1:{}:80", p));
     let mut admin_flags: Vec<String> = Vec::new();
     if let Some(pf) = &port_flag {
         admin_flags.extend(["-p".to_string(), pf.clone()]);
@@ -383,7 +383,7 @@ async fn init_admin(
     }
     logger.emit(
         "info",
-        &format!("admin ui running at http://admin.{dns_domain}:3000"),
+        &format!("admin ui running at http://admin.{dns_domain}"),
     );
 }
 
