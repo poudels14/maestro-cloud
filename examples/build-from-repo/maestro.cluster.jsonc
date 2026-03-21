@@ -1,0 +1,21 @@
+{
+  "services": {
+    "whoami": {
+      "name": "whoami",
+      "build": {
+        "repo": "https://github.com/traefik/whoami.git",
+        "branch": "master",
+        "dockerfilePath": "Dockerfile",
+        "watch": false
+      },
+      "ingress": {
+        "host": "whoami.local",
+        "port": 80
+      },
+      "deploy": {
+        "healthcheckPath": "/health",
+        "replicas": 1
+      }
+    }
+  }
+}
