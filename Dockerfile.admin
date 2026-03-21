@@ -7,8 +7,9 @@ RUN pnpm install --frozen-lockfile
 COPY ui/ ui/
 RUN pnpm --filter maestro-ui build
 
-FROM gcr.io/distroless/nodejs22-debian12:nonroot
+FROM gcr.io/distroless/nodejs22-debian12
 WORKDIR /app
 COPY --from=builder /app/ui/.output .output
-EXPOSE 3000
+EXPOSE 80
+ENV PORT=80
 CMD [".output/server/index.mjs"]
