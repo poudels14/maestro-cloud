@@ -25,7 +25,17 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         .and_then(|path| std::fs::read_to_string(path).ok())
         .unwrap_or_default();
     let derived_key = crate::utils::crypto::derive_key(encryption_key.trim());
-    let store = EtcdStateStore::new(etcd_endpoint, derived_key).await?;
+    let etcd_tls = match (
+        std::env::var("ETCD_CA_FILE"),
+        std::env::var("ETCD_CERT_FILE"),
+        std::env::var("ETCD_KEY_FILE"),
+    ) {
+        (Ok(ca), Ok(cert), Ok(key)) => {
+            crate::deployment::build_etcd_tls_from_files(&ca, &cert, &key)
+        }
+        _ => None,
+    };
+    let store = EtcdStateStore::new(etcd_endpoint, derived_key, etcd_tls).await?;
     let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownEvent>(4);

@@ -53,15 +53,22 @@ impl EtcdStateStore {
     pub async fn new(
         endpoint: &str,
         encryption_key: crate::utils::crypto::EncryptionKey,
+        tls: Option<etcd_client::TlsOptions>,
     ) -> Result<Self> {
         let backoff = ConstantBuilder::default()
             .with_delay(Duration::from_secs(1))
             .with_max_times(15);
 
-        let client: EtcdClient = (|| async {
-            let mut client = EtcdClient::connect([endpoint], None).await?;
-            client.status().await?;
-            Ok::<EtcdClient, anyhow::Error>(client)
+        let connect_options =
+            tls.map(|tls_opts| etcd_client::ConnectOptions::new().with_tls(tls_opts));
+
+        let client: EtcdClient = (|| {
+            let opts = connect_options.clone();
+            async move {
+                let mut client = EtcdClient::connect([endpoint], opts).await?;
+                client.status().await?;
+                Ok::<EtcdClient, anyhow::Error>(client)
+            }
         })
         .retry(backoff)
         .await
@@ -786,26 +793,49 @@ impl ClusterStore for EtcdStateStore {
         ) {
             return Ok(Some(latest.status.clone()));
         }
-        let replicas = self
-            .read_replica_states(service_id, &latest.id)
-            .await
-            .unwrap_or_default();
-        if replicas.is_empty() {
-            return Ok(Some(latest.status.clone()));
+
+        let mut has_ready_replica = false;
+        let mut has_any_replica = false;
+        let mut all_replicas_crashed = true;
+
+        for deployment in &deployments {
+            if matches!(
+                deployment.status,
+                DeploymentStatus::Draining
+                    | DeploymentStatus::Removed
+                    | DeploymentStatus::Canceled
+                    | DeploymentStatus::Terminated
+            ) {
+                continue;
+            }
+            let replicas = self
+                .read_replica_states(service_id, &deployment.id)
+                .await
+                .unwrap_or_default();
+            if replicas.is_empty() {
+                continue;
+            }
+            has_any_replica = true;
+            if replicas.iter().any(|r| r.status == DeploymentStatus::Ready) {
+                has_ready_replica = true;
+                break;
+            }
+            if !replicas
+                .iter()
+                .all(|r| r.status == DeploymentStatus::Crashed)
+            {
+                all_replicas_crashed = false;
+            }
         }
-        let all_ready = replicas.iter().all(|r| r.status == DeploymentStatus::Ready);
-        let any_ready = replicas.iter().any(|r| r.status == DeploymentStatus::Ready);
-        let all_crashed = replicas
-            .iter()
-            .all(|r| r.status == DeploymentStatus::Crashed);
-        if all_ready {
+
+        if has_ready_replica {
             Ok(Some(DeploymentStatus::Ready))
-        } else if all_crashed {
+        } else if has_any_replica && all_replicas_crashed {
             Ok(Some(DeploymentStatus::Crashed))
-        } else if any_ready {
-            Ok(Some(DeploymentStatus::Ready))
-        } else {
+        } else if has_any_replica {
             Ok(Some(DeploymentStatus::PendingReady))
+        } else {
+            Ok(Some(latest.status.clone()))
         }
     }
 

@@ -25,6 +25,7 @@ pub struct DeploymentConfig {
     pub tags: Vec<String>,
     pub system_type: Option<crate::config::SystemType>,
     pub force: bool,
+    pub disable_etcd_cert: bool,
 }
 
 impl DeploymentConfig {
@@ -36,6 +37,11 @@ impl DeploymentConfig {
     #[inline]
     pub fn probe_dir(&self) -> PathBuf {
         self.data_dir.join("system/probe")
+    }
+
+    #[inline]
+    pub fn certs_dir(&self) -> PathBuf {
+        self.data_dir.join("system/certs")
     }
 }
 

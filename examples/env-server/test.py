@@ -69,7 +69,8 @@ def rollout(admin_host, config_path):
     )
     output = (result.stdout + result.stderr).strip()
     print(f"  [rollout] {output}")
-    return result.returncode == 0
+    skipped = "config unchanged" in output or "skipped" in output.lower()
+    return {"ok": result.returncode == 0, "skipped": skipped}
 
 
 def redeploy(admin_host, service_id):
@@ -132,8 +133,10 @@ def run(url, host, service_id, config_path, admin_host):
         old_hostname = old_data.get("hostname")
     except Exception:
         pass
-    rollout(admin_host, config_path)
-    if old_hostname:
+    result = rollout(admin_host, config_path)
+    if result["skipped"] and old_hostname:
+        data = fetch_json(url, host)
+    elif old_hostname:
         data = wait_for_new_deployment(url, host, old_hostname)
     else:
         data = wait_for_ready(url, host)
