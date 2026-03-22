@@ -6,7 +6,7 @@
       "build": {
         "repo": "https://github.com/traefik/whoami.git",
         "branch": "master",
-        "dockerfilePath": "Dockerfile",
+        "dockerfile": "Dockerfile",
         "watch": false
       },
       "ingress": {

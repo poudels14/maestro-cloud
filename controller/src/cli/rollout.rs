@@ -6,6 +6,7 @@ use crate::deployment::types::{
     IngressConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
 };
 use crate::error::{Error, Result};
+use crate::utils::crypto::SecretString;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -310,10 +311,10 @@ fn service_payload(
     let mut deploy = deploy;
     let mut resolved_env = std::collections::HashMap::new();
     for (key, value) in &deploy.env.items {
-        let resolved = expand_env_value(value).map_err(|err| {
+        let resolved = expand_env_value(value.as_str()).map_err(|err| {
             Error::invalid_config(format!("service `{service_id}` env `{key}`: {err}"))
         })?;
-        resolved_env.insert(key.clone(), resolved);
+        resolved_env.insert(key.clone(), SecretString::new(resolved));
     }
     deploy.env.items = resolved_env;
 
@@ -331,10 +332,10 @@ fn service_payload(
     let build = if let Some(mut build) = build {
         let mut resolved_build_env = std::collections::HashMap::new();
         for (key, value) in &build.env.items {
-            let resolved = expand_env_value(value).map_err(|err| {
+            let resolved = expand_env_value(value.as_str()).map_err(|err| {
                 Error::invalid_config(format!("service `{service_id}` build.env `{key}`: {err}"))
             })?;
-            resolved_build_env.insert(key.clone(), resolved);
+            resolved_build_env.insert(key.clone(), SecretString::new(resolved));
         }
         build.env.items = resolved_build_env;
         Some(build)

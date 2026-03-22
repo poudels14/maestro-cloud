@@ -9,6 +9,8 @@ use tokio::sync::broadcast;
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{DeploymentStatus, ServiceDeployment, ServiceInfo};
 use crate::signal::ShutdownEvent;
+use crate::utils::cmd;
+use crate::utils::crypto::SecretString;
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
@@ -125,7 +127,10 @@ impl BuildWatcher {
             }
         }
 
-        let remote_sha = check_remote_head(&build_config.repo, branch).await?;
+        let mut git_env = build_config.env.resolved().await?;
+        git_env.extend(build_config.secrets.resolved().await?);
+
+        let remote_sha = check_remote_head(&build_config.repo, branch, &git_env).await?;
         let current_sha = latest
             .and_then(|d| d.git_commit.as_ref())
             .map(|c| c.reference.as_str());
@@ -147,9 +152,16 @@ impl BuildWatcher {
     }
 }
 
-async fn check_remote_head(repo: &str, branch: &str) -> Result<String> {
+async fn check_remote_head(
+    repo: &str,
+    branch: &str,
+    env: &HashMap<String, SecretString>,
+) -> Result<String> {
     let refspec = format!("refs/heads/{branch}");
-    let stdout = crate::utils::cmd::run("git", &["ls-remote", repo, &refspec]).await?;
+    let stdout = cmd::exec("git", &["ls-remote", repo, &refspec])
+        .env(env)
+        .run()
+        .await?;
     let sha = stdout.split_whitespace().next().unwrap_or("").to_string();
     if sha.is_empty() {
         return Err(anyhow!("branch `{branch}` not found on remote `{repo}`"));

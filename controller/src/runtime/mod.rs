@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use crate::config::RuntimeType;
 use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
+use crate::utils::crypto::SecretString;
 
 pub mod docker;
 pub mod nerdctl;
@@ -25,7 +26,8 @@ pub struct BuildSpec {
     pub context_dir: PathBuf,
     pub tag: String,
     pub dockerfile: Option<String>,
-    pub build_args: HashMap<String, String>,
+    pub build_args: HashMap<String, SecretString>,
+    pub secrets: HashMap<String, SecretString>,
 }
 
 #[async_trait]
@@ -61,6 +63,10 @@ pub trait RuntimeProvider: Send + Sync {
         log_sender: Option<&flume::Sender<LogEntry>>,
         log_source: Option<&str>,
     ) -> Result<()>;
+
+    async fn tag_image(&self, source: &str, target: &str) -> Result<()>;
+
+    async fn push_image(&self, tag: &str) -> Result<()>;
 
     async fn exec_in_container(&self, container: &str, cmd: &[&str]) -> Result<String>;
 

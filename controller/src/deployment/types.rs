@@ -100,6 +100,7 @@ impl ServiceConfig {
         config.deploy.env.items.clear();
         if let Some(build) = &mut config.build {
             build.env.items.clear();
+            build.secrets.items.clear();
         }
         config
     }
@@ -127,11 +128,15 @@ pub struct ServiceBuildConfig {
     pub repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    pub dockerfile_path: String,
+    pub dockerfile: String,
     #[serde(default)]
     pub watch: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
     pub env: EnvConfig,
+    #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
+    pub secrets: EnvConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,12 +165,23 @@ pub struct EnvConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub items: HashMap<String, String>,
+    pub items: HashMap<String, SecretString>,
 }
 
 impl EnvConfig {
     pub fn is_empty(&self) -> bool {
         self.source.is_none() && self.items.is_empty()
+    }
+
+    pub async fn resolved(&self) -> Result<HashMap<String, SecretString>> {
+        let mut items = self.items.clone();
+        if let Some(source) = &self.source {
+            let source_items = SecretProvider::fetch_json_from_source(source).await?;
+            for (key, value) in source_items {
+                items.entry(key).or_insert(SecretString::new(value));
+            }
+        }
+        Ok(items)
     }
 }
 
@@ -331,19 +347,10 @@ impl ServiceDeployment {
     }
 
     pub async fn resolve_secrets(&mut self) -> Result<()> {
-        if let Some(source) = self.config.deploy.env.source.take() {
-            let source_items = SecretProvider::fetch_json_from_source(&source).await?;
-            for (key, value) in source_items {
-                self.config.deploy.env.items.entry(key).or_insert(value);
-            }
-        }
+        self.config.deploy.env.items = self.config.deploy.env.resolved().await?;
         if let Some(build) = &mut self.config.build {
-            if let Some(source) = build.env.source.take() {
-                let source_items = SecretProvider::fetch_json_from_source(&source).await?;
-                for (key, value) in source_items {
-                    build.env.items.entry(key).or_insert(value);
-                }
-            }
+            build.env.items = build.env.resolved().await?;
+            build.secrets.items = build.secrets.resolved().await?;
         }
         if let Some(secrets) = &mut self.config.deploy.secrets {
             if let Some(source) = secrets.source.take() {

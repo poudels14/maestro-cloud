@@ -64,7 +64,7 @@
     },
     "build": {
       "type": "object",
-      "required": ["repo", "dockerfilePath"],
+      "required": ["repo", "dockerfile"],
       "additionalProperties": false,
       "properties": {
         "repo": {
@@ -73,15 +73,23 @@
         "branch": {
           "type": "string"
         },
-        "dockerfilePath": {
+        "dockerfile": {
           "type": "string"
         },
         "watch": {
           "type": "boolean",
           "default": false
         },
+        "registry": {
+          "type": "string",
+          "description": "Container registry URL to push built images to (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)"
+        },
         "env": {
           "$ref": "#/$defs/envConfig"
+        },
+        "secrets": {
+          "$ref": "#/$defs/envConfig",
+          "description": "Build secrets passed via --secret (not baked into image layers). GH_TOKEN here is used for private repo access."
         }
       }
     },

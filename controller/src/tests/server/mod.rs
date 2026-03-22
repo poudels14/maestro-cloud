@@ -10,9 +10,11 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
         build: Some(ServiceBuildConfig {
             repo: "https://example.com/repo.git".to_string(),
             branch: None,
-            dockerfile_path: "./Dockerfile".to_string(),
+            dockerfile: "./Dockerfile".to_string(),
             watch: false,
+            registry: None,
             env: Default::default(),
+            secrets: Default::default(),
         }),
         image: None,
         deploy: ServiceDeployConfig {

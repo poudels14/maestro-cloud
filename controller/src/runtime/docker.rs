@@ -134,23 +134,33 @@ impl RuntimeProvider for DockerRuntimeProvider {
         }
         for (key, value) in &spec.build_args {
             args.push("--build-arg".to_string());
-            args.push(format!("{key}={value}"));
+            args.push(format!("{key}={}", value.as_str()));
+        }
+        for key in spec.secrets.keys() {
+            args.push("--secret".to_string());
+            args.push(format!("id={key},env={key}"));
         }
         args.push(spec.context_dir.display().to_string());
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            cmd::run_with_logs(
-                "docker",
-                &args,
-                sender,
-                source,
-                crate::logs::LogOrigin::Build,
-            )
-            .await?;
+            cmd::exec("docker", &args)
+                .env(&spec.secrets)
+                .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
+                .await?;
         } else {
-            cmd::run("docker", &args).await?;
+            cmd::exec("docker", &args).env(&spec.secrets).run().await?;
         }
         eprintln!("[maestro]: docker image {} built successfully", spec.tag);
+        Ok(())
+    }
+
+    async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
+        cmd::run("docker", &["tag", source, target]).await?;
+        Ok(())
+    }
+
+    async fn push_image(&self, tag: &str) -> Result<()> {
+        cmd::run("docker", &["push", tag]).await?;
         Ok(())
     }
 

@@ -60,10 +60,13 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             .build
             .as_ref()
             .ok_or_else(|| anyhow!("no build config"))?;
+        let mut git_env = build_config.env.items.clone();
+        git_env.extend(build_config.secrets.items.clone());
         builder::sync_repo(
             &build_config.repo,
             build_config.branch.as_deref(),
             build_dir,
+            &git_env,
         )
         .await?;
         let (commit_sha, commit_message) = builder::get_head_commit(build_dir).await?;
@@ -73,15 +76,31 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                 &BuildSpec {
                     context_dir: build_dir.to_path_buf(),
                     tag: image_tag.to_string(),
-                    dockerfile: Some(build_config.dockerfile_path.clone()),
+                    dockerfile: Some(build_config.dockerfile.clone()),
                     build_args: build_config.env.items.clone(),
+                    secrets: build_config.secrets.items.clone(),
                 },
                 log_sender.as_ref(),
                 Some(&log_source),
             )
             .await?;
+
+        let final_tag = if let Some(registry) = &build_config.registry {
+            let registry_tag = format!(
+                "{}/{}:{}",
+                registry.trim_end_matches('/'),
+                deployment.config.id,
+                deployment.id
+            );
+            self.runtime.tag_image(image_tag, &registry_tag).await?;
+            self.runtime.push_image(&registry_tag).await?;
+            registry_tag
+        } else {
+            image_tag.to_string()
+        };
+
         Ok(BuildOutput {
-            image_tag: image_tag.to_string(),
+            image_tag: final_tag,
             commit_sha,
             commit_message,
         })
@@ -138,7 +157,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                 extra_flags.extend(["-p".to_string(), format!("0:{port}")]);
             }
             for (key, value) in &deployment.config.deploy.env.items {
-                extra_flags.extend(["-e".to_string(), format!("{key}={value}")]);
+                extra_flags.extend(["-e".to_string(), format!("{key}={}", value.as_str())]);
             }
             if let Some((host_path, container_path)) = &mount_arg {
                 extra_flags.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
