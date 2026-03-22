@@ -1,7 +1,10 @@
 use std::fmt;
+use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
+
+use crate::utils::secrets::SecretProvider;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -125,35 +128,15 @@ pub struct DatadogConfig {
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {
-    if let Some(secret_name) = source.strip_prefix("aws-secret://") {
-        load_from_aws(secret_name).await
+    let path = source.strip_prefix("file://").unwrap_or(source);
+    let raw = if Path::new(path).exists() {
+        std::fs::read_to_string(path)
+            .map_err(|err| anyhow!("failed to read config file `{path}`: {err}"))?
     } else {
-        let path = source.strip_prefix("file://").unwrap_or(source);
-        load_from_file(path)
-    }
-}
-
-fn load_from_file(path: &str) -> Result<StartConfig> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|err| anyhow!("failed to read config file `{path}`: {err}"))?;
+        SecretProvider::fetch_from_source(source).await?
+    };
     let config: StartConfig = json5::from_str(&raw)
-        .map_err(|err| anyhow!("failed to parse config file `{path}`: {err}"))?;
-    Ok(config)
-}
-
-async fn load_from_aws(secret_name: &str) -> Result<StartConfig> {
-    let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let client = aws_sdk_secretsmanager::Client::new(&aws_config);
-    let result = client
-        .get_secret_value()
-        .secret_id(secret_name)
-        .send()
-        .await
-        .map_err(|err| anyhow!("failed to fetch secret `{secret_name}` from AWS: {err}"))?;
-    let secret_string = result
-        .secret_string()
-        .ok_or_else(|| anyhow!("secret `{secret_name}` has no string value"))?;
-    let config: StartConfig = serde_json::from_str(secret_string)
-        .map_err(|err| anyhow!("failed to parse secret `{secret_name}`: {err}"))?;
+        .or_else(|_| serde_json::from_str(&raw))
+        .map_err(|err| anyhow!("failed to parse config `{source}`: {err}"))?;
     Ok(config)
 }

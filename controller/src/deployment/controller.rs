@@ -338,12 +338,7 @@ impl DeploymentController {
             return Ok(());
         }
 
-        if let Err(err) = crate::utils::secrets::resolve_secrets(
-            &secret_providers(),
-            &mut queued_deployment.deployment,
-        )
-        .await
-        {
+        if let Err(err) = queued_deployment.deployment.resolve_secrets().await {
             let error_msg = format!("failed to resolve secrets: {err}");
             self.logger.emit(
                 "error",
@@ -360,14 +355,14 @@ impl DeploymentController {
                 let _ = sender.try_send(LogEntry {
                     seq: 0,
                     ts: now,
-                    level: std::sync::Arc::from("error"),
-                    stream: std::sync::Arc::from("stderr"),
+                    level: Arc::from("error"),
+                    stream: Arc::from("stderr"),
                     text: error_msg,
-                    source: std::sync::Arc::from(
+                    source: Arc::from(
                         format!("{}/{}/", queued_deployment.service_id, deployment_id).as_str(),
                     ),
                     origin: LogOrigin::Service,
-                    tags: std::sync::Arc::new(serde_json::Value::Array(vec![])),
+                    tags: Arc::new(serde_json::Value::Array(vec![])),
                     attrs: vec![],
                 });
             }
@@ -1179,8 +1174,4 @@ fn deregister_container_dns(
         dns.remove_records_for_hostname(hostname, domain);
         let _ = dns.flush();
     }
-}
-
-fn secret_providers() -> Vec<Box<dyn crate::utils::secrets::SecretProvider>> {
-    vec![Box::new(crate::utils::secrets::AwsSecretProvider)]
 }
