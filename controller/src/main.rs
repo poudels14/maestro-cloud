@@ -423,7 +423,11 @@ async fn run() -> crate::error::Result<bool> {
             if let Some(dd) = cfg.datadog {
                 if let Some(site) = explicit_datadog_site {
                     let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
-                    let dd_worker = logs::SinkWorker::new(log_store.clone(), Box::new(dd_sink));
+                    let dd_worker = logs::SinkWorker::new(
+                        log_store.clone(),
+                        Box::new(dd_sink),
+                        signal_tx.subscribe(),
+                    );
                     background_handles.push(dd_worker.spawn());
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
                 } else {
@@ -506,7 +510,11 @@ async fn run() -> crate::error::Result<bool> {
             );
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
             let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
-            let sink_worker = logs::SinkWorker::new(log_store.clone(), Box::new(http_sink));
+            let sink_worker = logs::SinkWorker::new(
+                log_store.clone(),
+                Box::new(http_sink),
+                signal_tx.subscribe(),
+            );
             background_handles.push(sink_worker.spawn());
             let deployment_signal_rx = signal_tx.subscribe();
             let watcher_signal_rx = signal_tx.subscribe();

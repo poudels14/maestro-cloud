@@ -1,15 +1,25 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import {
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   For,
   Show,
+  Switch,
+  Match,
   Suspense,
   on,
   onCleanup
 } from "solid-js";
-import { Clock, GitCommitHorizontal, Home, Rocket } from "lucide-solid";
+import {
+  createSolidTable,
+  getCoreRowModel,
+  getExpandedRowModel,
+  flexRender,
+  type ColumnDef
+} from "@tanstack/solid-table";
+import { Clock, GitCommitHorizontal, Home, Rocket, ChevronRight } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry, Service } from "../lib/types";
 import {
@@ -182,6 +192,12 @@ function ServiceDetailPanel(props: {
 }) {
   const s = props.service;
 
+  createEffect(() => {
+    if (s.system && props.tab === "deployments") {
+      props.navigateTab("logs");
+    }
+  });
+
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
       <div class="pt-5 pb-0 shrink-0 bg-white border-b border-gray-200">
@@ -233,11 +249,6 @@ function ServiceDetailPanel(props: {
 function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const s = props.service;
 
-  const configItems = [
-    { label: "Service ID", value: s.id },
-    { label: "Version", value: s.version }
-  ];
-
   const sourceItems =
     s.build != null
       ? [
@@ -255,12 +266,11 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   }));
   const buildSecretKeys = Object.keys(s.build?.secrets?.items ?? {}).sort();
 
-  const deployCommand = s.deploy.command
-    ? `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
-    : "(not set)";
   const deployItems = [
     { label: "Replicas", value: String(s.deploy.replicas ?? 1) },
-    { label: "Deploy command", value: deployCommand },
+    ...(s.deploy.command
+      ? [{ label: "Deploy command", value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim() }]
+      : []),
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
 
@@ -280,7 +290,6 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
 
   return (
     <div class="space-y-6">
-      <ConfigSection title="General" items={configItems} />
       <ConfigSection title="Source" items={sourceItems} />
       <Show when={buildEnvItems.length > 0}>
         <ConfigSection title="Build Environment" items={buildEnvItems} />
@@ -307,12 +316,12 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
         {(items) => <ConfigSection title="Ingress" items={items()} />}
       </Show>
       <Show when={envItems.length > 0}>
-        <ConfigSection title="Environment" items={envItems} />
+        <ConfigSection title="Deploy Environment" items={envItems} />
       </Show>
       <Show when={secretKeys.length > 0}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
-            Secrets
+            Deploy Secrets
             <span class="ml-1.5 text-gray-300 normal-case">
               (mounted at {s.deploy.secrets?.mountPath})
             </span>
@@ -445,12 +454,18 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                     .map(([key]) => key);
                 const envEntries = () =>
                   Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
-                const hasDetails = () => envEntries().length > 0 || secretKeys().length > 0;
+                const buildEnvEntries = () =>
+                  Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
+                const buildSecretKeys = () =>
+                  Object.keys(d.config.build?.secrets?.items ?? {}).sort();
+                const hasDetails = () =>
+                  envEntries().length > 0 || secretKeys().length > 0 ||
+                  buildEnvEntries().length > 0 || buildSecretKeys().length > 0;
                 return (
                   <div class="rounded-lg border border-gray-200 bg-white overflow-hidden">
                     <div class="p-4">
                       <div class="flex items-start justify-between gap-3 mb-1">
-                        <div class="text-sm font-semibold text-gray-900 truncate min-w-0">
+                        <div class="text-base font-semibold text-gray-900 truncate min-w-0">
                           {d.gitCommit ? d.gitCommit.message : shortId}
                         </div>
                         <div class="flex items-center gap-1.5 shrink-0">
@@ -532,27 +547,76 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           </For>
                         </div>
                       </Show>
-                      <div class="flex items-center gap-3 text-xs text-gray-400">
+                      <div class="flex items-center gap-2 text-xs text-gray-400">
                         <span class="font-mono">{d.config.version.slice(0, 12)}</span>
+                        <span class="ml-auto" />
                         <Show when={hasDetails()}>
                           <button
                             type="button"
                             onClick={() => setExpanded(!expanded())}
-                            class="text-xs text-indigo-500 hover:text-indigo-600 outline-none"
+                            class={clsx(
+                              "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors outline-none",
+                              {
+                                "bg-indigo-50 text-indigo-600": expanded(),
+                                "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600": !expanded()
+                              }
+                            )}
                           >
-                            {expanded() ? "hide details" : "details"}
+                            {expanded() ? "Hide Details" : "Details"}
                           </button>
                         </Show>
                         <button
                           type="button"
                           onClick={() => setLogsOpen(isLogsOpen() ? null : d.id)}
-                          class="text-xs text-indigo-500 hover:text-indigo-600 outline-none"
+                          class={clsx(
+                            "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors outline-none",
+                            {
+                              "bg-indigo-50 text-indigo-600": isLogsOpen(),
+                              "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600": !isLogsOpen()
+                            }
+                          )}
                         >
-                          {isLogsOpen() ? "hide logs" : "logs"}
+                          {isLogsOpen() ? "Hide Logs" : "Logs"}
                         </button>
                       </div>
                       <Show when={expanded()}>
                         <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                          <Show when={buildEnvEntries().length > 0}>
+                            <div>
+                              <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                                Build Environment
+                              </div>
+                              <div class="space-y-0.5">
+                                <For each={buildEnvEntries()}>
+                                  {([key, value]) => (
+                                    <div class="flex items-baseline gap-2 text-xs">
+                                      <span class="text-gray-500 font-mono">{key}</span>
+                                      <span class="text-gray-300">=</span>
+                                      <span class="text-gray-700 font-mono truncate">{value}</span>
+                                    </div>
+                                  )}
+                                </For>
+                              </div>
+                            </div>
+                          </Show>
+                          <Show when={buildSecretKeys().length > 0}>
+                            <div>
+                              <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                                Build Secrets
+                              </div>
+                              <div class="space-y-0.5">
+                                <For each={buildSecretKeys()}>
+                                  {(key) => (
+                                    <div class="flex items-baseline gap-2 text-xs">
+                                      <span class="text-gray-500 font-mono">{key}</span>
+                                      <span class="text-gray-300">=</span>
+                                      <span class="text-gray-400 font-mono">••••••••</span>
+                                    </div>
+                                  )}
+                                </For>
+                              </div>
+                            </div>
+                          </Show>
                           <Show when={envEntries().length > 0}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
@@ -584,7 +648,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                                   {([key, meta]) => {
                                     const changed =
                                       meta.prevHash != null && meta.hash !== meta.prevHash;
-                                    const isNew = meta.prevHash == null;
                                     return (
                                       <div class="flex items-baseline gap-2 text-xs">
                                         <span class="text-gray-500 font-mono">{key}</span>
@@ -592,9 +655,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                                         <span class="text-gray-400 font-mono">••••••••</span>
                                         {changed && (
                                           <span class="text-amber-500 text-[10px]">changed</span>
-                                        )}
-                                        {isNew && (
-                                          <span class="text-green-500 text-[10px]">new</span>
                                         )}
                                       </div>
                                     );
@@ -613,6 +673,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           deploymentId={d.id}
                           isSystem={false}
                           hasBuild={props.hasBuild}
+                          embedded={true}
                         />
                       </div>
                     </Show>
@@ -783,16 +844,24 @@ function DeploymentLogViewer(props: {
   isSystem: boolean;
   hasBuild: boolean;
   label?: string;
+  embedded?: boolean;
 }) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [hasMore, setHasMore] = createSignal(false);
   const [tail, setTail] = createSignal(DEFAULT_LOG_TAIL);
-  const [logPhase, setLogPhase] = createSignal<"deploy" | "build">("deploy");
+  const [userPhase, setUserPhase] = createSignal<"deploy" | "build" | null>(null);
 
   const hasBuildLogs = () => lines().some((l) => l.source?.endsWith("/build"));
   const showTabs = () => props.hasBuild || hasBuildLogs();
+  const defaultPhase = createMemo(() => {
+    const all = lines().filter((l) => l.text.trim().length > 0);
+    const hasDeploy = all.some((l) => !l.source?.endsWith("/build"));
+    if (!hasDeploy && hasBuildLogs()) return "build";
+    return "deploy";
+  });
+  const logPhase = () => userPhase() ?? defaultPhase();
   const filteredLines = () => {
     const all = lines().filter((l) => l.text.trim().length > 0);
     if (!showTabs()) return all;
@@ -802,6 +871,76 @@ function DeploymentLogViewer(props: {
       return !l.source?.endsWith("/build");
     });
   };
+
+  const logColumns: ColumnDef<LogEntry>[] = [
+    {
+      id: "expander",
+      size: 28,
+      header: () => null,
+      cell: ({ row }) => (
+        <button
+          type="button"
+          class="p-0.5 text-gray-300 hover:text-gray-500 transition-colors outline-none"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            row.toggleExpanded();
+          }}
+        >
+          <ChevronRight
+            size={12}
+            class={clsx("transition-transform", { "rotate-90": row.getIsExpanded() })}
+          />
+        </button>
+      )
+    },
+    {
+      accessorKey: "ts",
+      header: "Timestamp",
+      size: 155,
+      cell: (info) => (
+        <span class="text-gray-400 select-none whitespace-nowrap">
+          {formatTs(info.getValue<number>())}
+        </span>
+      )
+    },
+    {
+      id: "host",
+      header: "Host",
+      size: 160,
+      accessorFn: (row) => row.hostname || row.source || "",
+      cell: (info) => (
+        <span class="text-violet-400 truncate block" title={info.getValue<string>()}>
+          {info.getValue<string>()}
+        </span>
+      )
+    },
+    {
+      accessorKey: "level",
+      header: "Level",
+      size: 46,
+      cell: (info) => {
+        const level = info.getValue<string>();
+        return (
+          <span class={clsx("uppercase whitespace-nowrap", logLevelColor(level))}>{level}</span>
+        );
+      }
+    },
+    {
+      accessorKey: "text",
+      header: "Message",
+      cell: (info) => <span class="text-gray-700 break-all">{info.getValue<string>()}</span>
+    }
+  ];
+
+  const table = createSolidTable({
+    get data() {
+      return filteredLines();
+    },
+    columns: logColumns,
+    getCoreRowModel: getCoreRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    getRowCanExpand: () => true
+  });
 
   const fetchLogs = async () => {
     try {
@@ -830,6 +969,7 @@ function DeploymentLogViewer(props: {
         setLines([]);
         setLoading(true);
         setTail(DEFAULT_LOG_TAIL);
+        setUserPhase(null);
         fetchLogs();
       }
     )
@@ -871,7 +1011,9 @@ function DeploymentLogViewer(props: {
   };
 
   return (
-    <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div class={clsx("overflow-hidden", {
+      "bg-white rounded-lg border border-gray-200": !props.embedded
+    })}>
       <Show when={error()}>
         <div class="p-3">
           <ErrorBanner message={error()!} onRetry={fetchLogs} />
@@ -886,7 +1028,7 @@ function DeploymentLogViewer(props: {
             <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
               <button
                 type="button"
-                onClick={() => setLogPhase("build")}
+                onClick={() => setUserPhase("build")}
                 class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
                   "bg-white text-gray-900 shadow-sm font-medium": logPhase() === "build",
                   "text-gray-500 hover:text-gray-700": logPhase() !== "build"
@@ -896,7 +1038,7 @@ function DeploymentLogViewer(props: {
               </button>
               <button
                 type="button"
-                onClick={() => setLogPhase("deploy")}
+                onClick={() => setUserPhase("deploy")}
                 class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
                   "bg-white text-gray-900 shadow-sm font-medium": logPhase() === "deploy",
                   "text-gray-500 hover:text-gray-700": logPhase() !== "deploy"
@@ -909,74 +1051,150 @@ function DeploymentLogViewer(props: {
         </div>
       </Show>
       <div ref={scrollRef} onScroll={onScroll} class="max-h-[600px] overflow-y-auto">
-        <Show
-          when={!loading() && filteredLines().length > 0}
-          fallback={
-            <div class="text-gray-400 text-center py-8 font-mono text-xs">
-              {loading() ? "Loading logs…" : "No logs available."}
-            </div>
-          }
-        >
-          <Show when={hasMore()}>
-            <div class="text-center py-3">
-              <button
-                type="button"
-                onClick={loadMore}
-                class="text-xs text-indigo-600 hover:text-indigo-700 font-medium outline-none"
-              >
-                Load previous logs
-              </button>
-            </div>
-          </Show>
-          <table class="w-full font-mono text-xs border-collapse" style="table-layout: fixed">
-            <colgroup>
-              <col style="width: 155px" />
-              <col style="width: 160px" />
-              <col style="width: 46px" />
-              <col />
-            </colgroup>
-            <tbody>
-              <For each={filteredLines()}>
-                {(line) => (
-                  <tr class="align-top border-b border-gray-50 hover:bg-gray-50/50">
-                    <td class="text-gray-400 select-none py-1 pl-4 pr-2 whitespace-nowrap">
-                      {formatTs(line.ts)}
-                    </td>
-                    <td
-                      class="text-violet-400 py-1 px-2 truncate"
-                      title={line.hostname || line.source}
-                    >
-                      {line.hostname || line.source}
-                    </td>
-                    <td
-                      class={clsx("py-1 px-2 uppercase text-right whitespace-nowrap", {
-                        "text-red-500": line.level === "error",
-                        "text-amber-500": line.level === "warn",
-                        "text-gray-400": line.level === "debug",
-                        "text-gray-300": line.level === "trace",
-                        "text-blue-400":
-                          line.level !== "error" &&
-                          line.level !== "warn" &&
-                          line.level !== "debug" &&
-                          line.level !== "trace"
-                      })}
-                    >
-                      {line.level}
-                    </td>
-                    <td class="text-gray-700 py-1 pl-2 pr-4 break-all">{line.text}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
+        <Switch>
+          <Match when={loading()}>
+            <div class="text-gray-400 text-center py-8 font-mono text-xs">Loading logs…</div>
+          </Match>
+          <Match when={!loading() && filteredLines().length === 0}>
+            <div class="text-gray-400 text-center py-8 font-mono text-xs">No logs available.</div>
+          </Match>
+          <Match when={filteredLines().length > 0}>
+            <Show when={hasMore()}>
+              <div class="text-center py-3">
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  class="text-xs text-indigo-600 hover:text-indigo-700 font-medium outline-none"
+                >
+                  Load previous logs
+                </button>
+              </div>
+            </Show>
+            <table class="w-full font-mono text-xs border-collapse" style="table-layout: fixed">
+              <colgroup>
+                <col style="width: 28px" />
+                <col style="width: 155px" />
+                <col style="width: 160px" />
+                <col style="width: 46px" />
+                <col />
+              </colgroup>
+              <tbody>
+                <For each={table.getRowModel().rows}>
+                  {(row) => (
+                    <>
+                      <tr
+                        class={clsx(
+                          "align-top border-b border-gray-50 cursor-pointer transition-colors",
+                          {
+                            "bg-indigo-50/50 hover:bg-indigo-50/70": row.getIsExpanded(),
+                            "hover:bg-gray-50/50": !row.getIsExpanded()
+                          }
+                        )}
+                        onClick={() => row.toggleExpanded()}
+                      >
+                        <For each={row.getVisibleCells()}>
+                          {(cell) => (
+                            <td
+                              class={clsx("py-1", {
+                                "pl-2": cell.column.id === "expander",
+                                "pr-2": cell.column.id === "ts",
+                                "px-2": cell.column.id !== "expander" && cell.column.id !== "text",
+                                "pl-2 pr-4": cell.column.id === "text",
+                                "text-right": cell.column.id === "level"
+                              })}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </td>
+                          )}
+                        </For>
+                      </tr>
+                      <Show when={row.getIsExpanded()}>
+                        <tr class="border-b border-gray-100 bg-gray-50/80">
+                          <td colSpan={5} class="px-4 py-3">
+                            <LogDetailPanel entry={row.original} />
+                          </td>
+                        </tr>
+                      </Show>
+                    </>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </Match>
+        </Switch>
       </div>
+    </div>
+  );
+}
+
+function LogDetailPanel(props: { entry: LogEntry }) {
+  const baseAttrs = () => {
+    const entry = props.entry;
+    const attrs: { label: string; value: string }[] = [
+      { label: "Timestamp", value: new Date(entry.ts).toISOString() },
+      { label: "Sequence", value: String(entry.seq) },
+      { label: "Level", value: entry.level.toUpperCase() },
+      { label: "Stream", value: entry.stream }
+    ];
+    if (entry.hostname) {
+      attrs.push({ label: "Hostname", value: entry.hostname });
+    }
+    if (entry.source) {
+      attrs.push({ label: "Source", value: entry.source });
+    }
+    entry.attrs?.forEach(([key, value]) => {
+      attrs.push({ label: key, value });
+    });
+    return attrs;
+  };
+
+  const tags = () => props.entry.tags?.filter((tag) => !tag.startsWith("hostname:")) ?? [];
+
+  return (
+    <div class="flex flex-col gap-2.5">
+      <pre class="text-xs text-gray-800 font-mono whitespace-pre-wrap break-all">
+        {props.entry.text}
+      </pre>
+      <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
+        <For each={baseAttrs()}>
+          {(attr) => (
+            <>
+              <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap">
+                {attr.label}
+              </span>
+              <span class="text-[11px] font-mono text-gray-600">{attr.value}</span>
+            </>
+          )}
+        </For>
+      </div>
+      <Show when={tags().length > 0}>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <span class="text-[11px] text-gray-400 font-medium">Tags</span>
+          <For each={tags()}>
+            {(tag) => (
+              <span class="text-[11px] font-mono text-gray-600 bg-gray-200/70 rounded px-1.5 py-0.5">
+                {tag}
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
     </div>
   );
 }
 
 function formatTs(ms: number) {
   return new Date(ms).toISOString().replace("T", " ").replace("Z", "").slice(0, 19);
+}
+
+function logLevelColor(level: string) {
+  return {
+    "text-red-500": level === "error",
+    "text-amber-500": level === "warn",
+    "text-gray-400": level === "debug",
+    "text-gray-300": level === "trace",
+    "text-blue-400": level !== "error" && level !== "warn" && level !== "debug" && level !== "trace"
+  };
 }
 
 function ConfigSection(props: { title: string; items: { label: string; value: string }[] }) {
