@@ -243,9 +243,17 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
       ? [
           { label: "Git repository", value: s.build.repo },
           ...(s.build.branch ? [{ label: "Branch", value: s.build.branch }] : []),
-          { label: "Dockerfile", value: s.build.dockerfilePath }
+          { label: "Dockerfile", value: s.build.dockerfile },
+          ...(s.build.registry ? [{ label: "Registry", value: s.build.registry }] : []),
+          ...(s.build.watch ? [{ label: "Watch", value: "enabled" }] : [])
         ]
       : [{ label: "Image", value: s.image ?? "(not set)" }];
+
+  const buildEnvItems = Object.entries(s.build?.env?.items ?? {}).map(([key, value]) => ({
+    label: key,
+    value
+  }));
+  const buildSecretKeys = Object.keys(s.build?.secrets?.items ?? {}).sort();
 
   const deployCommand = s.deploy.command
     ? `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
@@ -274,6 +282,26 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
     <div class="space-y-6">
       <ConfigSection title="General" items={configItems} />
       <ConfigSection title="Source" items={sourceItems} />
+      <Show when={buildEnvItems.length > 0}>
+        <ConfigSection title="Build Environment" items={buildEnvItems} />
+      </Show>
+      <Show when={buildSecretKeys.length > 0}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+            Build Secrets
+          </h4>
+          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <For each={buildSecretKeys}>
+              {(key) => (
+                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                  <span class="text-xs text-gray-500 shrink-0">{key}</span>
+                  <span class="text-sm font-mono text-gray-400">••••••••</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
       <ConfigSection title="Deploy" items={deployItems} />
       <Show when={ingressItems}>
         {(items) => <ConfigSection title="Ingress" items={items()} />}
