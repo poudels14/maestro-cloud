@@ -96,9 +96,9 @@ impl ServiceConfig {
         if let Some(secrets) = &config.deploy.secrets {
             config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
         }
-        config.deploy.env.clear();
+        config.deploy.env.items.clear();
         if let Some(build) = &mut config.build {
-            build.env.clear();
+            build.env.items.clear();
         }
         config
     }
@@ -129,8 +129,8 @@ pub struct ServiceBuildConfig {
     pub dockerfile_path: String,
     #[serde(default)]
     pub watch: bool,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
+    pub env: EnvConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,10 +147,25 @@ pub struct ServiceDeployConfig {
     pub replicas: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
+    pub env: EnvConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub items: HashMap<String, String>,
+}
+
+impl EnvConfig {
+    pub fn is_empty(&self) -> bool {
+        self.source.is_none() && self.items.is_empty()
+    }
 }
 
 /// Secrets with resolved values — used during rollout and deployment.
@@ -159,6 +174,8 @@ pub struct ServiceDeployConfig {
 #[serde(rename_all = "camelCase")]
 pub struct SecretsConfig {
     pub mount_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub items: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -204,6 +221,7 @@ impl SecretsConfig {
             .collect();
         SecretsConfig {
             mount_path: self.mount_path.clone(),
+            source: None,
             items: HashMap::new(),
             keys,
         }

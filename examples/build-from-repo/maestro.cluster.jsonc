@@ -1,4 +1,5 @@
 {
+  "$schema": "../../controller/maestro.schema.json",
   "services": {
     "whoami": {
       "name": "whoami",

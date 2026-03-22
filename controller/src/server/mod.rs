@@ -1088,8 +1088,8 @@ async fn compute_rollout_diff(
         });
     }
 
-    for (key, new_val) in &new_config.deploy.env {
-        if let Some(old_val) = old.deploy.env.get(key) {
+    for (key, new_val) in &new_config.deploy.env.items {
+        if let Some(old_val) = old.deploy.env.items.get(key) {
             if old_val != new_val {
                 changes.push(RolloutChange {
                     field: format!("env.{key}"),
@@ -1105,11 +1105,11 @@ async fn compute_rollout_diff(
             });
         }
     }
-    for key in old.deploy.env.keys() {
-        if !new_config.deploy.env.contains_key(key) {
+    for key in old.deploy.env.items.keys() {
+        if !new_config.deploy.env.items.contains_key(key) {
             changes.push(RolloutChange {
                 field: format!("env.{key}"),
-                from: Some(old.deploy.env[key].clone()),
+                from: Some(old.deploy.env.items[key].clone()),
                 to: None,
             });
         }
