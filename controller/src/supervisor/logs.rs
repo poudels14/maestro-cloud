@@ -4,11 +4,11 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::logs::LogOrigin;
 
-struct ParsedLine {
-    ts: Option<u64>,
-    level: Option<String>,
-    text: String,
-    attrs: Vec<(String, String)>,
+pub struct ParsedLine {
+    pub ts: Option<u64>,
+    pub level: Option<String>,
+    pub text: String,
+    pub attrs: Vec<(String, String)>,
 }
 
 pub async fn read_pipe_to_collector(
@@ -68,7 +68,7 @@ pub async fn read_pipe_to_collector(
 /// - JSON logs: `{"ts":"...","level":"...","msg":"..."}`
 /// - Prefixed logs: `2026-03-15T20:28:36Z ERR Provider error, retrying...`
 /// - Plain text: everything else
-fn parse_log_line(line: &str) -> ParsedLine {
+pub fn parse_log_line(line: &str) -> ParsedLine {
     // Try JSON first
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
         let ts = parsed

@@ -24,6 +24,12 @@ pub struct BuildOutput {
     pub commit_message: String,
 }
 
+pub struct BuildError {
+    pub error: anyhow::Error,
+    pub commit_sha: Option<String>,
+    pub commit_message: Option<String>,
+}
+
 #[async_trait]
 pub trait ServiceCommandPlanner: Send + Sync {
     async fn build(
@@ -32,7 +38,7 @@ pub trait ServiceCommandPlanner: Send + Sync {
         build_dir: &Path,
         image_tag: &str,
         log_sender: Option<flume::Sender<LogEntry>>,
-    ) -> Result<BuildOutput>;
+    ) -> Result<BuildOutput, BuildError>;
     fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput>;
 }
 
@@ -54,56 +60,80 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         build_dir: &Path,
         image_tag: &str,
         log_sender: Option<flume::Sender<LogEntry>>,
-    ) -> Result<BuildOutput> {
-        let build_config = deployment
-            .config
-            .build
-            .as_ref()
-            .ok_or_else(|| anyhow!("no build config"))?;
+    ) -> Result<BuildOutput, BuildError> {
+        let build_config = deployment.config.build.as_ref().ok_or_else(|| BuildError {
+            error: anyhow!("no build config"),
+            commit_sha: None,
+            commit_message: None,
+        })?;
         let mut git_env = build_config.env.items.clone();
         git_env.extend(build_config.secrets.items.clone());
+        let log_source = format!("{}/{}/build", deployment.config.id, deployment.id);
         builder::sync_repo(
             &build_config.repo,
             build_config.branch.as_deref(),
             build_dir,
             &git_env,
+            log_sender.as_ref(),
+            Some(&log_source),
         )
-        .await?;
-        let (commit_sha, commit_message) = builder::get_head_commit(build_dir).await?;
-        let log_source = format!("{}/{}/build", deployment.config.id, deployment.id);
-        self.runtime
-            .build_image(
-                &BuildSpec {
-                    context_dir: build_dir.to_path_buf(),
-                    tag: image_tag.to_string(),
-                    dockerfile: Some(build_config.dockerfile.clone()),
-                    build_args: build_config.env.items.clone(),
-                    secrets: build_config.secrets.items.clone(),
-                },
-                log_sender.as_ref(),
-                Some(&log_source),
-            )
-            .await?;
+        .await
+        .map_err(|error| BuildError {
+            error,
+            commit_sha: None,
+            commit_message: None,
+        })?;
+        let (commit_sha, commit_message) =
+            builder::get_head_commit(build_dir)
+                .await
+                .map_err(|error| BuildError {
+                    error,
+                    commit_sha: None,
+                    commit_message: None,
+                })?;
 
-        let final_tag = if let Some(registry) = &build_config.registry {
-            let registry_tag = format!(
-                "{}/{}:{}",
-                registry.trim_end_matches('/'),
-                deployment.config.id,
-                deployment.id
-            );
-            self.runtime.tag_image(image_tag, &registry_tag).await?;
-            self.runtime.push_image(&registry_tag).await?;
-            registry_tag
-        } else {
-            image_tag.to_string()
+        let build_and_push = async {
+            self.runtime
+                .build_image(
+                    &BuildSpec {
+                        context_dir: build_dir.to_path_buf(),
+                        tag: image_tag.to_string(),
+                        dockerfile: Some(build_config.dockerfile.clone()),
+                        build_args: build_config.env.items.clone(),
+                        secrets: build_config.secrets.items.clone(),
+                    },
+                    log_sender.as_ref(),
+                    Some(&log_source),
+                )
+                .await?;
+
+            if let Some(registry) = &build_config.registry {
+                let registry_tag = format!(
+                    "{}/{}:{}",
+                    registry.trim_end_matches('/'),
+                    deployment.config.id,
+                    deployment.id
+                );
+                self.runtime.tag_image(image_tag, &registry_tag).await?;
+                self.runtime.push_image(&registry_tag).await?;
+                Ok(registry_tag)
+            } else {
+                Ok(image_tag.to_string())
+            }
         };
 
-        Ok(BuildOutput {
-            image_tag: final_tag,
-            commit_sha,
-            commit_message,
-        })
+        match build_and_push.await {
+            Ok(final_tag) => Ok(BuildOutput {
+                image_tag: final_tag,
+                commit_sha,
+                commit_message,
+            }),
+            Err(error) => Err(BuildError {
+                error,
+                commit_sha: Some(commit_sha),
+                commit_message: Some(commit_message),
+            }),
+        }
     }
 
     fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput> {
@@ -213,8 +243,12 @@ impl ServiceCommandPlanner for ShellDeploymentProvider {
         _build_dir: &Path,
         _image_tag: &str,
         _log_sender: Option<flume::Sender<LogEntry>>,
-    ) -> Result<BuildOutput> {
-        Err(anyhow!("shell provider does not support build"))
+    ) -> Result<BuildOutput, BuildError> {
+        Err(BuildError {
+            error: anyhow!("shell provider does not support build"),
+            commit_sha: None,
+            commit_message: None,
+        })
     }
 
     fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<DeployOutput> {
