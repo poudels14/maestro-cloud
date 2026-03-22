@@ -5,7 +5,8 @@ use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
 use crate::deployment::dns::DnsManager;
 use crate::deployment::provider::{
-    BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
+    BuildError, BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner,
+    ShellDeploymentProvider,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -38,7 +39,7 @@ pub enum ControllerExitReason {
 }
 
 struct PendingBuild {
-    handle: JoinHandle<Result<BuildOutput>>,
+    handle: JoinHandle<Result<BuildOutput, BuildError>>,
     queued_deployment: QueuedDeployment,
     build_dir: PathBuf,
     started_at: std::time::Instant,
@@ -112,6 +113,9 @@ impl DeploymentController {
         let mut shutdown_started = false;
         let mut exit_reason = ControllerExitReason::Shutdown;
         let mut signal_rx = self.signal_rx.resubscribe();
+
+        let tmp_dir = self.config.data_dir.join("tmp");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
 
         if let Err(err) = self.queue_terminated_active_deployments().await {
             self.logger.emit(
@@ -388,7 +392,7 @@ impl DeploymentController {
             let build_dir = self
                 .config
                 .data_dir
-                .join("builds")
+                .join("tmp")
                 .join(&queued_deployment.service_id)
                 .join(&short_id);
 
@@ -498,13 +502,17 @@ impl DeploymentController {
 
             let build_result = match result {
                 Ok(inner) => inner,
-                Err(err) => Err(anyhow::anyhow!("build task panicked: {err}")),
+                Err(err) => Err(BuildError {
+                    error: anyhow::anyhow!("build task panicked: {err}"),
+                    commit_sha: None,
+                    commit_message: None,
+                }),
             };
+
+            let _ = std::fs::remove_dir_all(&pending.build_dir);
 
             match build_result {
                 Ok(output) => {
-                    let _ = std::fs::remove_dir_all(&pending.build_dir);
-
                     let mut queued = pending.queued_deployment;
                     queued.deployment.build = Some(DeploymentBuildInfo {
                         docker_image_id: output.image_tag,
@@ -532,18 +540,30 @@ impl DeploymentController {
                     }
                     self.start_deployment_replicas(&queued).await;
                 }
-                Err(err) => {
+                Err(build_err) => {
                     self.logger.emit(
                         "error",
                         &format!(
-                            "build failed for service `{service_id}` deployment `{deployment_id}`: {err}"
+                            "build failed for service `{service_id}` deployment `{deployment_id}`: {}",
+                            build_err.error
                         ),
                     );
+                    let mut queued = pending.queued_deployment;
+                    if let Some(sha) = build_err.commit_sha {
+                        queued.deployment.git_commit = Some(GitCommitInfo {
+                            reference: sha,
+                            message: build_err.commit_message.unwrap_or_default(),
+                        });
+                    }
                     let deployment_ref = Deployment {
-                        service_id,
-                        id: deployment_id,
+                        service_id: service_id.clone(),
+                        id: deployment_id.clone(),
                         replica_index: 0,
                     };
+                    let _ = self
+                        .store
+                        .update_deployment_build_info(&deployment_ref, &queued.deployment)
+                        .await;
                     let _ = self
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)

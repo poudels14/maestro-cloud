@@ -8,6 +8,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use crate::logs::{LogEntry, LogOrigin};
+use crate::supervisor::logs::parse_log_line;
 use crate::utils::crypto::SecretString;
 
 pub async fn run<S: AsRef<OsStr>>(program: &str, args: &[S]) -> Result<String> {
@@ -127,22 +128,28 @@ async fn pipe_to_collector(
     origin: LogOrigin,
 ) {
     let stream: Arc<str> = Arc::from(stream_name);
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let ts = std::time::SystemTime::now()
+    let now_millis = || {
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as i64;
+            .as_millis() as i64
+    };
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let parsed = parse_log_line(&line);
         let entry = LogEntry {
             seq: 0,
-            ts,
-            level: Arc::from("info"),
+            ts: parsed.ts.map(|t| t as i64).unwrap_or_else(&now_millis),
+            level: parsed
+                .level
+                .map(Arc::from)
+                .unwrap_or_else(|| Arc::from("info")),
             stream: stream.clone(),
-            text: line,
+            text: parsed.text,
             source: source.clone(),
             origin,
             tags: Arc::new(serde_json::Value::Null),
-            attrs: vec![],
+            attrs: parsed.attrs,
         };
         if sender.send_async(entry).await.is_err() {
             break;

@@ -125,6 +125,9 @@ impl BuildWatcher {
             ) {
                 return Ok(());
             }
+            if latest.status == DeploymentStatus::Crashed && latest.git_commit.is_none() {
+                return Ok(());
+            }
         }
 
         let mut git_env = build_config.env.resolved().await?;
