@@ -41,12 +41,24 @@ pub fn replica_states_prefix(service_id: &str, deployment_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/replicas/{deployment_id}/")
 }
 
-pub fn deployment_secrets_key(service_id: &str, deployment_id: &str) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/secrets/{deployment_id}")
+pub fn deployment_prefix(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/")
 }
 
-pub fn deployment_env_key(service_id: &str, deployment_id: &str) -> String {
-    format!("{SERVICES_ROOT}/{service_id}/env/{deployment_id}")
+pub fn deployment_build_env_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/build/env")
+}
+
+pub fn deployment_build_secrets_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/build/secrets")
+}
+
+pub fn deployment_deploy_env_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/deploy/env")
+}
+
+pub fn deployment_deploy_secrets_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/deploy/secrets")
 }
 
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";

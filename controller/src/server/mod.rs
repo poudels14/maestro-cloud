@@ -1044,11 +1044,11 @@ async fn compute_rollout_diff(
             from: old
                 .build
                 .as_ref()
-                .map(|b| format!("{}:{}", b.repo, b.dockerfile_path)),
+                .map(|b| format!("{}:{}", b.repo, b.dockerfile)),
             to: new_config
                 .build
                 .as_ref()
-                .map(|b| format!("{}:{}", b.repo, b.dockerfile_path)),
+                .map(|b| format!("{}:{}", b.repo, b.dockerfile)),
         });
     }
 
@@ -1093,15 +1093,15 @@ async fn compute_rollout_diff(
             if old_val != new_val {
                 changes.push(RolloutChange {
                     field: format!("env.{key}"),
-                    from: Some(old_val.clone()),
-                    to: Some(new_val.clone()),
+                    from: Some(old_val.as_str().to_string()),
+                    to: Some(new_val.as_str().to_string()),
                 });
             }
         } else {
             changes.push(RolloutChange {
                 field: format!("env.{key}"),
                 from: None,
-                to: Some(new_val.clone()),
+                to: Some(new_val.as_str().to_string()),
             });
         }
     }
@@ -1109,7 +1109,7 @@ async fn compute_rollout_diff(
         if !new_config.deploy.env.items.contains_key(key) {
             changes.push(RolloutChange {
                 field: format!("env.{key}"),
-                from: Some(old.deploy.env.items[key].clone()),
+                from: Some(old.deploy.env.items[key].as_str().to_string()),
                 to: None,
             });
         }

@@ -8,11 +8,11 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_env_key,
-    deployment_secrets_key, replica_state_key, replica_states_prefix,
-    service_deployment_history_key, service_deployment_history_prefix,
-    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
-    service_info_key, service_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_build_env_key,
+    deployment_build_secrets_key, deployment_deploy_env_key, deployment_deploy_secrets_key,
+    deployment_prefix, replica_state_key, replica_states_prefix, service_deployment_history_key,
+    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
+    service_id_from_info_key, service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -116,78 +116,22 @@ impl EtcdStateStore {
             .unwrap_or_default()
     }
 
-    async fn write_deployment_secrets(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-        deployment: &ServiceDeployment,
-    ) {
-        let Some(secrets) = &deployment.config.deploy.secrets else {
-            return;
-        };
-        if secrets.items.is_empty() {
-            return;
-        }
-        let items_json = match serde_json::to_string(&secrets.items) {
+    async fn write_encrypted(&self, key: &str, data: &impl serde::Serialize) {
+        let json = match serde_json::to_string(data) {
             Ok(json) => json,
             Err(_) => return,
         };
-        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &items_json) {
+        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &json) {
             Ok(encrypted) => encrypted,
             Err(_) => return,
         };
-        let key = deployment_secrets_key(service_id, deployment_id);
         let mut client = self.client.lock().await;
         let _ = client
             .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
             .await;
     }
 
-    async fn write_deployment_env(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-        deployment: &ServiceDeployment,
-    ) {
-        let deploy_env = &deployment.config.deploy.env.items;
-        let build_env = deployment
-            .config
-            .build
-            .as_ref()
-            .map(|b| &b.env.items)
-            .cloned()
-            .unwrap_or_default();
-        if deploy_env.is_empty() && build_env.is_empty() {
-            return;
-        }
-        let env_data = serde_json::json!({
-            "deploy": deploy_env,
-            "build": build_env,
-        });
-        let env_json = match serde_json::to_string(&env_data) {
-            Ok(json) => json,
-            Err(_) => return,
-        };
-        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &env_json) {
-            Ok(encrypted) => encrypted,
-            Err(_) => return,
-        };
-        let key = deployment_env_key(service_id, deployment_id);
-        let mut client = self.client.lock().await;
-        let _ = client
-            .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
-            .await;
-    }
-
-    async fn read_deployment_env(
-        &self,
-        service_id: &str,
-        deployment_id: &str,
-    ) -> (
-        std::collections::HashMap<String, String>,
-        std::collections::HashMap<String, String>,
-    ) {
-        let key = deployment_env_key(service_id, deployment_id);
+    async fn read_encrypted<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> T {
         let response = match self.get(key.as_bytes().to_vec(), None).await {
             Ok(r) => r,
             Err(_) => return Default::default(),
@@ -196,39 +140,51 @@ impl EtcdStateStore {
             return Default::default();
         };
         let value = String::from_utf8_lossy(kv.value()).to_string();
-        let env_json =
+        let json =
             crate::utils::crypto::decrypt_string(&self.encryption_key, &value).unwrap_or(value);
-        let parsed: serde_json::Value = match serde_json::from_str(&env_json) {
-            Ok(v) => v,
-            Err(_) => return Default::default(),
-        };
-        let deploy_env = parsed
-            .get("deploy")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        let build_env = parsed
-            .get("build")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        (deploy_env, build_env)
+        serde_json::from_str(&json).unwrap_or_default()
     }
 
-    async fn restore_deployment_env(&self, service_id: &str, deployment: &mut ServiceDeployment) {
+    async fn write_deployment_data(&self, service_id: &str, deployment: &ServiceDeployment) {
+        let deployment_id = &deployment.id;
         if !deployment.config.deploy.env.items.is_empty() {
-            return;
+            let key = deployment_deploy_env_key(service_id, deployment_id);
+            self.write_encrypted(&key, &deployment.config.deploy.env.items)
+                .await;
         }
-        let has_build_env = deployment
-            .config
-            .build
-            .as_ref()
-            .is_some_and(|b| !b.env.items.is_empty());
-        if has_build_env {
-            return;
+        if let Some(secrets) = &deployment.config.deploy.secrets {
+            if !secrets.items.is_empty() {
+                let key = deployment_deploy_secrets_key(service_id, deployment_id);
+                self.write_encrypted(&key, &secrets.items).await;
+            }
         }
-        let (deploy_env, build_env) = self.read_deployment_env(service_id, &deployment.id).await;
-        deployment.config.deploy.env.items = deploy_env;
+        if let Some(build) = &deployment.config.build {
+            if !build.env.items.is_empty() {
+                let key = deployment_build_env_key(service_id, deployment_id);
+                self.write_encrypted(&key, &build.env.items).await;
+            }
+            if !build.secrets.items.is_empty() {
+                let key = deployment_build_secrets_key(service_id, deployment_id);
+                self.write_encrypted(&key, &build.secrets.items).await;
+            }
+        }
+    }
+
+    async fn restore_deployment_data(&self, service_id: &str, deployment: &mut ServiceDeployment) {
+        let deployment_id = &deployment.id;
+        if deployment.config.deploy.env.items.is_empty() {
+            let key = deployment_deploy_env_key(service_id, deployment_id);
+            deployment.config.deploy.env.items = self.read_encrypted(&key).await;
+        }
         if let Some(build) = &mut deployment.config.build {
-            build.env.items = build_env;
+            if build.env.items.is_empty() {
+                let key = deployment_build_env_key(service_id, deployment_id);
+                build.env.items = self.read_encrypted(&key).await;
+            }
+            if build.secrets.items.is_empty() {
+                let key = deployment_build_secrets_key(service_id, deployment_id);
+                build.secrets.items = self.read_encrypted(&key).await;
+            }
         }
     }
 
@@ -541,14 +497,11 @@ impl ClusterStore for EtcdStateStore {
             let mut deployment = deployment;
             if let Some(secrets) = &mut deployment.config.deploy.secrets {
                 if secrets.items.is_empty() && !secrets.keys.is_empty() {
-                    let items = self
-                        .read_deployment_secrets(&service_id, &deployment.id)
-                        .await
-                        .unwrap_or_default();
-                    secrets.items = items;
+                    let key = deployment_deploy_secrets_key(&service_id, &deployment.id);
+                    secrets.items = self.read_encrypted(&key).await;
                 }
             }
-            self.restore_deployment_env(&service_id, &mut deployment)
+            self.restore_deployment_data(&service_id, &mut deployment)
                 .await;
             queued.push(QueuedDeployment {
                 service_id,
@@ -574,9 +527,7 @@ impl ClusterStore for EtcdStateStore {
     ) -> anyhow::Result<bool> {
         let mut building = queued_deployment.deployment.clone();
         building.status = DeploymentStatus::Building;
-        self.write_deployment_secrets(&queued_deployment.service_id, &building.id, &building)
-            .await;
-        self.write_deployment_env(&queued_deployment.service_id, &building.id, &building)
+        self.write_deployment_data(&queued_deployment.service_id, &building)
             .await;
         let prev_keys = self.prev_secret_keys(&queued_deployment.service_id).await;
         let building = self.strip_deployment_with_metadata(&building, &prev_keys);
@@ -727,10 +678,15 @@ impl ClusterStore for EtcdStateStore {
                 .await;
         }
 
-        let secrets_key = deployment_secrets_key(&deployment.service_id, &deployment.id);
-        let _ = client.delete(secrets_key.as_bytes(), None).await;
-        let env_key = deployment_env_key(&deployment.service_id, &deployment.id);
-        let _ = client.delete(env_key.as_bytes(), None).await;
+        let dep_prefix = deployment_prefix(&deployment.service_id, &deployment.id);
+        if let Some(range_end) = prefix_range_end(dep_prefix.as_bytes()) {
+            let _ = client
+                .delete(
+                    dep_prefix.as_bytes(),
+                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+                )
+                .await;
+        }
 
         Ok(Some(snapshot.deployment))
     }
@@ -798,7 +754,7 @@ impl ClusterStore for EtcdStateStore {
         let deployments = self.list_service_deployments(service_id).await?;
         let mut result = Vec::with_capacity(deployments.len());
         for mut deployment in deployments {
-            self.restore_deployment_env(service_id, &mut deployment)
+            self.restore_deployment_data(service_id, &mut deployment)
                 .await;
             let replicas: Vec<ReplicaState> = self
                 .read_replica_states(service_id, &deployment.id)
@@ -875,10 +831,24 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn read_service_info(&self, service_id: &str) -> anyhow::Result<Option<ServiceInfo>> {
-        Ok(self
-            .read_service_info_snapshot(service_id)
-            .await?
-            .map(|snapshot| snapshot.info))
+        let Some(snapshot) = self.read_service_info_snapshot(service_id).await? else {
+            return Ok(None);
+        };
+        let mut info = snapshot.info;
+        let deployments = self.list_service_deployments(service_id).await?;
+        if let Some(latest) = deployments.first() {
+            if let Some(build) = &mut info.config.build {
+                if build.secrets.items.is_empty() {
+                    let key = deployment_build_secrets_key(service_id, &latest.id);
+                    build.secrets.items = self.read_encrypted(&key).await;
+                }
+                if build.env.items.is_empty() {
+                    let key = deployment_build_env_key(service_id, &latest.id);
+                    build.env.items = self.read_encrypted(&key).await;
+                }
+            }
+        }
+        Ok(Some(info))
     }
 
     async fn get_service_status(
@@ -960,15 +930,8 @@ impl ClusterStore for EtcdStateStore {
         service_id: &str,
         deployment_id: &str,
     ) -> anyhow::Result<std::collections::HashMap<String, String>> {
-        let key = deployment_secrets_key(service_id, deployment_id);
-        let response = self.get(key.as_bytes().to_vec(), None).await?;
-        let Some(kv) = response.kvs().first() else {
-            return Ok(Default::default());
-        };
-        let value = String::from_utf8_lossy(kv.value()).to_string();
-        let items_json =
-            crate::utils::crypto::decrypt_string(&self.encryption_key, &value).unwrap_or(value);
-        Ok(serde_json::from_str(&items_json).unwrap_or_default())
+        let key = deployment_deploy_secrets_key(service_id, deployment_id);
+        Ok(self.read_encrypted(&key).await)
     }
 
     async fn queue_deployment(
@@ -998,6 +961,8 @@ impl ClusterStore for EtcdStateStore {
             let deployment_json = serde_json::to_string(&stripped_deployment)
                 .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
+            self.write_deployment_data(&deployment.config.id, &deployment)
+                .await;
             let existing_frozen = self
                 .read_service_info(&deployment.config.id)
                 .await
@@ -1033,10 +998,7 @@ impl ClusterStore for EtcdStateStore {
             let committed = self.txn(compare, success).await?;
             if committed {
                 let service_id = &deployment.config.id;
-                self.write_deployment_secrets(service_id, &deployment.id, &deployment)
-                    .await;
-                self.write_deployment_env(service_id, &deployment.id, &deployment)
-                    .await;
+                self.write_deployment_data(service_id, &deployment).await;
                 return Ok(ForceQueueOutcome {
                     deployment_index,
                     deployment: deployment.clone(),
@@ -1150,6 +1112,19 @@ impl ClusterStore for EtcdStateStore {
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
 
             let active_deployment = self.find_active_deployment(service_id).await;
+            if let Some(dep_snapshot) = &active_deployment {
+                if let Some(build) = &config.build {
+                    if !build.secrets.items.is_empty() {
+                        let key =
+                            deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
+                        self.write_encrypted(&key, &build.secrets.items).await;
+                    }
+                    if !build.env.items.is_empty() {
+                        let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
+                        self.write_encrypted(&key, &build.env.items).await;
+                    }
+                }
+            }
 
             let mut compare = vec![compare_mod_revision_or_absent(
                 &info_snapshot.key,

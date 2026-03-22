@@ -25,17 +25,19 @@ pub fn validate_build_config(
             if repo.is_empty() {
                 return Err("build.repo cannot be empty".to_string());
             }
-            let dockerfile_path = build.dockerfile_path.trim();
-            if dockerfile_path.is_empty() {
-                return Err("build.dockerfilePath cannot be empty".to_string());
+            let dockerfile = build.dockerfile.trim();
+            if dockerfile.is_empty() {
+                return Err("build.dockerfile cannot be empty".to_string());
             }
             Ok((
                 Some(ServiceBuildConfig {
                     repo: repo.to_string(),
                     branch: build.branch.clone(),
-                    dockerfile_path: dockerfile_path.to_string(),
+                    dockerfile: dockerfile.to_string(),
                     watch: build.watch,
+                    registry: build.registry.clone(),
                     env: build.env.clone(),
+                    secrets: build.secrets.clone(),
                 }),
                 None,
             ))

@@ -208,23 +208,33 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         }
         for (key, value) in &spec.build_args {
             args.push("--build-arg".to_string());
-            args.push(format!("{key}={value}"));
+            args.push(format!("{key}={}", value.as_str()));
+        }
+        for key in spec.secrets.keys() {
+            args.push("--secret".to_string());
+            args.push(format!("id={key},env={key}"));
         }
         args.push(spec.context_dir.display().to_string());
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            cmd::run_with_logs(
-                "nerdctl",
-                &args,
-                sender,
-                source,
-                crate::logs::LogOrigin::Build,
-            )
-            .await?;
+            cmd::exec("nerdctl", &args)
+                .env(&spec.secrets)
+                .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
+                .await?;
         } else {
-            cmd::run("nerdctl", &args).await?;
+            cmd::exec("nerdctl", &args).env(&spec.secrets).run().await?;
         }
         eprintln!("[maestro]: image {} built successfully (nerdctl)", spec.tag);
+        Ok(())
+    }
+
+    async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
+        cmd::run("nerdctl", &["tag", source, target]).await?;
+        Ok(())
+    }
+
+    async fn push_image(&self, tag: &str) -> Result<()> {
+        cmd::run("nerdctl", &["push", tag]).await?;
         Ok(())
     }
 

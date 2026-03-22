@@ -9,7 +9,7 @@ fn sample_config() -> &'static str {
           "name": "Service One",
           "build": {
             "repo": "https://example.com/org/repo.git",
-            "dockerfilePath": "Dockerfile"
+            "dockerfile": "Dockerfile"
           },
           "deploy": {
             "exposePorts": [8080, 8443],

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
@@ -7,79 +8,115 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use crate::logs::{LogEntry, LogOrigin};
+use crate::utils::crypto::SecretString;
 
 pub async fn run<S: AsRef<OsStr>>(program: &str, args: &[S]) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .map_err(|err| anyhow!("failed to run {program}: {err}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("{} failed: {stderr}", label(program, args)));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    exec(program, args).run().await
 }
 
-pub async fn run_in<S: AsRef<OsStr>>(program: &str, args: &[S], dir: &Path) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .await
-        .map_err(|err| anyhow!("failed to run {program}: {err}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("{} failed: {stderr}", label(program, args)));
+pub fn exec<'a, S: AsRef<OsStr>>(program: &'a str, args: &'a [S]) -> Cmd<'a, S> {
+    Cmd {
+        program,
+        args,
+        dir: None,
+        env: None,
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub async fn run_with_logs<S: AsRef<OsStr>>(
-    program: &str,
-    args: &[S],
-    sender: &flume::Sender<LogEntry>,
-    source: &str,
-    origin: LogOrigin,
-) -> Result<()> {
-    let source: Arc<str> = Arc::from(source);
-    let mut child = Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|err| anyhow!("failed to spawn {program}: {err}"))?;
+pub struct Cmd<'a, S: AsRef<OsStr>> {
+    program: &'a str,
+    args: &'a [S],
+    dir: Option<&'a Path>,
+    env: Option<&'a HashMap<String, SecretString>>,
+}
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let sender_clone = sender.clone();
-    let source_clone = source.clone();
-    let stdout_task = tokio::spawn(async move {
-        if let Some(out) = stdout {
-            pipe_to_collector(out, "stdout", &source_clone, &sender_clone, origin).await;
-        }
-    });
-
-    let sender_clone = sender.clone();
-    let source_clone = source.clone();
-    let stderr_task = tokio::spawn(async move {
-        if let Some(err_stream) = stderr {
-            pipe_to_collector(err_stream, "stderr", &source_clone, &sender_clone, origin).await;
-        }
-    });
-
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|err| anyhow!("failed to wait for {program}: {err}"))?;
-    if !status.success() {
-        return Err(anyhow!("{} failed", label(program, args)));
+impl<'a, S: AsRef<OsStr>> Cmd<'a, S> {
+    pub fn dir(mut self, dir: &'a Path) -> Self {
+        self.dir = Some(dir);
+        self
     }
-    Ok(())
+
+    pub fn env(mut self, env: &'a HashMap<String, SecretString>) -> Self {
+        self.env = Some(env);
+        self
+    }
+
+    fn apply_options(&self, cmd: &mut Command) {
+        if let Some(dir) = self.dir {
+            cmd.current_dir(dir);
+        }
+        if let Some(env) = self.env {
+            for (key, value) in env {
+                cmd.env(key, value.as_str());
+            }
+        }
+    }
+
+    pub async fn run(self) -> Result<String> {
+        let mut cmd = Command::new(self.program);
+        cmd.args(self.args);
+        self.apply_options(&mut cmd);
+        let output = cmd
+            .output()
+            .await
+            .map_err(|err| anyhow!("failed to run {}: {err}", self.program))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "{} failed: {stderr}",
+                label(self.program, self.args)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    pub async fn run_with_logs(
+        self,
+        sender: &flume::Sender<LogEntry>,
+        source: &str,
+        origin: LogOrigin,
+    ) -> Result<()> {
+        let source: Arc<str> = Arc::from(source);
+        let mut cmd = Command::new(self.program);
+        cmd.args(self.args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        self.apply_options(&mut cmd);
+        let mut child = cmd
+            .spawn()
+            .map_err(|err| anyhow!("failed to spawn {}: {err}", self.program))?;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let sender_clone = sender.clone();
+        let source_clone = source.clone();
+        let stdout_task = tokio::spawn(async move {
+            if let Some(out) = stdout {
+                pipe_to_collector(out, "stdout", &source_clone, &sender_clone, origin).await;
+            }
+        });
+
+        let sender_clone = sender.clone();
+        let source_clone = source.clone();
+        let stderr_task = tokio::spawn(async move {
+            if let Some(err_stream) = stderr {
+                pipe_to_collector(err_stream, "stderr", &source_clone, &sender_clone, origin).await;
+            }
+        });
+
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|err| anyhow!("failed to wait for {}: {err}", self.program))?;
+        if !status.success() {
+            return Err(anyhow!("{} failed", label(self.program, self.args)));
+        }
+        Ok(())
+    }
 }
 
 async fn pipe_to_collector(

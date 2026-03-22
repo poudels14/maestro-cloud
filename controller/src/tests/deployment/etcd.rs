@@ -160,9 +160,11 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
         Some(ServiceBuildConfig {
             repo: "https://example.com/repo.git".to_string(),
             branch: None,
-            dockerfile_path: "Dockerfile".to_string(),
+            dockerfile: "Dockerfile".to_string(),
             watch: false,
+            registry: None,
             env: Default::default(),
+            secrets: Default::default(),
         }),
         None,
         Some(Command {
