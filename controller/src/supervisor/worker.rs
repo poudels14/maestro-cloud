@@ -1,4 +1,4 @@
-use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{path::PathBuf, process::Stdio, str::FromStr, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -8,7 +8,9 @@ use tokio::{
 
 use backon::{BackoffBuilder, ExponentialBuilder};
 
+use crate::config::RuntimeType;
 use crate::logs::{LogConfig, LogEntry, LogOrigin};
+use crate::runtime;
 
 use super::logs::read_pipe_to_collector;
 use watchexec_supervisor::{
@@ -111,7 +113,7 @@ enum WorkerOutcome {
 }
 
 pub struct SupervisedJob {
-    job: Job,
+    managed: SupervisedJobInner,
     handle: JoinHandle<SupervisedJobStatus>,
     shutdown_tx: watch::Sender<ShutdownRequest>,
 }
@@ -123,22 +125,8 @@ impl SupervisedJob {
     }
 
     pub async fn status(&self) -> SupervisedJobStatus {
-        let (tx, rx) = oneshot::channel();
-        self.job
-            .run(move |ctx| {
-                let status = match ctx.current {
-                    CommandState::Pending => SupervisedJobStatus::Pending,
-                    CommandState::Running { .. } => SupervisedJobStatus::Running,
-                    CommandState::Finished { status, .. } => match status {
-                        ProcessEnd::Success => SupervisedJobStatus::Completed,
-                        _ => SupervisedJobStatus::Stopped,
-                    },
-                };
-                let _ = tx.send(status);
-            })
-            .await;
-
-        rx.await.unwrap_or_else(|_| {
+        let status = self.managed.status().await;
+        status.unwrap_or_else(|| {
             if self.handle.is_finished() {
                 SupervisedJobStatus::Stopped
             } else {
@@ -160,6 +148,166 @@ impl SupervisedJob {
     #[inline]
     pub fn shutdown(&self, request: ShutdownRequest) {
         let _ = self.shutdown_tx.send(request);
+    }
+}
+
+struct SupervisedJobInner {
+    inner: Job,
+}
+
+impl Clone for SupervisedJobInner {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl SupervisedJobInner {
+    fn new(job: Job) -> Self {
+        Self { inner: job }
+    }
+
+    async fn is_running(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .run(move |ctx| {
+                let _ = tx.send(matches!(ctx.current, CommandState::Running { .. }));
+            })
+            .await;
+        rx.await.unwrap_or(false)
+    }
+
+    async fn status(&self) -> Option<SupervisedJobStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .run(move |ctx| {
+                let status = match ctx.current {
+                    CommandState::Pending => SupervisedJobStatus::Pending,
+                    CommandState::Running { .. } => SupervisedJobStatus::Running,
+                    CommandState::Finished { status, .. } => match status {
+                        ProcessEnd::Success => SupervisedJobStatus::Completed,
+                        _ => SupervisedJobStatus::Stopped,
+                    },
+                };
+                let _ = tx.send(status);
+            })
+            .await;
+        rx.await.ok()
+    }
+
+    async fn wait(&self) -> Option<ProcessEnd> {
+        self.inner.to_wait().await;
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .run(move |ctx| {
+                let status = if let CommandState::Finished { status, .. } = ctx.current {
+                    Some(*status)
+                } else {
+                    None
+                };
+                let _ = tx.send(status);
+            })
+            .await;
+        rx.await.ok().flatten()
+    }
+
+    async fn start(&self) {
+        self.inner.start().await;
+    }
+
+    async fn graceful_stop(&self, grace: Duration, shutdown_timeout: Duration) {
+        if !self.is_running().await {
+            let _ = timeout(Duration::from_secs(2), self.inner.delete_now()).await;
+            return;
+        }
+
+        let graceful_completed = tokio::select! {
+            _ = self.wait() => true,
+            result = timeout(
+                shutdown_timeout,
+                self.inner.stop_with_signal(Signal::Terminate, grace),
+            ) => result.is_ok(),
+        };
+
+        if !graceful_completed && self.is_running().await {
+            eprintln!("[maestro]: graceful stop timed out; forcing stop");
+            let _ = timeout(Duration::from_secs(2), self.inner.signal(Signal::ForceStop)).await;
+            let _ = timeout(Duration::from_secs(2), self.inner.stop()).await;
+        }
+
+        let _ = timeout(Duration::from_secs(2), self.inner.delete_now()).await;
+    }
+
+    async fn force_stop(&self) {
+        if !self.is_running().await {
+            let _ = timeout(Duration::from_secs(2), self.inner.delete_now()).await;
+            return;
+        }
+
+        let _ = timeout(Duration::from_secs(1), self.inner.signal(Signal::ForceStop)).await;
+        let _ = timeout(Duration::from_secs(2), self.inner.stop()).await;
+        let _ = timeout(Duration::from_secs(2), self.inner.delete_now()).await;
+    }
+
+    async fn handle_shutdown(
+        &self,
+        request: ShutdownRequest,
+        grace: Duration,
+        shutdown_timeout: Duration,
+        container: Option<&ContainerRef>,
+    ) -> bool {
+        match request {
+            ShutdownRequest::Force => self.force_stop().await,
+            ShutdownRequest::Graceful => self.graceful_stop(grace, shutdown_timeout).await,
+            ShutdownRequest::None => return false,
+        }
+        if let Some(container) = container {
+            let _ =
+                crate::utils::cmd::run(&container.runtime_cli, &["kill", &container.name]).await;
+        }
+        true
+    }
+
+    async fn delete(&self) {
+        let _ = timeout(Duration::from_secs(2), self.inner.delete_now()).await;
+    }
+
+    async fn log_process_ids(&self, name: &str, log_config: Option<&LogConfig>) {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .run(move |ctx| {
+                let pid = match ctx.current {
+                    CommandState::Running { child, .. } => child.id(),
+                    _ => None,
+                };
+                let pgid = pid.and_then(get_pgid_for_pid);
+                let _ = tx.send((pid, pgid));
+            })
+            .await;
+
+        if let Ok((Some(pid), pgid)) = rx.await {
+            let pgid_str = pgid.map_or("unknown".to_string(), |g| g.to_string());
+            let text = format!("service '{name}' started: pid={pid} pgid={pgid_str}");
+            eprintln!("[maestro]: {text}");
+            if let Some(cfg) = log_config {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+                let _ = cfg.sender.try_send(LogEntry {
+                    seq: 0,
+                    ts: now,
+                    level: Arc::from("info"),
+                    stream: Arc::from("stderr"),
+                    text,
+                    source: Arc::from(name.to_string()),
+                    origin: LogOrigin::System,
+                    tags: cfg.build_tags(),
+                    attrs: vec![],
+                });
+            }
+        }
     }
 }
 
@@ -190,36 +338,40 @@ impl SupervisedJobRunner {
             },
         });
         let (job, job_handle) = start_job(command);
-        let run_job = job.clone();
+        let managed = SupervisedJobInner::new(job);
+        let run_managed = managed.clone();
         let (shutdown_tx, shutdown_rx) = watch::channel(ShutdownRequest::None);
-        let handle =
-            tokio::spawn(
-                async move { Self::run_job(config, run_job, job_handle, shutdown_rx).await },
-            );
+        let handle = tokio::spawn(async move {
+            Self::run_job(config, run_managed, job_handle, shutdown_rx).await
+        });
 
         SupervisedJob {
-            job,
+            managed,
             handle,
             shutdown_tx,
         }
     }
 
-    async fn setup_job(job: &Job, config: &SupervisedJobConfig) -> Option<JoinHandle<()>> {
+    async fn setup_job(
+        job: &SupervisedJobInner,
+        config: &SupervisedJobConfig,
+    ) -> Option<JoinHandle<()>> {
         let (pipe_tx, mut pipe_rx) =
             mpsc::unbounded_channel::<(os_pipe::PipeReader, os_pipe::PipeReader)>();
 
-        job.set_spawn_hook(move |command, _| {
-            let Ok((stdout_reader, stdout_writer)) = os_pipe::pipe() else {
-                return;
-            };
-            let Ok((stderr_reader, stderr_writer)) = os_pipe::pipe() else {
-                return;
-            };
-            command.command_mut().stdout(Stdio::from(stdout_writer));
-            command.command_mut().stderr(Stdio::from(stderr_writer));
-            let _ = pipe_tx.send((stdout_reader, stderr_reader));
-        })
-        .await;
+        job.inner
+            .set_spawn_hook(move |command, _| {
+                let Ok((stdout_reader, stdout_writer)) = os_pipe::pipe() else {
+                    return;
+                };
+                let Ok((stderr_reader, stderr_writer)) = os_pipe::pipe() else {
+                    return;
+                };
+                command.command_mut().stdout(Stdio::from(stdout_writer));
+                command.command_mut().stderr(Stdio::from(stderr_writer));
+                let _ = pipe_tx.send((stdout_reader, stderr_reader));
+            })
+            .await;
 
         let log_config = config.log_config.clone();
         let log_source: Arc<str> = Arc::from(config.name.as_str());
@@ -248,7 +400,7 @@ impl SupervisedJobRunner {
 
     async fn run_job(
         config: SupervisedJobConfig,
-        job: Job,
+        job: SupervisedJobInner,
         mut job_handle: JoinHandle<()>,
         mut shutdown_rx: watch::Receiver<ShutdownRequest>,
     ) -> SupervisedJobStatus {
@@ -270,42 +422,19 @@ impl SupervisedJobRunner {
         let mut restart_count = 0_u32;
         let mut exit_status = SupervisedJobStatus::Completed;
 
-        /// Handle a shutdown request; returns `true` if the job should stop, `false` to continue.
-        async fn handle_shutdown(
-            request: ShutdownRequest,
-            job: &Job,
-            grace: Duration,
-            shutdown_timeout: Duration,
-            container: Option<&ContainerRef>,
-        ) -> bool {
-            match request {
-                ShutdownRequest::Force => force_stop_and_delete(job).await,
-                ShutdownRequest::Graceful => {
-                    graceful_stop_and_delete(job, grace, shutdown_timeout).await;
-                }
-                ShutdownRequest::None => return false,
-            }
-            if let Some(container) = container {
-                container_kill(&container.name, &container.runtime_cli).await;
-            }
-            true
-        }
-
         loop {
             let current_shutdown = *shutdown_rx.borrow();
-            if current_shutdown != ShutdownRequest::None {
-                if handle_shutdown(
+            if job
+                .handle_shutdown(
                     current_shutdown,
-                    &job,
                     shutdown_grace,
                     shutdown_timeout,
                     config.container.as_ref(),
                 )
                 .await
-                {
-                    exit_status = SupervisedJobStatus::Stopped;
-                    break;
-                }
+            {
+                exit_status = SupervisedJobStatus::Stopped;
+                break;
             }
 
             if let Some(secrets) = &config.secrets_mount {
@@ -314,24 +443,24 @@ impl SupervisedJobRunner {
                 }
             }
             job.start().await;
-            log_service_process_ids(&name, &job, config.log_config.as_ref()).await;
+            job.log_process_ids(&name, config.log_config.as_ref()).await;
 
             let outcome = tokio::select! {
                 biased;
-                status = wait_for_job_exit(&job) => WorkerOutcome::Exited(status),
+                status = job.wait() => WorkerOutcome::Exited(status),
                 _ = shutdown_rx.changed() => WorkerOutcome::Shutdown(*shutdown_rx.borrow()),
             };
 
             match outcome {
                 WorkerOutcome::Shutdown(request) => {
-                    if handle_shutdown(
-                        request,
-                        &job,
-                        shutdown_grace,
-                        shutdown_timeout,
-                        config.container.as_ref(),
-                    )
-                    .await
+                    if job
+                        .handle_shutdown(
+                            request,
+                            shutdown_grace,
+                            shutdown_timeout,
+                            config.container.as_ref(),
+                        )
+                        .await
                     {
                         exit_status = SupervisedJobStatus::Stopped;
                         break;
@@ -349,6 +478,7 @@ impl SupervisedJobRunner {
                     }
 
                     restart_count += 1;
+                    cleanup_system_container(config.container.as_ref(), &config.log_config).await;
                     let delay = backoff.next().unwrap_or(Duration::from_millis(max_delay));
                     let delay_ms = delay.as_millis();
                     match config.max_restarts {
@@ -366,14 +496,14 @@ impl SupervisedJobRunner {
                     };
 
                     if let WorkerOutcome::Shutdown(request) = delay_outcome {
-                        if handle_shutdown(
-                            request,
-                            &job,
-                            shutdown_grace,
-                            shutdown_timeout,
-                            config.container.as_ref(),
-                        )
-                        .await
+                        if job
+                            .handle_shutdown(
+                                request,
+                                shutdown_grace,
+                                shutdown_timeout,
+                                config.container.as_ref(),
+                            )
+                            .await
                         {
                             exit_status = SupervisedJobStatus::Stopped;
                             break;
@@ -396,7 +526,7 @@ impl SupervisedJobRunner {
         if let Some(secrets) = &config.secrets_mount {
             secrets.cleanup();
         }
-        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
+        job.delete().await;
         if timeout(Duration::from_secs(3), &mut job_handle)
             .await
             .is_err()
@@ -414,104 +544,21 @@ impl SupervisedJobRunner {
     }
 }
 
-async fn graceful_stop_and_delete(job: &Job, grace: Duration, shutdown_timeout: Duration) {
-    if !is_job_running(job).await {
-        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-        return;
-    }
-
-    let graceful_completed = tokio::select! {
-        _ = wait_for_job_exit(job) => true,
-        result = timeout(
-            shutdown_timeout,
-            job.stop_with_signal(Signal::Terminate, grace),
-        ) => result.is_ok(),
-    };
-
-    if !graceful_completed && is_job_running(job).await {
-        eprintln!("[maestro]: graceful stop timed out; forcing stop");
-        let _ = timeout(Duration::from_secs(2), job.signal(Signal::ForceStop)).await;
-        let _ = timeout(Duration::from_secs(2), job.stop()).await;
-    }
-
-    let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-}
-
-async fn force_stop_and_delete(job: &Job) {
-    if !is_job_running(job).await {
-        let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-        return;
-    }
-
-    let _ = timeout(Duration::from_secs(1), job.signal(Signal::ForceStop)).await;
-    let _ = timeout(Duration::from_secs(2), job.stop()).await;
-    let _ = timeout(Duration::from_secs(2), job.delete_now()).await;
-}
-
-async fn container_kill(container: &str, runtime_cli: &str) {
-    let _ = crate::utils::cmd::run(runtime_cli, &["kill", container]).await;
-}
-
-async fn is_job_running(job: &Job) -> bool {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    job.run(move |ctx| {
-        let running = matches!(ctx.current, CommandState::Running { .. });
-        let _ = tx.send(running);
-    })
-    .await;
-
-    rx.await.unwrap_or(false)
-}
-
-async fn wait_for_job_exit(job: &Job) -> Option<ProcessEnd> {
-    job.to_wait().await;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    job.run(move |ctx| {
-        let status = if let CommandState::Finished { status, .. } = ctx.current {
-            Some(*status)
-        } else {
-            None
-        };
-        let _ = tx.send(status);
-    })
-    .await;
-
-    rx.await.ok().flatten()
-}
-
-async fn log_service_process_ids(name: &str, job: &Job, log_config: Option<&LogConfig>) {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    job.run(move |ctx| {
-        let pid = match ctx.current {
-            CommandState::Running { child, .. } => child.id(),
-            _ => None,
-        };
-        let pgid = pid.and_then(get_pgid_for_pid);
-        let _ = tx.send((pid, pgid));
-    })
-    .await;
-
-    if let Ok((Some(pid), pgid)) = rx.await {
-        let pgid_str = pgid.map_or("unknown".to_string(), |g| g.to_string());
-        let text = format!("service '{name}' started: pid={pid} pgid={pgid_str}");
-        eprintln!("[maestro]: {text}");
-        if let Some(cfg) = log_config {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
-            let _ = cfg.sender.try_send(LogEntry {
-                seq: 0,
-                ts: now,
-                level: Arc::from("info"),
-                stream: Arc::from("stderr"),
-                text,
-                source: Arc::from(name.to_string()),
-                origin: LogOrigin::System,
-                tags: cfg.build_tags(),
-                attrs: vec![],
-            });
+async fn cleanup_system_container(
+    container: Option<&ContainerRef>,
+    log_config: &Option<LogConfig>,
+) {
+    let is_system_service = log_config
+        .as_ref()
+        .map(|cfg| cfg.origin == LogOrigin::System)
+        .unwrap_or(false);
+    if is_system_service {
+        if let Some(container_ref) = container {
+            let runtime_type = RuntimeType::from_str(&container_ref.runtime_cli);
+            if let Ok(runtime_type) = runtime_type {
+                let provider = runtime::create_provider(runtime_type);
+                let _ = provider.remove_container(&container_ref.name).await;
+            }
         }
     }
 }

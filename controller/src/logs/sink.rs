@@ -3,10 +3,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 use tokio::time::sleep;
 
 use super::store::{LogEntry, LogStore};
+use crate::signal::ShutdownEvent;
 
 const BATCH_SIZE: usize = 200;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
@@ -23,15 +24,21 @@ pub struct SinkWorker {
     store: Arc<LogStore>,
     sink: Box<dyn LogSink>,
     notify: Arc<Notify>,
+    signal_rx: broadcast::Receiver<ShutdownEvent>,
 }
 
 impl SinkWorker {
-    pub fn new(store: Arc<LogStore>, sink: Box<dyn LogSink>) -> Self {
+    pub fn new(
+        store: Arc<LogStore>,
+        sink: Box<dyn LogSink>,
+        signal_rx: broadcast::Receiver<ShutdownEvent>,
+    ) -> Self {
         let notify = store.notifier();
         Self {
             store,
             sink,
             notify,
+            signal_rx,
         }
     }
 
@@ -39,7 +46,7 @@ impl SinkWorker {
         tokio::spawn(async move { self.run().await })
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let sink_id = self.sink.id().to_string();
         let mut cursor = self.store.get_sink_cursor(&sink_id).await.unwrap_or(0);
 
@@ -47,6 +54,13 @@ impl SinkWorker {
             tokio::select! {
                 _ = self.notify.notified() => {}
                 _ = sleep(FLUSH_INTERVAL) => {}
+                signal = self.signal_rx.recv() => {
+                    match signal {
+                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
+                        | Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    }
+                }
             }
 
             loop {

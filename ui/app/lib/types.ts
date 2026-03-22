@@ -85,10 +85,14 @@ export interface MetricPoint {
 }
 
 export interface LogEntry {
+  seq: number;
   ts: number;
   level: string;
   stream: "stdout" | "stderr";
   text: string;
-  hostname?: string;
   source?: string;
+  origin?: string;
+  hostname?: string;
+  tags?: string[];
+  attrs?: [string, string][];
 }

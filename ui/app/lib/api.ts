@@ -88,19 +88,23 @@ export async function getSystemLogs(name: string, tail?: number): Promise<LogEnt
 
 function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
   return raw.map((entry) => {
+    const tags = Array.isArray(entry.tags) ? entry.tags as string[] : undefined;
     let hostname: string | undefined;
-    const tags = entry.tags;
-    if (Array.isArray(tags)) {
-      const match = tags.find((tag: string) => tag.startsWith("hostname:"));
+    if (tags) {
+      const match = tags.find((tag) => tag.startsWith("hostname:"));
       if (match) hostname = match.slice("hostname:".length);
     }
     return {
+      seq: entry.seq as number,
       ts: entry.ts as number,
       level: entry.level as string,
       stream: entry.stream as LogEntry["stream"],
       text: entry.text as string,
+      source: entry.source as string | undefined,
+      origin: entry.origin as string | undefined,
       hostname,
-      source: entry.source as string | undefined
+      tags,
+      attrs: Array.isArray(entry.attrs) ? entry.attrs as [string, string][] : undefined
     };
   });
 }
