@@ -37,7 +37,8 @@ pub async fn read_pipe_to_collector(
 
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
-        if tee_to_stderr {
+        let suppress_stderr = tee_to_stderr && line.contains("magicsock:");
+        if tee_to_stderr && !suppress_stderr {
             eprintln!("[{source}]: {line}");
         }
         let parsed = parse_log_line(&line);
