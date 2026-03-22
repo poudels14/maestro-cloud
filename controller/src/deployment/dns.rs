@@ -63,7 +63,6 @@ impl DnsManager {
         no_reverse
     }
     cache 30
-    log
     errors
 }
 "#;

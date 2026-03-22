@@ -80,6 +80,80 @@ The config file (`maestro.jsonc`) supports:
 
 Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
 
+## External Secrets
+
+Maestro can load env vars and secrets from external providers. Currently supported: **AWS Secrets Manager**.
+
+### `secrets.source`
+
+Loads all key/value pairs from a JSON secret into `secrets.items`. The AWS secret must be a flat JSON object.
+
+```jsonc
+{
+  "deploy": {
+    "secrets": {
+      "mountPath": "/app/.env",
+      "source": "aws-secret://prod/my-app-secrets"
+    }
+  }
+}
+```
+
+If the AWS secret `prod/my-app-secrets` contains `{ "DB_PASSWORD": "s3cret", "API_KEY": "key123" }`, both will be mounted in `/app/.env`.
+
+Explicit `items` take precedence over values loaded from `source`:
+
+```jsonc
+{
+  "deploy": {
+    "secrets": {
+      "mountPath": "/app/.env",
+      "source": "aws-secret://prod/my-app-secrets",
+      "items": { "DB_PASSWORD": "override-value" }
+    }
+  }
+}
+```
+
+### `deploy.env.source`
+
+Loads all key/value pairs from a JSON secret into container environment variables.
+
+```jsonc
+{
+  "deploy": {
+    "env": {
+      "source": "aws-secret://prod/my-app-env",
+      "items": { "EXTRA_VAR": "literal-value" }
+    }
+  }
+}
+```
+
+Explicit `items` take precedence over values from `source`.
+
+### `build.env.source`
+
+Same as `deploy.env.source`, but for Docker build args (`--build-arg`).
+
+```jsonc
+{
+  "build": {
+    "repo": "git@github.com:org/repo.git",
+    "dockerfilePath": "Dockerfile",
+    "env": {
+      "source": "aws-secret://ci/build-tokens"
+    }
+  }
+}
+```
+
+### Notes
+
+- Secrets are resolved once when a deployment starts building. All replicas use the same resolved values, even across restarts.
+- Resolved values are encrypted at rest in etcd.
+- To add a new provider (e.g. Vault), implement the `SecretProvider` trait in `controller/src/utils/secrets.rs`.
+
 ## Tailscale setup
 
 Tailscale enables remote access to your containers from any device on your tailnet.
