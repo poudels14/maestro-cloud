@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
+use tokio::sync::Mutex;
 
 pub enum SecretProvider {
     Aws,
@@ -31,8 +33,7 @@ impl SecretProvider {
                 if reference.is_empty() {
                     return Err(anyhow!("empty AWS secret reference"));
                 }
-                let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-                let client = aws_sdk_secretsmanager::Client::new(&config);
+                let client = aws_client().await;
                 let result = client
                     .get_secret_value()
                     .secret_id(reference)
@@ -63,5 +64,20 @@ impl SecretProvider {
             }
         }
         Ok(result)
+    }
+}
+
+static AWS_CLIENT: OnceLock<Mutex<Option<aws_sdk_secretsmanager::Client>>> = OnceLock::new();
+
+async fn aws_client() -> aws_sdk_secretsmanager::Client {
+    let mutex = AWS_CLIENT.get_or_init(|| Mutex::new(None));
+    let mut guard = mutex.lock().await;
+    if let Some(client) = guard.as_ref() {
+        client.clone()
+    } else {
+        let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+        let client = aws_sdk_secretsmanager::Client::new(&config);
+        *guard = Some(client.clone());
+        client
     }
 }
