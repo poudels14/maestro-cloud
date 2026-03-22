@@ -3,10 +3,19 @@ export interface BuildCommand {
   args: string[];
 }
 
+export interface EnvConfig {
+  source?: string | null;
+  items?: Record<string, string>;
+}
+
 export interface Build {
   repo: string;
   branch?: string | null;
-  dockerfilePath: string;
+  dockerfile: string;
+  watch?: boolean;
+  registry?: string | null;
+  env?: EnvConfig;
+  secrets?: EnvConfig;
 }
 
 export interface Ingress {
