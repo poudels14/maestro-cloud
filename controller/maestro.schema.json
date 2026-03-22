@@ -70,8 +70,18 @@
         "repo": {
           "type": "string"
         },
+        "branch": {
+          "type": "string"
+        },
         "dockerfilePath": {
           "type": "string"
+        },
+        "watch": {
+          "type": "boolean",
+          "default": false
+        },
+        "env": {
+          "$ref": "#/$defs/envConfig"
         }
       }
     },
@@ -105,15 +115,18 @@
           "minimum": 0
         },
         "env": {
-          "type": "object",
-          "additionalProperties": { "type": "string" }
+          "$ref": "#/$defs/envConfig"
         },
         "secrets": {
           "type": "object",
-          "required": ["mountPath", "items"],
+          "required": ["mountPath"],
           "additionalProperties": false,
           "properties": {
             "mountPath": { "type": "string" },
+            "source": {
+              "type": "string",
+              "description": "Load all key/value pairs from a secret provider (e.g. aws-secret://secret-name)"
+            },
             "items": {
               "type": "object",
               "additionalProperties": { "type": "string" }
@@ -134,6 +147,20 @@
           "type": "array",
           "items": { "type": "string" },
           "default": []
+        }
+      }
+    },
+    "envConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Load all key/value pairs from a secret provider (e.g. aws-secret://secret-name)"
+        },
+        "items": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     },

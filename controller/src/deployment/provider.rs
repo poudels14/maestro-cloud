@@ -74,7 +74,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                     context_dir: build_dir.to_path_buf(),
                     tag: image_tag.to_string(),
                     dockerfile: Some(build_config.dockerfile_path.clone()),
-                    build_args: build_config.env.clone(),
+                    build_args: build_config.env.items.clone(),
                 },
                 log_sender.as_ref(),
                 Some(&log_source),
@@ -137,7 +137,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             for port in &deployment.config.deploy.expose_ports {
                 extra_flags.extend(["-p".to_string(), format!("0:{port}")]);
             }
-            for (key, value) in &deployment.config.deploy.env {
+            for (key, value) in &deployment.config.deploy.env.items {
                 extra_flags.extend(["-e".to_string(), format!("{key}={value}")]);
             }
             if let Some((host_path, container_path)) = &mount_arg {

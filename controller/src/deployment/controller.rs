@@ -322,7 +322,7 @@ impl DeploymentController {
 
     async fn process_queued_deployment(
         &mut self,
-        queued_deployment: QueuedDeployment,
+        mut queued_deployment: QueuedDeployment,
     ) -> Result<()> {
         let deployment_id = queued_deployment.deployment.id.clone();
 
@@ -335,6 +335,53 @@ impl DeploymentController {
             .claim_deployment_building(&queued_deployment)
             .await?;
         if !claimed {
+            return Ok(());
+        }
+
+        if let Err(err) = crate::utils::secrets::resolve_secrets(
+            &secret_providers(),
+            &mut queued_deployment.deployment,
+        )
+        .await
+        {
+            let error_msg = format!("failed to resolve secrets: {err}");
+            self.logger.emit(
+                "error",
+                &format!(
+                    "{}/{}: {error_msg}",
+                    queued_deployment.service_id, deployment_id
+                ),
+            );
+            if let Some(sender) = &self.log_sender {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+                let _ = sender.try_send(LogEntry {
+                    seq: 0,
+                    ts: now,
+                    level: std::sync::Arc::from("error"),
+                    stream: std::sync::Arc::from("stderr"),
+                    text: error_msg,
+                    source: std::sync::Arc::from(
+                        format!("{}/{}/", queued_deployment.service_id, deployment_id).as_str(),
+                    ),
+                    origin: LogOrigin::Service,
+                    tags: std::sync::Arc::new(serde_json::Value::Array(vec![])),
+                    attrs: vec![],
+                });
+            }
+            let _ = self
+                .store
+                .update_deployment_status(
+                    &Deployment {
+                        id: deployment_id.clone(),
+                        service_id: queued_deployment.service_id.clone(),
+                        replica_index: 0,
+                    },
+                    DeploymentStatus::Crashed,
+                )
+                .await;
             return Ok(());
         }
 
@@ -1132,4 +1179,8 @@ fn deregister_container_dns(
         dns.remove_records_for_hostname(hostname, domain);
         let _ = dns.flush();
     }
+}
+
+fn secret_providers() -> Vec<Box<dyn crate::utils::secrets::SecretProvider>> {
+    vec![Box::new(crate::utils::secrets::AwsSecretProvider)]
 }

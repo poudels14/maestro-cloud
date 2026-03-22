@@ -309,13 +309,13 @@ fn service_payload(
 
     let mut deploy = deploy;
     let mut resolved_env = std::collections::HashMap::new();
-    for (key, value) in &deploy.env {
+    for (key, value) in &deploy.env.items {
         let resolved = expand_env_value(value).map_err(|err| {
             Error::invalid_config(format!("service `{service_id}` env `{key}`: {err}"))
         })?;
         resolved_env.insert(key.clone(), resolved);
     }
-    deploy.env = resolved_env;
+    deploy.env.items = resolved_env;
 
     if let Some(secrets) = &mut deploy.secrets {
         let mut resolved_items = std::collections::HashMap::new();
@@ -330,13 +330,13 @@ fn service_payload(
 
     let build = if let Some(mut build) = build {
         let mut resolved_build_env = std::collections::HashMap::new();
-        for (key, value) in &build.env {
+        for (key, value) in &build.env.items {
             let resolved = expand_env_value(value).map_err(|err| {
                 Error::invalid_config(format!("service `{service_id}` build.env `{key}`: {err}"))
             })?;
             resolved_build_env.insert(key.clone(), resolved);
         }
-        build.env = resolved_build_env;
+        build.env.items = resolved_build_env;
         Some(build)
     } else {
         None

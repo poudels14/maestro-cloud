@@ -90,9 +90,9 @@ impl EtcdStateStore {
         if let Some(secrets) = &d.config.deploy.secrets {
             d.config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
         }
-        d.config.deploy.env.clear();
+        d.config.deploy.env.items.clear();
         if let Some(build) = &mut d.config.build {
-            build.env.clear();
+            build.env.items.clear();
         }
         d
     }
@@ -145,12 +145,12 @@ impl EtcdStateStore {
         deployment_id: &str,
         deployment: &ServiceDeployment,
     ) {
-        let deploy_env = &deployment.config.deploy.env;
+        let deploy_env = &deployment.config.deploy.env.items;
         let build_env = deployment
             .config
             .build
             .as_ref()
-            .map(|b| &b.env)
+            .map(|b| &b.env.items)
             .cloned()
             .unwrap_or_default();
         if deploy_env.is_empty() && build_env.is_empty() {
@@ -210,21 +210,21 @@ impl EtcdStateStore {
     }
 
     async fn restore_deployment_env(&self, service_id: &str, deployment: &mut ServiceDeployment) {
-        if !deployment.config.deploy.env.is_empty() {
+        if !deployment.config.deploy.env.items.is_empty() {
             return;
         }
         let has_build_env = deployment
             .config
             .build
             .as_ref()
-            .is_some_and(|b| !b.env.is_empty());
+            .is_some_and(|b| !b.env.items.is_empty());
         if has_build_env {
             return;
         }
         let (deploy_env, build_env) = self.read_deployment_env(service_id, &deployment.id).await;
-        deployment.config.deploy.env = deploy_env;
+        deployment.config.deploy.env.items = deploy_env;
         if let Some(build) = &mut deployment.config.build {
-            build.env = build_env;
+            build.env.items = build_env;
         }
     }
 
