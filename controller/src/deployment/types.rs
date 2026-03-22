@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils;
 use crate::utils::crypto::SecretString;
+use crate::utils::secrets::SecretProvider;
 
 #[derive(Debug, Clone)]
 pub struct DeploymentConfig {
@@ -327,6 +328,32 @@ impl ServiceDeployment {
             git_commit: None,
             build: None,
         })
+    }
+
+    pub async fn resolve_secrets(&mut self) -> Result<()> {
+        if let Some(source) = self.config.deploy.env.source.take() {
+            let source_items = SecretProvider::fetch_json_from_source(&source).await?;
+            for (key, value) in source_items {
+                self.config.deploy.env.items.entry(key).or_insert(value);
+            }
+        }
+        if let Some(build) = &mut self.config.build {
+            if let Some(source) = build.env.source.take() {
+                let source_items = SecretProvider::fetch_json_from_source(&source).await?;
+                for (key, value) in source_items {
+                    build.env.items.entry(key).or_insert(value);
+                }
+            }
+        }
+        if let Some(secrets) = &mut self.config.deploy.secrets {
+            if let Some(source) = secrets.source.take() {
+                let source_items = SecretProvider::fetch_json_from_source(&source).await?;
+                for (key, value) in source_items {
+                    secrets.items.entry(key).or_insert(value);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
