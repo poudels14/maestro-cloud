@@ -37,8 +37,8 @@ pub async fn read_pipe_to_collector(
 
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
-        let suppress_stderr = tee_to_stderr && line.contains("magicsock:");
-        if tee_to_stderr && !suppress_stderr {
+        // tailscale's magicsock logs DERP peer discovery chatter every few seconds
+        if tee_to_stderr && !line.contains("magicsock:") {
             eprintln!("[{source}]: {line}");
         }
         let parsed = parse_log_line(&line);
