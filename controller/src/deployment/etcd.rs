@@ -88,10 +88,14 @@ impl EtcdStateStore {
     ) -> ServiceDeployment {
         let mut d = deployment.clone();
         if let Some(secrets) = &d.config.deploy.secrets {
-            d.config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
+            let mut stripped = secrets.to_metadata(prev_keys);
+            stripped.source = None;
+            d.config.deploy.secrets = Some(stripped);
         }
+        d.config.deploy.env.source = None;
         d.config.deploy.env.items.clear();
         if let Some(build) = &mut d.config.build {
+            build.env.source = None;
             build.env.items.clear();
         }
         d
