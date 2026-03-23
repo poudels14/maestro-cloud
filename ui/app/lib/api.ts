@@ -95,7 +95,7 @@ export async function getSystemLogs(
 
 function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
   return raw.map((entry) => {
-    const tags = Array.isArray(entry.tags) ? entry.tags as string[] : undefined;
+    const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : undefined;
     let hostname: string | undefined;
     if (tags) {
       const match = tags.find((tag) => tag.startsWith("hostname:"));
@@ -111,7 +111,7 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
       origin: entry.origin as string | undefined,
       hostname,
       tags,
-      attrs: Array.isArray(entry.attrs) ? entry.attrs as [string, string][] : undefined
+      attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
     };
   });
 }

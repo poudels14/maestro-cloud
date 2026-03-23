@@ -270,7 +270,12 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const deployItems = [
     { label: "Replicas", value: String(s.deploy.replicas ?? 1) },
     ...(s.deploy.command
-      ? [{ label: "Deploy command", value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim() }]
+      ? [
+          {
+            label: "Deploy command",
+            value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
+          }
+        ]
       : []),
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
@@ -380,10 +385,7 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
 
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
-  const [clusterInfo] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getClusterInfo
-  );
+  const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
   const [logsOpen, setLogsOpen] = createSignal<string | null>(null);
   const [showFreezeConfirm, setShowFreezeConfirm] = createSignal(false);
 
@@ -466,12 +468,16 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                 const envEntries = () =>
                   Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
                 const buildEnvEntries = () =>
-                  Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
+                  Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) =>
+                    a.localeCompare(b)
+                  );
                 const buildSecretKeys = () =>
                   Object.keys(d.config.build?.secrets?.items ?? {}).sort();
                 const hasDetails = () =>
-                  envEntries().length > 0 || secretKeys().length > 0 ||
-                  buildEnvEntries().length > 0 || buildSecretKeys().length > 0;
+                  envEntries().length > 0 ||
+                  secretKeys().length > 0 ||
+                  buildEnvEntries().length > 0 ||
+                  buildSecretKeys().length > 0;
                 return (
                   <div class="rounded-lg border border-gray-200 bg-white overflow-hidden">
                     <div class="p-4">
@@ -516,9 +522,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                         </Show>
                       </div>
                       <Show when={deploymentDomain()}>
-                        <div class="text-xs font-mono text-gray-400 mb-2">
-                          {deploymentDomain()}
-                        </div>
+                        <div class="text-xs font-mono text-gray-400 mb-2">{deploymentDomain()}</div>
                       </Show>
                       <Show
                         when={
@@ -564,7 +568,8 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors outline-none",
                               {
                                 "bg-indigo-50 text-indigo-600": expanded(),
-                                "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600": !expanded()
+                                "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600":
+                                  !expanded()
                               }
                             )}
                           >
@@ -578,7 +583,8 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                             "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors outline-none",
                             {
                               "bg-indigo-50 text-indigo-600": isLogsOpen(),
-                              "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600": !isLogsOpen()
+                              "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-600":
+                                !isLogsOpen()
                             }
                           )}
                         >
@@ -905,7 +911,7 @@ function DeploymentLogViewer(props: {
       size: 155,
       cell: (info) => (
         <span class="text-gray-400 select-none whitespace-nowrap">
-          {formatTs(info.getValue<number>())}
+          {tsFormatter.format(new Date(info.getValue<number>()))}
         </span>
       )
     },
@@ -1035,9 +1041,11 @@ function DeploymentLogViewer(props: {
   };
 
   return (
-    <div class={clsx("overflow-hidden", {
-      "bg-white rounded-lg border border-gray-200": !props.embedded
-    })}>
+    <div
+      class={clsx("overflow-hidden", {
+        "bg-white rounded-lg border border-gray-200": !props.embedded
+      })}
+    >
       <Show when={error()}>
         <div class="p-3">
           <ErrorBanner message={error()!} onRetry={fetchInitialLogs} />
@@ -1155,7 +1163,7 @@ function LogDetailPanel(props: { entry: LogEntry }) {
   const baseAttrs = () => {
     const entry = props.entry;
     const attrs: { label: string; value: string }[] = [
-      { label: "Timestamp", value: new Date(entry.ts).toISOString() },
+      { label: "Timestamp", value: tsFormatter.format(new Date(entry.ts)) },
       { label: "Sequence", value: String(entry.seq) },
       { label: "Level", value: entry.level.toUpperCase() },
       { label: "Stream", value: entry.stream }
@@ -1207,9 +1215,15 @@ function LogDetailPanel(props: { entry: LogEntry }) {
   );
 }
 
-function formatTs(ms: number) {
-  return new Date(ms).toISOString().replace("T", " ").replace("Z", "").slice(0, 19);
-}
+const tsFormatter = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false
+});
 
 function logLevelColor(level: string) {
   return {
