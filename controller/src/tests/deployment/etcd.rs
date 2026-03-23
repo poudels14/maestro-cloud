@@ -6,8 +6,8 @@ use crate::deployment::provider::{
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     Command, Deployment, DeploymentConfig, DeploymentStatus, IngressConfig, QueuedDeployment,
-    ReplicaState, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
-    ServiceInfo, ServiceProvider,
+    ReplicaState, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceDeployment, ServiceInfo, ServiceProvider,
 };
 use crate::runtime;
 use crate::supervisor::controller::JobSupervisor;
@@ -232,6 +232,46 @@ fn shell_command_planner_uses_explicit_deploy_command() {
         deploy.command,
         crate::supervisor::JobCommand::Shell("echo ok".to_string())
     );
+}
+
+#[test]
+fn secrets_mount_content_quotes_values() {
+    let mut deployment = deployment_with_source(None, Some("my-app:latest"), None);
+    deployment.config.deploy.secrets = Some(SecretsConfig {
+        mount_path: "/app/.env".to_string(),
+        source: None,
+        items: HashMap::from([
+            ("SIMPLE".to_string(), "hello".to_string()),
+            ("WITH_QUOTES".to_string(), "say \"hi\"".to_string()),
+            ("MULTILINE".to_string(), "line1\nline2".to_string()),
+            ("WITH_BACKSLASH".to_string(), "path\\to\\file".to_string()),
+        ]),
+        keys: HashMap::new(),
+    });
+
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        network: "test-net".to_string(),
+        dns_domain: None,
+        dns_server: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets-quote"),
+    };
+    let deploy = planner
+        .deploy(&deployment, 0)
+        .expect("should produce deploy output");
+    let content = deploy
+        .secrets_mount
+        .expect("should have secrets mount")
+        .content;
+
+    let parsed: HashMap<String, String> = dotenvy::from_read_iter(content.as_bytes())
+        .filter_map(|item| item.ok())
+        .collect();
+
+    assert_eq!(parsed.get("SIMPLE").unwrap(), "hello");
+    assert_eq!(parsed.get("WITH_QUOTES").unwrap(), "say \"hi\"");
+    assert_eq!(parsed.get("MULTILINE").unwrap(), "line1\nline2");
+    assert_eq!(parsed.get("WITH_BACKSLASH").unwrap(), "path\\to\\file");
 }
 
 #[derive(Default)]
