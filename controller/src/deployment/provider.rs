@@ -159,7 +159,10 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                 let content: String = s
                     .items
                     .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
+                    .map(|(k, v)| {
+                        let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!("{k}=\"{escaped}\"")
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 Some((host_path, s.mount_path.clone(), content))
