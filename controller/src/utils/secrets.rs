@@ -22,9 +22,9 @@ impl SecretProvider {
         provider.fetch(reference).await
     }
 
-    pub async fn fetch_json_from_source(source: &str) -> Result<HashMap<String, String>> {
+    pub async fn fetch_kv_from_source(source: &str) -> Result<HashMap<String, String>> {
         let (provider, reference) = Self::from_source(source)?;
-        provider.fetch_json(reference).await
+        provider.fetch_kv(reference).await
     }
 
     async fn fetch(&self, reference: &str) -> Result<String> {
@@ -48,22 +48,24 @@ impl SecretProvider {
         }
     }
 
-    async fn fetch_json(&self, reference: &str) -> Result<HashMap<String, String>> {
+    async fn fetch_kv(&self, reference: &str) -> Result<HashMap<String, String>> {
         let raw = self.fetch(reference).await?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|err| anyhow!("secret `{reference}` is not valid JSON: {err}"))?;
-        let object = parsed
-            .as_object()
-            .ok_or_else(|| anyhow!("secret `{reference}` is not a JSON object"))?;
-        let mut result = HashMap::new();
-        for (key, value) in object {
-            if let Some(string_value) = value.as_str() {
-                result.insert(key.clone(), string_value.to_string());
-            } else {
-                result.insert(key.clone(), value.to_string());
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(object) = parsed.as_object() {
+                let mut result = HashMap::new();
+                for (key, value) in object {
+                    if let Some(string_value) = value.as_str() {
+                        result.insert(key.clone(), string_value.to_string());
+                    } else {
+                        result.insert(key.clone(), value.to_string());
+                    }
+                }
+                return Ok(result);
             }
         }
-        Ok(result)
+        Ok(dotenvy::from_read_iter(raw.as_bytes())
+            .filter_map(|item| item.ok())
+            .collect())
     }
 }
 

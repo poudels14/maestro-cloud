@@ -194,7 +194,7 @@ impl EnvConfig {
     pub async fn resolved(&self) -> Result<HashMap<String, SecretString>> {
         let mut items = self.items.clone();
         if let Some(source) = &self.source {
-            let source_items = SecretProvider::fetch_json_from_source(source).await?;
+            let source_items = SecretProvider::fetch_kv_from_source(source).await?;
             for (key, value) in source_items {
                 items.entry(key).or_insert(SecretString::new(value));
             }
@@ -372,7 +372,7 @@ impl ServiceDeployment {
         }
         if let Some(secrets) = &mut self.config.deploy.secrets {
             if let Some(source) = secrets.source.take() {
-                let source_items = SecretProvider::fetch_json_from_source(&source).await?;
+                let source_items = SecretProvider::fetch_kv_from_source(&source).await?;
                 for (key, value) in source_items {
                     secrets.items.entry(key).or_insert(value);
                 }
