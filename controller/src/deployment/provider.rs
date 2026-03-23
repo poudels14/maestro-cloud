@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
-use crate::builder;
+use crate::builder::{BuildSource, LogTarget};
 use crate::deployment::types::ServiceDeployment;
 use crate::logs::LogEntry;
 use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
@@ -66,31 +66,30 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             commit_sha: None,
             commit_message: None,
         })?;
-        let mut git_env = build_config.env.items.clone();
-        git_env.extend(build_config.secrets.items.clone());
-        let log_source = format!("{}/{}/build", deployment.config.id, deployment.id);
-        builder::sync_repo(
-            &build_config.repo,
-            build_config.branch.as_deref(),
-            build_dir,
-            &git_env,
-            log_sender.as_ref(),
-            Some(&log_source),
-        )
-        .await
-        .map_err(|error| BuildError {
-            error,
-            commit_sha: None,
-            commit_message: None,
-        })?;
-        let (commit_sha, commit_message) =
-            builder::get_head_commit(build_dir)
-                .await
-                .map_err(|error| BuildError {
-                    error,
-                    commit_sha: None,
-                    commit_message: None,
-                })?;
+        let source = build_config.source();
+        let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
+        let log = log_sender.as_ref().map(|sender| LogTarget {
+            sender,
+            source: &log_source_str,
+        });
+        source
+            .sync(build_dir, log)
+            .await
+            .map_err(|error| BuildError {
+                error,
+                commit_sha: None,
+                commit_message: None,
+            })?;
+        let head = source
+            .head_info(build_dir)
+            .await
+            .map_err(|error| BuildError {
+                error,
+                commit_sha: None,
+                commit_message: None,
+            })?;
+        let commit_sha = head.sha;
+        let commit_message = head.message;
 
         let build_and_push = async {
             self.runtime
@@ -103,7 +102,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                         secrets: build_config.secrets.items.clone(),
                     },
                     log_sender.as_ref(),
-                    Some(&log_source),
+                    Some(&log_source_str),
                 )
                 .await?;
 

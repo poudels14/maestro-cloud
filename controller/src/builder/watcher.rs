@@ -3,14 +3,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use tokio::sync::broadcast;
 
+use super::BuildSource;
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{DeploymentStatus, ServiceDeployment, ServiceInfo};
 use crate::signal::ShutdownEvent;
-use crate::utils::cmd;
-use crate::utils::crypto::SecretString;
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
@@ -111,29 +110,19 @@ impl BuildWatcher {
 
     async fn check_service(&self, service_id: &str, info: &ServiceInfo) -> Result<()> {
         let build_config = info.config.build.as_ref().unwrap();
-        let branch = build_config
-            .branch
-            .as_deref()
-            .ok_or_else(|| anyhow!("watch requires a branch to be specified"))?;
 
         let deployments = self.store.list_service_deployments(service_id).await?;
         let latest = deployments.first();
         if let Some(latest) = latest {
-            if matches!(
-                latest.status,
-                DeploymentStatus::Queued | DeploymentStatus::Building
-            ) {
-                return Ok(());
-            }
-            if latest.status == DeploymentStatus::Crashed && latest.git_commit.is_none() {
-                return Ok(());
+            match (&latest.status, &latest.git_commit) {
+                (DeploymentStatus::Queued | DeploymentStatus::Building, _) => return Ok(()),
+                (DeploymentStatus::Crashed, None) => return Ok(()),
+                _ => {}
             }
         }
 
-        let mut git_env = build_config.env.resolved().await?;
-        git_env.extend(build_config.secrets.resolved().await?);
-
-        let remote_sha = check_remote_head(&build_config.repo, branch, &git_env).await?;
+        let source = build_config.resolved_source().await?;
+        let remote_sha = source.remote_head().await?;
         let current_sha = latest
             .and_then(|d| d.git_commit.as_ref())
             .map(|c| c.reference.as_str());
@@ -145,7 +134,7 @@ impl BuildWatcher {
         self.logger.emit(
             "info",
             &format!(
-                "build watcher detected new commit for `{service_id}` on branch `{branch}` ({})",
+                "build watcher detected new commit for `{service_id}` ({})",
                 &remote_sha[..7.min(remote_sha.len())]
             ),
         );
@@ -153,21 +142,4 @@ impl BuildWatcher {
         self.store.queue_deployment(deployment).await?;
         Ok(())
     }
-}
-
-async fn check_remote_head(
-    repo: &str,
-    branch: &str,
-    env: &HashMap<String, SecretString>,
-) -> Result<String> {
-    let refspec = format!("refs/heads/{branch}");
-    let stdout = cmd::exec("git", &["ls-remote", repo, &refspec])
-        .env(env)
-        .run()
-        .await?;
-    let sha = stdout.split_whitespace().next().unwrap_or("").to_string();
-    if sha.is_empty() {
-        return Err(anyhow!("branch `{branch}` not found on remote `{repo}`"));
-    }
-    Ok(sha)
 }

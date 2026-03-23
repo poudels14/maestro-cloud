@@ -139,6 +139,24 @@ pub struct ServiceBuildConfig {
     pub secrets: EnvConfig,
 }
 
+impl ServiceBuildConfig {
+    pub fn source(&self) -> crate::builder::GitSource {
+        let mut env = self.env.items.clone();
+        env.extend(self.secrets.items.clone());
+        crate::builder::GitSource::new(&self.repo, self.branch.as_deref(), env)
+    }
+
+    pub async fn resolved_source(&self) -> Result<crate::builder::GitSource> {
+        let mut env = self.env.resolved().await?;
+        env.extend(self.secrets.resolved().await?);
+        Ok(crate::builder::GitSource::new(
+            &self.repo,
+            self.branch.as_deref(),
+            env,
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceDeployConfig {
