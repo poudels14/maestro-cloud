@@ -450,7 +450,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   );
                 const changedSecrets = () =>
                   secretKeys()
-                    .filter(([, meta]) => meta.prevHash != null && meta.hash !== meta.prevHash)
+                    .filter(([, meta]) => meta.changed)
                     .map(([key]) => key);
                 const envEntries = () =>
                   Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -494,17 +494,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                         </div>
                       </div>
                       <div class="flex items-center gap-2 mb-2 text-xs">
-                        <Show
-                          when={[
-                            "TERMINATED",
-                            "REMOVED",
-                            "CANCELED",
-                            "CRASHED",
-                            "DRAINING"
-                          ].includes(d.status)}
-                        >
-                          <StatusBadge status={d.status} />
-                        </Show>
+                        <StatusBadge status={d.status} />
                         <span class="font-mono text-gray-400">{shortId}</span>
                         <Show when={d.gitCommit}>
                           <span class="text-gray-300">·</span>
@@ -646,8 +636,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               <div class="space-y-0.5">
                                 <For each={secretKeys()}>
                                   {([key, meta]) => {
-                                    const changed =
-                                      meta.prevHash != null && meta.hash !== meta.prevHash;
+                                    const changed = !!meta.changed;
                                     return (
                                       <div class="flex items-baseline gap-2 text-xs">
                                         <span class="text-gray-500 font-mono">{key}</span>

@@ -188,6 +188,20 @@ impl EtcdStateStore {
         }
     }
 
+    async fn restore_deployment_env(&self, service_id: &str, deployment: &mut ServiceDeployment) {
+        let deployment_id = &deployment.id;
+        if deployment.config.deploy.env.items.is_empty() {
+            let key = deployment_deploy_env_key(service_id, deployment_id);
+            deployment.config.deploy.env.items = self.read_encrypted(&key).await;
+        }
+        if let Some(build) = &mut deployment.config.build {
+            if build.env.items.is_empty() {
+                let key = deployment_build_env_key(service_id, deployment_id);
+                build.env.items = self.read_encrypted(&key).await;
+            }
+        }
+    }
+
     async fn get(
         &self,
         key: Vec<u8>,
@@ -754,7 +768,7 @@ impl ClusterStore for EtcdStateStore {
         let deployments = self.list_service_deployments(service_id).await?;
         let mut result = Vec::with_capacity(deployments.len());
         for mut deployment in deployments {
-            self.restore_deployment_data(service_id, &mut deployment)
+            self.restore_deployment_env(service_id, &mut deployment)
                 .await;
             let replicas: Vec<ReplicaState> = self
                 .read_replica_states(service_id, &deployment.id)
@@ -794,9 +808,12 @@ impl ClusterStore for EtcdStateStore {
                 continue;
             }
 
-            let info = serde_json::from_slice::<ServiceInfo>(kv.value())
-                .map_err(|err| anyhow!("failed to parse service info at key `{key}`: {err}"))?;
-            infos.push(info);
+            match serde_json::from_slice::<ServiceInfo>(kv.value()) {
+                Ok(info) => infos.push(info),
+                Err(err) => {
+                    eprintln!("[maestro]: failed to parse service info at key `{key}`: {err}");
+                }
+            }
         }
         infos.sort_by(|a, b| a.config.id.cmp(&b.config.id));
         Ok(infos)
