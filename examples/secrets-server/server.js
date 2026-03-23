@@ -26,15 +26,18 @@ const server = Bun.serve({
       }
     }
 
-    return Response.json({
-      env,
-      secretsFile: SECRETS_FILE,
-      secretsFileContent: rawSecrets,
-      hostname: process.env.HOSTNAME || "unknown",
-    }, {
-      headers: { "Content-Type": "application/json" },
-    });
-  },
+    return Response.json(
+      {
+        env,
+        secretsFile: SECRETS_FILE,
+        secretsFileContent: rawSecrets,
+        hostname: process.env.HOSTNAME || "unknown"
+      },
+      {
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }
 });
 
 console.log(`secrets-server listening on port ${server.port}`);
