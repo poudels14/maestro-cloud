@@ -622,10 +622,12 @@ impl Server {
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/{deployment_id}/");
-            let entries = log_store
-                .read_tail_by_prefix(&prefix, tail)
-                .await
-                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let entries = if let Some(after) = query.after {
+                log_store.read_after_by_prefix(&prefix, after, tail).await
+            } else {
+                log_store.read_tail_by_prefix(&prefix, tail).await
+            }
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
             let values: Vec<serde_json::Value> = entries
                 .into_iter()
                 .map(|e| serde_json::to_value(e).unwrap_or_default())
@@ -650,11 +652,21 @@ impl Server {
             return Ok(Json(Vec::new()));
         };
         let entries = if name == "maestro-probe" {
-            log_store
-                .read_tail_sources(&["maestro-probe", "maestro-controller"], tail)
-                .await
+            if let Some(after) = query.after {
+                log_store
+                    .read_after_sources(&["maestro-probe", "maestro-controller"], after, tail)
+                    .await
+            } else {
+                log_store
+                    .read_tail_sources(&["maestro-probe", "maestro-controller"], tail)
+                    .await
+            }
         } else {
-            log_store.read_tail(name, tail).await
+            if let Some(after) = query.after {
+                log_store.read_after_for_source(name, after, tail).await
+            } else {
+                log_store.read_tail(name, tail).await
+            }
         }
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let values: Vec<serde_json::Value> = entries
@@ -812,6 +824,7 @@ fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
 #[derive(serde::Deserialize)]
 struct LogsQuery {
     tail: Option<usize>,
+    after: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]

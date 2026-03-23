@@ -283,12 +283,22 @@ function ServicesPage() {
           </div>
           <Show when={clusterInfo()}>
             {(info) => (
-              <div class="flex items-center gap-4 text-xs text-gray-400 font-mono">
-                <span>{info().clusterName}</span>
-                <span title="Canonical domain">{info().canonicalDomain}</span>
-                <span title="Alias domain" class="text-gray-300">
+              <div class="flex items-center gap-4 text-xs font-mono">
+                <span class="text-gray-400">{info().clusterName}</span>
+                <a
+                  href={`http://${info().canonicalDomain}`}
+                  title="Canonical domain"
+                  class="text-gray-500 hover:text-gray-700 no-underline"
+                >
+                  {info().canonicalDomain}
+                </a>
+                <a
+                  href={`http://${info().aliasDomain}`}
+                  title="Alias domain"
+                  class="text-gray-300 hover:text-gray-500 no-underline"
+                >
                   {info().aliasDomain}
-                </span>
+                </a>
               </div>
             )}
           </Show>
