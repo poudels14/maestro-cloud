@@ -1,0 +1,35 @@
+{
+  "$schema": "../../controller/maestro.schema.json",
+  "services": {
+    "secrets-server": {
+      "name": "Secrets Server",
+      "build": {
+        "repo": "git@github.com:poudels14/maestro-cloud.git",
+        "branch": "main",
+        "dockerfile": "examples/secrets-server/Dockerfile"
+      },
+      "ingress": {
+        "host": "secrets-server.local",
+        "port": 3000
+      },
+      "deploy": {
+        "replicas": 1,
+        "healthcheckPath": "/health",
+        "env": {
+          "source": "aws-secret://my-app/env-vars",
+          "items": {
+            "APP_NAME": "secrets-test"
+          }
+        },
+        "secrets": {
+          "mountPath": "/app/.env",
+          "source": "aws-secret://my-app/secrets",
+          "items": {
+            "DB_PASSWORD": "local-test-password",
+            "API_KEY": "local-test-key"
+          }
+        }
+      }
+    }
+  }
+}
