@@ -1,5 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createEffect, createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  Suspense
+} from "solid-js";
 import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Dialog } from "@kobalte/core/dialog";
