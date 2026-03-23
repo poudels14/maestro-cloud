@@ -164,6 +164,28 @@
                 Type = "simple";
                 Restart = "on-failure";
                 RestartSec = 5;
+                ExecStartPre = pkgs.writeShellScript "fix-metadata-route" ''
+                  # Some nerdctl/CNI setups create broad 169.254.0.0/16 veth routes
+                  # that can steal traffic to cloud metadata. Enforce an explicit
+                  # host route so 169.254.169.254 always resolves via the host uplink.
+                  DEFAULT_ROUTE=$(${pkgs.iproute2}/bin/ip -4 -o route show to default | head -1)
+                  DEFAULT_IF=$(printf "%s\n" "$DEFAULT_ROUTE" | ${pkgs.gawk}/bin/awk '{print $5}')
+
+                  if [ -z "$DEFAULT_IF" ]; then
+                    echo "maestro: unable to determine default interface for metadata route" >&2
+                    exit 0
+                  fi
+
+                  case "$DEFAULT_IF" in
+                    veth*|cni*)
+                      echo "maestro: default interface looks like container link ($DEFAULT_IF)" >&2
+                      exit 0
+                      ;;
+                  esac
+
+                  ${pkgs.iproute2}/bin/ip -4 route replace 169.254.169.254/32 dev "$DEFAULT_IF" scope link || \
+                    echo "maestro: failed to install link-scoped metadata route" >&2
+                '';
                 ExecStart = lib.concatStringsSep " " ([
                   "${cfg.package}/bin/maestro"
                   "start"
