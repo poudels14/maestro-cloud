@@ -1,13 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import {
-  createEffect,
-  createResource,
-  createSignal,
-  For,
-  onCleanup,
-  Show,
-  Suspense
-} from "solid-js";
+import { createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
 import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Dialog } from "@kobalte/core/dialog";
@@ -277,18 +269,10 @@ function ServicesPage() {
     }
   };
 
-  const [clusterInfo, { refetch: refetchClusterInfo }] = createResource(
+  const [clusterInfo] = createResource(
     () => (import.meta.env.SSR ? null : true),
     getClusterInfo
   );
-
-  const isUpgrading = () => clusterInfo()?.upgrading ?? false;
-
-  createEffect(() => {
-    if (!isUpgrading()) return;
-    const interval = setInterval(() => refetchClusterInfo(), 5000);
-    onCleanup(() => clearInterval(interval));
-  });
 
   return (
     <div class="min-h-screen bg-[#fafafa]">
@@ -323,14 +307,6 @@ function ServicesPage() {
           </Show>
         </div>
       </header>
-
-      <Show when={isUpgrading()}>
-        <div class="bg-amber-50 border-b border-amber-200 px-6 py-2.5 text-center">
-          <span class="text-xs font-medium text-amber-700">
-            System upgrade in progress — the cluster will reboot shortly
-          </span>
-        </div>
-      </Show>
 
       <main class="max-w-5xl mx-auto px-6 py-8">
         <Show

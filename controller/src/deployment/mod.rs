@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::deployment::dns::DnsManager;
-use crate::logs::{LogConfig, LogEntry, LogOrigin};
+use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
 use crate::supervisor::{
     ContainerRef, SupervisedJobConfig, SupervisedJobStatus, controller::JobSupervisor,
@@ -31,7 +31,7 @@ pub async fn start_system_jobs(
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
-    logger: &crate::logs::SystemLogger,
+    logger: &Logger,
     supervisor: &mut JobSupervisor,
 ) -> SystemStartupInfo {
     let secrets_dir = config.data_dir.join("secrets");
@@ -291,7 +291,7 @@ async fn init_ingress(
     dns_flag: &[String],
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
-    logger: &crate::logs::SystemLogger,
+    logger: &Logger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -377,7 +377,7 @@ async fn init_admin(
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
-    logger: &crate::logs::SystemLogger,
+    logger: &Logger,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -578,7 +578,7 @@ async fn init_probe(
 async fn init_tailnet(
     container_name: &str,
     dns_domain: &str,
-    logger: &crate::logs::SystemLogger,
+    logger: &Logger,
     static_ip: Option<&str>,
     config: &DeploymentConfig,
     runtime: &Arc<dyn RuntimeProvider>,

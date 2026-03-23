@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/solid-router";
-import { Suspense } from "solid-js";
+import { createEffect, createResource, onCleanup, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";
+import { getClusterInfo } from "../lib/api";
 import appCss from "../app.css?url";
 
 export const Route = createRootRoute({
@@ -38,8 +39,27 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
+  const [clusterInfo, { refetch }] = createResource(
+    () => (import.meta.env.SSR ? null : true),
+    getClusterInfo
+  );
+  const isUpgrading = () => clusterInfo()?.upgrading ?? false;
+
+  createEffect(() => {
+    if (!isUpgrading()) return;
+    const interval = setInterval(() => refetch(), 5000);
+    onCleanup(() => clearInterval(interval));
+  });
+
   return (
     <RootDocument>
+      <Show when={isUpgrading()}>
+        <div class="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-6 py-2.5 text-center">
+          <span class="text-xs font-medium text-amber-700">
+            System upgrade in progress — the cluster will reboot shortly
+          </span>
+        </div>
+      </Show>
       <Outlet />
     </RootDocument>
   );

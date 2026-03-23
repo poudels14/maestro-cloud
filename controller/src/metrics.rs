@@ -6,6 +6,7 @@ use sysinfo::System;
 use tokio::process::Command;
 use tokio::sync::broadcast;
 
+use crate::logs::Logger;
 use crate::signal::ShutdownEvent;
 
 const COLLECT_INTERVAL: Duration = Duration::from_secs(5);
@@ -28,7 +29,7 @@ pub struct MetricsCollector {
     runtime_cli: String,
     client: reqwest::Client,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
-    logger: crate::logs::SystemLogger,
+    logger: Logger,
 }
 
 impl MetricsCollector {
@@ -37,7 +38,7 @@ impl MetricsCollector {
         cluster_name: String,
         runtime_cli: String,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
-        logger: crate::logs::SystemLogger,
+        logger: Logger,
     ) -> Self {
         Self {
             endpoint,

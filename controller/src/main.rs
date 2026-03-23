@@ -405,7 +405,7 @@ async fn run() -> crate::error::Result<bool> {
             } else {
                 "inactive (tailscale disabled)"
             };
-            let logger = logs::SystemLogger::new(Some(log_sender.clone()));
+            let logger = logs::Logger::new(Some(log_sender.clone()));
             logger.emit("info", &format!("etcd endpoint {etcd_endpoint}"));
             logger.emit("info", &format!("container network {network}"));
             logger.emit(
