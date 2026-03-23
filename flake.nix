@@ -158,6 +158,7 @@
                 pkgs.kmod
                 pkgs.nix
                 pkgs.nixos-rebuild
+                pkgs.git
               ];
 
               serviceConfig = {
