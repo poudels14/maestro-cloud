@@ -510,6 +510,12 @@ impl SupervisedJobRunner {
                         }
                     }
                 }
+                WorkerOutcome::Exited(Some(_)) if config.max_restarts.is_none() => {
+                    eprintln!("[maestro]: service '{name}' exited successfully; restarting");
+                    cleanup_system_container(config.container.as_ref(), &config.log_config).await;
+                    let delay = backoff.next().unwrap_or(Duration::from_millis(max_delay));
+                    sleep(delay).await;
+                }
                 WorkerOutcome::Exited(Some(_)) => {
                     eprintln!("[maestro]: service '{name}' exited successfully (not restarting)");
                     break;
