@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::logs::Logger;
 use crate::utils;
 use crate::utils::crypto::SecretString;
 use crate::utils::secrets::SecretProvider;
@@ -146,9 +147,9 @@ impl ServiceBuildConfig {
         crate::builder::GitSource::new(&self.repo, self.branch.as_deref(), env)
     }
 
-    pub async fn resolved_source(&self) -> Result<crate::builder::GitSource> {
-        let mut env = self.env.resolved().await?;
-        env.extend(self.secrets.resolved().await?);
+    pub async fn resolved_source(&self, logger: &Logger) -> Result<crate::builder::GitSource> {
+        let mut env = self.env.resolved(logger).await?;
+        env.extend(self.secrets.resolved(logger).await?);
         Ok(crate::builder::GitSource::new(
             &self.repo,
             self.branch.as_deref(),
@@ -191,10 +192,10 @@ impl EnvConfig {
         self.source.is_none() && self.items.is_empty()
     }
 
-    pub async fn resolved(&self) -> Result<HashMap<String, SecretString>> {
+    pub async fn resolved(&self, logger: &Logger) -> Result<HashMap<String, SecretString>> {
         let mut items = self.items.clone();
         if let Some(source) = &self.source {
-            let source_items = SecretProvider::fetch_kv_from_source(source).await?;
+            let source_items = SecretProvider::new(source, logger)?.fetch_kv().await?;
             for (key, value) in source_items {
                 items.entry(key).or_insert(SecretString::new(value));
             }
@@ -364,15 +365,15 @@ impl ServiceDeployment {
         })
     }
 
-    pub async fn resolve_secrets(&mut self) -> Result<()> {
-        self.config.deploy.env.items = self.config.deploy.env.resolved().await?;
+    pub async fn resolve_secrets(&mut self, logger: &Logger) -> Result<()> {
+        self.config.deploy.env.items = self.config.deploy.env.resolved(logger).await?;
         if let Some(build) = &mut self.config.build {
-            build.env.items = build.env.resolved().await?;
-            build.secrets.items = build.secrets.resolved().await?;
+            build.env.items = build.env.resolved(logger).await?;
+            build.secrets.items = build.secrets.resolved(logger).await?;
         }
         if let Some(secrets) = &mut self.config.deploy.secrets {
             if let Some(source) = secrets.source.take() {
-                let source_items = SecretProvider::fetch_kv_from_source(&source).await?;
+                let source_items = SecretProvider::new(&source, logger)?.fetch_kv().await?;
                 for (key, value) in source_items {
                     secrets.items.entry(key).or_insert(value);
                 }

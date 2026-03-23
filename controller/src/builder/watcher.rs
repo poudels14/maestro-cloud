@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use super::BuildSource;
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{DeploymentStatus, ServiceDeployment, ServiceInfo};
+use crate::logs::Logger;
 use crate::signal::ShutdownEvent;
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -21,7 +22,7 @@ pub struct BuildWatcher {
     data_dir: PathBuf,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     backoff: HashMap<String, (Instant, Duration)>,
-    logger: crate::logs::SystemLogger,
+    logger: Logger,
 }
 
 impl BuildWatcher {
@@ -29,7 +30,7 @@ impl BuildWatcher {
         store: Arc<dyn ClusterStore>,
         data_dir: PathBuf,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
-        logger: crate::logs::SystemLogger,
+        logger: Logger,
     ) -> Self {
         Self {
             store,
@@ -121,7 +122,7 @@ impl BuildWatcher {
             }
         }
 
-        let source = build_config.resolved_source().await?;
+        let source = build_config.resolved_source(&self.logger).await?;
         let remote_sha = source.remote_head().await?;
         let current_sha = latest
             .and_then(|d| d.git_commit.as_ref())

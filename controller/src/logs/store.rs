@@ -56,13 +56,17 @@ pub struct LogEntry {
 }
 
 #[derive(Clone)]
-pub struct SystemLogger {
+pub struct Logger {
     sender: Option<flume::Sender<LogEntry>>,
 }
 
-impl SystemLogger {
+impl Logger {
     pub fn new(sender: Option<flume::Sender<LogEntry>>) -> Self {
         Self { sender }
+    }
+
+    pub fn noop() -> Self {
+        Self { sender: None }
     }
 
     pub fn emit(&self, level: &str, text: &str) {

@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
+use crate::logs::Logger;
 use crate::utils::secrets::SecretProvider;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
@@ -133,7 +134,9 @@ pub async fn load_config(source: &str) -> Result<StartConfig> {
         std::fs::read_to_string(path)
             .map_err(|err| anyhow!("failed to read config file `{path}`: {err}"))?
     } else {
-        SecretProvider::fetch_from_source(source).await?
+        SecretProvider::new(source, &Logger::noop())?
+            .fetch_raw()
+            .await?
     };
     let config: StartConfig = json5::from_str(&raw)
         .or_else(|_| serde_json::from_str(&raw))

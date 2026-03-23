@@ -13,7 +13,7 @@ use crate::deployment::types::{
     Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, GitCommitInfo,
     QueuedDeployment, ServiceDeployment, ServiceProvider,
 };
-use crate::logs::{LogConfig, LogEntry, LogOrigin};
+use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RuntimeProvider};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
@@ -58,7 +58,7 @@ pub struct DeploymentController {
     deployments: HashMap<String, Deployment>,
     pending_builds: HashMap<String, PendingBuild>,
     shutdown_in_progress: bool,
-    logger: crate::logs::SystemLogger,
+    logger: Logger,
     log_sender: Option<flume::Sender<LogEntry>>,
 }
 
@@ -104,7 +104,7 @@ impl DeploymentController {
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
             shutdown_in_progress: false,
-            logger: crate::logs::SystemLogger::new(log_sender.clone()),
+            logger: Logger::new(log_sender.clone()),
             log_sender,
         }
     }
@@ -343,7 +343,11 @@ impl DeploymentController {
             return Ok(());
         }
 
-        if let Err(err) = queued_deployment.deployment.resolve_secrets().await {
+        if let Err(err) = queued_deployment
+            .deployment
+            .resolve_secrets(&self.logger)
+            .await
+        {
             let error_msg = format!("failed to resolve secrets: {err}");
             self.logger.emit(
                 "error",
