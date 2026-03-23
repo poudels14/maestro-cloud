@@ -251,6 +251,7 @@ impl EtcdStateStore {
         let key = service_info_key(service_id);
         let response = self.get(key.as_bytes().to_vec(), None).await?;
         let Some(kv) = response.kvs().first() else {
+            eprintln!("[maestro]: service info key missing for `{service_id}` at `{key}`");
             return Ok(None);
         };
 
@@ -566,23 +567,29 @@ impl ClusterStore for EtcdStateStore {
         let info_json = serde_json::to_string(&updated_info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
 
-        self.txn(
-            vec![
-                compare_mod_revision_or_absent(
-                    &queued_deployment.key,
-                    Some(queued_deployment.mod_revision),
-                ),
-                compare_mod_revision_or_absent(
-                    &info_key,
-                    existing_info.as_ref().map(|s| s.mod_revision),
-                ),
-            ],
-            vec![
-                request_put(&queued_deployment.key, &deployment_json),
-                request_put(&info_key, &info_json),
-            ],
-        )
-        .await
+        let committed = self
+            .txn(
+                vec![
+                    compare_mod_revision_or_absent(
+                        &queued_deployment.key,
+                        Some(queued_deployment.mod_revision),
+                    ),
+                    compare_mod_revision_or_absent(
+                        &info_key,
+                        existing_info.as_ref().map(|s| s.mod_revision),
+                    ),
+                ],
+                vec![
+                    request_put(&queued_deployment.key, &deployment_json),
+                    request_put(&info_key, &info_json),
+                ],
+            )
+            .await?;
+        eprintln!(
+            "[maestro]: claim_deployment_building service=`{}` deployment=`{}` info_key=`{}` committed={}",
+            queued_deployment.service_id, queued_deployment.deployment.id, info_key, committed
+        );
+        Ok(committed)
     }
 
     async fn update_deployment_status(

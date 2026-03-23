@@ -31,7 +31,8 @@ import {
   cancelDeployment,
   stopDeployment,
   freezeService,
-  getServiceMetrics
+  getServiceMetrics,
+  getClusterInfo
 } from "../lib/api";
 import { TimelineChart } from "../components/TimelineChart";
 import { StatusBadge, StatusDot, DeploymentMenu, TabButton, timeAgo, ErrorBanner } from "../lib/ui";
@@ -274,19 +275,19 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
 
-  const ingressItems = s.ingress
-    ? [
-        { label: "Host", value: s.ingress.host },
-        { label: "Port", value: String(s.ingress.port ?? 80) }
-      ]
-    : null;
-
   const envItems = Object.entries(s.deploy.env ?? {}).map(([key, value]) => ({
     label: key,
     value
   }));
 
   const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
+
+  const ingressItems = s.ingress
+    ? [
+        { label: "Host", value: s.ingress.host },
+        { label: "Port", value: String(s.ingress.port ?? 80) }
+      ]
+    : null;
 
   return (
     <div class="space-y-6">
@@ -311,10 +312,10 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
           </div>
         </div>
       </Show>
-      <ConfigSection title="Deploy" items={deployItems} />
       <Show when={ingressItems}>
         {(items) => <ConfigSection title="Ingress" items={items()} />}
       </Show>
+      <ConfigSection title="Deploy" items={deployItems} />
       <Show when={envItems.length > 0}>
         <ConfigSection title="Deploy Environment" items={envItems} />
       </Show>
@@ -379,6 +380,10 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
 
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
+  const [clusterInfo] = createResource(
+    () => (import.meta.env.SSR ? null : true),
+    getClusterInfo
+  );
   const [logsOpen, setLogsOpen] = createSignal<string | null>(null);
   const [showFreezeConfirm, setShowFreezeConfirm] = createSignal(false);
 
@@ -452,6 +457,12 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   secretKeys()
                     .filter(([, meta]) => meta.changed)
                     .map(([key]) => key);
+                const deploymentDomain = () => {
+                  const info = clusterInfo();
+                  if (!info) return null;
+                  const shortId = d.id.slice(0, 6);
+                  return `${d.config.id}-${shortId}.${info.canonicalDomain}`;
+                };
                 const envEntries = () =>
                   Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
                 const buildEnvEntries = () =>
@@ -504,6 +515,11 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           </span>
                         </Show>
                       </div>
+                      <Show when={deploymentDomain()}>
+                        <div class="text-xs font-mono text-gray-400 mb-2">
+                          {deploymentDomain()}
+                        </div>
+                      </Show>
                       <Show
                         when={
                           d.replicas &&
