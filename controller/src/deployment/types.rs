@@ -220,8 +220,8 @@ pub struct SecretsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretKeyMeta {
     pub hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prev_hash: Option<String>,
+    #[serde(default)]
+    pub changed: bool,
 }
 
 impl SecretsConfig {
@@ -250,8 +250,8 @@ impl SecretsConfig {
             .iter()
             .map(|(k, v)| {
                 let hash = Self::compute_value_hash(v);
-                let prev_hash = prev_keys.get(k).map(|m| m.hash.clone());
-                (k.clone(), SecretKeyMeta { hash, prev_hash })
+                let changed = prev_keys.get(k).is_some_and(|prev| prev.hash != hash);
+                (k.clone(), SecretKeyMeta { hash, changed })
             })
             .collect();
         SecretsConfig {

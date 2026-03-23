@@ -24,8 +24,7 @@ export interface Ingress {
 }
 
 export interface SecretKeyMeta {
-  hash: string;
-  prevHash?: string | null;
+  changed?: boolean;
 }
 
 export interface SecretsConfig {
