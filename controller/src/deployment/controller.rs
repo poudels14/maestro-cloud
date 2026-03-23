@@ -116,6 +116,7 @@ impl DeploymentController {
 
         let tmp_dir = self.config.data_dir.join("tmp");
         let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = self.store.delete_system_upgrade_request().await;
 
         if let Err(err) = self.queue_terminated_active_deployments().await {
             self.logger.emit(
@@ -179,8 +180,6 @@ impl DeploymentController {
         let Some(system_type) = request.ok().flatten() else {
             return None;
         };
-        let _ = self.store.delete_system_upgrade_request().await;
-
         if system_type == "nixos" {
             self.logger.emit("info", "starting NixOS system upgrade");
             let flake_result = tokio::process::Command::new("nix")
@@ -1048,6 +1047,21 @@ impl DeploymentController {
                         .delete_replica_state(service_id, deployment_id, state.replica_index)
                         .await;
                 }
+            }
+
+            let any_ready = replica_states
+                .iter()
+                .any(|s| s.replica_index < desired && s.status == DeploymentStatus::Ready);
+            if any_ready {
+                let deployment_ref = Deployment {
+                    service_id: service_id.clone(),
+                    id: deployment_id.clone(),
+                    replica_index: 0,
+                };
+                let _ = self
+                    .store
+                    .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
+                    .await;
             }
         }
     }

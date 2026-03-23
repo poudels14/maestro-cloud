@@ -5,6 +5,7 @@ export interface ClusterInfo {
   clusterAlias: string;
   canonicalDomain: string;
   aliasDomain: string;
+  upgrading?: boolean;
 }
 
 export async function getClusterInfo(): Promise<ClusterInfo> {
