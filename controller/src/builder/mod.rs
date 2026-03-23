@@ -1,5 +1,5 @@
-mod runner;
+mod source;
 mod watcher;
 
-pub use runner::{get_head_commit, sync_repo};
+pub use source::{BuildSource, GitSource, LogTarget};
 pub use watcher::BuildWatcher;
