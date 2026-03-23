@@ -857,6 +857,7 @@ function DeploymentLogViewer(props: {
   const [hasMore, setHasMore] = createSignal(false);
   const [tail, setTail] = createSignal(DEFAULT_LOG_TAIL);
   const [userPhase, setUserPhase] = createSignal<"deploy" | "build" | null>(null);
+  const lastSeq = () => lines().at(-1)?.seq ?? 0;
 
   const hasBuildLogs = () => lines().some((l) => l.source?.endsWith("/build"));
   const showTabs = () => props.hasBuild || hasBuildLogs();
@@ -947,7 +948,7 @@ function DeploymentLogViewer(props: {
     getRowCanExpand: () => true
   });
 
-  const fetchLogs = async () => {
+  const fetchInitialLogs = async () => {
     try {
       const t = tail();
       let fetched: LogEntry[];
@@ -967,6 +968,24 @@ function DeploymentLogViewer(props: {
     }
   };
 
+  const pollLogs = async () => {
+    try {
+      const after = lastSeq();
+      let fetched: LogEntry[];
+      if (props.isSystem) {
+        fetched = await getSystemLogs(props.serviceId, DEFAULT_LOG_TAIL, after);
+      } else {
+        if (!props.deploymentId) return;
+        fetched = await getLogs(props.serviceId, props.deploymentId, DEFAULT_LOG_TAIL, after);
+      }
+      if (fetched.length === 0) return;
+      setLines((prev) => [...prev, ...fetched]);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load logs");
+    }
+  };
+
   createEffect(
     on(
       () => props.deploymentId,
@@ -975,12 +994,12 @@ function DeploymentLogViewer(props: {
         setLoading(true);
         setTail(DEFAULT_LOG_TAIL);
         setUserPhase(null);
-        fetchLogs();
+        fetchInitialLogs();
       }
     )
   );
 
-  const pollTimer = setInterval(fetchLogs, POLL_INTERVAL_MS);
+  const pollTimer = setInterval(pollLogs, POLL_INTERVAL_MS);
   onCleanup(() => clearInterval(pollTimer));
 
   let scrollRef: HTMLDivElement | undefined;
@@ -1021,7 +1040,7 @@ function DeploymentLogViewer(props: {
     })}>
       <Show when={error()}>
         <div class="p-3">
-          <ErrorBanner message={error()!} onRetry={fetchLogs} />
+          <ErrorBanner message={error()!} onRetry={fetchInitialLogs} />
         </div>
       </Show>
       <Show when={showTabs() || props.label}>

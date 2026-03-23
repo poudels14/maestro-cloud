@@ -691,17 +691,15 @@ impl DeploymentController {
             }
         }
 
-        if replica_status == DeploymentStatus::Ready {
-            let deployment_ref = Deployment {
-                service_id: service_id.clone(),
-                id: deployment_id.clone(),
-                replica_index: 0,
-            };
-            let _ = self
-                .store
-                .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
-                .await;
-        }
+        let deployment_ref = Deployment {
+            service_id: service_id.clone(),
+            id: deployment_id.clone(),
+            replica_index: 0,
+        };
+        let _ = self
+            .store
+            .update_deployment_status(&deployment_ref, replica_status)
+            .await;
     }
 
     async fn update_jobs_status(&mut self, finished: Vec<FinishedJob>) {

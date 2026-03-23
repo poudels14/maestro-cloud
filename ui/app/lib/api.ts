@@ -64,22 +64,29 @@ export async function stopDeployment(serviceId: string, deploymentId: string) {
 export async function getLogs(
   serviceId: string,
   deploymentId: string,
-  tail?: number
+  tail?: number,
+  afterSeq?: number
 ): Promise<LogEntry[]> {
   const url = new URL(
     `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
     location.origin
   );
   if (tail != null) url.searchParams.set("tail", String(tail));
+  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
   const raw = await res.json();
   return mapLogEntries(raw);
 }
 
-export async function getSystemLogs(name: string, tail?: number): Promise<LogEntry[]> {
+export async function getSystemLogs(
+  name: string,
+  tail?: number,
+  afterSeq?: number
+): Promise<LogEntry[]> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
+  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
   const raw = await res.json();
