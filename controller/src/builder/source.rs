@@ -48,6 +48,10 @@ impl GitSource {
     pub fn new(repo: &str, branch: Option<&str>, mut env: HashMap<String, SecretString>) -> Self {
         let repo = to_https_url(repo);
         if let Some(token) = env.get("GH_TOKEN").cloned() {
+            let host = repo
+                .strip_prefix("https://")
+                .and_then(|r| r.split('/').next())
+                .unwrap_or("github.com");
             let encoded = format!(
                 "basic {}",
                 base64::engine::general_purpose::STANDARD
@@ -59,7 +63,7 @@ impl GitSource {
             );
             env.insert(
                 "GIT_CONFIG_KEY_0".to_string(),
-                SecretString::new("http.extraHeader".to_string()),
+                SecretString::new(format!("http.https://{host}/.extraHeader")),
             );
             env.insert(
                 "GIT_CONFIG_VALUE_0".to_string(),
