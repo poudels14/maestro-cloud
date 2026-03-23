@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
+use base64::Engine;
+
 use crate::logs::{LogEntry, LogOrigin};
 use crate::utils::cmd;
 use crate::utils::crypto::SecretString;
@@ -43,9 +45,33 @@ pub struct GitSource {
 }
 
 impl GitSource {
-    pub fn new(repo: &str, branch: Option<&str>, env: HashMap<String, SecretString>) -> Self {
+    pub fn new(repo: &str, branch: Option<&str>, mut env: HashMap<String, SecretString>) -> Self {
+        let repo = to_https_url(repo);
+        if let Some(token) = env.get("GH_TOKEN").cloned() {
+            let encoded = format!(
+                "basic {}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(format!("x-access-token:{}", token.as_str()))
+            );
+            env.insert(
+                "GIT_CONFIG_COUNT".to_string(),
+                SecretString::new("1".to_string()),
+            );
+            env.insert(
+                "GIT_CONFIG_KEY_0".to_string(),
+                SecretString::new("http.extraHeader".to_string()),
+            );
+            env.insert(
+                "GIT_CONFIG_VALUE_0".to_string(),
+                SecretString::new(format!("Authorization: {encoded}")),
+            );
+            env.insert(
+                "GIT_TERMINAL_PROMPT".to_string(),
+                SecretString::new("0".to_string()),
+            );
+        }
         Self {
-            repo: to_https_url(repo),
+            repo,
             branch: branch.map(String::from),
             env,
         }
