@@ -918,6 +918,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         crate::validation::validate_service_provider_config(provider, &build, &image, &deploy)?;
 
     let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
+    let secrets_source = deploy.secrets.as_ref().and_then(|s| s.source.as_ref());
     let version_payload = json!({
         "id": &service_id,
         "name": &service_name,
@@ -931,6 +932,8 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
             "healthcheckPath": &deploy.healthcheck_path,
             "env": &deploy.env,
             "secretsHash": &secrets_hash,
+            "secretsSource": &secrets_source,
+            "secretsMountPath": deploy.secrets.as_ref().map(|s| &s.mount_path),
         },
         "ingress": &ingress
     });

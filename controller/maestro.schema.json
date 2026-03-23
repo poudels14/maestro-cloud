@@ -133,6 +133,9 @@
               "type": "object",
               "additionalProperties": { "type": "string" }
             }
+          },
+          "not": {
+            "required": ["source", "items"]
           }
         }
       }
@@ -164,6 +167,9 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         }
+      },
+      "not": {
+        "required": ["source", "items"]
       }
     },
     "ingress": {

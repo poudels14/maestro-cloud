@@ -1,4 +1,6 @@
-use crate::deployment::types::{ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
+use crate::deployment::types::{
+    EnvConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
+};
 
 pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
     if service_id.is_empty() {
@@ -29,6 +31,8 @@ pub fn validate_build_config(
             if dockerfile.is_empty() {
                 return Err("build.dockerfile cannot be empty".to_string());
             }
+            validate_env_config(&build.env, "build.env")?;
+            validate_env_config(&build.secrets, "build.secrets")?;
             Ok((
                 Some(ServiceBuildConfig {
                     repo: repo.to_string(),
@@ -67,6 +71,15 @@ pub fn validate_service_provider_config(
     ),
     String,
 > {
+    validate_env_config(&deploy.env, "deploy.env")?;
+    if let Some(secrets) = &deploy.secrets {
+        if secrets.source.is_some() && !secrets.items.is_empty() {
+            return Err(
+                "deploy.secrets cannot have both `source` and `items`; use one or the other"
+                    .to_string(),
+            );
+        }
+    }
     match provider {
         ServiceProvider::Docker => {
             let (build, image) = validate_build_config(build, image)?;
@@ -88,4 +101,13 @@ pub fn validate_service_provider_config(
             Ok((None, None, deploy.clone()))
         }
     }
+}
+
+fn validate_env_config(config: &EnvConfig, field: &str) -> Result<(), String> {
+    if config.source.is_some() && !config.items.is_empty() {
+        return Err(format!(
+            "{field} cannot have both `source` and `items`; use one or the other"
+        ));
+    }
+    Ok(())
 }
