@@ -661,16 +661,14 @@ impl ClusterStore for EtcdStateStore {
                 .await;
         }
 
-        let prev_keys = self.prev_secret_keys(service_id).await;
-        let stripped = self.strip_deployment_with_metadata(deployment, &prev_keys);
-        let deployment_json = serde_json::to_string(&stripped)
-            .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
-
         let dep = Deployment {
             id: deployment_id.clone(),
             service_id: service_id.to_string(),
             replica_index: 0,
         };
+        let prev_keys = self.prev_secret_keys(service_id).await;
+        let stripped = self.strip_deployment_with_metadata(deployment, &prev_keys);
+
         for _attempt in 0..MAX_STATUS_TXN_RETRIES {
             let Some(snapshot) = self.find_deployment_snapshot(&dep).await? else {
                 return Err(anyhow!(
@@ -678,6 +676,12 @@ impl ClusterStore for EtcdStateStore {
                     deployment_id,
                 ));
             };
+            let mut stored = snapshot.deployment.clone();
+            stored.config.deploy.env = stripped.config.deploy.env.clone();
+            stored.config.deploy.secrets = stripped.config.deploy.secrets.clone();
+
+            let deployment_json = serde_json::to_string(&stored)
+                .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
             let committed = self
                 .txn(
                     vec![compare_mod_revision_or_absent(
