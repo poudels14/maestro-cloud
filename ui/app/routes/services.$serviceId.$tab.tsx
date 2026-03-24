@@ -19,7 +19,7 @@ import {
   flexRender,
   type ColumnDef
 } from "@tanstack/solid-table";
-import { Clock, GitCommitHorizontal, Home, Rocket, ChevronRight } from "lucide-solid";
+import { Clock, Eye, EyeOff, GitCommitHorizontal, Home, Rocket, ChevronRight } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry, Service } from "../lib/types";
 import {
@@ -310,7 +310,7 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
             </Show>
           </h4>
           <Show when={buildEnvItems.length > 0}>
-            <ConfigSection items={buildEnvItems} />
+            <ConfigSection items={buildEnvItems} maskValues />
           </Show>
         </div>
       </Show>
@@ -349,7 +349,7 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
             </Show>
           </h4>
           <Show when={envItems.length > 0}>
-            <ConfigSection items={envItems} />
+            <ConfigSection items={envItems} maskValues />
           </Show>
         </div>
       </Show>
@@ -484,6 +484,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
               {(d) => {
                 const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
                 const [expanded, setExpanded] = createSignal(false);
+                const [envRevealed, setEnvRevealed] = createSignal(false);
                 const isLogsOpen = () => logsOpen() === d.id;
                 const secretKeys = () =>
                   Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) =>
@@ -497,7 +498,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   const info = clusterInfo();
                   if (!info) return null;
                   const shortId = d.id.slice(0, 6);
-                  return `${d.config.id}-${shortId}.${info.canonicalDomain}`;
+                  const host = `${d.config.id}-${shortId}.${info.canonicalDomain}`;
+                  const port = d.config.ingress?.port ?? null;
+                  return { host, port: port ?? null };
                 };
                 const envEntries = () =>
                   Object.entries(d.config.deploy.env?.items ?? {}).sort(([a], [b]) =>
@@ -566,7 +569,21 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                         </Show>
                       </div>
                       <Show when={deploymentDomain()}>
-                        <div class="text-xs font-mono text-gray-400 mb-2">{deploymentDomain()}</div>
+                        {(domain) => {
+                          const port = domain().port;
+                          const label = port ? `${domain().host}:${port}` : domain().host;
+                          const href = `http://${label}`;
+                          return (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="block text-xs font-mono text-gray-400 hover:text-indigo-500 transition-colors mb-2"
+                            >
+                              {label}
+                            </a>
+                          );
+                        }}
                       </Show>
                       <Show
                         when={
@@ -639,10 +656,25 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                         <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
                           <Show when={buildEnvEntries().length > 0 || buildEnvSource()}>
                             <div>
-                              <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
-                                Build Environment
-                                <Show when={buildEnvSource()}>
-                                  <span class="normal-case ml-1 text-gray-300 font-mono">{buildEnvSource()}</span>
+                              <div class="flex items-center justify-between mb-1">
+                                <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                                  Build Environment
+                                  <Show when={buildEnvSource()}>
+                                    <span class="normal-case ml-1 text-gray-300 font-mono">
+                                      {buildEnvSource()}
+                                    </span>
+                                  </Show>
+                                </div>
+                                <Show when={buildEnvEntries().length > 0}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEnvRevealed(!envRevealed())}
+                                    class="text-gray-400 hover:text-gray-600 transition-colors"
+                                  >
+                                    <Show when={envRevealed()} fallback={<Eye class="size-3" />}>
+                                      <EyeOff class="size-3" />
+                                    </Show>
+                                  </button>
                                 </Show>
                               </div>
                               <div class="space-y-0.5">
@@ -651,7 +683,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                                     <div class="flex items-baseline gap-2 text-xs">
                                       <span class="text-gray-500 font-mono">{key}</span>
                                       <span class="text-gray-300">=</span>
-                                      <span class="text-gray-700 font-mono truncate">{value}</span>
+                                      <span class="text-gray-700 font-mono truncate">
+                                        {envRevealed() ? value : "••••••••"}
+                                      </span>
                                     </div>
                                   )}
                                 </For>
@@ -663,7 +697,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                                 Build Secrets
                                 <Show when={buildSecretSource()}>
-                                  <span class="normal-case ml-1 text-gray-300 font-mono">{buildSecretSource()}</span>
+                                  <span class="normal-case ml-1 text-gray-300 font-mono">
+                                    {buildSecretSource()}
+                                  </span>
                                 </Show>
                               </div>
                               <div class="space-y-0.5">
@@ -681,10 +717,25 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           </Show>
                           <Show when={envEntries().length > 0 || envSource()}>
                             <div>
-                              <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
-                                Environment
-                                <Show when={envSource()}>
-                                  <span class="normal-case ml-1 text-gray-300 font-mono">{envSource()}</span>
+                              <div class="flex items-center justify-between mb-1">
+                                <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                                  Deploy Environment
+                                  <Show when={envSource()}>
+                                    <span class="normal-case ml-1 text-gray-300 font-mono">
+                                      {envSource()}
+                                    </span>
+                                  </Show>
+                                </div>
+                                <Show when={envEntries().length > 0}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEnvRevealed(!envRevealed())}
+                                    class="text-gray-400 hover:text-gray-600 transition-colors"
+                                  >
+                                    <Show when={envRevealed()} fallback={<Eye class="size-3" />}>
+                                      <EyeOff class="size-3" />
+                                    </Show>
+                                  </button>
                                 </Show>
                               </div>
                               <div class="space-y-0.5">
@@ -693,7 +744,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                                     <div class="flex items-baseline gap-2 text-xs">
                                       <span class="text-gray-500 font-mono">{key}</span>
                                       <span class="text-gray-300">=</span>
-                                      <span class="text-gray-700 font-mono truncate">{value}</span>
+                                      <span class="text-gray-700 font-mono truncate">
+                                        {envRevealed() ? value : "••••••••"}
+                                      </span>
                                     </div>
                                   )}
                                 </For>
@@ -703,13 +756,15 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           <Show when={secretKeys().length > 0 || secretSource()}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
-                                Secrets
+                                Deploy Secrets
                                 <span class="normal-case ml-1 text-gray-300">
                                   ({d.config.deploy.secrets?.mountPath})
                                 </span>
                               </div>
                               <Show when={secretSource()}>
-                                <div class="text-xs font-mono text-gray-400 mb-1">{secretSource()}</div>
+                                <div class="text-xs font-mono text-gray-400 mb-1">
+                                  {secretSource()}
+                                </div>
                               </Show>
                               <div class="space-y-0.5">
                                 <For each={secretKeys()}>
@@ -1291,18 +1346,40 @@ function logLevelColor(level: string) {
   };
 }
 
-function ConfigSection(props: { title?: string; items: { label: string; value: string }[] }) {
+function ConfigSection(props: {
+  title?: string;
+  items: { label: string; value: string }[];
+  maskValues?: boolean;
+}) {
+  const [revealed, setRevealed] = createSignal(false);
+  const masked = () => props.maskValues && !revealed();
+
   return (
     <div>
       <Show when={props.title}>
-        <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">{props.title}</h4>
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider">{props.title}</h4>
+          <Show when={props.maskValues}>
+            <button
+              type="button"
+              onClick={() => setRevealed(!revealed())}
+              class="text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <Show when={revealed()} fallback={<Eye class="size-3.5" />}>
+                <EyeOff class="size-3.5" />
+              </Show>
+            </button>
+          </Show>
+        </div>
       </Show>
       <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
         <For each={props.items}>
           {(item) => (
             <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
               <span class="text-xs text-gray-500 shrink-0">{item.label}</span>
-              <span class="text-sm font-mono text-gray-800 text-right truncate">{item.value}</span>
+              <span class="text-sm font-mono text-gray-800 text-right truncate">
+                {masked() ? "••••••••" : item.value}
+              </span>
             </div>
           )}
         </For>

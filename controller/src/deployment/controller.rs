@@ -343,53 +343,42 @@ impl DeploymentController {
             return Ok(());
         }
 
-        if let Err(err) = queued_deployment
-            .deployment
-            .resolve_secrets(&self.logger)
-            .await
-        {
-            let error_msg = format!("failed to resolve secrets: {err}");
-            self.logger.emit(
-                "error",
-                &format!(
-                    "{}/{}: {error_msg}",
-                    queued_deployment.service_id, deployment_id
-                ),
-            );
-            if let Some(sender) = &self.log_sender {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
-                let _ = sender.try_send(LogEntry {
-                    seq: 0,
-                    ts: now,
-                    level: Arc::from("error"),
-                    stream: Arc::from("stderr"),
-                    text: error_msg,
-                    source: Arc::from(
-                        format!("{}/{}/", queued_deployment.service_id, deployment_id).as_str(),
-                    ),
-                    origin: LogOrigin::Service,
-                    tags: Arc::new(serde_json::Value::Array(vec![])),
-                    attrs: vec![],
-                });
-            }
-            let _ = self
-                .store
-                .update_deployment_status(
-                    &Deployment {
-                        id: deployment_id.clone(),
-                        service_id: queued_deployment.service_id.clone(),
-                        replica_index: 0,
-                    },
-                    DeploymentStatus::Crashed,
-                )
-                .await;
-            return Ok(());
-        }
+        let service_log_source = format!("{}/{}/", queued_deployment.service_id, deployment_id);
 
         if queued_deployment.deployment.config.build.is_some() {
+            if let Err(err) = queued_deployment
+                .deployment
+                .resolve_build_secrets(&self.logger)
+                .await
+            {
+                let error_msg = format!("failed to resolve build secrets: {err}");
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "{}/{}: {error_msg}",
+                        queued_deployment.service_id, deployment_id
+                    ),
+                );
+                self.logger.emit_from_source(
+                    "error",
+                    &error_msg,
+                    &service_log_source,
+                    LogOrigin::Service,
+                );
+                let _ = self
+                    .store
+                    .update_deployment_status(
+                        &Deployment {
+                            id: deployment_id.clone(),
+                            service_id: queued_deployment.service_id.clone(),
+                            replica_index: 0,
+                        },
+                        DeploymentStatus::Crashed,
+                    )
+                    .await;
+                return Ok(());
+            }
+
             if let Err(err) = self
                 .store
                 .save_build_data(&queued_deployment.service_id, &queued_deployment.deployment)
@@ -436,7 +425,7 @@ impl DeploymentController {
             return Ok(());
         }
 
-        self.deploy_service(&queued_deployment).await;
+        self.deploy_service(&mut queued_deployment).await;
 
         Ok(())
     }
@@ -524,7 +513,7 @@ impl DeploymentController {
                             ),
                         );
                     }
-                    self.deploy_service(&queued).await;
+                    self.deploy_service(&mut queued).await;
                 }
                 Err(build_err) => {
                     self.logger.emit(
@@ -559,9 +548,51 @@ impl DeploymentController {
         }
     }
 
-    async fn deploy_service(&mut self, queued_deployment: &QueuedDeployment) {
-        let service_id = &queued_deployment.service_id;
-        let deployment_id = &queued_deployment.deployment.id;
+    async fn deploy_service(&mut self, queued_deployment: &mut QueuedDeployment) {
+        let service_id = &queued_deployment.service_id.clone();
+        let deployment_id = &queued_deployment.deployment.id.clone();
+        let service_log_source = format!("{service_id}/{deployment_id}/");
+
+        match queued_deployment
+            .deployment
+            .resolve_deploy_secrets(&self.logger)
+            .await
+        {
+            Ok(Some(resolved)) => {
+                self.logger.emit_from_source(
+                    "info",
+                    &format!("loaded {} keys from `{}`", resolved.count, resolved.source),
+                    &service_log_source,
+                    LogOrigin::Service,
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let error_msg = format!("failed to resolve deploy secrets: {err}");
+                self.logger.emit(
+                    "error",
+                    &format!("{service_id}/{deployment_id}: {error_msg}"),
+                );
+                self.logger.emit_from_source(
+                    "error",
+                    &error_msg,
+                    &service_log_source,
+                    LogOrigin::Service,
+                );
+                let _ = self
+                    .store
+                    .update_deployment_status(
+                        &Deployment {
+                            id: deployment_id.clone(),
+                            service_id: service_id.clone(),
+                            replica_index: 0,
+                        },
+                        DeploymentStatus::Crashed,
+                    )
+                    .await;
+                return;
+            }
+        }
 
         if let Err(err) = self
             .store
