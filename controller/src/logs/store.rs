@@ -71,6 +71,10 @@ impl Logger {
 
     pub fn emit(&self, level: &str, text: &str) {
         eprintln!("[maestro]: {text}");
+        self.emit_from_source(level, text, "maestro-controller", LogOrigin::System);
+    }
+
+    pub fn emit_from_source(&self, level: &str, text: &str, source: &str, origin: LogOrigin) {
         if let Some(sender) = &self.sender {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -82,8 +86,8 @@ impl Logger {
                 level: Arc::from(level),
                 stream: Arc::from("stderr"),
                 text: text.to_string(),
-                source: Arc::from("maestro-controller"),
-                origin: LogOrigin::System,
+                source: Arc::from(source),
+                origin,
                 tags: Arc::new(serde_json::Value::Array(vec![])),
                 attrs: vec![],
             });

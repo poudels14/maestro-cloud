@@ -365,22 +365,39 @@ impl ServiceDeployment {
         })
     }
 
-    pub async fn resolve_secrets(&mut self, logger: &Logger) -> Result<()> {
-        self.config.deploy.env.items = self.config.deploy.env.resolved(logger).await?;
+    pub async fn resolve_build_secrets(&mut self, logger: &Logger) -> Result<()> {
         if let Some(build) = &mut self.config.build {
             build.env.items = build.env.resolved(logger).await?;
             build.secrets.items = build.secrets.resolved(logger).await?;
         }
+        Ok(())
+    }
+
+    pub async fn resolve_deploy_secrets(
+        &mut self,
+        logger: &Logger,
+    ) -> Result<Option<ResolvedSecret>> {
+        self.config.deploy.env.items = self.config.deploy.env.resolved(logger).await?;
         if let Some(secrets) = &mut self.config.deploy.secrets {
             if let Some(source) = &secrets.source {
                 let source_items = SecretProvider::new(source, logger)?.fetch_kv().await?;
+                let resolved = ResolvedSecret {
+                    source: source.clone(),
+                    count: source_items.len(),
+                };
                 for (key, value) in source_items {
                     secrets.items.entry(key).or_insert(value);
                 }
+                return Ok(Some(resolved));
             }
         }
-        Ok(())
+        Ok(None)
     }
+}
+
+pub struct ResolvedSecret {
+    pub source: String,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

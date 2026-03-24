@@ -195,6 +195,10 @@ impl EtcdStateStore {
                 let key = deployment_build_env_key(service_id, deployment_id);
                 build.env.items = self.read_encrypted(&key).await;
             }
+            if build.secrets.items.is_empty() {
+                let key = deployment_build_secrets_key(service_id, deployment_id);
+                build.secrets.items = self.read_encrypted(&key).await;
+            }
         }
     }
 
@@ -922,6 +926,16 @@ impl ClusterStore for EtcdStateStore {
             if info.config.deploy.env.items.is_empty() {
                 let key = deployment_deploy_env_key(service_id, &latest.id);
                 info.config.deploy.env.items = self.read_encrypted(&key).await;
+            }
+            if let Some(latest_secrets) = &latest.config.deploy.secrets {
+                if let Some(info_secrets) = &mut info.config.deploy.secrets {
+                    if info_secrets.keys.is_empty() && !latest_secrets.keys.is_empty() {
+                        info_secrets.keys = latest_secrets.keys.clone();
+                    }
+                    if info_secrets.source.is_none() && latest_secrets.source.is_some() {
+                        info_secrets.source = latest_secrets.source.clone();
+                    }
+                }
             }
             if let Some(build) = &mut info.config.build {
                 if build.secrets.items.is_empty() {
