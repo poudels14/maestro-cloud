@@ -36,7 +36,7 @@ export interface Deploy {
   command?: BuildCommand | null;
   healthcheckPath: string;
   replicas?: number;
-  env?: Record<string, string>;
+  env?: EnvConfig;
   secrets?: SecretsConfig | null;
 }
 
