@@ -280,7 +280,7 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
     { label: "Healthcheck path", value: s.deploy.healthcheckPath }
   ];
 
-  const envItems = Object.entries(s.deploy.env ?? {}).map(([key, value]) => ({
+  const envItems = Object.entries(s.deploy.env?.items ?? {}).map(([key, value]) => ({
     label: key,
     value
   }));
@@ -466,7 +466,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   return `${d.config.id}-${shortId}.${info.canonicalDomain}`;
                 };
                 const envEntries = () =>
-                  Object.entries(d.config.deploy.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
+                  Object.entries(d.config.deploy.env?.items ?? {}).sort(([a], [b]) =>
+                    a.localeCompare(b)
+                  );
                 const buildEnvEntries = () =>
                   Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) =>
                     a.localeCompare(b)

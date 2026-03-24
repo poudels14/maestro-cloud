@@ -269,10 +269,7 @@ function ServicesPage() {
     }
   };
 
-  const [clusterInfo] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getClusterInfo
-  );
+  const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
 
   return (
     <div class="min-h-screen bg-[#fafafa]">
