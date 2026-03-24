@@ -29,6 +29,7 @@ export interface SecretKeyMeta {
 
 export interface SecretsConfig {
   mountPath: string;
+  source?: string | null;
   keys: Record<string, SecretKeyMeta>;
 }
 

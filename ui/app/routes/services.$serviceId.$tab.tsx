@@ -265,7 +265,9 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
     label: key,
     value
   }));
+  const buildEnvSource = s.build?.env?.source ?? null;
   const buildSecretKeys = Object.keys(s.build?.secrets?.items ?? {}).sort();
+  const buildSecretSource = s.build?.secrets?.source ?? null;
 
   const deployItems = [
     { label: "Replicas", value: String(s.deploy.replicas ?? 1) },
@@ -284,8 +286,10 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
     label: key,
     value
   }));
+  const envSource = s.deploy.env?.source ?? null;
 
   const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
+  const secretSource = s.deploy.secrets?.source ?? null;
 
   const ingressItems = s.ingress
     ? [
@@ -297,34 +301,59 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   return (
     <div class="space-y-6">
       <ConfigSection title="Source" items={sourceItems} />
-      <Show when={buildEnvItems.length > 0}>
-        <ConfigSection title="Build Environment" items={buildEnvItems} />
+      <Show when={buildEnvItems.length > 0 || buildEnvSource}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+            Build Environment
+            <Show when={buildEnvSource}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildEnvSource}</span>
+            </Show>
+          </h4>
+          <Show when={buildEnvItems.length > 0}>
+            <ConfigSection items={buildEnvItems} />
+          </Show>
+        </div>
       </Show>
-      <Show when={buildSecretKeys.length > 0}>
+      <Show when={buildSecretKeys.length > 0 || buildSecretSource}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Build Secrets
+            <Show when={buildSecretSource}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildSecretSource}</span>
+            </Show>
           </h4>
-          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-            <For each={buildSecretKeys}>
-              {(key) => (
-                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                  <span class="text-xs text-gray-500 shrink-0">{key}</span>
-                  <span class="text-sm font-mono text-gray-400">••••••••</span>
-                </div>
-              )}
-            </For>
-          </div>
+          <Show when={buildSecretKeys.length > 0}>
+            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+              <For each={buildSecretKeys}>
+                {(key) => (
+                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                    <span class="text-xs text-gray-500 shrink-0">{key}</span>
+                    <span class="text-sm font-mono text-gray-400">••••••••</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
       </Show>
       <Show when={ingressItems}>
         {(items) => <ConfigSection title="Ingress" items={items()} />}
       </Show>
       <ConfigSection title="Deploy" items={deployItems} />
-      <Show when={envItems.length > 0}>
-        <ConfigSection title="Deploy Environment" items={envItems} />
+      <Show when={envItems.length > 0 || envSource}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+            Deploy Environment
+            <Show when={envSource}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{envSource}</span>
+            </Show>
+          </h4>
+          <Show when={envItems.length > 0}>
+            <ConfigSection items={envItems} />
+          </Show>
+        </div>
       </Show>
-      <Show when={secretKeys.length > 0}>
+      <Show when={secretKeys.length > 0 || secretSource}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Deploy Secrets
@@ -332,16 +361,21 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
               (mounted at {s.deploy.secrets?.mountPath})
             </span>
           </h4>
-          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-            <For each={secretKeys}>
-              {(key) => (
-                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                  <span class="text-xs text-gray-500 shrink-0">{key}</span>
-                  <span class="text-sm font-mono text-gray-400">••••••••</span>
-                </div>
-              )}
-            </For>
-          </div>
+          <Show when={secretSource}>
+            <div class="text-xs font-mono text-gray-400 mb-2">{secretSource}</div>
+          </Show>
+          <Show when={secretKeys.length > 0}>
+            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+              <For each={secretKeys}>
+                {(key) => (
+                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                    <span class="text-xs text-gray-500 shrink-0">{key}</span>
+                    <span class="text-sm font-mono text-gray-400">••••••••</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
       </Show>
       <Show when={!s.system}>
@@ -469,17 +503,25 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   Object.entries(d.config.deploy.env?.items ?? {}).sort(([a], [b]) =>
                     a.localeCompare(b)
                   );
+                const envSource = () => d.config.deploy.env?.source ?? null;
+                const secretSource = () => d.config.deploy.secrets?.source ?? null;
                 const buildEnvEntries = () =>
                   Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) =>
                     a.localeCompare(b)
                   );
+                const buildEnvSource = () => d.config.build?.env?.source ?? null;
                 const buildSecretKeys = () =>
                   Object.keys(d.config.build?.secrets?.items ?? {}).sort();
+                const buildSecretSource = () => d.config.build?.secrets?.source ?? null;
                 const hasDetails = () =>
                   envEntries().length > 0 ||
+                  envSource() ||
                   secretKeys().length > 0 ||
+                  secretSource() ||
                   buildEnvEntries().length > 0 ||
-                  buildSecretKeys().length > 0;
+                  buildEnvSource() ||
+                  buildSecretKeys().length > 0 ||
+                  buildSecretSource();
                 return (
                   <div class="rounded-lg border border-gray-200 bg-white overflow-hidden">
                     <div class="p-4">
@@ -595,10 +637,13 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                       </div>
                       <Show when={expanded()}>
                         <div class="mt-3 pt-3 border-t border-gray-100 space-y-3">
-                          <Show when={buildEnvEntries().length > 0}>
+                          <Show when={buildEnvEntries().length > 0 || buildEnvSource()}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                                 Build Environment
+                                <Show when={buildEnvSource()}>
+                                  <span class="normal-case ml-1 text-gray-300 font-mono">{buildEnvSource()}</span>
+                                </Show>
                               </div>
                               <div class="space-y-0.5">
                                 <For each={buildEnvEntries()}>
@@ -613,10 +658,13 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               </div>
                             </div>
                           </Show>
-                          <Show when={buildSecretKeys().length > 0}>
+                          <Show when={buildSecretKeys().length > 0 || buildSecretSource()}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                                 Build Secrets
+                                <Show when={buildSecretSource()}>
+                                  <span class="normal-case ml-1 text-gray-300 font-mono">{buildSecretSource()}</span>
+                                </Show>
                               </div>
                               <div class="space-y-0.5">
                                 <For each={buildSecretKeys()}>
@@ -631,10 +679,13 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               </div>
                             </div>
                           </Show>
-                          <Show when={envEntries().length > 0}>
+                          <Show when={envEntries().length > 0 || envSource()}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                                 Environment
+                                <Show when={envSource()}>
+                                  <span class="normal-case ml-1 text-gray-300 font-mono">{envSource()}</span>
+                                </Show>
                               </div>
                               <div class="space-y-0.5">
                                 <For each={envEntries()}>
@@ -649,7 +700,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               </div>
                             </div>
                           </Show>
-                          <Show when={secretKeys().length > 0}>
+                          <Show when={secretKeys().length > 0 || secretSource()}>
                             <div>
                               <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
                                 Secrets
@@ -657,6 +708,9 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                                   ({d.config.deploy.secrets?.mountPath})
                                 </span>
                               </div>
+                              <Show when={secretSource()}>
+                                <div class="text-xs font-mono text-gray-400 mb-1">{secretSource()}</div>
+                              </Show>
                               <div class="space-y-0.5">
                                 <For each={secretKeys()}>
                                   {([key, meta]) => {
@@ -1237,10 +1291,12 @@ function logLevelColor(level: string) {
   };
 }
 
-function ConfigSection(props: { title: string; items: { label: string; value: string }[] }) {
+function ConfigSection(props: { title?: string; items: { label: string; value: string }[] }) {
   return (
     <div>
-      <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">{props.title}</h4>
+      <Show when={props.title}>
+        <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">{props.title}</h4>
+      </Show>
       <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
         <For each={props.items}>
           {(item) => (

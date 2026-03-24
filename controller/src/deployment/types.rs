@@ -257,7 +257,7 @@ impl SecretsConfig {
             .collect();
         SecretsConfig {
             mount_path: self.mount_path.clone(),
-            source: None,
+            source: self.source.clone(),
             items: HashMap::new(),
             keys,
         }
@@ -372,8 +372,8 @@ impl ServiceDeployment {
             build.secrets.items = build.secrets.resolved(logger).await?;
         }
         if let Some(secrets) = &mut self.config.deploy.secrets {
-            if let Some(source) = secrets.source.take() {
-                let source_items = SecretProvider::new(&source, logger)?.fetch_kv().await?;
+            if let Some(source) = &secrets.source {
+                let source_items = SecretProvider::new(source, logger)?.fetch_kv().await?;
                 for (key, value) in source_items {
                     secrets.items.entry(key).or_insert(value);
                 }
