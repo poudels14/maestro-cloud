@@ -390,6 +390,20 @@ impl DeploymentController {
         }
 
         if queued_deployment.deployment.config.build.is_some() {
+            if let Err(err) = self
+                .store
+                .save_build_data(&queued_deployment.service_id, &queued_deployment.deployment)
+                .await
+            {
+                self.logger.emit(
+                    "warn",
+                    &format!(
+                        "{}/{}: failed to save build data: {err}",
+                        queued_deployment.service_id, deployment_id
+                    ),
+                );
+            }
+
             let short_id: String = deployment_id.chars().take(6).collect();
             let image_tag = format!("{}:{short_id}", queued_deployment.deployment.config.id);
             let build_dir = self
@@ -422,38 +436,7 @@ impl DeploymentController {
             return Ok(());
         }
 
-        self.start_deployment_replicas(&queued_deployment).await;
-
-        let has_healthcheck = queued_deployment
-            .deployment
-            .config
-            .deploy
-            .healthcheck_path
-            .as_ref()
-            .is_some_and(|p| !p.trim().is_empty());
-        let deployment_status = if has_healthcheck {
-            DeploymentStatus::PendingReady
-        } else {
-            DeploymentStatus::Ready
-        };
-        let deployment_ref = Deployment {
-            service_id: queued_deployment.service_id.clone(),
-            id: queued_deployment.deployment.id.clone(),
-            replica_index: 0,
-        };
-        if let Err(err) = self
-            .store
-            .update_deployment_status(&deployment_ref, deployment_status)
-            .await
-        {
-            self.logger.emit(
-                "error",
-                &format!(
-                    "failed to update deployment `{}` status: {err}",
-                    queued_deployment.deployment.id
-                ),
-            );
-        }
+        self.deploy_service(&queued_deployment).await;
 
         Ok(())
     }
@@ -541,7 +524,7 @@ impl DeploymentController {
                             ),
                         );
                     }
-                    self.start_deployment_replicas(&queued).await;
+                    self.deploy_service(&queued).await;
                 }
                 Err(build_err) => {
                     self.logger.emit(
@@ -576,9 +559,21 @@ impl DeploymentController {
         }
     }
 
-    async fn start_deployment_replicas(&mut self, queued_deployment: &QueuedDeployment) {
+    async fn deploy_service(&mut self, queued_deployment: &QueuedDeployment) {
         let service_id = &queued_deployment.service_id;
         let deployment_id = &queued_deployment.deployment.id;
+
+        if let Err(err) = self
+            .store
+            .save_deploy_data(service_id, &queued_deployment.deployment)
+            .await
+        {
+            self.logger.emit(
+                "warn",
+                &format!("{service_id}/{deployment_id}: failed to save deploy data: {err}"),
+            );
+        }
+
         let replicas = queued_deployment.deployment.config.deploy.replicas;
         let has_healthcheck = queued_deployment
             .deployment

@@ -88,14 +88,10 @@ impl EtcdStateStore {
     ) -> ServiceDeployment {
         let mut d = deployment.clone();
         if let Some(secrets) = &d.config.deploy.secrets {
-            let mut stripped = secrets.to_metadata(prev_keys);
-            stripped.source = None;
-            d.config.deploy.secrets = Some(stripped);
+            d.config.deploy.secrets = Some(secrets.to_metadata(prev_keys));
         }
-        d.config.deploy.env.source = None;
         d.config.deploy.env.items.clear();
         if let Some(build) = &mut d.config.build {
-            build.env.source = None;
             build.env.items.clear();
         }
         d
@@ -153,7 +149,7 @@ impl EtcdStateStore {
                 .await;
         }
         if let Some(secrets) = &deployment.config.deploy.secrets {
-            if !secrets.items.is_empty() {
+            if !secrets.items.is_empty() && secrets.source.is_none() {
                 let key = deployment_deploy_secrets_key(service_id, deployment_id);
                 self.write_encrypted(&key, &secrets.items).await;
             }
@@ -541,8 +537,6 @@ impl ClusterStore for EtcdStateStore {
     ) -> anyhow::Result<bool> {
         let mut building = queued_deployment.deployment.clone();
         building.status = DeploymentStatus::Building;
-        self.write_deployment_data(&queued_deployment.service_id, &building)
-            .await;
         let prev_keys = self.prev_secret_keys(&queued_deployment.service_id).await;
         let building = self.strip_deployment_with_metadata(&building, &prev_keys);
 
@@ -633,6 +627,73 @@ impl ClusterStore for EtcdStateStore {
         Err(anyhow!(
             "failed to update deployment `{}` to {status:?} due to concurrent updates",
             deployment.id,
+        ))
+    }
+
+    async fn save_build_data(
+        &self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        let deployment_id = &deployment.id;
+        if let Some(build) = &deployment.config.build {
+            if !build.env.items.is_empty() {
+                let key = deployment_build_env_key(service_id, deployment_id);
+                self.write_encrypted(&key, &build.env.items).await;
+            }
+            if !build.secrets.items.is_empty() {
+                let key = deployment_build_secrets_key(service_id, deployment_id);
+                self.write_encrypted(&key, &build.secrets.items).await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn save_deploy_data(
+        &self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        let deployment_id = &deployment.id;
+        if !deployment.config.deploy.env.items.is_empty() {
+            let key = deployment_deploy_env_key(service_id, deployment_id);
+            self.write_encrypted(&key, &deployment.config.deploy.env.items)
+                .await;
+        }
+
+        let prev_keys = self.prev_secret_keys(service_id).await;
+        let stripped = self.strip_deployment_with_metadata(deployment, &prev_keys);
+        let deployment_json = serde_json::to_string(&stripped)
+            .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
+
+        let dep = Deployment {
+            id: deployment_id.clone(),
+            service_id: service_id.to_string(),
+            replica_index: 0,
+        };
+        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
+            let Some(snapshot) = self.find_deployment_snapshot(&dep).await? else {
+                return Err(anyhow!(
+                    "deployment `{}` for service `{service_id}` not found",
+                    deployment_id,
+                ));
+            };
+            let committed = self
+                .txn(
+                    vec![compare_mod_revision_or_absent(
+                        &snapshot.key,
+                        Some(snapshot.mod_revision),
+                    )],
+                    vec![request_put(&snapshot.key, &deployment_json)],
+                )
+                .await?;
+            if committed {
+                return Ok(());
+            }
+        }
+        Err(anyhow!(
+            "failed to save deploy data for `{}` after retries",
+            deployment_id,
         ))
     }
 
@@ -854,6 +915,10 @@ impl ClusterStore for EtcdStateStore {
         let mut info = snapshot.info;
         let deployments = self.list_service_deployments(service_id).await?;
         if let Some(latest) = deployments.first() {
+            if info.config.deploy.env.items.is_empty() {
+                let key = deployment_deploy_env_key(service_id, &latest.id);
+                info.config.deploy.env.items = self.read_encrypted(&key).await;
+            }
             if let Some(build) = &mut info.config.build {
                 if build.secrets.items.is_empty() {
                     let key = deployment_build_secrets_key(service_id, &latest.id);
@@ -978,8 +1043,6 @@ impl ClusterStore for EtcdStateStore {
             let deployment_json = serde_json::to_string(&stripped_deployment)
                 .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
-            self.write_deployment_data(&deployment.config.id, &deployment)
-                .await;
             let existing_frozen = self
                 .read_service_info(&deployment.config.id)
                 .await
