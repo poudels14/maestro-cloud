@@ -118,10 +118,7 @@ impl Server {
                 "/api/services/{serviceId}/metrics",
                 get(Self::get_service_metrics),
             )
-            .route(
-                "/api/services/{serviceId}/ingress/routing",
-                get(Self::get_ingress_routing),
-            )
+            .route("/api/ingress/routes", get(Self::list_ingress_routes))
             .route(
                 "/api/services/{serviceId}/metrics/containers",
                 get(Self::get_container_metrics),
@@ -757,22 +754,15 @@ impl Server {
         Ok(Json(entries))
     }
 
-    async fn get_ingress_routing(
-        Path(service_id): Path<String>,
+    async fn list_ingress_routes(
         State(state): State<AppState>,
-    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-        let service_id = service_id.trim();
-        crate::validation::validate_service_id(service_id, "serviceId")
-            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
-        let routing = state
+    ) -> Result<Json<Vec<crate::deployment::types::IngressRouting>>, (StatusCode, String)> {
+        let routes = state
             .store
-            .read_ingress_routing(service_id)
+            .list_ingress_routes()
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        match routing {
-            Some(r) => Ok(Json(serde_json::to_value(r).unwrap())),
-            None => Ok(Json(serde_json::json!(null))),
-        }
+        Ok(Json(routes))
     }
 
     async fn get_service_metrics(

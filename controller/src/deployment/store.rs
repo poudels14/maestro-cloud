@@ -172,7 +172,7 @@ pub trait ClusterStore: Send + Sync {
         bail!("delete_system_upgrade_request not implemented")
     }
 
-    async fn read_ingress_routing(&self, _service_id: &str) -> Result<Option<IngressRouting>> {
-        bail!("read_ingress_routing not implemented")
+    async fn list_ingress_routes(&self) -> Result<Vec<IngressRouting>> {
+        bail!("list_ingress_routes not implemented")
     }
 }

@@ -1330,53 +1330,72 @@ impl ClusterStore for EtcdStateStore {
         Ok(())
     }
 
-    async fn read_ingress_routing(
-        &self,
-        service_id: &str,
-    ) -> anyhow::Result<Option<IngressRouting>> {
-        let router_prefix = format!("traefik/http/routers/{service_id}/");
-        let service_prefix = format!("traefik/http/services/{service_id}/loadBalancer/servers/");
+    async fn list_ingress_routes(&self) -> anyhow::Result<Vec<IngressRouting>> {
+        use std::collections::HashMap;
 
-        let mut rule = String::new();
-        let mut entry_points = Vec::new();
+        let routers_prefix = "traefik/http/routers/";
+        let services_prefix = "traefik/http/services/";
 
-        if let Some(range_end) = prefix_range_end(router_prefix.as_bytes()) {
+        let mut routers: HashMap<String, (String, Vec<String>)> = HashMap::new();
+
+        if let Some(range_end) = prefix_range_end(routers_prefix.as_bytes()) {
             let options = GetOptions::new().with_range(range_end);
             let response = self
-                .get(router_prefix.as_bytes().to_vec(), Some(options))
+                .get(routers_prefix.as_bytes().to_vec(), Some(options))
                 .await?;
             for kv in response.kvs() {
                 let key = String::from_utf8_lossy(kv.key()).to_string();
                 let value = String::from_utf8_lossy(kv.value()).to_string();
+                let rest = &key[routers_prefix.len()..];
+                let service_id = rest.split('/').next().unwrap_or_default().to_string();
+                if service_id.is_empty() {
+                    continue;
+                }
+                let entry = routers
+                    .entry(service_id)
+                    .or_insert_with(|| (String::new(), Vec::new()));
                 if key.ends_with("/rule") {
-                    rule = value;
+                    entry.0 = value;
                 } else if key.contains("/entryPoints/") {
-                    entry_points.push(value);
+                    entry.1.push(value);
                 }
             }
         }
 
-        if rule.is_empty() {
-            return Ok(None);
-        }
+        let mut server_map: HashMap<String, Vec<String>> = HashMap::new();
 
-        let mut servers = Vec::new();
-        if let Some(range_end) = prefix_range_end(service_prefix.as_bytes()) {
+        if let Some(range_end) = prefix_range_end(services_prefix.as_bytes()) {
             let options = GetOptions::new().with_range(range_end);
             let response = self
-                .get(service_prefix.as_bytes().to_vec(), Some(options))
+                .get(services_prefix.as_bytes().to_vec(), Some(options))
                 .await?;
             for kv in response.kvs() {
+                let key = String::from_utf8_lossy(kv.key()).to_string();
                 let value = String::from_utf8_lossy(kv.value()).to_string();
-                servers.push(value);
+                let rest = &key[services_prefix.len()..];
+                let service_id = rest.split('/').next().unwrap_or_default().to_string();
+                if !service_id.is_empty() {
+                    server_map.entry(service_id).or_default().push(value);
+                }
             }
         }
 
-        Ok(Some(IngressRouting {
-            rule,
-            entry_points,
-            servers,
-        }))
+        let mut routes: Vec<IngressRouting> = routers
+            .into_iter()
+            .filter(|(_, (rule, _))| !rule.is_empty())
+            .map(|(service_id, (rule, entry_points))| {
+                let servers = server_map.remove(&service_id).unwrap_or_default();
+                IngressRouting {
+                    service_id,
+                    rule,
+                    entry_points,
+                    servers,
+                }
+            })
+            .collect();
+        routes.sort_by(|a, b| a.service_id.cmp(&b.service_id));
+
+        Ok(routes)
     }
 }
 

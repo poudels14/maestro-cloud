@@ -24,6 +24,7 @@ export interface Ingress {
 }
 
 export interface IngressRouting {
+  serviceId: string;
   rule: string;
   entryPoints: string[];
   servers: string[];
