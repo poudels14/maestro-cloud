@@ -32,7 +32,8 @@ import {
   stopDeployment,
   freezeService,
   getServiceMetrics,
-  getClusterInfo
+  getClusterInfo,
+  getIngressRouting
 } from "../lib/api";
 import { TimelineChart } from "../components/TimelineChart";
 import { StatusBadge, StatusDot, DeploymentMenu, TabButton, timeAgo, ErrorBanner } from "../lib/ui";
@@ -250,6 +251,11 @@ function ServiceDetailPanel(props: {
 function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const s = props.service;
 
+  const [routing] = createResource(
+    () => (s.ingress ? s.id : null),
+    (serviceId) => getIngressRouting(serviceId)
+  );
+
   const sourceItems =
     s.build != null
       ? [
@@ -337,7 +343,42 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
         </div>
       </Show>
       <Show when={ingressItems}>
-        {(items) => <ConfigSection title="Ingress" items={items()} />}
+        {(items) => (
+          <div>
+            <ConfigSection title="Ingress" items={items()} />
+            <Show when={routing()}>
+              {(r) => (
+                <div class="mt-3">
+                  <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+                    Traefik Routing
+                  </h4>
+                  <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+                    <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                      <span class="text-xs text-gray-500 shrink-0">Rule</span>
+                      <span class="text-sm font-mono text-gray-800 text-right truncate">{r().rule}</span>
+                    </div>
+                    <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                      <span class="text-xs text-gray-500 shrink-0">Entry points</span>
+                      <span class="text-sm font-mono text-gray-800 text-right truncate">
+                        {r().entryPoints.join(", ")}
+                      </span>
+                    </div>
+                    <For each={r().servers}>
+                      {(server, idx) => (
+                        <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                          <span class="text-xs text-gray-500 shrink-0">
+                            {r().servers.length > 1 ? `Server ${idx() + 1}` : "Server"}
+                          </span>
+                          <span class="text-sm font-mono text-gray-800 text-right truncate">{server}</span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              )}
+            </Show>
+          </div>
+        )}
       </Show>
       <ConfigSection title="Deploy" items={deployItems} />
       <Show when={envItems.length > 0 || envSource}>

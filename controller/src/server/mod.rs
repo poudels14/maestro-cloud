@@ -119,6 +119,10 @@ impl Server {
                 get(Self::get_service_metrics),
             )
             .route(
+                "/api/services/{serviceId}/ingress/routing",
+                get(Self::get_ingress_routing),
+            )
+            .route(
                 "/api/services/{serviceId}/metrics/containers",
                 get(Self::get_container_metrics),
             )
@@ -751,6 +755,24 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok(Json(entries))
+    }
+
+    async fn get_ingress_routing(
+        Path(service_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        crate::validation::validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let routing = state
+            .store
+            .read_ingress_routing(service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        match routing {
+            Some(r) => Ok(Json(serde_json::to_value(r).unwrap())),
+            None => Ok(Json(serde_json::json!(null))),
+        }
     }
 
     async fn get_service_metrics(

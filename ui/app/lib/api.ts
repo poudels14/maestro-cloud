@@ -1,4 +1,4 @@
-import type { Deployment, LogEntry, MetricPoint, Service } from "./types";
+import type { Deployment, IngressRouting, LogEntry, MetricPoint, Service } from "./types";
 
 export interface ClusterInfo {
   clusterName: string;
@@ -115,6 +115,12 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
       attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
     };
   });
+}
+
+export async function getIngressRouting(serviceId: string): Promise<IngressRouting | null> {
+  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/ingress/routing`);
+  if (!res.ok) throw new Error(`Failed to fetch ingress routing: ${res.statusText}`);
+  return res.json();
 }
 
 export async function getServiceMetrics(

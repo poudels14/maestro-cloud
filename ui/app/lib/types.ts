@@ -23,6 +23,12 @@ export interface Ingress {
   port?: number;
 }
 
+export interface IngressRouting {
+  rule: string;
+  entryPoints: string[];
+  servers: string[];
+}
+
 export interface SecretKeyMeta {
   changed?: boolean;
 }
