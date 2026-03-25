@@ -115,6 +115,14 @@ pub struct IngressConfig {
     pub port: Option<u16>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressRouting {
+    pub rule: String,
+    pub entry_points: Vec<String>,
+    pub servers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceProvider {

@@ -3,8 +3,8 @@ use async_trait::async_trait;
 
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
-    ForceQueueOutcome, QueuedDeployment, ReplicaState, ServiceConfig, ServiceDeployment,
-    ServiceInfo,
+    ForceQueueOutcome, IngressRouting, QueuedDeployment, ReplicaState, ServiceConfig,
+    ServiceDeployment, ServiceInfo,
 };
 
 #[derive(Debug, Clone)]
@@ -170,5 +170,9 @@ pub trait ClusterStore: Send + Sync {
 
     async fn delete_system_upgrade_request(&self) -> Result<()> {
         bail!("delete_system_upgrade_request not implemented")
+    }
+
+    async fn read_ingress_routing(&self, _service_id: &str) -> Result<Option<IngressRouting>> {
+        bail!("read_ingress_routing not implemented")
     }
 }

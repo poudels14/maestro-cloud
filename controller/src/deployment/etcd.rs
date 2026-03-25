@@ -17,8 +17,8 @@ use crate::deployment::keys::{
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
-    ForceQueueOutcome, IngressConfig, QueuedDeployment, ReplicaState, ServiceConfig,
-    ServiceDeployment, ServiceInfo,
+    ForceQueueOutcome, IngressConfig, IngressRouting, QueuedDeployment, ReplicaState,
+    ServiceConfig, ServiceDeployment, ServiceInfo,
 };
 use crate::utils::time::current_time_millis;
 
@@ -1328,6 +1328,55 @@ impl ClusterStore for EtcdStateStore {
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
         Ok(())
+    }
+
+    async fn read_ingress_routing(
+        &self,
+        service_id: &str,
+    ) -> anyhow::Result<Option<IngressRouting>> {
+        let router_prefix = format!("traefik/http/routers/{service_id}/");
+        let service_prefix = format!("traefik/http/services/{service_id}/loadBalancer/servers/");
+
+        let mut rule = String::new();
+        let mut entry_points = Vec::new();
+
+        if let Some(range_end) = prefix_range_end(router_prefix.as_bytes()) {
+            let options = GetOptions::new().with_range(range_end);
+            let response = self
+                .get(router_prefix.as_bytes().to_vec(), Some(options))
+                .await?;
+            for kv in response.kvs() {
+                let key = String::from_utf8_lossy(kv.key()).to_string();
+                let value = String::from_utf8_lossy(kv.value()).to_string();
+                if key.ends_with("/rule") {
+                    rule = value;
+                } else if key.contains("/entryPoints/") {
+                    entry_points.push(value);
+                }
+            }
+        }
+
+        if rule.is_empty() {
+            return Ok(None);
+        }
+
+        let mut servers = Vec::new();
+        if let Some(range_end) = prefix_range_end(service_prefix.as_bytes()) {
+            let options = GetOptions::new().with_range(range_end);
+            let response = self
+                .get(service_prefix.as_bytes().to_vec(), Some(options))
+                .await?;
+            for kv in response.kvs() {
+                let value = String::from_utf8_lossy(kv.value()).to_string();
+                servers.push(value);
+            }
+        }
+
+        Ok(Some(IngressRouting {
+            rule,
+            entry_points,
+            servers,
+        }))
     }
 }
 
