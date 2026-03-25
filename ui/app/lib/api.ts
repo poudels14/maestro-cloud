@@ -117,9 +117,9 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
   });
 }
 
-export async function getIngressRouting(serviceId: string): Promise<IngressRouting | null> {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/ingress/routing`);
-  if (!res.ok) throw new Error(`Failed to fetch ingress routing: ${res.statusText}`);
+export async function getIngressRoutes(): Promise<IngressRouting[]> {
+  const res = await fetch("/api/ingress/routes");
+  if (!res.ok) throw new Error(`Failed to fetch ingress routes: ${res.statusText}`);
   return res.json();
 }
 

@@ -7,7 +7,7 @@
   "author": "",
   "main": "index.js",
   "scripts": {
-    "fmt": "oxfmt --write ."
+    "format": "oxfmt --write ."
   },
   "devDependencies": {
     "oxfmt": "^0.36.0"

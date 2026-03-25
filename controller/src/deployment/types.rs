@@ -118,6 +118,7 @@ pub struct IngressConfig {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IngressRouting {
+    pub service_id: String,
     pub rule: String,
     pub entry_points: Vec<String>,
     pub servers: Vec<String>,
