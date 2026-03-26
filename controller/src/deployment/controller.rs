@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
 use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
@@ -163,7 +168,6 @@ impl DeploymentController {
     }
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
-        self.cleanup_orphaned_deployments().await;
         self.stop_removed_deployments().await;
         self.drain_old_deployments().await;
         self.check_pending_builds().await;
@@ -172,6 +176,7 @@ impl DeploymentController {
         for queued_deployment in queued {
             self.process_queued_deployment(queued_deployment).await?;
         }
+        self.cleanup_orphaned_deployments().await;
         Ok(())
     }
 
@@ -834,7 +839,7 @@ impl DeploymentController {
     }
 
     async fn mark_deployments_terminated(&self) {
-        let mut seen_deployment_ids = std::collections::HashSet::new();
+        let mut seen_deployment_ids = HashSet::new();
         for deployment in self.deployments.values() {
             if !seen_deployment_ids.insert(deployment.id.clone()) {
                 continue;
@@ -856,8 +861,8 @@ impl DeploymentController {
     }
 
     async fn cleanup_orphaned_deployments(&mut self) {
-        let tracked_job_ids: std::collections::HashSet<String> =
-            self.deployments.keys().cloned().collect();
+        let tracked_job_ids: HashSet<String> = self.deployments.keys().cloned().collect();
+        let pending_deployment_ids: HashSet<&String> = self.pending_builds.keys().collect();
 
         let service_ids = match self.store.list_service_ids().await {
             Ok(ids) => ids,
@@ -877,6 +882,10 @@ impl DeploymentController {
                         | DeploymentStatus::Ready
                         | DeploymentStatus::PendingReady
                 ) {
+                    continue;
+                }
+
+                if pending_deployment_ids.contains(&deployment.id) {
                     continue;
                 }
 
