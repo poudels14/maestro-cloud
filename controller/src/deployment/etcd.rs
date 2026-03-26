@@ -326,6 +326,26 @@ impl EtcdStateStore {
         Ok(())
     }
 
+    async fn remove_ingress(&self, service_id: &str) -> Result<()> {
+        let router_prefix = format!("traefik/http/routers/{service_id}/");
+        let service_prefix = format!("traefik/http/services/{service_id}/");
+
+        let mut client = self.client.lock().await;
+        for prefix in [&router_prefix, &service_prefix] {
+            if let Some(range_end) = prefix_range_end(prefix.as_bytes()) {
+                let options = GetOptions::new().with_range(range_end).with_keys_only();
+                if let Ok(response) = client.get(prefix.as_bytes(), Some(options)).await {
+                    for kv in response.kvs() {
+                        let _ = client.delete(kv.key(), None).await;
+                    }
+                }
+            }
+        }
+
+        eprintln!("removed ingress for `{service_id}`");
+        Ok(())
+    }
+
     async fn find_deployment_snapshot(
         &self,
         deployment: &Deployment,
@@ -395,6 +415,9 @@ impl EtcdStateStore {
             .and_then(|d| d.config.ingress.clone());
 
         let Some(ingress) = ingress else {
+            if let Err(err) = self.remove_ingress(service_id).await {
+                eprintln!("[maestro]: failed to remove ingress for `{service_id}`: {err}");
+            }
             return;
         };
 
@@ -1291,6 +1314,9 @@ impl ClusterStore for EtcdStateStore {
             )
             .await
             .map_err(|err| anyhow!("failed to delete service keys: {err}"))?;
+
+        drop(client);
+        let _ = self.remove_ingress(service_id).await;
 
         Ok(())
     }
