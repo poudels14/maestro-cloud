@@ -876,7 +876,6 @@ impl DeploymentController {
                     DeploymentStatus::Draining
                         | DeploymentStatus::Ready
                         | DeploymentStatus::PendingReady
-                        | DeploymentStatus::Building
                 ) {
                     continue;
                 }
