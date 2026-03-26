@@ -5,13 +5,12 @@ use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
 use crate::deployment::dns::DnsManager;
 use crate::deployment::provider::{
-    BuildError, BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner,
-    ShellDeploymentProvider,
+    BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, GitCommitInfo,
-    QueuedDeployment, ServiceDeployment, ServiceProvider,
+    Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, QueuedDeployment,
+    ServiceDeployment, ServiceProvider,
 };
 use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RuntimeProvider};
@@ -39,7 +38,7 @@ pub enum ControllerExitReason {
 }
 
 struct PendingBuild {
-    handle: JoinHandle<Result<BuildOutput, BuildError>>,
+    handle: JoinHandle<Result<BuildOutput>>,
     queued_deployment: QueuedDeployment,
     build_dir: PathBuf,
     started_at: std::time::Instant,
@@ -164,6 +163,7 @@ impl DeploymentController {
     }
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
+        self.cleanup_orphaned_deployments().await;
         self.stop_removed_deployments().await;
         self.drain_old_deployments().await;
         self.check_pending_builds().await;
@@ -402,6 +402,54 @@ impl DeploymentController {
                 .join(&queued_deployment.service_id)
                 .join(&short_id);
 
+            match self
+                .container_provider
+                .setup(
+                    &queued_deployment.deployment,
+                    &build_dir,
+                    self.log_sender.as_ref(),
+                )
+                .await
+            {
+                Ok(git_commit) => {
+                    if git_commit.is_some() {
+                        queued_deployment.deployment.git_commit = git_commit;
+                        let deployment_ref = Deployment {
+                            service_id: queued_deployment.service_id.clone(),
+                            id: deployment_id.clone(),
+                            replica_index: 0,
+                        };
+                        let _ = self
+                            .store
+                            .update_deployment_build_info(
+                                &deployment_ref,
+                                &queued_deployment.deployment,
+                            )
+                            .await;
+                    }
+                }
+                Err(err) => {
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "source resolution failed for service `{}` deployment `{deployment_id}`: {err}",
+                            queued_deployment.service_id
+                        ),
+                    );
+                    let deployment_ref = Deployment {
+                        service_id: queued_deployment.service_id.clone(),
+                        id: deployment_id,
+                        replica_index: 0,
+                    };
+                    let _ = self
+                        .store
+                        .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                        .await;
+                    let _ = std::fs::remove_dir_all(&build_dir);
+                    return Ok(());
+                }
+            }
+
             let provider = self.container_provider.clone();
             let deployment = queued_deployment.deployment.clone();
             let log_sender = self.log_sender.clone();
@@ -477,11 +525,7 @@ impl DeploymentController {
 
             let build_result = match result {
                 Ok(inner) => inner,
-                Err(err) => Err(BuildError {
-                    error: anyhow::anyhow!("build task panicked: {err}"),
-                    commit_sha: None,
-                    commit_message: None,
-                }),
+                Err(err) => Err(anyhow::anyhow!("build task panicked: {err}")),
             };
 
             let _ = std::fs::remove_dir_all(&pending.build_dir);
@@ -491,10 +535,6 @@ impl DeploymentController {
                     let mut queued = pending.queued_deployment;
                     queued.deployment.build = Some(DeploymentBuildInfo {
                         docker_image_id: output.image_tag,
-                    });
-                    queued.deployment.git_commit = Some(GitCommitInfo {
-                        reference: output.commit_sha,
-                        message: output.commit_message,
                     });
                     let deployment_ref = Deployment {
                         service_id: service_id.clone(),
@@ -519,26 +559,14 @@ impl DeploymentController {
                     self.logger.emit(
                         "error",
                         &format!(
-                            "build failed for service `{service_id}` deployment `{deployment_id}`: {}",
-                            build_err.error
+                            "build failed for service `{service_id}` deployment `{deployment_id}`: {build_err}"
                         ),
                     );
-                    let mut queued = pending.queued_deployment;
-                    if let Some(sha) = build_err.commit_sha {
-                        queued.deployment.git_commit = Some(GitCommitInfo {
-                            reference: sha,
-                            message: build_err.commit_message.unwrap_or_default(),
-                        });
-                    }
                     let deployment_ref = Deployment {
                         service_id: service_id.clone(),
                         id: deployment_id.clone(),
                         replica_index: 0,
                     };
-                    let _ = self
-                        .store
-                        .update_deployment_build_info(&deployment_ref, &queued.deployment)
-                        .await;
                     let _ = self
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
@@ -827,6 +855,113 @@ impl DeploymentController {
         }
     }
 
+    async fn cleanup_orphaned_deployments(&mut self) {
+        let tracked_job_ids: std::collections::HashSet<String> =
+            self.deployments.keys().cloned().collect();
+
+        let service_ids = match self.store.list_service_ids().await {
+            Ok(ids) => ids,
+            Err(_) => return,
+        };
+
+        for service_id in &service_ids {
+            let deployments = match self.store.list_service_deployments(service_id).await {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            for deployment in &deployments {
+                if !matches!(
+                    deployment.status,
+                    DeploymentStatus::Draining
+                        | DeploymentStatus::Ready
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Building
+                ) {
+                    continue;
+                }
+
+                let replicas = deployment.config.deploy.replicas;
+                let mut has_orphaned_replica = false;
+                for replica_index in 0..replicas {
+                    let job_id = replica_job_id(&deployment.id, replica_index);
+                    if !tracked_job_ids.contains(&job_id) {
+                        has_orphaned_replica = true;
+                        break;
+                    }
+                }
+                if !has_orphaned_replica {
+                    continue;
+                }
+
+                if deployment.status == DeploymentStatus::Draining {
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "cleaning up orphaned draining deployment `{}` for service `{service_id}`",
+                            deployment.id
+                        ),
+                    );
+                    for replica_index in 0..replicas {
+                        let hostname = deployment.hostname_for_replica(replica_index);
+                        let _ = self.runtime.remove_container(&hostname).await;
+                        deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                        let _ = self
+                            .store
+                            .delete_replica_state(service_id, &deployment.id, replica_index)
+                            .await;
+                    }
+                    let deployment_ref = Deployment {
+                        service_id: service_id.clone(),
+                        id: deployment.id.clone(),
+                        replica_index: 0,
+                    };
+                    let _ = self
+                        .store
+                        .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                        .await;
+                    cleanup_deployment_image(deployment, &self.config.data_dir, &self.runtime);
+                } else {
+                    let container_alive = self
+                        .runtime
+                        .inspect_container_ip(&deployment.hostname_for_replica(0))
+                        .await
+                        .is_some();
+                    if !container_alive {
+                        self.logger.emit(
+                            "info",
+                            &format!(
+                                "marking orphaned deployment `{}` for service `{service_id}` as terminated (container not running)",
+                                deployment.id
+                            ),
+                        );
+                        for replica_index in 0..replicas {
+                            let hostname = deployment.hostname_for_replica(replica_index);
+                            deregister_container_dns(
+                                &hostname,
+                                &self.dns_domain,
+                                &self.dns_manager,
+                            );
+                            let _ = self
+                                .store
+                                .delete_replica_state(service_id, &deployment.id, replica_index)
+                                .await;
+                        }
+                        let deployment_ref = Deployment {
+                            service_id: service_id.clone(),
+                            id: deployment.id.clone(),
+                            replica_index: 0,
+                        };
+                        let _ = self
+                            .store
+                            .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
     async fn stop_removed_deployments(&mut self) {
         let running_job_ids = self.deployments.keys().cloned().collect::<Vec<_>>();
         for job_id in running_job_ids {
@@ -909,35 +1044,34 @@ impl DeploymentController {
     }
 
     async fn drain_old_deployments(&mut self) {
-        let mut services: HashMap<String, Vec<String>> = HashMap::new();
-        for deployment in self.deployments.values() {
-            let ids = services.entry(deployment.service_id.clone()).or_default();
-            if !ids.contains(&deployment.id) {
-                ids.push(deployment.id.clone());
-            }
-        }
+        let service_ids = match self.store.list_service_ids().await {
+            Ok(ids) => ids,
+            Err(_) => return,
+        };
 
-        for (service_id, deployment_ids) in &services {
-            if deployment_ids.len() <= 1 {
-                continue;
-            }
-
+        for service_id in &service_ids {
             let store_deployments = match self.store.list_service_deployments(service_id).await {
                 Ok(d) => d,
                 Err(_) => continue,
             };
 
-            let latest_active = store_deployments.iter().find(|d| {
-                matches!(
-                    d.status,
-                    DeploymentStatus::Ready
-                        | DeploymentStatus::PendingReady
-                        | DeploymentStatus::Building
-                )
-            });
-            let Some(latest) = latest_active else {
+            let active: Vec<&ServiceDeployment> = store_deployments
+                .iter()
+                .filter(|d| {
+                    matches!(
+                        d.status,
+                        DeploymentStatus::Ready
+                            | DeploymentStatus::PendingReady
+                            | DeploymentStatus::Building
+                    )
+                })
+                .collect();
+
+            if active.len() <= 1 {
                 continue;
-            };
+            }
+
+            let latest = active[0];
 
             let has_ready_replica = self
                 .store
@@ -951,19 +1085,7 @@ impl DeploymentController {
                 continue;
             }
 
-            for old in &store_deployments {
-                if old.id == latest.id {
-                    continue;
-                }
-                if !matches!(
-                    old.status,
-                    DeploymentStatus::Ready
-                        | DeploymentStatus::PendingReady
-                        | DeploymentStatus::Building
-                ) {
-                    continue;
-                }
-
+            for old in &active[1..] {
                 let deployment_ref = Deployment {
                     service_id: service_id.clone(),
                     id: old.id.clone(),
