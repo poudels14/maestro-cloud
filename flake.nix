@@ -5,212 +5,255 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs }:
-    let
-      supportedSystems = [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-      pkgsFor = system: import nixpkgs { inherit system; };
-    in {
-      packages = forAllSystems (system:
-        let pkgs = pkgsFor system; in {
-          default = pkgs.rustPlatform.buildRustPackage {
-            pname = "maestro";
-            version = "0.1.0";
-            src = ./.;
+  outputs = {
+    self,
+    nixpkgs,
+  }: let
+    supportedSystems = ["aarch64-darwin" "x86_64-linux" "aarch64-linux"];
+    forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+    pkgsFor = system: import nixpkgs {inherit system;};
+  in {
+    packages = forAllSystems (
+      system: let
+        pkgs = pkgsFor system;
+      in {
+        default = pkgs.rustPlatform.buildRustPackage {
+          pname = "maestro";
+          version = "0.1.0";
+          src = ./.;
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-            };
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+          };
 
-            nativeBuildInputs = with pkgs; [ pkg-config protobuf ];
+          nativeBuildInputs = with pkgs; [pkg-config protobuf];
 
-            buildInputs = with pkgs; [
+          buildInputs = with pkgs;
+            [
               openssl
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk_15
             ];
-          };
-        }
-      );
-
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/maestro";
         };
-      });
+      }
+    );
 
-      devShells = forAllSystems (system:
-        let pkgs = pkgsFor system; in {
-          default = pkgs.mkShell {
-            inputsFrom = [ self.packages.${system}.default ];
-            packages = with pkgs; [
-              cargo
-              rustc
-              rust-analyzer
-              clippy
-            ];
+    apps = forAllSystems (system: {
+      default = {
+        type = "app";
+        program = "${self.packages.${system}.default}/bin/maestro";
+      };
+    });
+
+    devShells = forAllSystems (
+      system: let
+        pkgs = pkgsFor system;
+      in {
+        default = pkgs.mkShell {
+          inputsFrom = [self.packages.${system}.default];
+          packages = with pkgs; [
+            cargo
+            rustc
+            rust-analyzer
+            clippy
+          ];
+        };
+      }
+    );
+
+    nixosModules.default = {
+      config,
+      lib,
+      pkgs,
+      utils,
+      ...
+    }: let
+      cfg = config.services.maestro;
+      isNerdctl = cfg.runtime == "nerdctl";
+      isDocker = cfg.runtime == "docker";
+    in {
+      options.services.maestro = {
+        enable = lib.mkEnableOption "Maestro deployment controller";
+
+        package = lib.mkOption {
+          type = lib.types.package;
+          default = self.packages.${pkgs.system}.default;
+          description = "The maestro package to use";
+        };
+
+        source = lib.mkOption {
+          type = lib.types.path;
+          default = self.outPath;
+          description = "Source tree to copy for Dockerfile builds";
+        };
+
+        config = lib.mkOption {
+          type = lib.types.str;
+          description = "Config URI (file path or aws-secret://...)";
+        };
+
+        dataDir = lib.mkOption {
+          type = lib.types.path;
+          default = "/data/maestro";
+          description = "Directory for etcd data, logs, and state";
+        };
+
+        runtime = lib.mkOption {
+          type = lib.types.enum ["docker" "nerdctl"];
+          default = "nerdctl";
+          description = "Container runtime to use (docker or nerdctl)";
+        };
+
+        extraArgs = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [];
+          description = "Extra arguments to pass to maestro start";
+        };
+      };
+
+      config = lib.mkIf cfg.enable {
+        # --- Docker runtime ---
+        virtualisation.docker.enable = lib.mkIf isDocker true;
+
+        # --- Containerd/nerdctl runtime ---
+        virtualisation.containerd.enable = lib.mkIf isNerdctl true;
+        virtualisation.containerd.settings = lib.mkIf isNerdctl {
+          plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
+        };
+
+        # BuildKit daemon for nerdctl build
+        systemd.services.buildkitd = lib.mkIf isNerdctl {
+          description = "BuildKit daemon";
+          after = ["containerd.service"];
+          requires = ["containerd.service"];
+          wantedBy = ["multi-user.target"];
+          serviceConfig = {
+            Type = "simple";
+            ExecStart = "${pkgs.buildkit}/bin/buildkitd --oci-worker=false --containerd-worker=true --addr unix:///run/buildkit/buildkitd.sock";
+            Restart = "on-failure";
+            RestartSec = 3;
+            StateDirectory = "buildkit";
+            RuntimeDirectory = "buildkit";
           };
-        }
-      );
+        };
 
-      nixosModules.default = { config, lib, pkgs, ... }:
-        let
-          cfg = config.services.maestro;
-          isNerdctl = cfg.runtime == "nerdctl";
-          isDocker = cfg.runtime == "docker";
-        in {
-          options.services.maestro = {
-            enable = lib.mkEnableOption "Maestro deployment controller";
+        # System packages available on the host
+        environment.systemPackages =
+          [
+            cfg.package
+          ]
+          ++ lib.optionals isNerdctl [
+            pkgs.nerdctl
+            pkgs.buildkit
+          ];
 
-            package = lib.mkOption {
-              type = lib.types.package;
-              default = self.packages.${pkgs.system}.default;
-              description = "The maestro package to use";
-            };
+        # Copy maestro source for Dockerfile builds
+        system.activationScripts.maestro-source = ''
+          mkdir -p /etc/maestro
+          rm -rf /etc/maestro/source
+          cp -r ${cfg.source} /etc/maestro/source
+          chmod -R u+w /etc/maestro/source
+        '';
 
-            config = lib.mkOption {
-              type = lib.types.str;
-              description = "Config URI (file path or aws-secret://...)";
-            };
+        systemd.services.aws-linklocal-routes = {
+          description = "Route AWS link-local traffic via primary interface";
+          after = ["network-online.target"];
+          before = ["maestro.service"];
+          wants = ["network-online.target"];
+          wantedBy = ["multi-user.target"];
 
-            dataDir = lib.mkOption {
-              type = lib.types.path;
-              default = "/data/maestro";
-              description = "Directory for etcd data, logs, and state";
-            };
-
-            runtime = lib.mkOption {
-              type = lib.types.enum [ "docker" "nerdctl" ];
-              default = "nerdctl";
-              description = "Container runtime to use (docker or nerdctl)";
-            };
-
-            extraArgs = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-              default = [];
-              description = "Extra arguments to pass to maestro start";
-            };
-
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
           };
+          script = ''
+            set -eu
 
-          config = lib.mkIf cfg.enable {
+            iface=$(${pkgs.iproute2}/bin/ip -4 route show default | ${pkgs.gawk}/bin/awk 'NR==1 {print $5}')
+            [ -n "$iface" ] || exit 1
 
-            # --- Docker runtime ---
-            virtualisation.docker.enable = lib.mkIf isDocker true;
+            case "$iface" in
+              veth*|cni*|br-*)
+                exit 1
+                ;;
+            esac
 
-            # --- Containerd/nerdctl runtime ---
-            virtualisation.containerd.enable = lib.mkIf isNerdctl true;
-            virtualisation.containerd.settings = lib.mkIf isNerdctl {
-              plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
-            };
+            ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.254/32 dev "$iface" scope link
+            ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.123/32 dev "$iface" scope link
 
-            # BuildKit daemon for nerdctl build
-            systemd.services.buildkitd = lib.mkIf isNerdctl {
-              description = "BuildKit daemon";
-              after = [ "containerd.service" ];
-              requires = [ "containerd.service" ];
-              wantedBy = [ "multi-user.target" ];
-              serviceConfig = {
-                Type = "simple";
-                ExecStart = "${pkgs.buildkit}/bin/buildkitd --oci-worker=false --containerd-worker=true --addr unix:///run/buildkit/buildkitd.sock";
-                Restart = "on-failure";
-                RestartSec = 3;
-                StateDirectory = "buildkit";
-                RuntimeDirectory = "buildkit";
-              };
-            };
+            ${pkgs.iproute2}/bin/ip -4 rule add pref 100 to 169.254.169.254/32 table 100 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip -4 rule add pref 101 to 169.254.169.123/32 table 100 2>/dev/null || true
+          '';
+        };
 
-            # System packages available on the host
-            environment.systemPackages = [
-              cfg.package
-            ] ++ lib.optionals isNerdctl [
-              pkgs.nerdctl
-              pkgs.buildkit
-            ];
+        # --- Maestro service ---
+        systemd.services.maestro = {
+          description = "Maestro deployment controller";
+          after =
+            [
+              "network-online.target"
+              "aws-linklocal-routes.service"
+            ]
+            ++ (
+              if isNerdctl
+              then ["containerd.service" "buildkitd.service"]
+              else ["docker.service"]
+            );
+          requires = ["aws-linklocal-routes.service"];
+          wants = ["network-online.target"];
+          wantedBy = ["multi-user.target"];
 
-            # Copy maestro source for Dockerfile builds
-            system.activationScripts.maestro-source = ''
-              rm -rf /etc/maestro/source
-              cp -r ${cfg.package.src} /etc/maestro/source
-              chmod -R u+w /etc/maestro/source
-            '';
+          path = [
+            pkgs.docker
+            pkgs.nerdctl
+            pkgs.cni-plugins
+            pkgs.iptables
+            pkgs.iproute2
+            pkgs.buildkit
+            pkgs.util-linux
+            pkgs.kmod
+            pkgs.nix
+            pkgs.nixos-rebuild
+            pkgs.git
+          ];
 
-            # --- Maestro service ---
-            systemd.services.maestro = {
-              description = "Maestro deployment controller";
-              after = [
-                "network-online.target"
-              ] ++ (if isNerdctl
-                then [ "containerd.service" "buildkitd.service" ]
-                else [ "docker.service" ]);
-              wants = [ "network-online.target" ];
-              wantedBy = [ "multi-user.target" ];
-
-              path = [
-                pkgs.docker
-                pkgs.nerdctl
-                pkgs.cni-plugins
-                pkgs.iptables
-                pkgs.iproute2
-                pkgs.buildkit
-                pkgs.util-linux
-                pkgs.kmod
-                pkgs.nix
-                pkgs.nixos-rebuild
-                pkgs.git
-              ];
-
-              serviceConfig = {
-                Type = "simple";
-                Restart = "on-failure";
-                RestartSec = 5;
-                ExecStartPre = pkgs.writeShellScript "fix-metadata-route" ''
-                  # Some nerdctl/CNI setups create broad 169.254.0.0/16 veth routes
-                  # that can steal traffic to cloud metadata. Enforce an explicit
-                  # host route so 169.254.169.254 always resolves via the host uplink.
-                  DEFAULT_ROUTE=$(${pkgs.iproute2}/bin/ip -4 -o route show to default | head -1)
-                  DEFAULT_IF=$(printf "%s\n" "$DEFAULT_ROUTE" | ${pkgs.gawk}/bin/awk '{print $5}')
-
-                  if [ -z "$DEFAULT_IF" ]; then
-                    echo "maestro: unable to determine default interface for metadata route" >&2
-                    exit 0
-                  fi
-
-                  case "$DEFAULT_IF" in
-                    veth*|cni*)
-                      echo "maestro: default interface looks like container link ($DEFAULT_IF)" >&2
-                      exit 0
-                      ;;
-                  esac
-
-                  ${pkgs.iproute2}/bin/ip -4 route replace 169.254.169.254/32 dev "$DEFAULT_IF" scope link || \
-                    echo "maestro: failed to install link-scoped metadata route" >&2
-                '';
-                ExecStart = lib.concatStringsSep " " ([
+          serviceConfig =
+            {
+              Type = "simple";
+              Restart = "on-failure";
+              RestartSec = 5;
+              ExecStart = utils.escapeSystemdExecArgs ([
                   "${cfg.package}/bin/maestro"
                   "start"
-                  "--config" cfg.config
-                  "--data-dir" (toString cfg.dataDir)
-                  "--system" "nixos"
-                  "--runtime" cfg.runtime
+                  "--config"
+                  cfg.config
+                  "--data-dir"
+                  (toString cfg.dataDir)
+                  "--system"
+                  "nixos"
+                  "--runtime"
+                  cfg.runtime
                   "--force"
-                  "--project-dir" "/etc/maestro/source"
-                ] ++ cfg.extraArgs);
-              } // lib.optionalAttrs isNerdctl {
-                Environment = [
-                  "CONTAINERD_ADDRESS=/run/containerd/containerd.sock"
-                  "CNI_PATH=${pkgs.cni-plugins}/bin"
-                  "NETCONFPATH=/etc/cni/net.d"
-                ];
-              };
+                  "--project-dir"
+                  "/etc/maestro/source"
+                ]
+                ++ cfg.extraArgs);
+            }
+            // lib.optionalAttrs isNerdctl {
+              Environment = [
+                "CONTAINERD_ADDRESS=/run/containerd/containerd.sock"
+                "CNI_PATH=${pkgs.cni-plugins}/bin"
+                "NETCONFPATH=/etc/cni/net.d"
+              ];
             };
-
-            # Ensure CNI config directory exists
-            systemd.tmpfiles.rules = lib.mkIf isNerdctl [
-              "d /etc/cni/net.d 0755 root root -"
-            ];
-          };
         };
+
+        # Ensure CNI config directory exists
+        systemd.tmpfiles.rules = lib.mkIf isNerdctl [
+          "d /etc/cni/net.d 0755 root root -"
+        ];
+      };
     };
+  };
 }
