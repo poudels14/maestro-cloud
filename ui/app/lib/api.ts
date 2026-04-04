@@ -1,4 +1,4 @@
-import type { Deployment, IngressRouting, LogEntry, MetricPoint, Service } from "./types";
+import type { Deployment, DiskInfo, IngressRouting, LogEntry, MetricPoint, Service } from "./types";
 
 export interface ClusterInfo {
   clusterName: string;
@@ -115,6 +115,12 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
       attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
     };
   });
+}
+
+export async function getDisks(): Promise<DiskInfo[]> {
+  const res = await fetch("/api/disks");
+  if (!res.ok) throw new Error(`Failed to fetch disks: ${res.statusText}`);
+  return res.json();
 }
 
 export async function getIngressRoutes(): Promise<IngressRouting[]> {

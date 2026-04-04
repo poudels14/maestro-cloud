@@ -1,13 +1,15 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
+import clsx from "clsx";
 import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Dialog } from "@kobalte/core/dialog";
-import type { MetricPoint, Service } from "../lib/types";
+import type { Service } from "../lib/types";
 import {
   deleteService,
   getClusterInfo,
   getClusterMetrics,
+  getDisks,
   getNodeMetrics,
   getServices
 } from "../lib/api";
@@ -132,10 +134,15 @@ function HomeMetrics() {
     metricsSource,
     ({ from, to }) => getClusterMetrics(from, to)
   );
+  const [disks, { refetch: refetchDisks }] = createResource(
+    () => (import.meta.env.SSR ? null : true),
+    getDisks
+  );
 
   const pollTimer = setInterval(() => {
     refetchNode();
     refetchCluster();
+    refetchDisks();
   }, 10_000);
   onCleanup(() => clearInterval(pollTimer));
 
@@ -248,6 +255,48 @@ function HomeMetrics() {
           </div>
         </div>
       </div>
+      <Show when={(disks() ?? []).length > 0}>
+        <div>
+          <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Disks</h2>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <For each={disks()}>
+              {(disk) => {
+                const usedBytes = () => disk.totalBytes - disk.availableBytes;
+                const usedPercent = () =>
+                  disk.totalBytes > 0 ? (usedBytes() / disk.totalBytes) * 100 : 0;
+                return (
+                  <div class="bg-white rounded-lg border border-gray-200 p-4">
+                    <div class="flex items-baseline justify-between mb-1">
+                      <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider truncate">
+                        {disk.mountPoint}
+                      </h3>
+                      <span class="text-xs text-gray-400 shrink-0 ml-2">
+                        {formatBytes(usedBytes())} / {formatBytes(disk.totalBytes)}
+                      </span>
+                    </div>
+                    <Show when={disk.name || disk.fileSystem}>
+                      <p class="text-xs text-gray-400 mb-3 truncate">
+                        {[disk.name, disk.fileSystem].filter(Boolean).join(" · ")}
+                      </p>
+                    </Show>
+                    <div class="w-full bg-gray-100 rounded-full h-2">
+                      <div
+                        class={clsx("h-2 rounded-full", {
+                          "bg-red-500": usedPercent() > 90,
+                          "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
+                          "bg-indigo-500": usedPercent() <= 70,
+                        })}
+                        style={{ width: `${Math.min(usedPercent(), 100)}%` }}
+                      />
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1.5">{usedPercent().toFixed(1)}% used</p>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }
