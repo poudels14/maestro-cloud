@@ -102,6 +102,13 @@ pub async fn start_system_jobs(
         dns_manager.set_record("web", &dns_domain, &ips.ingress);
         dns_manager.set_record("maestro-probe", &dns_domain, &ips.probe);
         dns_manager.set_record("admin", &dns_domain, &ips.admin);
+        if config.tailscale_authkey.is_some() {
+            dns_manager.set_record(
+                "admin",
+                &format!("{}.maestro.internal", config.cluster_alias),
+                &ips.tailscale,
+            );
+        }
         let _ = dns_manager.flush();
     }
 
@@ -608,7 +615,7 @@ async fn init_tailnet(
             &BuildSpec {
                 context_dir: config.project_dir.clone(),
                 tag: TAILSCALE_IMAGE_TAG.to_string(),
-                dockerfile: Some("Dockerfile.tailscale".to_string()),
+                dockerfile: Some("dns/Dockerfile.tailscale".to_string()),
                 build_args: Default::default(),
                 secrets: Default::default(),
                 builder: crate::config::BuilderType::Default,
