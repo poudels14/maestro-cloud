@@ -829,6 +829,14 @@ impl Server {
         let disks = sysinfo::Disks::new_with_refreshed_list();
         let items: Vec<serde_json::Value> = disks
             .iter()
+            .filter(|disk| {
+                let mount = disk.mount_point().to_string_lossy().to_string();
+                let name = disk.name().to_string_lossy();
+                name.starts_with("/dev/")
+                    && !mount.starts_with("/etc/")
+                    && !mount.starts_with("/proc/")
+                    && !mount.starts_with("/sys/")
+            })
             .map(|disk| {
                 json!({
                     "name": disk.name().to_string_lossy(),
