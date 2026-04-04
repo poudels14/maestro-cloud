@@ -20,10 +20,12 @@ import sys
 import threading
 import time
 
+from dns_http import http_server_loop
+
+DNS_PORT = 53
 DNS_UPSTREAM_IS_COREDNS = "MAESTRO_DNS_UPSTREAM" in os.environ
 DNS_UPSTREAM = "127.0.0.1" if DNS_UPSTREAM_IS_COREDNS else "127.0.0.11"
 DNS_UPSTREAM_PORT = 5353 if DNS_UPSTREAM_IS_COREDNS else DNS_PORT
-DNS_PORT = 53
 ROOT_DOMAIN = ["maestro", "internal"]
 PEER_REFRESH_INTERVAL = 15
 # Used to verify that a peer is a maestro DNS proxy
@@ -191,7 +193,7 @@ def peer_refresh_loop(my_cluster, my_alias, state_ref, lock):
             print(f"peer refresh error: {err}", file=sys.stderr, flush=True)
 
 
-def handle_dns_query(data, my_cluster, state, lock):
+def handle_dns_query(data, my_cluster, my_alias, state, lock):
     """Process a DNS query and return the response bytes, or None."""
     if len(data) < 12:
         return None
@@ -211,6 +213,7 @@ def handle_dns_query(data, my_cluster, state, lock):
         if len(lower_labels) >= 3 and lower_labels[-2:] == ROOT_DOMAIN:
             query_cluster = lower_labels[-3]
             bare_labels = labels[:-3]
+            lower_bare_labels = lower_labels[:-3]
 
             if not bare_labels:
                 return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
@@ -222,6 +225,20 @@ def handle_dns_query(data, my_cluster, state, lock):
                 alias_owners = state.get("alias_owners", {})
                 peer_ip = peers.get(query_cluster)
                 alias_owner = alias_owners.get(query_cluster)
+
+            if lower_bare_labels == ["admin"]:
+                if query_cluster == my_alias:
+                    return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
+                elif query_cluster == my_cluster:
+                    return resolve_local(
+                        upstream_sock, data, original_qname, bare_labels, my_cluster, qname_end
+                    )
+                elif peer_ip:
+                    return resolve_upstream(upstream_sock, data, peer_ip, DNS_PORT)
+                elif alias_owner and alias_owner in peers:
+                    return resolve_upstream(upstream_sock, data, peers[alias_owner], DNS_PORT)
+                else:
+                    return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
 
             if query_cluster == my_cluster or alias_owner == my_cluster:
                 return resolve_local(upstream_sock, data, original_qname, bare_labels, my_cluster, qname_end)
@@ -237,7 +254,7 @@ def handle_dns_query(data, my_cluster, state, lock):
         upstream_sock.close()
 
 
-def handle_tcp_client(conn, my_cluster, state, lock):
+def handle_tcp_client(conn, my_cluster, my_alias, state, lock):
     try:
         conn.settimeout(5)
         length_bytes = conn.recv(2)
@@ -247,7 +264,7 @@ def handle_tcp_client(conn, my_cluster, state, lock):
         data = conn.recv(msg_len)
         if len(data) < msg_len:
             return
-        response = handle_dns_query(data, my_cluster, state, lock)
+        response = handle_dns_query(data, my_cluster, my_alias, state, lock)
         if response:
             conn.sendall(struct.pack("!H", len(response)) + response)
     except Exception as err:
@@ -256,13 +273,13 @@ def handle_tcp_client(conn, my_cluster, state, lock):
         conn.close()
 
 
-def tcp_listener_loop(tcp_server, my_cluster, state, lock):
+def tcp_listener_loop(tcp_server, my_cluster, my_alias, state, lock):
     while True:
         try:
             conn, _ = tcp_server.accept()
             threading.Thread(
                 target=handle_tcp_client,
-                args=(conn, my_cluster, state, lock),
+                args=(conn, my_cluster, my_alias, state, lock),
                 daemon=True,
             ).start()
         except Exception as err:
@@ -305,15 +322,22 @@ def main():
 
     tcp_thread = threading.Thread(
         target=tcp_listener_loop,
-        args=(tcp_server, my_cluster, state, lock),
+        args=(tcp_server, my_cluster, my_alias, state, lock),
         daemon=True,
     )
     tcp_thread.start()
 
+    http_thread = threading.Thread(
+        target=http_server_loop,
+        args=(my_cluster, my_alias, state, lock, derive_alias),
+        daemon=True,
+    )
+    http_thread.start()
+
     while True:
         data, addr = server.recvfrom(4096)
         try:
-            response = handle_dns_query(data, my_cluster, state, lock)
+            response = handle_dns_query(data, my_cluster, my_alias, state, lock)
             if response:
                 server.sendto(response, addr)
         except Exception as err:

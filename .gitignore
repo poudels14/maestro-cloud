@@ -4,6 +4,8 @@ node_modules
 .nitro
 routeTree.gen.ts
 
+__pycache__
+
 .env
 .envrc
 
