@@ -335,6 +335,7 @@ async fn run() -> crate::error::Result<bool> {
                     }),
                     system: None,
                     runtime: Default::default(),
+                    builder: Default::default(),
                     disable_etcd_cert,
                 },
             };
@@ -392,6 +393,7 @@ async fn run() -> crate::error::Result<bool> {
             };
             let runtime_type = runtime_flag.unwrap_or(cfg.runtime);
             let runtime = runtime::create_provider(runtime_type);
+            let builder_type = cfg.builder;
 
             let log_store = Arc::new(
                 logs::LogStore::open(&data_dir.join("logs/logs.db"))
@@ -545,6 +547,7 @@ async fn run() -> crate::error::Result<bool> {
                 deployment_signal_rx,
                 Some(log_sender.clone()),
                 runtime,
+                builder_type,
                 Some(system_info.dns_manager),
                 system_info.nameserver_ip,
             );

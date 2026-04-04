@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::builder::{BuildSource, LogTarget};
+use crate::config::BuilderType;
 use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
 use crate::logs::LogEntry;
 use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
@@ -45,6 +46,7 @@ pub trait ServiceCommandPlanner: Send + Sync {
 #[derive(Clone)]
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
+    pub builder: BuilderType,
     pub network: String,
     pub dns_domain: Option<String>,
     pub dns_server: Option<String>,
@@ -90,22 +92,40 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             .as_ref()
             .ok_or_else(|| anyhow!("no build config"))?;
         let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
+        let use_depot = self.builder == BuilderType::Depot;
+
+        let (build_tag, depot_pushed) = if use_depot && build_config.registry.is_some() {
+            let registry = build_config.registry.as_ref().unwrap();
+            let registry_tag = format!(
+                "{}/{}:{}",
+                registry.trim_end_matches('/'),
+                deployment.config.id,
+                deployment.id
+            );
+            (registry_tag, true)
+        } else {
+            (image_tag.to_string(), false)
+        };
 
         self.runtime
             .build_image(
                 &BuildSpec {
                     context_dir: build_dir.to_path_buf(),
-                    tag: image_tag.to_string(),
+                    tag: build_tag.clone(),
                     dockerfile: Some(build_config.dockerfile.clone()),
                     build_args: build_config.env.items.clone(),
                     secrets: build_config.secrets.items.clone(),
+                    builder: self.builder,
+                    push_to_registry: depot_pushed,
                 },
                 log_sender.as_ref(),
                 Some(&log_source_str),
             )
             .await?;
 
-        let final_tag = if let Some(registry) = &build_config.registry {
+        let final_tag = if depot_pushed {
+            build_tag
+        } else if let Some(registry) = &build_config.registry {
             let registry_tag = format!(
                 "{}/{}:{}",
                 registry.trim_end_matches('/'),
@@ -116,7 +136,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             self.runtime.push_image(&registry_tag).await?;
             registry_tag
         } else {
-            image_tag.to_string()
+            build_tag
         };
 
         Ok(BuildOutput {

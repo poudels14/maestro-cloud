@@ -8,6 +8,7 @@ use std::{
 use anyhow::Result;
 use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
+use crate::config::BuilderType;
 use crate::deployment::dns::DnsManager;
 use crate::deployment::provider::{
     BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
@@ -74,6 +75,7 @@ impl DeploymentController {
         signal_rx: broadcast::Receiver<ShutdownEvent>,
         log_sender: Option<flume::Sender<LogEntry>>,
         runtime: Arc<dyn RuntimeProvider>,
+        builder: BuilderType,
         dns_manager: Option<Arc<DnsManager>>,
         coredns_ip: Option<String>,
     ) -> Self {
@@ -88,6 +90,7 @@ impl DeploymentController {
         };
         let container_provider = ContainerDeploymentProvider {
             runtime: runtime.clone(),
+            builder,
             network: config.network.clone(),
             dns_domain: dns_domain.clone(),
             dns_server,
@@ -238,6 +241,8 @@ impl DeploymentController {
                             dockerfile: dockerfile.map(String::from),
                             build_args: Default::default(),
                             secrets: Default::default(),
+                            builder: BuilderType::Default,
+                            push_to_registry: false,
                         },
                         None,
                         None,
@@ -272,6 +277,8 @@ impl DeploymentController {
                             dockerfile: dockerfile.map(String::from),
                             build_args: Default::default(),
                             secrets: Default::default(),
+                            builder: BuilderType::Default,
+                            push_to_registry: false,
                         },
                         None,
                         None,
