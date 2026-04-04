@@ -118,6 +118,7 @@ impl Server {
                 "/api/services/{serviceId}/metrics",
                 get(Self::get_service_metrics),
             )
+            .route("/api/disks", get(Self::get_disks))
             .route("/api/ingress/routes", get(Self::list_ingress_routes))
             .route(
                 "/api/services/{serviceId}/metrics/containers",
@@ -822,6 +823,23 @@ impl Server {
             "accepted": true,
             "system": system_type,
         })))
+    }
+
+    async fn get_disks() -> Json<Vec<serde_json::Value>> {
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let items: Vec<serde_json::Value> = disks
+            .iter()
+            .map(|disk| {
+                json!({
+                    "name": disk.name().to_string_lossy(),
+                    "mountPoint": disk.mount_point().to_string_lossy(),
+                    "totalBytes": disk.total_space(),
+                    "availableBytes": disk.available_space(),
+                    "fileSystem": String::from_utf8_lossy(disk.file_system().as_encoded_bytes()),
+                })
+            })
+            .collect();
+        Json(items)
     }
 }
 

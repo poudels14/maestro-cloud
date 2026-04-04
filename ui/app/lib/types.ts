@@ -91,6 +91,14 @@ export interface MetricPoint {
   netTxBytes: number;
 }
 
+export interface DiskInfo {
+  name: string;
+  mountPoint: string;
+  totalBytes: number;
+  availableBytes: number;
+  fileSystem: string;
+}
+
 export interface LogEntry {
   seq: number;
   ts: number;
