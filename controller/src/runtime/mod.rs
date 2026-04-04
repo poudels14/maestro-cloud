@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::config::RuntimeType;
+use crate::config::{BuilderType, RuntimeType};
 use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
 use crate::utils::crypto::SecretString;
@@ -28,6 +28,8 @@ pub struct BuildSpec {
     pub dockerfile: Option<String>,
     pub build_args: HashMap<String, SecretString>,
     pub secrets: HashMap<String, SecretString>,
+    pub builder: BuilderType,
+    pub push_to_registry: bool,
 }
 
 #[async_trait]

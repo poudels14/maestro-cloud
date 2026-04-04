@@ -284,7 +284,7 @@ function HomeMetrics() {
                         class={clsx("h-2 rounded-full", {
                           "bg-red-500": usedPercent() > 90,
                           "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
-                          "bg-indigo-500": usedPercent() <= 70,
+                          "bg-indigo-500": usedPercent() <= 70
                         })}
                         style={{ width: `${Math.min(usedPercent(), 100)}%` }}
                       />

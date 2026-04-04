@@ -73,6 +73,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
 
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        builder: crate::config::BuilderType::Default,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -116,6 +117,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        builder: crate::config::BuilderType::Default,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -175,6 +177,7 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
 
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        builder: crate::config::BuilderType::Default,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -251,6 +254,7 @@ fn secrets_mount_content_quotes_values() {
 
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        builder: crate::config::BuilderType::Default,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -792,6 +796,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
         signal_rx,
         None,
         runtime::create_provider(crate::config::RuntimeType::Docker),
+        crate::config::BuilderType::Default,
         None,
         None,
     );
@@ -882,6 +887,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
         signal_rx,
         None,
         runtime::create_provider(crate::config::RuntimeType::Docker),
+        crate::config::BuilderType::Default,
         None,
         None,
     );
@@ -995,6 +1001,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
         signal_rx,
         None,
         runtime::create_provider(crate::config::RuntimeType::Docker),
+        crate::config::BuilderType::Default,
         None,
         None,
     );
@@ -1124,6 +1131,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
         signal_rx,
         None,
         runtime::create_provider(crate::config::RuntimeType::Docker),
+        crate::config::BuilderType::Default,
         None,
         None,
     );

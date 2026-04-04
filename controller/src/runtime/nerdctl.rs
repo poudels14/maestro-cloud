@@ -6,6 +6,8 @@ use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
 use crate::utils::cmd;
 
+use crate::config::BuilderType;
+
 use super::{BuildSpec, RunSpec, RuntimeProvider};
 
 pub struct NerdctlRuntimeProvider;
@@ -195,12 +197,28 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         log_sender: Option<&flume::Sender<LogEntry>>,
         log_source: Option<&str>,
     ) -> Result<()> {
+        let (cli, cli_label) = match spec.builder {
+            BuilderType::Depot => ("depot", "depot"),
+            BuilderType::Default => ("nerdctl", "nerdctl"),
+        };
         eprintln!(
-            "[maestro]: building image {} from {} (nerdctl)",
+            "[maestro]: building image {} from {} ({cli_label})",
             spec.tag,
             spec.context_dir.display()
         );
         let mut args = vec!["build".to_string(), "-t".to_string(), spec.tag.clone()];
+        if spec.builder == BuilderType::Depot {
+            let arch = match std::env::consts::ARCH {
+                "aarch64" => "arm64",
+                other => other,
+            };
+            args.push(format!("--platform=linux/{arch}"));
+            if spec.push_to_registry {
+                args.push("--push".to_string());
+            } else {
+                args.push("--load".to_string());
+            }
+        }
         if let Some(ref dockerfile) = spec.dockerfile {
             let dockerfile_path = spec.context_dir.join(dockerfile).display().to_string();
             args.push("-f".to_string());
@@ -210,21 +228,20 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
             args.push("--build-arg".to_string());
             args.push(format!("{key}={}", value.as_str()));
         }
-        for key in spec.secrets.keys() {
-            args.push("--secret".to_string());
-            args.push(format!("id={key},env={key}"));
-        }
         args.push(spec.context_dir.display().to_string());
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
-            cmd::exec("nerdctl", &args)
+            cmd::exec(cli, &args)
                 .env(&spec.secrets)
                 .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
                 .await?;
         } else {
-            cmd::exec("nerdctl", &args).env(&spec.secrets).run().await?;
+            cmd::exec(cli, &args).env(&spec.secrets).run().await?;
         }
-        eprintln!("[maestro]: image {} built successfully (nerdctl)", spec.tag);
+        eprintln!(
+            "[maestro]: image {} built successfully ({cli_label})",
+            spec.tag
+        );
         Ok(())
     }
 

@@ -15,6 +15,14 @@ pub enum RuntimeType {
     Nerdctl,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuilderType {
+    #[default]
+    Default,
+    Depot,
+}
+
 impl fmt::Display for RuntimeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -57,6 +65,8 @@ pub struct StartConfig {
     pub system: Option<SystemType>,
     #[serde(default)]
     pub runtime: RuntimeType,
+    #[serde(default)]
+    pub builder: BuilderType,
     #[serde(default)]
     pub disable_etcd_cert: bool,
 }
