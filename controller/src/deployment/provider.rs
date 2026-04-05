@@ -8,7 +8,7 @@ use crate::builder::{BuildSource, LogTarget};
 use crate::config::BuilderType;
 use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
 use crate::logs::LogEntry;
-use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
+use crate::runtime::{BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider};
 use crate::supervisor::SecretsMount;
 
 use crate::supervisor::JobCommand;
@@ -107,12 +107,26 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             (image_tag.to_string(), false)
         };
 
+        if let Err(err) = self.runtime.prune_images().await {
+            eprintln!(
+                "[maestro]: failed to prune {} images before building service {}: {err}",
+                self.runtime.cli_name(),
+                deployment.config.id
+            );
+        }
+        let mut labels = std::collections::HashMap::new();
+        labels.insert(
+            MANAGED_IMAGE_LABEL.0.to_string(),
+            MANAGED_IMAGE_LABEL.1.to_string(),
+        );
+
         self.runtime
             .build_image(
                 &BuildSpec {
                     context_dir: build_dir.to_path_buf(),
                     tag: build_tag.clone(),
                     dockerfile: Some(build_config.dockerfile.clone()),
+                    labels,
                     build_args: build_config.env.items.clone(),
                     secrets: build_config.secrets.items.clone(),
                     builder: self.builder,

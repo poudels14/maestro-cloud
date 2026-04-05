@@ -13,6 +13,8 @@ use crate::utils::crypto::SecretString;
 pub mod docker;
 pub mod nerdctl;
 
+pub const MANAGED_IMAGE_LABEL: (&str, &str) = ("maestro.managed", "true");
+
 pub struct RunSpec {
     pub container_name: String,
     pub hostname: String,
@@ -26,6 +28,7 @@ pub struct BuildSpec {
     pub context_dir: PathBuf,
     pub tag: String,
     pub dockerfile: Option<String>,
+    pub labels: HashMap<String, String>,
     pub build_args: HashMap<String, SecretString>,
     pub secrets: HashMap<String, SecretString>,
     pub builder: BuilderType,
@@ -56,6 +59,10 @@ pub trait RuntimeProvider: Send + Sync {
         _names: &[String],
         _ips: &[String],
     ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn prune_images(&self) -> Result<()> {
         Ok(())
     }
 
