@@ -1,5 +1,5 @@
 use crate::config::RuntimeType;
-use crate::runtime::{self, BuildSpec, RunSpec, RuntimeProvider};
+use crate::runtime::{self, RunSpec};
 use crate::supervisor::JobCommand;
 
 fn run_spec() -> RunSpec {
