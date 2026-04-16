@@ -178,6 +178,7 @@ impl DeploymentController {
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
         self.stop_removed_deployments().await;
         self.drain_old_deployments().await;
+        self.abort_canceled_builds().await;
         self.check_pending_builds().await;
         self.reconcile_replicas().await;
         let queued = self.store.list_queued_deployments().await?;
@@ -186,6 +187,40 @@ impl DeploymentController {
         }
         self.cleanup_orphaned_deployments().await;
         Ok(())
+    }
+
+    async fn abort_canceled_builds(&mut self) {
+        let deployment_ids: Vec<String> = self.pending_builds.keys().cloned().collect();
+
+        for deployment_id in deployment_ids {
+            let Some(pending) = self.pending_builds.get(&deployment_id) else {
+                continue;
+            };
+            let deployment_ref = Deployment {
+                service_id: pending.queued_deployment.service_id.clone(),
+                id: deployment_id.clone(),
+                replica_index: 0,
+            };
+            let is_canceled = self
+                .store
+                .read_service_deployment(&deployment_ref)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|deployment| deployment.status == DeploymentStatus::Canceled);
+
+            if !is_canceled {
+                continue;
+            }
+
+            let pending = self.pending_builds.remove(&deployment_id).unwrap();
+            pending.handle.abort();
+            let _ = std::fs::remove_dir_all(&pending.build_dir);
+            self.logger.emit(
+                "info",
+                &format!("build canceled for deployment `{deployment_id}`"),
+            );
+        }
     }
 
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
@@ -550,6 +585,28 @@ impl DeploymentController {
             };
 
             let _ = std::fs::remove_dir_all(&pending.build_dir);
+
+            let current_status = self
+                .store
+                .read_service_deployment(&Deployment {
+                    service_id: service_id.clone(),
+                    id: deployment_id.clone(),
+                    replica_index: 0,
+                })
+                .await
+                .ok()
+                .flatten()
+                .map(|deployment| deployment.status);
+
+            if current_status == Some(DeploymentStatus::Canceled) {
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "skipping canceled deployment `{deployment_id}` after build completion"
+                    ),
+                );
+                continue;
+            }
 
             match build_result {
                 Ok(output) => {
