@@ -10,7 +10,7 @@ use crate::utils::crypto::SecretString;
 use crate::utils::secrets::SecretProvider;
 
 #[derive(Debug, Clone)]
-pub struct DeploymentConfig {
+pub struct ControllerConfig {
     pub cluster_alias: String,
     pub cluster_name: String,
     pub data_dir: PathBuf,
@@ -24,13 +24,14 @@ pub struct DeploymentConfig {
     pub tailscale_authkey: Option<String>,
     pub encryption_key: SecretString,
     pub jwt_secret: Option<String>,
+    pub depot_token: Option<SecretString>,
     pub tags: Vec<String>,
     pub system_type: Option<crate::config::SystemType>,
     pub force: bool,
     pub disable_etcd_cert: bool,
 }
 
-impl DeploymentConfig {
+impl ControllerConfig {
     #[inline]
     pub fn etcd_dir(&self) -> PathBuf {
         self.data_dir.join("system/etcd/")

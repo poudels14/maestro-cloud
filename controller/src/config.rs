@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
 use crate::logs::Logger;
+use crate::utils::crypto::SecretString;
 use crate::utils::secrets::SecretProvider;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
@@ -68,7 +69,16 @@ pub struct StartConfig {
     #[serde(default)]
     pub builder: BuilderType,
     #[serde(default)]
+    pub depot: Option<DepotConfig>,
+    #[serde(default)]
     pub disable_etcd_cert: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DepotConfig {
+    #[serde(default)]
+    pub token: Option<SecretString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

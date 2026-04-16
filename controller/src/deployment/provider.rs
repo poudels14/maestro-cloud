@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,6 +11,7 @@ use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
 use crate::logs::LogEntry;
 use crate::runtime::{BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider};
 use crate::supervisor::SecretsMount;
+use crate::utils::crypto::SecretString;
 
 use crate::supervisor::JobCommand;
 
@@ -47,6 +49,7 @@ pub trait ServiceCommandPlanner: Send + Sync {
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
     pub builder: BuilderType,
+    pub build_command_env: HashMap<String, SecretString>,
     pub network: String,
     pub dns_domain: Option<String>,
     pub dns_server: Option<String>,
@@ -115,10 +118,14 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             );
         }
         let mut labels = std::collections::HashMap::new();
+        let mut command_env = self.build_command_env.clone();
         labels.insert(
             MANAGED_IMAGE_LABEL.0.to_string(),
             MANAGED_IMAGE_LABEL.1.to_string(),
         );
+        if !use_depot {
+            command_env.clear();
+        }
 
         self.runtime
             .build_image(
@@ -129,6 +136,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                     labels,
                     build_args: build_config.env.items.clone(),
                     secrets: build_config.secrets.items.clone(),
+                    command_env,
                     builder: self.builder,
                     push_to_registry: depot_pushed,
                 },

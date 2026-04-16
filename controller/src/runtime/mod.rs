@@ -31,6 +31,7 @@ pub struct BuildSpec {
     pub labels: HashMap<String, String>,
     pub build_args: HashMap<String, SecretString>,
     pub secrets: HashMap<String, SecretString>,
+    pub command_env: HashMap<String, SecretString>,
     pub builder: BuilderType,
     pub push_to_registry: bool,
 }

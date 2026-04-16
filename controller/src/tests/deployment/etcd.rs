@@ -5,7 +5,7 @@ use crate::deployment::provider::{
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Command, Deployment, DeploymentConfig, DeploymentStatus, IngressConfig, QueuedDeployment,
+    Command, ControllerConfig, Deployment, DeploymentStatus, IngressConfig, QueuedDeployment,
     ReplicaState, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
     ServiceDeployment, ServiceInfo, ServiceProvider,
 };
@@ -772,7 +772,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
     let signal_rx = signal_tx.subscribe();
 
     let mut controller = DeploymentController::new(
-        DeploymentConfig {
+        ControllerConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
             cluster_alias: "test".to_string(),
@@ -863,7 +863,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
     let signal_rx = signal_tx.subscribe();
 
     let mut controller = DeploymentController::new(
-        DeploymentConfig {
+        ControllerConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
             cluster_alias: "test".to_string(),
@@ -977,7 +977,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
     let signal_rx = signal_tx.subscribe();
 
     let mut controller = DeploymentController::new(
-        DeploymentConfig {
+        ControllerConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
             cluster_alias: "test".to_string(),
@@ -1107,7 +1107,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
     let signal_rx = signal_tx.subscribe();
 
     let mut controller = DeploymentController::new(
-        DeploymentConfig {
+        ControllerConfig {
             data_dir: data_dir.clone(),
             etcd_port: 0,
             cluster_alias: "test".to_string(),

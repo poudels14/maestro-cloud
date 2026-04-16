@@ -26,7 +26,7 @@ use error::Error;
 use signal::spawn_shutdown_signal_bus;
 
 use crate::{
-    deployment::{DeploymentConfig, controller::DeploymentController},
+    deployment::{ControllerConfig, controller::DeploymentController},
     supervisor::controller::JobSupervisor,
 };
 
@@ -336,6 +336,7 @@ async fn run() -> crate::error::Result<bool> {
                     system: None,
                     runtime: Default::default(),
                     builder: Default::default(),
+                    depot: Default::default(),
                     disable_etcd_cert,
                 },
             };
@@ -437,7 +438,7 @@ async fn run() -> crate::error::Result<bool> {
                 }
             }
 
-            let mut deployment_config = DeploymentConfig {
+            let mut deployment_config = ControllerConfig {
                 cluster_alias,
                 cluster_name,
                 data_dir,
@@ -462,6 +463,7 @@ async fn run() -> crate::error::Result<bool> {
                 tailscale_authkey,
                 encryption_key: SecretString::new(cfg.encryption_key),
                 jwt_secret: cfg.jwt_secret,
+                depot_token: cfg.depot.and_then(|depot| depot.token),
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
                 force,
