@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
 use crate::utils::cmd;
+use crate::utils::nanoid;
 
 use crate::config::BuilderType;
 
@@ -227,6 +228,7 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
             spec.context_dir.display()
         );
         let mut args = vec!["build".to_string(), "-t".to_string(), spec.tag.clone()];
+        let mut archive_path = None;
         if spec.builder == BuilderType::Depot {
             let arch = match std::env::consts::ARCH {
                 "aarch64" => "arm64",
@@ -239,7 +241,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
             if spec.push_to_registry {
                 args.push("--push".to_string());
             } else {
-                args.push("--load".to_string());
+                let path = std::env::temp_dir()
+                    .join(format!("maestro-depot-{}.tar", nanoid::unique_id(10)));
+                let output = format!("type=docker,dest={}", path.display());
+                args.extend(["--output".to_string(), output]);
+                archive_path = Some(path);
             }
         }
         if let Some(ref dockerfile) = spec.dockerfile {
@@ -257,13 +263,29 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         }
         args.push(spec.context_dir.display().to_string());
 
-        if let (Some(sender), Some(source)) = (log_sender, log_source) {
+        let build_result = if let (Some(sender), Some(source)) = (log_sender, log_source) {
             cmd::exec(cli, &args)
                 .env(&command_env)
                 .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
-                .await?;
+                .await
         } else {
-            cmd::exec(cli, &args).env(&command_env).run().await?;
+            cmd::exec(cli, &args)
+                .env(&command_env)
+                .run()
+                .await
+                .map(|_| ())
+        };
+        if let Err(err) = build_result {
+            if let Some(path) = &archive_path {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(err);
+        }
+        if let Some(path) = &archive_path {
+            let load_result =
+                cmd::run("nerdctl", &["load", "-i", path.to_string_lossy().as_ref()]).await;
+            let _ = std::fs::remove_file(path);
+            load_result?;
         }
         eprintln!(
             "[maestro]: image {} built successfully ({cli_label})",
