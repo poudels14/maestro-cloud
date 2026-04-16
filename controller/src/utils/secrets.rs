@@ -1,7 +1,7 @@
+use anyhow::{Result, anyhow};
+use backon::{ConstantBuilder, Retryable};
 use std::collections::HashMap;
 use std::sync::OnceLock;
-
-use anyhow::{Result, anyhow};
 use tokio::sync::Mutex;
 
 use crate::logs::Logger;
@@ -30,12 +30,26 @@ impl SecretProvider {
             return Err(anyhow!("empty AWS secret reference"));
         }
         let client = aws_client().await;
-        let result = client
-            .get_secret_value()
-            .secret_id(&self.reference)
-            .send()
-            .await
-            .map_err(|err| anyhow!("failed to fetch AWS secret `{}`: {err}", self.reference))?;
+        let backoff = ConstantBuilder::default()
+            .with_delay(std::time::Duration::from_millis(500))
+            .with_max_times(3);
+        let reference = self.reference.clone();
+
+        let result = (|| {
+            let client = client.clone();
+            let reference = reference.clone();
+            async move {
+                client
+                    .get_secret_value()
+                    .secret_id(&reference)
+                    .send()
+                    .await
+                    .map_err(|err| anyhow!("failed to fetch AWS secret `{reference}`: {err}"))
+            }
+        })
+        .retry(backoff)
+        .await?;
+
         result
             .secret_string()
             .map(|s| s.to_string())
