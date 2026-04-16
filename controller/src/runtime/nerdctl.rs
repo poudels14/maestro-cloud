@@ -215,6 +215,8 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         log_sender: Option<&flume::Sender<LogEntry>>,
         log_source: Option<&str>,
     ) -> Result<()> {
+        let mut command_env = spec.command_env.clone();
+        command_env.extend(spec.secrets.clone());
         let (cli, cli_label) = match spec.builder {
             BuilderType::Depot => ("depot", "depot"),
             BuilderType::Default => ("nerdctl", "nerdctl"),
@@ -254,11 +256,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
 
         if let (Some(sender), Some(source)) = (log_sender, log_source) {
             cmd::exec(cli, &args)
-                .env(&spec.secrets)
+                .env(&command_env)
                 .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
                 .await?;
         } else {
-            cmd::exec(cli, &args).env(&spec.secrets).run().await?;
+            cmd::exec(cli, &args).env(&command_env).run().await?;
         }
         eprintln!(
             "[maestro]: image {} built successfully ({cli_label})",

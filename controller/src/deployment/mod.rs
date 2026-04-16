@@ -17,7 +17,7 @@ pub mod provider;
 pub mod store;
 pub mod types;
 
-pub use types::DeploymentConfig;
+pub use types::ControllerConfig;
 
 const PROBE_IMAGE_TAG: &str = "maestro-probe";
 const ADMIN_IMAGE_TAG: &str = "maestro-admin";
@@ -28,7 +28,7 @@ pub struct SystemStartupInfo {
 }
 
 pub async fn start_system_jobs(
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     logger: &Logger,
@@ -219,7 +219,7 @@ async fn init_etcd(
     dns_domain: &str,
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
@@ -299,7 +299,7 @@ async fn init_ingress(
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
     logger: &Logger,
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
@@ -385,7 +385,7 @@ async fn init_admin(
     dns_flag: &[String],
     ip_flags: Vec<String>,
     logger: &Logger,
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
@@ -399,6 +399,7 @@ async fn init_admin(
                 labels: Default::default(),
                 build_args: Default::default(),
                 secrets: Default::default(),
+                command_env: Default::default(),
                 builder: crate::config::BuilderType::Default,
                 push_to_registry: false,
             },
@@ -471,7 +472,7 @@ async fn init_probe(
     dns_flag: &[String],
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
@@ -485,6 +486,7 @@ async fn init_probe(
                 labels: Default::default(),
                 build_args: Default::default(),
                 secrets: Default::default(),
+                command_env: Default::default(),
                 builder: crate::config::BuilderType::Default,
                 push_to_registry: false,
             },
@@ -593,7 +595,7 @@ async fn init_tailnet(
     dns_domain: &str,
     logger: &Logger,
     static_ip: Option<&str>,
-    config: &DeploymentConfig,
+    config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
@@ -621,6 +623,7 @@ async fn init_tailnet(
                 labels: Default::default(),
                 build_args: Default::default(),
                 secrets: Default::default(),
+                command_env: Default::default(),
                 builder: crate::config::BuilderType::Default,
                 push_to_registry: false,
             },

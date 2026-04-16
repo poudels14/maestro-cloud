@@ -1,20 +1,26 @@
 {
+  "$schema": "./maestro.start.schema.json",
   "cluster": {
     "name": "my-cluster"
   },
   "ingress": {
     "port": 8080
   },
-  // "subnet": "172.22.0.0/16",
-  "encryption-key": "CHANGE_ME",
-  // "jwt-secret": "",
-  // "tailscale": {
-  //   "auth-key": ""
-  // },
-  "tags": []
-  // "datadog": {
-  //   "api-key": "",
-  //   "site": "datadoghq.com",
-  //   "include-system-logs": false
-  // }
+  "subnet": "172.22.0.0/16",
+  "encryption-key": "$CHANGE_ME",
+  "runtime": "nerdctl",
+  "builder": "depot",
+  "depot": {
+    "token": ""
+  },
+  "jwt-secret": "",
+  "tailscale": {
+    "auth-key": ""
+  },
+  "tags": [],
+  "datadog": {
+    "api-key": "$API_KEY",
+    "site": "datadoghq.com",
+    "include-system-logs": false
+  }
 }

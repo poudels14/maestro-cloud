@@ -69,6 +69,10 @@ The config file (`maestro.jsonc`) supports:
   "subnet": "172.22.0.0/16",
   "encryption-key": "your-secret-key",
   "runtime": "nerdctl", // "docker" (default) or "nerdctl"
+  "builder": "depot", // "default" (default) or "depot"
+  "depot": {
+    "token": "your-depot-token"
+  },
   "tailscale": { "auth-key": "tskey-auth-..." },
   "datadog": {
     "api-key": "your-dd-api-key",

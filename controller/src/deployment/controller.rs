@@ -15,7 +15,7 @@ use crate::deployment::provider::{
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Deployment, DeploymentBuildInfo, DeploymentConfig, DeploymentStatus, QueuedDeployment,
+    ControllerConfig, Deployment, DeploymentBuildInfo, DeploymentStatus, QueuedDeployment,
     ServiceDeployment, ServiceProvider,
 };
 use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
@@ -51,7 +51,7 @@ struct PendingBuild {
 }
 
 pub struct DeploymentController {
-    config: DeploymentConfig,
+    config: ControllerConfig,
     runtime: Arc<dyn RuntimeProvider>,
     dns_manager: Option<Arc<DnsManager>>,
     dns_domain: Option<String>,
@@ -69,7 +69,7 @@ pub struct DeploymentController {
 
 impl DeploymentController {
     pub fn new(
-        config: DeploymentConfig,
+        config: ControllerConfig,
         store: Arc<dyn ClusterStore>,
         supervisor: JobSupervisor,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
@@ -88,9 +88,14 @@ impl DeploymentController {
         } else {
             None
         };
+        let mut build_command_env = HashMap::new();
+        if let Some(token) = &config.depot_token {
+            build_command_env.insert("DEPOT_TOKEN".to_string(), token.clone());
+        }
         let container_provider = ContainerDeploymentProvider {
             runtime: runtime.clone(),
             builder,
+            build_command_env,
             network: config.network.clone(),
             dns_domain: dns_domain.clone(),
             dns_server,
@@ -242,6 +247,7 @@ impl DeploymentController {
                             labels: Default::default(),
                             build_args: Default::default(),
                             secrets: Default::default(),
+                            command_env: Default::default(),
                             builder: BuilderType::Default,
                             push_to_registry: false,
                         },
@@ -279,6 +285,7 @@ impl DeploymentController {
                             labels: Default::default(),
                             build_args: Default::default(),
                             secrets: Default::default(),
+                            command_env: Default::default(),
                             builder: BuilderType::Default,
                             push_to_registry: false,
                         },
