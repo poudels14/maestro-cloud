@@ -9,7 +9,6 @@
   "subnet": "172.22.0.0/16",
   "encryption-key": "$CHANGE_ME",
   "runtime": "nerdctl",
-  "builder": "depot",
   "depot": {
     "token": ""
   },

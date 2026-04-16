@@ -33,6 +33,20 @@ pub fn validate_build_config(
             }
             validate_env_config(&build.env, "build.env")?;
             validate_env_config(&build.secrets, "build.secrets")?;
+            let depot = build
+                .depot
+                .as_ref()
+                .map(|depot| {
+                    let project = depot.project.trim();
+                    if project.is_empty() {
+                        Err("build.depot.project cannot be empty".to_string())
+                    } else {
+                        Ok(crate::deployment::types::DepotConfig {
+                            project: project.to_string(),
+                        })
+                    }
+                })
+                .transpose()?;
             Ok((
                 Some(ServiceBuildConfig {
                     repo: repo.to_string(),
@@ -40,6 +54,7 @@ pub fn validate_build_config(
                     dockerfile: dockerfile.to_string(),
                     watch: build.watch,
                     registry: build.registry.clone(),
+                    depot,
                     env: build.env.clone(),
                     secrets: build.secrets.clone(),
                 }),

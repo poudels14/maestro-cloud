@@ -33,6 +33,7 @@ pub struct BuildSpec {
     pub secrets: HashMap<String, SecretString>,
     pub command_env: HashMap<String, SecretString>,
     pub builder: BuilderType,
+    pub depot_project: Option<String>,
     pub push_to_registry: bool,
 }
 

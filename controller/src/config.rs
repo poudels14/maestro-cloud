@@ -67,8 +67,6 @@ pub struct StartConfig {
     #[serde(default)]
     pub runtime: RuntimeType,
     #[serde(default)]
-    pub builder: BuilderType,
-    #[serde(default)]
     pub depot: Option<DepotConfig>,
     #[serde(default)]
     pub disable_etcd_cert: bool,

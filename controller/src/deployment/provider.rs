@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::builder::{BuildSource, LogTarget};
 use crate::config::BuilderType;
-use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
+use crate::deployment::types::{GitCommitInfo, ServiceBuildConfig, ServiceDeployment};
 use crate::logs::LogEntry;
 use crate::runtime::{BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider};
 use crate::supervisor::SecretsMount;
@@ -48,7 +48,6 @@ pub trait ServiceCommandPlanner: Send + Sync {
 #[derive(Clone)]
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
-    pub builder: BuilderType,
     pub build_command_env: HashMap<String, SecretString>,
     pub network: String,
     pub dns_domain: Option<String>,
@@ -95,7 +94,13 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             .as_ref()
             .ok_or_else(|| anyhow!("no build config"))?;
         let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
-        let use_depot = self.builder == BuilderType::Depot;
+        let depot_project = self.depot_project(build_config);
+        let use_depot = depot_project.is_some();
+        let builder = if use_depot {
+            BuilderType::Depot
+        } else {
+            BuilderType::Default
+        };
 
         let (build_tag, depot_pushed) = if use_depot && build_config.registry.is_some() {
             let registry = build_config.registry.as_ref().unwrap();
@@ -137,7 +142,8 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                     build_args: build_config.env.items.clone(),
                     secrets: build_config.secrets.items.clone(),
                     command_env,
-                    builder: self.builder,
+                    builder,
+                    depot_project,
                     push_to_registry: depot_pushed,
                 },
                 log_sender.as_ref(),
@@ -265,6 +271,20 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         } else {
             None
         }
+    }
+}
+
+impl ContainerDeploymentProvider {
+    fn depot_project(&self, build_config: &ServiceBuildConfig) -> Option<String> {
+        if self.build_command_env.is_empty() {
+            return None;
+        }
+        build_config
+            .depot
+            .as_ref()
+            .map(|depot| depot.project.trim())
+            .filter(|project| !project.is_empty())
+            .map(ToString::to_string)
     }
 }
 
