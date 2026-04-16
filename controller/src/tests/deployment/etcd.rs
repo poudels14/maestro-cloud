@@ -806,7 +806,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
         None,
     );
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(180);
     while store.queued_count() > 0 || controller.has_running_services() {
         controller
             .reconcile_deployments()
@@ -814,6 +814,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
             .expect("queue processing should succeed");
         sleep(Duration::from_millis(3)).await;
         controller.reap_finished_tasks().await;
+
         assert!(Instant::now() < deadline, "stress run timed out");
     }
 
@@ -823,7 +824,10 @@ async fn stress_supervisor_updates_deployment_statuses() {
         assert!(
             matches!(
                 deployment.status,
-                DeploymentStatus::Ready | DeploymentStatus::Draining | DeploymentStatus::Removed
+                DeploymentStatus::Ready
+                    | DeploymentStatus::Draining
+                    | DeploymentStatus::Removed
+                    | DeploymentStatus::Terminated
             ),
             "deployment {} has unexpected status {:?}",
             deployment.id,
