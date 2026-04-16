@@ -13,6 +13,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             dockerfile: "./Dockerfile".to_string(),
             watch: false,
             registry: None,
+            depot: None,
             env: Default::default(),
             secrets: Default::default(),
         }),

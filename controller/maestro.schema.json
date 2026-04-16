@@ -78,6 +78,17 @@
           "type": "string",
           "description": "Container registry URL to push built images to (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)"
         },
+        "depot": {
+          "type": "object",
+          "required": ["project"],
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Depot project ID used for remote builds. Requires depot.token in maestro.jsonc."
+            }
+          }
+        },
         "env": {
           "$ref": "#/$defs/envConfig"
         },

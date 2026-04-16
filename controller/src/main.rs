@@ -335,7 +335,6 @@ async fn run() -> crate::error::Result<bool> {
                     }),
                     system: None,
                     runtime: Default::default(),
-                    builder: Default::default(),
                     depot: Default::default(),
                     disable_etcd_cert,
                 },
@@ -394,7 +393,15 @@ async fn run() -> crate::error::Result<bool> {
             };
             let runtime_type = runtime_flag.unwrap_or(cfg.runtime);
             let runtime = runtime::create_provider(runtime_type);
-            let builder_type = cfg.builder;
+            let build_command_env = cfg
+                .depot
+                .and_then(|depot| depot.token)
+                .map(|token| {
+                    let mut env = std::collections::HashMap::new();
+                    env.insert("DEPOT_TOKEN".to_string(), token);
+                    env
+                })
+                .unwrap_or_default();
 
             let log_store = Arc::new(
                 logs::LogStore::open(&data_dir.join("logs/logs.db"))
@@ -463,7 +470,7 @@ async fn run() -> crate::error::Result<bool> {
                 tailscale_authkey,
                 encryption_key: SecretString::new(cfg.encryption_key),
                 jwt_secret: cfg.jwt_secret,
-                depot_token: cfg.depot.and_then(|depot| depot.token),
+                build_command_env,
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
                 force,
@@ -549,7 +556,6 @@ async fn run() -> crate::error::Result<bool> {
                 deployment_signal_rx,
                 Some(log_sender.clone()),
                 runtime,
-                builder_type,
                 Some(system_info.dns_manager),
                 system_info.nameserver_ip,
             );

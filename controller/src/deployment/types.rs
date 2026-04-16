@@ -24,7 +24,7 @@ pub struct ControllerConfig {
     pub tailscale_authkey: Option<String>,
     pub encryption_key: SecretString,
     pub jwt_secret: Option<String>,
-    pub depot_token: Option<SecretString>,
+    pub build_command_env: HashMap<String, SecretString>,
     pub tags: Vec<String>,
     pub system_type: Option<crate::config::SystemType>,
     pub force: bool,
@@ -144,10 +144,18 @@ pub struct ServiceBuildConfig {
     pub watch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depot: Option<DepotConfig>,
     #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
     pub env: EnvConfig,
     #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
     pub secrets: EnvConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DepotConfig {
+    pub project: String,
 }
 
 impl ServiceBuildConfig {

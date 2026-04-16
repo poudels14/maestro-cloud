@@ -158,6 +158,9 @@ impl RuntimeProvider for DockerRuntimeProvider {
                 "aarch64" => "arm64",
                 other => other,
             };
+            if let Some(project) = &spec.depot_project {
+                args.extend(["--project".to_string(), project.clone()]);
+            }
             args.push(format!("--platform=linux/{arch}"));
             if spec.push_to_registry {
                 args.push("--push".to_string());

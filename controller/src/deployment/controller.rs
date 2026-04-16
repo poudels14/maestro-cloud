@@ -75,7 +75,6 @@ impl DeploymentController {
         signal_rx: broadcast::Receiver<ShutdownEvent>,
         log_sender: Option<flume::Sender<LogEntry>>,
         runtime: Arc<dyn RuntimeProvider>,
-        builder: BuilderType,
         dns_manager: Option<Arc<DnsManager>>,
         coredns_ip: Option<String>,
     ) -> Self {
@@ -88,14 +87,9 @@ impl DeploymentController {
         } else {
             None
         };
-        let mut build_command_env = HashMap::new();
-        if let Some(token) = &config.depot_token {
-            build_command_env.insert("DEPOT_TOKEN".to_string(), token.clone());
-        }
         let container_provider = ContainerDeploymentProvider {
             runtime: runtime.clone(),
-            builder,
-            build_command_env,
+            build_command_env: config.build_command_env.clone(),
             network: config.network.clone(),
             dns_domain: dns_domain.clone(),
             dns_server,
@@ -284,6 +278,7 @@ impl DeploymentController {
                             secrets: Default::default(),
                             command_env: Default::default(),
                             builder: BuilderType::Default,
+                            depot_project: None,
                             push_to_registry: false,
                         },
                         None,
@@ -322,6 +317,7 @@ impl DeploymentController {
                             secrets: Default::default(),
                             command_env: Default::default(),
                             builder: BuilderType::Default,
+                            depot_project: None,
                             push_to_registry: false,
                         },
                         None,

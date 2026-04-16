@@ -69,7 +69,6 @@ The config file (`maestro.jsonc`) supports:
   "subnet": "172.22.0.0/16",
   "encryption-key": "your-secret-key",
   "runtime": "nerdctl", // "docker" (default) or "nerdctl"
-  "builder": "depot", // "default" (default) or "depot"
   "depot": {
     "token": "your-depot-token"
   },
@@ -83,6 +82,8 @@ The config file (`maestro.jsonc`) supports:
 ```
 
 Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
+
+To use Depot for a service build, set `depot.token` in `maestro.jsonc` and `build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is missing, Maestro falls back to the default local builder automatically.
 
 ## External Secrets
 
