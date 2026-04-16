@@ -163,12 +163,20 @@
           wants = ["network-online.target"];
           wantedBy = ["multi-user.target"];
 
+          path = [
+            pkgs.iproute2
+            pkgs.gawk
+          ];
+
           serviceConfig = {
             Type = "oneshot";
-            RemainAfterExit = true;
           };
           script = ''
             set -eu
+
+            state_dir=/run/aws-linklocal-routes
+            state_file=$state_dir/iface
+            mkdir -p "$state_dir"
 
             iface=$(${pkgs.iproute2}/bin/ip -4 route show default | ${pkgs.gawk}/bin/awk 'NR==1 {print $5}')
             [ -n "$iface" ] || exit 1
@@ -179,12 +187,52 @@
                 ;;
             esac
 
+            prev_iface=""
+            if [ -f "$state_file" ]; then
+              prev_iface=$(cat "$state_file")
+            fi
+
+            matches() {
+              case "$1" in
+                *"$2"*) return 0 ;;
+                *) return 1 ;;
+              esac
+            }
+
+            changed=0
+            [ "$prev_iface" = "$iface" ] || changed=1
+
+            route_imds=$(${pkgs.iproute2}/bin/ip -4 route show table 100 169.254.169.254/32 2>/dev/null || true)
+            route_ntp=$(${pkgs.iproute2}/bin/ip -4 route show table 100 169.254.169.123/32 2>/dev/null || true)
+            rule_imds=$(${pkgs.iproute2}/bin/ip -4 rule show to 169.254.169.254/32 2>/dev/null || true)
+            rule_ntp=$(${pkgs.iproute2}/bin/ip -4 rule show to 169.254.169.123/32 2>/dev/null || true)
+
+            matches "$route_imds" "dev $iface" || changed=1
+            matches "$route_ntp" "dev $iface" || changed=1
+            matches "$rule_imds" "lookup 100" || changed=1
+            matches "$rule_ntp" "lookup 100" || changed=1
+
             ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.254/32 dev "$iface" scope link
             ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.123/32 dev "$iface" scope link
 
             ${pkgs.iproute2}/bin/ip -4 rule add pref 100 to 169.254.169.254/32 table 100 2>/dev/null || true
             ${pkgs.iproute2}/bin/ip -4 rule add pref 101 to 169.254.169.123/32 table 100 2>/dev/null || true
+
+            if [ "$changed" -eq 1 ]; then
+              printf '%s\n' "$iface" > "$state_file"
+              echo "aws-linklocal-routes: updated routing for $iface"
+            fi
           '';
+        };
+
+        systemd.timers.aws-linklocal-routes = {
+          description = "Periodically reconcile AWS link-local routes";
+          wantedBy = ["timers.target"];
+          timerConfig = {
+            OnBootSec = "30s";
+            OnUnitActiveSec = "60s";
+            Unit = "aws-linklocal-routes.service";
+          };
         };
 
         # --- Maestro service ---
