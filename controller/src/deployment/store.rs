@@ -44,6 +44,14 @@ pub trait ClusterStore: Send + Sync {
     ) -> Result<()> {
         bail!("update_replica_status not implemented")
     }
+    async fn upsert_replica_state(
+        &self,
+        _service_id: &str,
+        _deployment_id: &str,
+        _state: ReplicaState,
+    ) -> Result<()> {
+        bail!("upsert_replica_state not implemented")
+    }
     async fn list_replica_states(
         &self,
         _service_id: &str,

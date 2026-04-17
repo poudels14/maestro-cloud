@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use crate::deployment::store::ClusterStore;
-use crate::deployment::types::{DeploymentStatus, ReplicaState, ServiceDeployment};
+use crate::deployment::types::{Deployment, DeploymentStatus, ReplicaState, ServiceDeployment};
+
+const MAX_HEALTHCHECK_FAILURES: u32 = 10;
 
 /// Tracks whether each replica was healthy on the last check.
 /// Keys are "{deployment_id}-replica{replica_index}".
@@ -107,13 +109,16 @@ async fn check_replicas(
                 service_id, deployment.id, replica.replica_index
             );
             state.remove(&key);
-            if replica.status != DeploymentStatus::Ready {
+            if replica.status != DeploymentStatus::Ready || replica.healthcheck_failures != 0 {
                 store
-                    .update_replica_status(
+                    .upsert_replica_state(
                         service_id,
                         &deployment.id,
-                        replica.replica_index,
-                        DeploymentStatus::Ready,
+                        ReplicaState {
+                            replica_index: replica.replica_index,
+                            status: DeploymentStatus::Ready,
+                            healthcheck_failures: 0,
+                        },
                     )
                     .await?;
             }
@@ -165,16 +170,38 @@ async fn check_replicas(
         } else {
             DeploymentStatus::PendingReady
         };
+        let healthcheck_failures = match is_healthy {
+            true => 0,
+            false => replica.healthcheck_failures.saturating_add(1),
+        };
 
-        if replica.status != new_status {
+        if replica.status != new_status || replica.healthcheck_failures != healthcheck_failures {
             store
-                .update_replica_status(
+                .upsert_replica_state(
                     service_id,
                     &deployment.id,
-                    replica.replica_index,
-                    new_status,
+                    ReplicaState {
+                        replica_index: replica.replica_index,
+                        status: new_status,
+                        healthcheck_failures,
+                    },
                 )
                 .await?;
+        }
+
+        if !is_healthy && healthcheck_failures >= MAX_HEALTHCHECK_FAILURES {
+            eprintln!(
+                "stopping deployment {}/{} after {} consecutive healthcheck failures on replica{}",
+                service_id, deployment.id, healthcheck_failures, replica.replica_index,
+            );
+            let _ = store
+                .stop_service_deployment(&Deployment {
+                    service_id: service_id.to_string(),
+                    id: deployment.id.clone(),
+                    replica_index: replica.replica_index,
+                })
+                .await?;
+            return Ok(());
         }
     }
 

@@ -653,7 +653,29 @@ impl ClusterStore for InMemoryStore {
             replicas.push(ReplicaState {
                 replica_index,
                 status,
+                healthcheck_failures: 0,
             });
+        }
+        sync_ingress(&mut state, service_id);
+        Ok(())
+    }
+
+    async fn upsert_replica_state(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_state: ReplicaState,
+    ) -> Result<()> {
+        let mut state = self.state.lock().expect("state lock");
+        let key = format!("{service_id}/{deployment_id}");
+        let replicas = state.replica_states.entry(key).or_default();
+        if let Some(existing) = replicas
+            .iter_mut()
+            .find(|r| r.replica_index == replica_state.replica_index)
+        {
+            *existing = replica_state;
+        } else {
+            replicas.push(replica_state);
         }
         sync_ingress(&mut state, service_id);
         Ok(())

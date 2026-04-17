@@ -342,6 +342,8 @@ pub struct ReplicaState {
     #[serde(default)]
     pub replica_index: u32,
     pub status: DeploymentStatus,
+    #[serde(default)]
+    pub healthcheck_failures: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
