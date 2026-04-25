@@ -192,6 +192,11 @@
           chmod -R u+w /etc/maestro/source
         '';
 
+        # Remove old Nix generations/store paths during activation.
+        system.activationScripts.maestro-nix-gc = ''
+          ${pkgs.nix}/bin/nix-collect-garbage -d || true
+        '';
+
         systemd.services.aws-linklocal-routes = {
           description = "Route AWS link-local traffic via primary interface";
           after = ["network-online.target"];
