@@ -130,6 +130,7 @@ impl DeploymentController {
                 &format!("failed to queue terminated deployments on startup: {err}"),
             );
         }
+        self.prune_images().await;
 
         loop {
             tokio::select! {
@@ -428,6 +429,8 @@ impl DeploymentController {
                         DeploymentStatus::Crashed,
                     )
                     .await;
+                self.prune_service_images(&queued_deployment.service_id)
+                    .await;
                 return Ok(());
             }
 
@@ -498,6 +501,8 @@ impl DeploymentController {
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
                     let _ = std::fs::remove_dir_all(&build_dir);
+                    self.prune_service_images(&queued_deployment.service_id)
+                        .await;
                     return Ok(());
                 }
             }
@@ -607,6 +612,7 @@ impl DeploymentController {
             match build_result {
                 Ok(output) => {
                     let mut queued = pending.queued_deployment;
+                    let cleanup_service_id = queued.service_id.clone();
                     queued.deployment.build = Some(DeploymentBuildInfo {
                         docker_image_id: output.image_tag,
                     });
@@ -628,6 +634,7 @@ impl DeploymentController {
                         );
                     }
                     self.deploy_service(&mut queued).await;
+                    self.prune_service_images(&cleanup_service_id).await;
                 }
                 Err(build_err) => {
                     self.logger.emit(
@@ -645,6 +652,7 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
+                    self.prune_service_images(&service_id).await;
                 }
             }
         }
@@ -692,6 +700,7 @@ impl DeploymentController {
                         DeploymentStatus::Crashed,
                     )
                     .await;
+                self.prune_service_images(service_id).await;
                 return;
             }
         }
@@ -738,6 +747,15 @@ impl DeploymentController {
                         "skipping replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: no deploy command"
                     ),
                 );
+                let _ = self
+                    .store
+                    .update_replica_status(
+                        service_id,
+                        deployment_id,
+                        replica_index,
+                        DeploymentStatus::Crashed,
+                    )
+                    .await;
                 continue;
             };
 
@@ -801,6 +819,18 @@ impl DeploymentController {
                         "failed to start replica{replica_index} of deployment `{deployment_id}` for service `{service_id}`: job already exists"
                     ),
                 );
+                let _ = self
+                    .store
+                    .update_replica_status(
+                        service_id,
+                        deployment_id,
+                        replica_index,
+                        DeploymentStatus::Crashed,
+                    )
+                    .await;
+                self.remove_replica_container(&queued_deployment.deployment, replica_index)
+                    .await;
+                continue;
             }
 
             if let Err(err) = self
@@ -831,6 +861,7 @@ impl DeploymentController {
             .store
             .update_deployment_status(&deployment_ref, replica_status)
             .await;
+        self.prune_service_images(service_id).await;
     }
 
     async fn update_jobs_status(&mut self, finished: Vec<FinishedJob>) {
@@ -903,6 +934,95 @@ impl DeploymentController {
                         ),
                     );
                 }
+                if is_terminal(&new_status) {
+                    if let Ok(Some(deployment_record)) =
+                        self.store.read_service_deployment(&deployment).await
+                    {
+                        self.remove_replica_container(&deployment_record, deployment.replica_index)
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn remove_replica_container(&self, deployment: &ServiceDeployment, replica_index: u32) {
+        if deployment.config.provider != ServiceProvider::Docker {
+            return;
+        }
+
+        let hostname = deployment.hostname_for_replica(replica_index);
+        if let Err(err) = self.runtime.remove_container(&hostname).await {
+            self.logger.emit(
+                "warn",
+                &format!(
+                    "failed to remove container `{hostname}` during deployment cleanup: {err}"
+                ),
+            );
+        }
+        deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+    }
+
+    async fn prune_images(&self) {
+        let service_ids = match self.store.list_service_ids().await {
+            Ok(ids) => ids,
+            Err(err) => {
+                self.logger.emit(
+                    "warn",
+                    &format!("failed to list services for image cleanup: {err}"),
+                );
+                return;
+            }
+        };
+
+        for service_id in &service_ids {
+            self.prune_service_images(service_id).await;
+        }
+    }
+
+    async fn prune_service_images(&self, service_id: &str) {
+        let deployments = match self.store.list_service_deployments(service_id).await {
+            Ok(deployments) => deployments,
+            Err(err) => {
+                self.logger.emit(
+                    "warn",
+                    &format!(
+                        "failed to list deployments for service `{service_id}` during image cleanup: {err}"
+                    ),
+                );
+                return;
+            }
+        };
+
+        let latest_built_image = deployments
+            .iter()
+            .filter_map(|deployment| {
+                deployment_image(deployment).map(|image| (deployment.created_at, image))
+            })
+            .max_by_key(|(created_at, _)| *created_at)
+            .map(|(_, image)| image);
+
+        let active_images = deployments
+            .iter()
+            .filter(|deployment| is_active(&deployment.status))
+            .filter_map(deployment_image);
+
+        let retained_images = active_images
+            .chain(latest_built_image.into_iter())
+            .collect::<HashSet<_>>();
+
+        let stale_images = deployments
+            .iter()
+            .filter_map(deployment_image)
+            .filter(|image| !retained_images.contains(image))
+            .collect::<HashSet<_>>();
+
+        for image in stale_images {
+            if let Err(err) = self.runtime.remove_image(&image).await {
+                self.logger.emit(
+                    "warn",
+                    &format!("failed to remove old image `{image}`: {err}"),
+                );
             }
         }
     }
@@ -997,7 +1117,8 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                         .await;
-                    cleanup_deployment_image(deployment, &self.config.data_dir, &self.runtime);
+                    remove_build_dir(deployment, &self.config.data_dir);
+                    self.prune_service_images(service_id).await;
                 } else {
                     let container_alive = self
                         .runtime
@@ -1103,11 +1224,8 @@ impl DeploymentController {
                         .shutdown_job(&job_id, ShutdownRequest::Graceful);
                     let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
                     deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
-                    cleanup_deployment_image(
-                        &store_deployment,
-                        &self.config.data_dir,
-                        &self.runtime,
-                    );
+                    remove_build_dir(&store_deployment, &self.config.data_dir);
+                    self.prune_service_images(&deployment.service_id).await;
                 }
             } else if store_deployment.status == DeploymentStatus::Removed {
                 let _ = self
@@ -1115,7 +1233,8 @@ impl DeploymentController {
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
                 let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
                 deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
-                cleanup_deployment_image(&store_deployment, &self.config.data_dir, &self.runtime);
+                remove_build_dir(&store_deployment, &self.config.data_dir);
+                self.prune_service_images(&deployment.service_id).await;
             }
         }
     }
@@ -1382,18 +1501,7 @@ impl DeploymentController {
     }
 }
 
-fn cleanup_deployment_image(
-    deployment: &ServiceDeployment,
-    data_dir: &std::path::Path,
-    runtime: &Arc<dyn RuntimeProvider>,
-) {
-    if let Some(build_info) = &deployment.build {
-        let image_id = build_info.docker_image_id.clone();
-        let runtime = runtime.clone();
-        tokio::spawn(async move {
-            let _ = runtime.remove_image(&image_id).await;
-        });
-    }
+fn remove_build_dir(deployment: &ServiceDeployment, data_dir: &std::path::Path) {
     let short_id: String = deployment.id.chars().take(6).collect();
     let build_dir = data_dir
         .join("builds")
@@ -1406,6 +1514,34 @@ fn cleanup_deployment_image(
 
 fn replica_job_id(deployment_id: &str, replica_index: u32) -> String {
     format!("{deployment_id}-replica-{replica_index}")
+}
+
+fn is_terminal(status: &DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Canceled
+            | DeploymentStatus::Crashed
+            | DeploymentStatus::Removed
+            | DeploymentStatus::Terminated
+    )
+}
+
+fn is_active(status: &DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Queued
+            | DeploymentStatus::Building
+            | DeploymentStatus::PendingReady
+            | DeploymentStatus::Ready
+            | DeploymentStatus::Draining
+    )
+}
+
+fn deployment_image(deployment: &ServiceDeployment) -> Option<String> {
+    deployment
+        .build
+        .as_ref()
+        .map(|build| build.docker_image_id.clone())
 }
 
 fn register_container_dns(
