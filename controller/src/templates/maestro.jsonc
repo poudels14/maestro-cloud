@@ -7,6 +7,9 @@
     "port": 8080
   },
   "subnet": "172.22.0.0/16",
+  "egress": {
+    "deny": []
+  },
   "encryption-key": "$CHANGE_ME",
   "runtime": "nerdctl",
   "depot": {

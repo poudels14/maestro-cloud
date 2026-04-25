@@ -178,6 +178,7 @@
           [
             cfg.package
             depotPackage
+            pkgs.nftables
           ]
           ++ lib.optionals isNerdctl [
             pkgs.nerdctl
@@ -298,6 +299,7 @@
             pkgs.nerdctl
             pkgs.cni-plugins
             pkgs.iptables
+            pkgs.nftables
             pkgs.iproute2
             pkgs.buildkit
             pkgs.util-linux
