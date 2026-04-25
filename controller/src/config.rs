@@ -53,6 +53,8 @@ pub struct StartConfig {
     pub ingress: IngressConfig,
     #[serde(default)]
     pub subnet: Option<String>,
+    #[serde(default)]
+    pub egress: EgressConfig,
     pub encryption_key: String,
     #[serde(default)]
     pub tailscale: Option<TailscaleConfig>,
@@ -70,6 +72,13 @@ pub struct StartConfig {
     pub depot: Option<DepotConfig>,
     #[serde(default)]
     pub disable_etcd_cert: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct EgressConfig {
+    #[serde(default)]
+    pub deny: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod deployment;
 mod error;
+mod firewall;
 mod logs;
 mod metrics;
 mod probe;
@@ -80,6 +81,12 @@ enum CliCommand {
             help = "Container network subnet CIDR (e.g., 172.22.0.0/16)"
         )]
         subnet: Option<String>,
+        #[arg(
+            long = "egress-deny",
+            value_name = "CIDR",
+            help = "Deny container egress to an IP/CIDR (can be repeated)"
+        )]
+        egress_deny: Vec<String>,
         #[arg(
             long = "enable-tailscale",
             help = "Enable Tailscale subnet routing and DNS"
@@ -260,6 +267,7 @@ async fn run() -> crate::error::Result<bool> {
             data_dir,
             network,
             subnet,
+            egress_deny,
             enable_tailscale,
             tailscale_authkey,
             encryption_key,
@@ -305,6 +313,7 @@ async fn run() -> crate::error::Result<bool> {
                     if subnet.is_some() {
                         cfg.subnet = subnet;
                     }
+                    cfg.egress.deny.extend(egress_deny.clone());
                     cfg
                 }
                 None => config::StartConfig {
@@ -322,6 +331,7 @@ async fn run() -> crate::error::Result<bool> {
                         },
                     },
                     subnet,
+                    egress: config::EgressConfig { deny: egress_deny },
                     encryption_key: encryption_key
                         .ok_or_else(|| Error::invalid_input("--encryption-key is required"))?,
                     jwt_secret,
@@ -355,6 +365,7 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             validate_subnet_cidr(&subnet)?;
             cfg.subnet = Some(subnet);
+            let egress_deny = firewall::normalize_denies(&cfg.egress.deny)?;
 
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             let cluster_alias = cfg.cluster.name.to_lowercase();
@@ -486,6 +497,28 @@ async fn run() -> crate::error::Result<bool> {
                     .port()
             });
             deployment_config.probe_port = Some(probe_host_port);
+
+            let firewall_config = firewall::FirewallConfig {
+                subnet: deployment_config.subnet.clone(),
+                deny: egress_deny,
+            };
+            firewall::apply(&firewall_config).await.map_err(|err| {
+                Error::external(format!("failed to apply egress firewall: {err}"))
+            })?;
+            if !firewall_config.deny.is_empty() {
+                logger.emit(
+                    "info",
+                    &format!(
+                        "egress firewall enabled ({} denied CIDRs)",
+                        firewall_config.deny.len()
+                    ),
+                );
+                background_handles.push(firewall::spawn_reconciler(
+                    firewall_config,
+                    logger.clone(),
+                    signal_tx.subscribe(),
+                ));
+            }
 
             let mut supervisor = JobSupervisor::new();
             let mut startup_shutdown_rx = signal_tx.subscribe();
