@@ -115,13 +115,6 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             (image_tag.to_string(), false)
         };
 
-        if let Err(err) = self.runtime.prune_images().await {
-            eprintln!(
-                "[maestro]: failed to prune {} images before building service {}: {err}",
-                self.runtime.cli_name(),
-                deployment.config.id
-            );
-        }
         let mut labels = std::collections::HashMap::new();
         let mut command_env = self.build_command_env.clone();
         labels.insert(
