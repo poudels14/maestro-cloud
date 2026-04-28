@@ -7,7 +7,7 @@ use crate::utils::cmd;
 
 use crate::config::BuilderType;
 
-use super::{BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider};
+use super::{BuildSpec, RunSpec, RuntimeProvider};
 
 pub struct DockerRuntimeProvider;
 
@@ -118,20 +118,7 @@ impl RuntimeProvider for DockerRuntimeProvider {
     }
 
     async fn prune_images(&self) -> Result<()> {
-        cmd::run(
-            "docker",
-            &[
-                "image",
-                "prune",
-                "-a",
-                "-f",
-                "--filter",
-                "until=12h",
-                "--filter",
-                &format!("label={}={}", MANAGED_IMAGE_LABEL.0, MANAGED_IMAGE_LABEL.1),
-            ],
-        )
-        .await?;
+        cmd::run("docker", &["image", "prune", "-a", "-f"]).await?;
         Ok(())
     }
 

@@ -31,6 +31,7 @@ const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
 #[cfg(test)]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 200;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+const IMAGE_PRUNE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 #[cfg(not(test))]
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 #[cfg(test)]
@@ -119,6 +120,9 @@ impl DeploymentController {
         let mut shutdown_started = false;
         let mut exit_reason = ControllerExitReason::Shutdown;
         let mut signal_rx = self.signal_rx.resubscribe();
+        let mut image_prune_interval = tokio::time::interval(IMAGE_PRUNE_INTERVAL);
+        image_prune_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        image_prune_interval.tick().await;
 
         let tmp_dir = self.config.data_dir.join("tmp");
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -148,6 +152,9 @@ impl DeploymentController {
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }
+                }
+                _ = image_prune_interval.tick() => {
+                    self.prune_images().await;
                 }
                 _ = sleep(POLL_INTERVAL) => {
                     if let Some(reason) = self.check_system_upgrade().await {
@@ -399,6 +406,8 @@ impl DeploymentController {
         let service_log_source = format!("{}/{}/", queued_deployment.service_id, deployment_id);
 
         if queued_deployment.deployment.config.build.is_some() {
+            self.prune_images().await;
+
             if let Err(err) = queued_deployment
                 .deployment
                 .resolve_build_secrets(&self.logger)
@@ -977,6 +986,20 @@ impl DeploymentController {
 
         for service_id in &service_ids {
             self.prune_service_images(service_id).await;
+        }
+
+        if !self.pending_builds.is_empty() {
+            return;
+        }
+
+        if let Err(err) = self.runtime.prune_images().await {
+            self.logger.emit(
+                "warn",
+                &format!(
+                    "failed to prune unused {} images: {err}",
+                    self.runtime.cli_name()
+                ),
+            );
         }
     }
 
