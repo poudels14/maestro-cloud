@@ -664,6 +664,8 @@ async fn init_tailnet(
                     "-e".to_string(),
                     "TS_USERSPACE=true".to_string(),
                     "-e".to_string(),
+                    "TS_STATE_DIR=/var/lib/tailscale".to_string(),
+                    "-e".to_string(),
                     format!("TS_HOSTNAME=maestro-tailscale-{}", config.cluster_name),
                     "-e".to_string(),
                     "TS_EXTRA_ARGS=--accept-dns=false".to_string(),

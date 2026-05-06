@@ -118,7 +118,7 @@ impl RuntimeProvider for DockerRuntimeProvider {
     }
 
     async fn prune_images(&self) -> Result<()> {
-        cmd::run("docker", &["image", "prune", "-a", "-f"]).await?;
+        cmd::run("docker", &["image", "prune", "-f"]).await?;
         Ok(())
     }
 

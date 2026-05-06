@@ -24,6 +24,8 @@ use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::supervisor::{ContainerRef, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
 
+use super::{ADMIN_IMAGE_TAG, PROBE_IMAGE_TAG, TAILSCALE_IMAGE_TAG};
+
 const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
 const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
 #[cfg(not(test))]
@@ -49,6 +51,14 @@ struct PendingBuild {
     queued_deployment: QueuedDeployment,
     build_dir: PathBuf,
     started_at: std::time::Instant,
+}
+
+fn system_image_build_specs() -> [(&'static str, Option<&'static str>); 3] {
+    [
+        (ADMIN_IMAGE_TAG, Some("Dockerfile.admin")),
+        (PROBE_IMAGE_TAG, Some("Dockerfile.probe")),
+        (TAILSCALE_IMAGE_TAG, Some("dns/Dockerfile.tailscale")),
+    ]
 }
 
 pub struct DeploymentController {
@@ -269,11 +279,7 @@ impl DeploymentController {
 
             self.logger
                 .emit("info", "NixOS rebuild complete, pre-building system images");
-            let images = [
-                ("maestro-admin", Some("Dockerfile.admin")),
-                ("maestro-probe", Some("Dockerfile.probe")),
-            ];
-            for (tag, dockerfile) in &images {
+            for (tag, dockerfile) in system_image_build_specs() {
                 let result = self
                     .runtime
                     .build_image(
@@ -308,11 +314,7 @@ impl DeploymentController {
         } else {
             self.logger
                 .emit("info", "upgrade requested, rebuilding system images");
-            let images = [
-                ("maestro-admin", Some("Dockerfile.admin")),
-                ("maestro-probe", Some("Dockerfile.probe")),
-            ];
-            for (tag, dockerfile) in images {
+            for (tag, dockerfile) in system_image_build_specs() {
                 let result = self
                     .runtime
                     .build_image(
