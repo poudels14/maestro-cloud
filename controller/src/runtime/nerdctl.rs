@@ -193,7 +193,7 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     }
 
     async fn prune_images(&self) -> Result<()> {
-        cmd::run("nerdctl", &["image", "prune", "-a", "-f"]).await?;
+        cmd::run("nerdctl", &["image", "prune", "-f"]).await?;
         Ok(())
     }
 
