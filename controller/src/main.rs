@@ -22,7 +22,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use error::Error;
 use signal::spawn_shutdown_signal_bus;
 
@@ -45,105 +45,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
-    /// Start the cluster controller and all system services
-    Start {
-        #[arg(
-            long = "config",
-            help = "Config source: file path, file://path, or aws-secret://secret-name"
-        )]
-        config: Option<String>,
-        #[arg(
-            long = "cluster-name",
-            help = "Human-readable cluster name (maestro adds a random -xxxx suffix for canonical DNS)"
-        )]
-        cluster_name: Option<String>,
-        #[arg(long = "etcd-port", help = "Host port for etcd (random if not set)")]
-        etcd_port: Option<u16>,
-        #[arg(
-            long = "admin-port",
-            help = "Host port for maestro controller (not exposed if not set)"
-        )]
-        admin_port: Option<u16>,
-        #[arg(
-            long = "ingress-port",
-            help = "Host port(s) for ingress (can be repeated)"
-        )]
-        ingress_port: Vec<u16>,
-        #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
-        data_dir: PathBuf,
-        #[arg(
-            long = "network",
-            help = "Container network name (default: maestro-{clustername-xxxx})"
-        )]
-        network: Option<String>,
-        #[arg(
-            long = "subnet",
-            help = "Container network subnet CIDR (e.g., 172.22.0.0/16)"
-        )]
-        subnet: Option<String>,
-        #[arg(
-            long = "egress-deny",
-            value_name = "CIDR",
-            help = "Deny container egress to an IP/CIDR (can be repeated)"
-        )]
-        egress_deny: Vec<String>,
-        #[arg(
-            long = "enable-tailscale",
-            help = "Enable Tailscale subnet routing and DNS"
-        )]
-        enable_tailscale: bool,
-        #[arg(
-            long = "tailscale-auth-key",
-            env = "TS_AUTHKEY",
-            help = "Tailscale auth key"
-        )]
-        tailscale_authkey: Option<String>,
-        #[arg(
-            long = "encryption-key",
-            env = "MAESTRO_ENCRYPTION_KEY",
-            help = "Master key for encrypting secrets"
-        )]
-        encryption_key: Option<String>,
-        #[arg(
-            long = "jwt-secret",
-            env = "MAESTRO_JWT_SECRET",
-            help = "Secret for signing JWT auth tokens (enables rollout authentication)"
-        )]
-        jwt_secret: Option<String>,
-        #[arg(
-            long = "tag",
-            help = "Tags for log sinks like Datadog (key:value, can be repeated)"
-        )]
-        tags: Vec<String>,
-        #[arg(
-            long = "datadog-api-key",
-            env = "DATADOG_API_KEY",
-            help = "Datadog API key for log forwarding"
-        )]
-        dd_api_key: Option<String>,
-        #[arg(
-            long = "datadog-site",
-            help = "Datadog site (e.g. datadoghq.com, us3.datadoghq.com, datadoghq.eu)"
-        )]
-        dd_site: Option<String>,
-        #[arg(
-            long = "datadog-include-system-logs",
-            help = "Include maestro system logs in Datadog (excluded by default)"
-        )]
-        dd_include_system_logs: bool,
-        #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
-        system: Option<config::SystemType>,
-        #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
-        runtime: Option<config::RuntimeType>,
-        #[arg(long = "force", help = "Force recreate network if it conflicts")]
-        force: bool,
-        #[arg(
-            long = "disable-etcd-cert",
-            help = "Disable mTLS for etcd (insecure, for development only)"
-        )]
-        disable_etcd_cert: bool,
-        #[arg(long = "project-dir", help = "Path to the maestro project directory")]
-        project_dir: PathBuf,
+    /// Manage the local Maestro controller service
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
     },
     /// Deploy services from the config file (dry run by default)
     Rollout {
@@ -184,41 +89,6 @@ enum CliCommand {
         #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
         host: String,
     },
-    /// Run the health probe server (used internally by the probe container)
-    Probe {
-        #[arg(
-            long = "etcd-endpoint",
-            env = "ETCD_ENDPOINT",
-            default_value = "http://127.0.0.1:6401",
-            help = "etcd endpoint URL"
-        )]
-        etcd_endpoint: String,
-        #[arg(long = "port", env = "PORT", default_value_t = DEFAULT_API_PORT, help = "Port to listen on")]
-        port: u16,
-    },
-    /// Read logs from the local log store
-    Logs {
-        #[arg(
-            long = "source",
-            help = "Source name (e.g., service name). Shows all sources if omitted"
-        )]
-        source: Option<String>,
-        #[arg(long = "data-dir", help = "Maestro data directory")]
-        data_dir: PathBuf,
-        #[arg(
-            long = "cluster-name",
-            help = "Cluster name (read from maestro.jsonc if omitted)"
-        )]
-        cluster_name: Option<String>,
-        #[arg(
-            long = "tail",
-            default_value_t = 100,
-            help = "Number of recent entries"
-        )]
-        tail: usize,
-        #[arg(long = "follow", short = 'f', help = "Follow log output")]
-        follow: bool,
-    },
     /// Upgrade system components
     Upgrade {
         #[command(subcommand)]
@@ -226,6 +96,159 @@ enum CliCommand {
     },
     /// Create a default maestro.cluster.jsonc config file
     Init,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Start the cluster controller and all system services
+    Start(StartArgs),
+    /// Read logs from the local log store
+    Logs(LogsArgs),
+    /// Run the health probe server (used internally by the probe container)
+    Probe(ProbeArgs),
+}
+
+#[derive(Debug, Args)]
+struct StartArgs {
+    #[arg(
+        long = "config",
+        help = "Config source: file path, file://path, or aws-secret://secret-name"
+    )]
+    config: Option<String>,
+    #[arg(
+        long = "cluster-name",
+        help = "Human-readable cluster name (maestro adds a random -xxxx suffix for canonical DNS)"
+    )]
+    cluster_name: Option<String>,
+    #[arg(long = "etcd-port", help = "Host port for etcd (random if not set)")]
+    etcd_port: Option<u16>,
+    #[arg(
+        long = "admin-port",
+        help = "Host port for maestro controller (not exposed if not set)"
+    )]
+    admin_port: Option<u16>,
+    #[arg(
+        long = "ingress-port",
+        help = "Host port(s) for ingress (can be repeated)"
+    )]
+    ingress_port: Vec<u16>,
+    #[arg(long = "data-dir", help = "Directory for etcd data, logs, and state")]
+    data_dir: PathBuf,
+    #[arg(
+        long = "network",
+        help = "Container network name (default: maestro-{clustername-xxxx})"
+    )]
+    network: Option<String>,
+    #[arg(
+        long = "subnet",
+        help = "Container network subnet CIDR (e.g., 172.22.0.0/16)"
+    )]
+    subnet: Option<String>,
+    #[arg(
+        long = "egress-deny",
+        value_name = "CIDR",
+        help = "Deny container egress to an IP/CIDR (can be repeated)"
+    )]
+    egress_deny: Vec<String>,
+    #[arg(
+        long = "enable-tailscale",
+        help = "Enable Tailscale subnet routing and DNS"
+    )]
+    enable_tailscale: bool,
+    #[arg(
+        long = "tailscale-auth-key",
+        env = "TS_AUTHKEY",
+        help = "Tailscale auth key"
+    )]
+    tailscale_authkey: Option<String>,
+    #[arg(
+        long = "encryption-key",
+        env = "MAESTRO_ENCRYPTION_KEY",
+        help = "Master key for encrypting secrets"
+    )]
+    encryption_key: Option<String>,
+    #[arg(
+        long = "jwt-secret",
+        env = "MAESTRO_JWT_SECRET",
+        help = "Secret for signing JWT auth tokens (enables rollout authentication)"
+    )]
+    jwt_secret: Option<String>,
+    #[arg(
+        long = "tag",
+        help = "Tags for log sinks like Datadog (key:value, can be repeated)"
+    )]
+    tags: Vec<String>,
+    #[arg(
+        long = "datadog-api-key",
+        env = "DATADOG_API_KEY",
+        help = "Datadog API key for log forwarding"
+    )]
+    dd_api_key: Option<String>,
+    #[arg(
+        long = "datadog-site",
+        help = "Datadog site (e.g. datadoghq.com, us3.datadoghq.com, datadoghq.eu)"
+    )]
+    dd_site: Option<String>,
+    #[arg(
+        long = "datadog-include-system-logs",
+        help = "Include maestro system logs in Datadog (excluded by default)"
+    )]
+    dd_include_system_logs: bool,
+    #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
+    system: Option<config::SystemType>,
+    #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
+    runtime: Option<config::RuntimeType>,
+    #[arg(long = "force", help = "Force recreate network if it conflicts")]
+    force: bool,
+    #[arg(
+        long = "disable-etcd-cert",
+        help = "Disable mTLS for etcd (insecure, for development only)"
+    )]
+    disable_etcd_cert: bool,
+    #[arg(long = "project-dir", help = "Path to the maestro project directory")]
+    project_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct LogsArgs {
+    #[arg(
+        long = "source",
+        help = "Source name (e.g., service name). Shows all sources if omitted"
+    )]
+    source: Option<String>,
+    #[arg(long = "data-dir", help = "Maestro data directory")]
+    data_dir: PathBuf,
+    #[arg(
+        long = "cluster-name",
+        help = "Cluster name (read from maestro.jsonc if omitted)"
+    )]
+    cluster_name: Option<String>,
+    #[arg(
+        long = "tail",
+        default_value_t = 100,
+        help = "Number of recent entries"
+    )]
+    tail: usize,
+    #[arg(long = "follow", short = 'f', help = "Follow log output")]
+    follow: bool,
+}
+
+#[derive(Debug, Args)]
+struct ProbeArgs {
+    #[arg(
+        long = "etcd-endpoint",
+        env = "ETCD_ENDPOINT",
+        default_value = "http://127.0.0.1:6401",
+        help = "etcd endpoint URL"
+    )]
+    etcd_endpoint: String,
+    #[arg(
+        long = "port",
+        env = "PORT",
+        default_value_t = DEFAULT_API_PORT,
+        help = "Port to listen on"
+    )]
+    port: u16,
 }
 
 #[derive(Debug, Subcommand)]
@@ -258,29 +281,32 @@ async fn run() -> crate::error::Result<bool> {
             print!("{}", help_text());
             Ok(false)
         }
-        Some(CliCommand::Start {
-            config,
-            cluster_name,
-            admin_port,
-            ingress_port,
-            etcd_port,
-            data_dir,
-            network,
-            subnet,
-            egress_deny,
-            enable_tailscale,
-            tailscale_authkey,
-            encryption_key,
-            jwt_secret,
-            tags,
-            dd_api_key,
-            dd_site,
-            dd_include_system_logs,
-            system,
-            runtime: runtime_flag,
-            force,
-            disable_etcd_cert,
-            project_dir,
+        Some(CliCommand::Service {
+            command:
+                ServiceCommand::Start(StartArgs {
+                    config,
+                    cluster_name,
+                    admin_port,
+                    ingress_port,
+                    etcd_port,
+                    data_dir,
+                    network,
+                    subnet,
+                    egress_deny,
+                    enable_tailscale,
+                    tailscale_authkey,
+                    encryption_key,
+                    jwt_secret,
+                    tags,
+                    dd_api_key,
+                    dd_site,
+                    dd_include_system_logs,
+                    system,
+                    runtime: runtime_flag,
+                    force,
+                    disable_etcd_cert,
+                    project_dir,
+                }),
         }) => {
             let explicit_datadog_site = dd_site
                 .as_deref()
@@ -654,19 +680,25 @@ async fn run() -> crate::error::Result<bool> {
         }) => cli::cancel::run_cancel(&host, &service_id, &deployment_id)
             .await
             .map(|()| false),
-        Some(CliCommand::Probe {
-            etcd_endpoint,
-            port,
+        Some(CliCommand::Service {
+            command:
+                ServiceCommand::Probe(ProbeArgs {
+                    etcd_endpoint,
+                    port,
+                }),
         }) => probe::run(&etcd_endpoint, port)
             .await
             .map(|()| false)
             .map_err(|err| Error::internal(err.to_string())),
-        Some(CliCommand::Logs {
-            source,
-            data_dir,
-            cluster_name,
-            tail,
-            follow,
+        Some(CliCommand::Service {
+            command:
+                ServiceCommand::Logs(LogsArgs {
+                    source,
+                    data_dir,
+                    cluster_name,
+                    tail,
+                    follow,
+                }),
         }) => {
             let cluster_name = if let Some(name) = cluster_name {
                 name

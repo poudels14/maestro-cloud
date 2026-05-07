@@ -27,7 +27,7 @@ This generates a `maestro.jsonc` file in your working directory with a sample se
 ### 2. Start the cluster
 
 ```bash
-maestro start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
+maestro service start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
 ```
 
 Flags:
@@ -167,7 +167,7 @@ Tailscale enables remote access to your containers from any device on your tailn
 
 ```bash
 export TS_AUTHKEY=tskey-auth-...
-maestro start \
+maestro service start \
   --cluster-name my-cluster \
   --ingress-port 80 --ingress-port 443 \
   --data-dir ./data \
@@ -227,10 +227,10 @@ Each cluster needs its own subnet to avoid IP conflicts:
 
 ```bash
 # Cluster 1
-maestro start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
+maestro service start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
 
 # Cluster 2
-maestro start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
+maestro service start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
 ```
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
