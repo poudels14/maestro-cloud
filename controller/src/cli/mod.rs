@@ -2,6 +2,7 @@ pub mod cancel;
 pub mod contexts;
 pub mod redeploy;
 pub mod rollout;
+pub mod services;
 pub mod upgrade;
 
 use std::{io::Write, path::Path};
