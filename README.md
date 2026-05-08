@@ -43,6 +43,13 @@ Flags:
 
 ### 3. Deploy services
 
+Set the Maestro API context once:
+
+```bash
+maestro contexts set local http://127.0.0.1:3001
+maestro contexts use local
+```
+
 ```bash
 maestro rollout
 ```
@@ -291,7 +298,13 @@ nixos-rebuild switch --flake /etc/maestro#default
 
 Replace `<your-secret-id>` with the secret name from step 1.
 
-Use `maestro upgrade system` to trigger updates remotely.
+Configure a context for the remote Maestro API, then trigger updates remotely:
+
+```bash
+maestro contexts set prod http://127.0.0.1:3001
+maestro contexts use prod
+maestro upgrade system
+```
 
 ### Step 3: Manage the service
 
