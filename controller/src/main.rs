@@ -75,6 +75,8 @@ enum CliCommand {
         )]
         jwt_secret: Option<String>,
     },
+    /// List services in the active context
+    Services,
     /// Trigger a redeployment of a running service
     Redeploy {
         #[arg(help = "Service ID to redeploy")]
@@ -718,6 +720,10 @@ async fn run() -> crate::error::Result<bool> {
             cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref())
                 .await
                 .map(|()| false)
+        }
+        Some(CliCommand::Services) => {
+            let host = cli::contexts::active_host()?;
+            cli::services::run_services(&host).await.map(|()| false)
         }
         Some(CliCommand::Redeploy { service_id }) => {
             let host = cli::contexts::active_host()?;
