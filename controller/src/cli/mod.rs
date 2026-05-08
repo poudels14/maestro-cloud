@@ -1,4 +1,5 @@
 pub mod cancel;
+pub mod contexts;
 pub mod redeploy;
 pub mod rollout;
 pub mod upgrade;

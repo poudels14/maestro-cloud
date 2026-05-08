@@ -22,7 +22,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, error::ErrorKind};
 use error::Error;
 use signal::spawn_shutdown_signal_bus;
 
@@ -34,7 +34,6 @@ use crate::{
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
 const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
-const DEFAULT_ROLLOUT_HOST: &str = "http://127.0.0.1:3001";
 
 #[derive(Debug, Parser)]
 #[command(name = "maestro", disable_help_subcommand = true)]
@@ -50,10 +49,13 @@ enum CliCommand {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Manage Maestro API contexts
+    Contexts {
+        #[command(subcommand)]
+        command: ContextsCommand,
+    },
     /// Deploy services from the config file (dry run by default)
     Rollout {
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
-        host: String,
         #[arg(
             long = "config",
             help = "Path to maestro.cluster.jsonc (default: maestro.cluster.jsonc)"
@@ -77,8 +79,6 @@ enum CliCommand {
     Redeploy {
         #[arg(help = "Service ID to redeploy")]
         service_id: String,
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
-        host: String,
     },
     /// Cancel a queued or building deployment
     Cancel {
@@ -86,16 +86,46 @@ enum CliCommand {
         service_id: String,
         #[arg(help = "Deployment ID to cancel")]
         deployment_id: String,
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
-        host: String,
     },
     /// Upgrade system components
+    #[command(after_help = "Example: maestro upgrade system")]
     Upgrade {
         #[command(subcommand)]
         target: UpgradeTarget,
     },
     /// Create a default maestro.cluster.jsonc config file
     Init,
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextsCommand {
+    /// Add or update a context
+    Set(ContextSetArgs),
+    /// Set the active context
+    Use {
+        #[arg(help = "Context name")]
+        name: String,
+    },
+    /// List configured contexts
+    List,
+    /// Show a context, or the active context if omitted
+    Show {
+        #[arg(help = "Context name")]
+        name: Option<String>,
+    },
+    /// Remove a context
+    Remove {
+        #[arg(help = "Context name")]
+        name: String,
+    },
+}
+
+#[derive(Debug, Args)]
+struct ContextSetArgs {
+    #[arg(help = "Context name")]
+    name: Option<String>,
+    #[arg(help = "Maestro API host for this context")]
+    host: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -254,10 +284,7 @@ struct ProbeArgs {
 #[derive(Debug, Subcommand)]
 enum UpgradeTarget {
     /// Upgrade the host operating system
-    System {
-        #[arg(long = "host", default_value = DEFAULT_ROLLOUT_HOST, help = "Maestro API host")]
-        host: String,
-    },
+    System,
 }
 
 #[tokio::main]
@@ -274,7 +301,21 @@ async fn main() {
 }
 
 async fn run() -> crate::error::Result<bool> {
-    let cli = Cli::try_parse().map_err(|err| Error::invalid_input(err.to_string()))?;
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            err.print().map_err(|print_err| {
+                Error::internal(format!("failed to print help: {print_err}"))
+            })?;
+            return Ok(false);
+        }
+        Err(err) => return Err(Error::invalid_input(err.to_string())),
+    };
 
     match cli.command {
         None => {
@@ -656,19 +697,30 @@ async fn run() -> crate::error::Result<bool> {
                 Err(err) => Err(err),
             }
         }
+        Some(CliCommand::Contexts { command }) => match command {
+            ContextsCommand::Set(ContextSetArgs { name, host }) => {
+                cli::contexts::set_context(name.as_deref(), host.as_deref())
+            }
+            ContextsCommand::Use { name } => cli::contexts::use_context(&name),
+            ContextsCommand::List => cli::contexts::list_contexts(),
+            ContextsCommand::Show { name } => cli::contexts::show_context(name.as_deref()),
+            ContextsCommand::Remove { name } => cli::contexts::remove_context(&name),
+        }
+        .map(|()| false),
         Some(CliCommand::Rollout {
-            host,
             config,
             apply,
             force,
             jwt_secret,
         }) => {
+            let host = cli::contexts::active_host()?;
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
             cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref())
                 .await
                 .map(|()| false)
         }
-        Some(CliCommand::Redeploy { service_id, host }) => {
+        Some(CliCommand::Redeploy { service_id }) => {
+            let host = cli::contexts::active_host()?;
             cli::redeploy::run_redeploy(&host, &service_id)
                 .await
                 .map(|()| false)
@@ -676,10 +728,12 @@ async fn run() -> crate::error::Result<bool> {
         Some(CliCommand::Cancel {
             service_id,
             deployment_id,
-            host,
-        }) => cli::cancel::run_cancel(&host, &service_id, &deployment_id)
-            .await
-            .map(|()| false),
+        }) => {
+            let host = cli::contexts::active_host()?;
+            cli::cancel::run_cancel(&host, &service_id, &deployment_id)
+                .await
+                .map(|()| false)
+        }
         Some(CliCommand::Service {
             command:
                 ServiceCommand::Probe(ProbeArgs {
@@ -745,10 +799,13 @@ async fn run() -> crate::error::Result<bool> {
             Ok(false)
         }
         Some(CliCommand::Upgrade {
-            target: UpgradeTarget::System { host },
-        }) => cli::upgrade::run_upgrade_system(&host)
-            .await
-            .map(|()| false),
+            target: UpgradeTarget::System,
+        }) => {
+            let host = cli::contexts::active_host()?;
+            cli::upgrade::run_upgrade_system(&host)
+                .await
+                .map(|()| false)
+        }
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
             Path::new(DEFAULT_CLUSTER_CONFIG_PATH),
