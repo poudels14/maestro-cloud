@@ -9,8 +9,8 @@ use crate::deployment::types::{
     ReplicaState, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
     ServiceDeployment, ServiceInfo, ServiceProvider,
 };
-use crate::runtime;
-use crate::supervisor::controller::JobSupervisor;
+use crate::runtime::{self, BuildSpec, RunSpec, RuntimeProvider};
+use crate::supervisor::{JobCommand, controller::JobSupervisor};
 use crate::utils::crypto::SecretString;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -495,6 +495,105 @@ impl InMemoryStore {
         state.configs.insert(service_id.to_string(), config);
     }
 
+    fn seed_active_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        status: DeploymentStatus,
+        healthcheck_path: Option<&str>,
+        replicas: u32,
+    ) -> ServiceDeployment {
+        let mut state = self.state.lock().expect("state lock");
+        let config = ServiceConfig {
+            id: service_id.to_string(),
+            name: format!("service-{service_id}"),
+            version: "cfg-0".to_string(),
+            provider: ServiceProvider::Shell,
+            build: None,
+            image: None,
+            deploy: ServiceDeployConfig {
+                flags: vec![],
+                expose_ports: vec![],
+                command: Some(Command {
+                    command: "sleep".to_string(),
+                    args: vec!["30".to_string()],
+                }),
+                healthcheck_path: healthcheck_path.map(str::to_string),
+                replicas,
+                max_restarts: None,
+                env: Default::default(),
+                secrets: None,
+            },
+            ingress: None,
+        };
+        state.configs.insert(service_id.to_string(), config.clone());
+
+        let deployment = ServiceDeployment {
+            id: deployment_id.to_string(),
+            created_at: 1,
+            deployed_at: None,
+            drained_at: None,
+            status: status.clone(),
+            config,
+            git_commit: None,
+            build: None,
+        };
+        state
+            .transitions
+            .insert(deployment.id.clone(), vec![status]);
+        state
+            .history
+            .insert(service_id.to_string(), vec![deployment.clone()]);
+        deployment
+    }
+
+    fn seed_queued_docker_deployment(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        healthcheck_path: Option<&str>,
+    ) -> ServiceDeployment {
+        let mut state = self.state.lock().expect("state lock");
+        let config = ServiceConfig {
+            id: service_id.to_string(),
+            name: format!("service-{service_id}"),
+            version: "cfg-0".to_string(),
+            provider: ServiceProvider::Docker,
+            build: None,
+            image: Some("example/image:latest".to_string()),
+            deploy: ServiceDeployConfig {
+                flags: vec![],
+                expose_ports: vec![],
+                command: None,
+                healthcheck_path: healthcheck_path.map(str::to_string),
+                replicas: 1,
+                max_restarts: None,
+                env: Default::default(),
+                secrets: None,
+            },
+            ingress: None,
+        };
+        state.configs.insert(service_id.to_string(), config.clone());
+
+        let deployment = ServiceDeployment {
+            id: deployment_id.to_string(),
+            created_at: 1,
+            deployed_at: None,
+            drained_at: None,
+            status: DeploymentStatus::Queued,
+            config,
+            git_commit: None,
+            build: None,
+        };
+        state
+            .transitions
+            .insert(deployment.id.clone(), vec![DeploymentStatus::Queued]);
+        state
+            .history
+            .insert(service_id.to_string(), vec![deployment.clone()]);
+        deployment
+    }
+
     fn add_queued_deployment(&self, service_id: &str, deploy_command: Command) -> String {
         let mut state = self.state.lock().expect("state lock");
         let mut config = state
@@ -535,6 +634,128 @@ impl InMemoryStore {
             .get(service_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn replica_states(&self, service_id: &str, deployment_id: &str) -> Vec<ReplicaState> {
+        let state = self.state.lock().expect("state lock");
+        let key = format!("{service_id}/{deployment_id}");
+        state.replica_states.get(&key).cloned().unwrap_or_default()
+    }
+}
+
+#[derive(Default)]
+struct TestRuntimeProvider {
+    containers: Mutex<HashMap<String, String>>,
+}
+
+impl TestRuntimeProvider {
+    fn with_container(name: &str, ip: &str) -> Self {
+        let mut containers = HashMap::new();
+        containers.insert(name.to_string(), ip.to_string());
+        Self {
+            containers: Mutex::new(containers),
+        }
+    }
+
+    fn add_container(&self, name: &str, ip: &str) {
+        self.containers
+            .lock()
+            .expect("containers lock")
+            .insert(name.to_string(), ip.to_string());
+    }
+}
+
+#[async_trait]
+impl RuntimeProvider for TestRuntimeProvider {
+    fn cli_name(&self) -> &str {
+        "test-runtime"
+    }
+
+    fn requires_explicit_dns(&self) -> bool {
+        false
+    }
+
+    async fn ensure_network(&self, _name: &str, _subnet: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn remove_network(&self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn remove_container(&self, name: &str) -> Result<()> {
+        self.containers
+            .lock()
+            .expect("containers lock")
+            .remove(name);
+        Ok(())
+    }
+
+    fn run_command(&self, _spec: &RunSpec) -> JobCommand {
+        JobCommand::Exec {
+            program: "true".to_string(),
+            args: vec![],
+        }
+    }
+
+    async fn inspect_container_ip(&self, name: &str) -> Option<String> {
+        self.containers
+            .lock()
+            .expect("containers lock")
+            .get(name)
+            .cloned()
+    }
+
+    async fn inspect_network_cidr(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    async fn build_image(
+        &self,
+        _spec: &BuildSpec,
+        _log_sender: Option<&flume::Sender<crate::logs::LogEntry>>,
+        _log_source: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn tag_image(&self, _source: &str, _target: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn push_image(&self, _tag: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn exec_in_container(&self, _container: &str, _cmd: &[&str]) -> Result<String> {
+        Ok(String::new())
+    }
+
+    async fn remove_image(&self, _image_id: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
+    ControllerConfig {
+        data_dir: data_dir.clone(),
+        etcd_port: 0,
+        cluster_alias: "test".to_string(),
+        cluster_name: "test".to_string(),
+        probe_port: None,
+        admin_port: None,
+        ingress_ports: vec![],
+        project_dir: data_dir,
+        network: "test-net".to_string(),
+        subnet: None,
+        tailscale_authkey: None,
+        encryption_key: SecretString::new("test".to_string()),
+        jwt_secret: None,
+        build_command_env: Default::default(),
+        tags: Default::default(),
+        system_type: None,
+        force: false,
+        disable_etcd_cert: true,
     }
 }
 
@@ -1248,6 +1469,219 @@ async fn continuous_redeploy_maintains_ingress_backends() {
     assert_eq!(
         backends[0], expected_hostname,
         "ingress should point to the latest deployment's container"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn docker_deployment_without_healthcheck_stays_building_until_container_exists() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-docker-ready-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    let deployment = store.seed_queued_docker_deployment("svc-docker", "ABCDEF1234", None);
+    let runtime = Arc::new(TestRuntimeProvider::default());
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+    let mut controller = DeploymentController::new(
+        test_controller_config(data_dir.clone()),
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+        None,
+        runtime.clone(),
+        None,
+        None,
+    );
+
+    controller
+        .reconcile_deployments()
+        .await
+        .expect("reconcile should succeed");
+
+    let building = store
+        .all_deployments()
+        .into_iter()
+        .find(|item| item.id == deployment.id)
+        .expect("deployment should exist");
+    assert_eq!(building.status, DeploymentStatus::Building);
+    let replicas = store.replica_states("svc-docker", &deployment.id);
+    assert_eq!(replicas.len(), 1);
+    assert_eq!(replicas[0].status, DeploymentStatus::Building);
+
+    runtime.add_container(&deployment.hostname_for_replica(0), "10.0.0.2");
+    controller
+        .reconcile_deployments()
+        .await
+        .expect("reconcile should succeed");
+
+    let ready = store
+        .all_deployments()
+        .into_iter()
+        .find(|item| item.id == deployment.id)
+        .expect("deployment should exist");
+    assert_eq!(ready.status, DeploymentStatus::Ready);
+    let replicas = store.replica_states("svc-docker", &deployment.id);
+    assert_eq!(replicas.len(), 1);
+    assert_eq!(replicas[0].status, DeploymentStatus::Ready);
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn orphaned_building_deployment_with_running_container_restores_ready_state() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-orphan-ready-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    let deployment = store.seed_active_deployment(
+        "svc-orphan",
+        "ABCDEF1234",
+        DeploymentStatus::Building,
+        None,
+        1,
+    );
+    let runtime = Arc::new(TestRuntimeProvider::with_container(
+        &deployment.hostname_for_replica(0),
+        "10.0.0.2",
+    ));
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+    let mut controller = DeploymentController::new(
+        test_controller_config(data_dir.clone()),
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+        None,
+        runtime,
+        None,
+        None,
+    );
+
+    controller
+        .reconcile_deployments()
+        .await
+        .expect("reconcile should succeed");
+
+    let updated = store
+        .all_deployments()
+        .into_iter()
+        .find(|item| item.id == deployment.id)
+        .expect("deployment should exist");
+    assert_eq!(updated.status, DeploymentStatus::Ready);
+
+    let replicas = store.replica_states("svc-orphan", &deployment.id);
+    assert_eq!(replicas.len(), 1);
+    assert_eq!(replicas[0].status, DeploymentStatus::Ready);
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn orphaned_building_deployment_with_healthcheck_restores_pending_ready_state() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir = std::env::temp_dir().join(format!("maestro-test-orphan-pending-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    let deployment = store.seed_active_deployment(
+        "svc-orphan",
+        "ABCDEF1234",
+        DeploymentStatus::Building,
+        Some("/health"),
+        1,
+    );
+    let runtime = Arc::new(TestRuntimeProvider::with_container(
+        &deployment.hostname_for_replica(0),
+        "10.0.0.2",
+    ));
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+    let mut controller = DeploymentController::new(
+        test_controller_config(data_dir.clone()),
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+        None,
+        runtime,
+        None,
+        None,
+    );
+
+    controller
+        .reconcile_deployments()
+        .await
+        .expect("reconcile should succeed");
+
+    let updated = store
+        .all_deployments()
+        .into_iter()
+        .find(|item| item.id == deployment.id)
+        .expect("deployment should exist");
+    assert_eq!(updated.status, DeploymentStatus::PendingReady);
+
+    let replicas = store.replica_states("svc-orphan", &deployment.id);
+    assert_eq!(replicas.len(), 1);
+    assert_eq!(replicas[0].status, DeploymentStatus::PendingReady);
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn orphaned_building_deployment_without_container_is_terminated() {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_millis();
+    let data_dir =
+        std::env::temp_dir().join(format!("maestro-test-orphan-terminated-{now_millis}"));
+
+    let store = Arc::new(InMemoryStore::default());
+    let deployment = store.seed_active_deployment(
+        "svc-orphan",
+        "ABCDEF1234",
+        DeploymentStatus::Building,
+        None,
+        1,
+    );
+    let runtime = Arc::new(TestRuntimeProvider::default());
+    let (signal_tx, _) = broadcast::channel(4);
+    let signal_rx = signal_tx.subscribe();
+    let mut controller = DeploymentController::new(
+        test_controller_config(data_dir.clone()),
+        store.clone(),
+        JobSupervisor::new(),
+        signal_rx,
+        None,
+        runtime,
+        None,
+        None,
+    );
+
+    controller
+        .reconcile_deployments()
+        .await
+        .expect("reconcile should succeed");
+
+    let updated = store
+        .all_deployments()
+        .into_iter()
+        .find(|item| item.id == deployment.id)
+        .expect("deployment should exist");
+    assert_eq!(updated.status, DeploymentStatus::Terminated);
+    assert!(
+        store
+            .replica_states("svc-orphan", &deployment.id)
+            .is_empty()
     );
 
     let _ = std::fs::remove_dir_all(&data_dir);
