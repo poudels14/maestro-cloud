@@ -1094,14 +1094,26 @@ function DeploymentLogViewer(props: {
       cell: (info) => {
         const level = info.getValue<string>();
         return (
-          <span class={clsx("uppercase whitespace-nowrap", logLevelColor(level))}>{level}</span>
+          <span
+            class={clsx(
+              "block max-w-full truncate text-right uppercase whitespace-nowrap",
+              logLevelColor(level)
+            )}
+            title={level}
+          >
+            {level}
+          </span>
         );
       }
     },
     {
       accessorKey: "text",
       header: "Message",
-      cell: (info) => <span class="text-gray-700 break-all">{info.getValue<string>()}</span>
+      cell: (info) => (
+        <span class="block text-gray-700 whitespace-pre-wrap break-words">
+          {info.getValue<string>()}
+        </span>
+      )
     }
   ];
 
@@ -1288,7 +1300,7 @@ function DeploymentLogViewer(props: {
                         <For each={row.getVisibleCells()}>
                           {(cell) => (
                             <td
-                              class={clsx("py-1", {
+                              class={clsx("py-1 overflow-hidden", {
                                 "pl-2": cell.column.id === "expander",
                                 "pr-2": cell.column.id === "ts",
                                 "px-2": cell.column.id !== "expander" && cell.column.id !== "text",
