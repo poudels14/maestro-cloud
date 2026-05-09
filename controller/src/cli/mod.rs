@@ -1,5 +1,6 @@
 pub mod cancel;
 pub mod contexts;
+pub mod logs;
 pub mod redeploy;
 pub mod rollout;
 pub mod services;

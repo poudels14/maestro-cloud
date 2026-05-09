@@ -77,6 +77,8 @@ enum CliCommand {
     },
     /// List services in the active context
     Services,
+    /// Stream logs from the active context
+    Logs(cli::logs::RemoteLogsArgs),
     /// Trigger a redeployment of a running service
     Redeploy {
         #[arg(help = "Service ID to redeploy")]
@@ -724,6 +726,10 @@ async fn run() -> crate::error::Result<bool> {
         Some(CliCommand::Services) => {
             let host = cli::contexts::active_host()?;
             cli::services::run_services(&host).await.map(|()| false)
+        }
+        Some(CliCommand::Logs(args)) => {
+            let host = cli::contexts::active_host()?;
+            cli::logs::run_logs(&host, args).await.map(|()| false)
         }
         Some(CliCommand::Redeploy { service_id }) => {
             let host = cli::contexts::active_host()?;
