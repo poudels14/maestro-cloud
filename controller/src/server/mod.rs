@@ -1,5 +1,4 @@
-use std::io::Read;
-use std::sync::Arc;
+use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -9,6 +8,7 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,16 @@ const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-admin", "admin", "maestro-admin"),
     ("maestro-tailscale", "tailscale", "maestro-tailscale"),
 ];
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskInfo {
+    name: String,
+    mount_point: String,
+    total_bytes: u64,
+    available_bytes: u64,
+    file_system: String,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -825,29 +835,142 @@ impl Server {
         })))
     }
 
-    async fn get_disks() -> Json<Vec<serde_json::Value>> {
+    async fn get_disks() -> Json<Vec<DiskInfo>> {
         let disks = sysinfo::Disks::new_with_refreshed_list();
-        let items: Vec<serde_json::Value> = disks
-            .iter()
+        let host_root = std::env::var("MAESTRO_HOST_ROOT")
+            .ok()
+            .filter(|path| !path.trim().is_empty());
+        let mut candidates = Vec::new();
+
+        if let Some(host_root) = host_root.as_deref() {
+            if let Some(info) = disk_info_for_path(FsPath::new(host_root), "/", &disks) {
+                candidates.push(info);
+            }
+        }
+
+        candidates.extend(disks.iter().filter_map(|disk| {
+            let mount = disk.mount_point().to_string_lossy().to_string();
+            if host_root.as_deref().is_some_and(|host_root| {
+                mount == host_root || mount.starts_with(&format!("{host_root}/"))
+            }) {
+                return None;
+            }
+            if !is_relevant_disk(disk) {
+                return None;
+            }
+            Some(disk_info_from_sysinfo(disk, mount))
+        }));
+
+        candidates.sort_by(|a, b| {
+            disk_mount_priority(&a.mount_point)
+                .cmp(&disk_mount_priority(&b.mount_point))
+                .then_with(|| a.mount_point.cmp(&b.mount_point))
+        });
+
+        let mut seen = HashSet::new();
+        let items = candidates
+            .into_iter()
             .filter(|disk| {
-                let mount = disk.mount_point().to_string_lossy().to_string();
-                let name = disk.name().to_string_lossy();
-                name.starts_with("/dev/")
-                    && !mount.starts_with("/etc/")
-                    && !mount.starts_with("/proc/")
-                    && !mount.starts_with("/sys/")
-            })
-            .map(|disk| {
-                json!({
-                    "name": disk.name().to_string_lossy(),
-                    "mountPoint": disk.mount_point().to_string_lossy(),
-                    "totalBytes": disk.total_space(),
-                    "availableBytes": disk.available_space(),
-                    "fileSystem": String::from_utf8_lossy(disk.file_system().as_encoded_bytes()),
-                })
+                seen.insert((
+                    disk.name.clone(),
+                    disk.file_system.clone(),
+                    disk.total_bytes,
+                    disk.available_bytes,
+                ))
             })
             .collect();
         Json(items)
+    }
+}
+
+fn is_relevant_disk(disk: &sysinfo::Disk) -> bool {
+    let mount = disk.mount_point().to_string_lossy();
+    let name = disk.name().to_string_lossy();
+    name.starts_with("/dev/")
+        && !mount.starts_with("/certs")
+        && !mount.starts_with("/dev/")
+        && !mount.starts_with("/etc/")
+        && !mount.starts_with("/proc/")
+        && !mount.starts_with("/run/")
+        && !mount.starts_with("/sys/")
+}
+
+fn disk_info_from_sysinfo(disk: &sysinfo::Disk, mount_point: String) -> DiskInfo {
+    DiskInfo {
+        name: disk.name().to_string_lossy().to_string(),
+        mount_point,
+        total_bytes: disk.total_space(),
+        available_bytes: disk.available_space(),
+        file_system: String::from_utf8_lossy(disk.file_system().as_encoded_bytes()).to_string(),
+    }
+}
+
+fn disk_info_for_path(
+    path: &FsPath,
+    display_mount_point: &str,
+    disks: &sysinfo::Disks,
+) -> Option<DiskInfo> {
+    let (total_bytes, available_bytes) = statvfs_space(path)?;
+    let disk = best_disk_for_path(path, disks);
+    Some(DiskInfo {
+        name: disk
+            .map(|disk| disk.name().to_string_lossy().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| path.display().to_string()),
+        mount_point: display_mount_point.to_string(),
+        total_bytes,
+        available_bytes,
+        file_system: disk
+            .map(|disk| String::from_utf8_lossy(disk.file_system().as_encoded_bytes()).to_string())
+            .unwrap_or_default(),
+    })
+}
+
+fn best_disk_for_path<'a>(path: &FsPath, disks: &'a sysinfo::Disks) -> Option<&'a sysinfo::Disk> {
+    disks
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().components().count())
+}
+
+#[cfg(unix)]
+fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
+    use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stat = unsafe { stat.assume_init() };
+    let block_size = u64::from(stat.f_frsize.max(1));
+    Some((
+        u64::from(stat.f_blocks).saturating_mul(block_size),
+        u64::from(stat.f_bavail).saturating_mul(block_size),
+    ))
+}
+
+#[cfg(not(unix))]
+fn statvfs_space(_path: &FsPath) -> Option<(u64, u64)> {
+    None
+}
+
+fn disk_mount_priority(mount: &str) -> usize {
+    match mount {
+        "/" => 0,
+        "/data" => 1,
+        _ => 10,
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+
+    #[test]
+    fn disk_mount_priority_puts_host_root_first() {
+        assert!(disk_mount_priority("/") < disk_mount_priority("/data"));
+        assert!(disk_mount_priority("/data") < disk_mount_priority("/certs"));
     }
 }
 
