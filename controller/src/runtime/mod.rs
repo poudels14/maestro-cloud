@@ -75,6 +75,13 @@ pub trait RuntimeProvider: Send + Sync {
         log_source: Option<&str>,
     ) -> Result<()>;
 
+    async fn pull_image(
+        &self,
+        image: &str,
+        log_sender: Option<&flume::Sender<LogEntry>>,
+        log_source: Option<&str>,
+    ) -> Result<()>;
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()>;
 
     async fn push_image(&self, tag: &str) -> Result<()>;

@@ -281,6 +281,25 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         Ok(())
     }
 
+    async fn pull_image(
+        &self,
+        image: &str,
+        log_sender: Option<&flume::Sender<LogEntry>>,
+        log_source: Option<&str>,
+    ) -> Result<()> {
+        eprintln!("[maestro]: pulling nerdctl image {image}");
+        let args = vec!["pull".to_string(), image.to_string()];
+        if let (Some(sender), Some(source)) = (log_sender, log_source) {
+            cmd::exec("nerdctl", &args)
+                .run_with_logs(sender, source, crate::logs::LogOrigin::Build)
+                .await?;
+        } else {
+            cmd::exec("nerdctl", &args).run().await?;
+        }
+        eprintln!("[maestro]: nerdctl image {image} pulled successfully");
+        Ok(())
+    }
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
         cmd::run("nerdctl", &["tag", source, target]).await?;
         Ok(())

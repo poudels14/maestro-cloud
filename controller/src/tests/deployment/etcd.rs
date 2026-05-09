@@ -5,9 +5,9 @@ use crate::deployment::provider::{
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    Command, ControllerConfig, Deployment, DeploymentStatus, IngressConfig, QueuedDeployment,
-    ReplicaState, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, ServiceInfo, ServiceProvider,
+    Command, ControllerConfig, Deployment, DeploymentBuildInfo, DeploymentStatus, IngressConfig,
+    QueuedDeployment, ReplicaState, SecretsConfig, ServiceBuildConfig, ServiceConfig,
+    ServiceDeployConfig, ServiceDeployment, ServiceInfo, ServiceProvider,
 };
 use crate::runtime::{self, BuildSpec, RunSpec, RuntimeProvider};
 use crate::supervisor::{JobCommand, controller::JobSupervisor};
@@ -102,6 +102,40 @@ fn command_planner_uses_image_for_deploy_when_present() {
             .collect(),
         }
     );
+}
+
+#[test]
+fn command_planner_disables_pull_for_prepared_images() {
+    let mut deployment = deployment_with_source(None, Some("traefik/whoami"), None);
+    deployment.build = Some(DeploymentBuildInfo {
+        docker_image_id: "traefik/whoami".to_string(),
+    });
+
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
+        build_command_env: Default::default(),
+        network: "test-net".to_string(),
+        dns_domain: None,
+        dns_server: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+    };
+    let deploy = planner
+        .deploy(&deployment, 0)
+        .expect("deploy command should exist");
+
+    let args = match deploy.command {
+        crate::supervisor::JobCommand::Exec { args, .. } => args,
+        _ => panic!("expected exec command"),
+    };
+    let pull_index = args
+        .iter()
+        .position(|arg| arg == "--pull=never")
+        .expect("pull should be disabled");
+    let image_index = args
+        .iter()
+        .position(|arg| arg == "traefik/whoami")
+        .expect("image should be present");
+    assert!(pull_index < image_index);
 }
 
 #[test]
@@ -646,6 +680,7 @@ impl InMemoryStore {
 #[derive(Default)]
 struct TestRuntimeProvider {
     containers: Mutex<HashMap<String, String>>,
+    pulled_images: Mutex<Vec<String>>,
 }
 
 impl TestRuntimeProvider {
@@ -654,6 +689,7 @@ impl TestRuntimeProvider {
         containers.insert(name.to_string(), ip.to_string());
         Self {
             containers: Mutex::new(containers),
+            pulled_images: Mutex::new(Vec::new()),
         }
     }
 
@@ -662,6 +698,13 @@ impl TestRuntimeProvider {
             .lock()
             .expect("containers lock")
             .insert(name.to_string(), ip.to_string());
+    }
+
+    fn pulled_images(&self) -> Vec<String> {
+        self.pulled_images
+            .lock()
+            .expect("pulled images lock")
+            .clone()
     }
 }
 
@@ -716,6 +759,19 @@ impl RuntimeProvider for TestRuntimeProvider {
         _log_sender: Option<&flume::Sender<crate::logs::LogEntry>>,
         _log_source: Option<&str>,
     ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn pull_image(
+        &self,
+        image: &str,
+        _log_sender: Option<&flume::Sender<crate::logs::LogEntry>>,
+        _log_source: Option<&str>,
+    ) -> Result<()> {
+        self.pulled_images
+            .lock()
+            .expect("pulled images lock")
+            .push(image.to_string());
         Ok(())
     }
 
@@ -924,6 +980,31 @@ impl ClusterStore for InMemoryStore {
             replicas.retain(|r| r.replica_index != replica_index);
         }
         sync_ingress(&mut state, service_id);
+        Ok(())
+    }
+
+    async fn save_deploy_data(
+        &self,
+        _service_id: &str,
+        _deployment: &ServiceDeployment,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn update_deployment_build_info(
+        &self,
+        deployment: &Deployment,
+        updated: &ServiceDeployment,
+    ) -> Result<()> {
+        let mut state = self.state.lock().expect("state lock");
+        let Some(deployments) = state.history.get_mut(&deployment.service_id) else {
+            return Ok(());
+        };
+        let Some(stored) = deployments.iter_mut().find(|item| item.id == deployment.id) else {
+            return Ok(());
+        };
+        stored.build = updated.build.clone();
+        stored.git_commit = updated.git_commit.clone();
         Ok(())
     }
 
@@ -1503,15 +1584,49 @@ async fn docker_deployment_without_healthcheck_stays_building_until_container_ex
         .await
         .expect("reconcile should succeed");
 
+    assert!(
+        store
+            .replica_states("svc-docker", &deployment.id)
+            .is_empty()
+    );
+
+    let build_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        controller
+            .reconcile_deployments()
+            .await
+            .expect("reconcile should succeed");
+        let replicas = store.replica_states("svc-docker", &deployment.id);
+        if !replicas.is_empty() {
+            assert_eq!(replicas.len(), 1);
+            assert_eq!(replicas[0].status, DeploymentStatus::Building);
+            break;
+        }
+        assert!(
+            Instant::now() < build_deadline,
+            "image pull did not complete in time"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(
+        runtime.pulled_images(),
+        vec!["example/image:latest".to_string()]
+    );
+
     let building = store
         .all_deployments()
         .into_iter()
         .find(|item| item.id == deployment.id)
         .expect("deployment should exist");
     assert_eq!(building.status, DeploymentStatus::Building);
-    let replicas = store.replica_states("svc-docker", &deployment.id);
-    assert_eq!(replicas.len(), 1);
-    assert_eq!(replicas[0].status, DeploymentStatus::Building);
+    assert_eq!(
+        building
+            .build
+            .as_ref()
+            .map(|build| build.docker_image_id.as_str()),
+        Some("example/image:latest")
+    );
 
     runtime.add_container(&deployment.hostname_for_replica(0), "10.0.0.2");
     controller

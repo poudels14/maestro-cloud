@@ -407,56 +407,58 @@ impl DeploymentController {
 
         let service_log_source = format!("{}/{}/", queued_deployment.service_id, deployment_id);
 
-        if queued_deployment.deployment.config.build.is_some() {
+        if queued_deployment.deployment.has_build_step() {
             self.prune_images().await;
 
-            if let Err(err) = queued_deployment
-                .deployment
-                .resolve_build_secrets(&self.logger)
-                .await
-            {
-                let error_msg = format!("failed to resolve build secrets: {err}");
-                self.logger.emit(
-                    "error",
-                    &format!(
-                        "{}/{}: {error_msg}",
-                        queued_deployment.service_id, deployment_id
-                    ),
-                );
-                self.logger.emit_from_source(
-                    "error",
-                    &error_msg,
-                    &service_log_source,
-                    LogOrigin::Service,
-                );
-                let _ = self
-                    .store
-                    .update_deployment_status(
-                        &Deployment {
-                            id: deployment_id.clone(),
-                            service_id: queued_deployment.service_id.clone(),
-                            replica_index: 0,
-                        },
-                        DeploymentStatus::Crashed,
-                    )
-                    .await;
-                self.prune_service_images(&queued_deployment.service_id)
-                    .await;
-                return Ok(());
-            }
+            if queued_deployment.deployment.config.build.is_some() {
+                if let Err(err) = queued_deployment
+                    .deployment
+                    .resolve_build_secrets(&self.logger)
+                    .await
+                {
+                    let error_msg = format!("failed to resolve build secrets: {err}");
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "{}/{}: {error_msg}",
+                            queued_deployment.service_id, deployment_id
+                        ),
+                    );
+                    self.logger.emit_from_source(
+                        "error",
+                        &error_msg,
+                        &service_log_source,
+                        LogOrigin::Service,
+                    );
+                    let _ = self
+                        .store
+                        .update_deployment_status(
+                            &Deployment {
+                                id: deployment_id.clone(),
+                                service_id: queued_deployment.service_id.clone(),
+                                replica_index: 0,
+                            },
+                            DeploymentStatus::Crashed,
+                        )
+                        .await;
+                    self.prune_service_images(&queued_deployment.service_id)
+                        .await;
+                    return Ok(());
+                }
 
-            if let Err(err) = self
-                .store
-                .save_build_data(&queued_deployment.service_id, &queued_deployment.deployment)
-                .await
-            {
-                self.logger.emit(
-                    "warn",
-                    &format!(
-                        "{}/{}: failed to save build data: {err}",
-                        queued_deployment.service_id, deployment_id
-                    ),
-                );
+                if let Err(err) = self
+                    .store
+                    .save_build_data(&queued_deployment.service_id, &queued_deployment.deployment)
+                    .await
+                {
+                    self.logger.emit(
+                        "warn",
+                        &format!(
+                            "{}/{}: failed to save build data: {err}",
+                            queued_deployment.service_id, deployment_id
+                        ),
+                    );
+                }
             }
 
             let short_id: String = deployment_id.chars().take(6).collect();
