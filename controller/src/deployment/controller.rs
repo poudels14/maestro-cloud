@@ -728,19 +728,7 @@ impl DeploymentController {
         }
 
         let replicas = queued_deployment.deployment.config.deploy.replicas;
-        let has_healthcheck = queued_deployment
-            .deployment
-            .config
-            .deploy
-            .healthcheck_path
-            .as_ref()
-            .is_some_and(|p| !p.trim().is_empty());
-
-        let replica_status = if has_healthcheck {
-            DeploymentStatus::PendingReady
-        } else {
-            DeploymentStatus::Ready
-        };
+        let replica_status = initial_replica_status_for_deployment(&queued_deployment.deployment);
 
         for replica_index in 0..replicas {
             let deploy_output = match queued_deployment.deployment.config.provider {
@@ -1105,7 +1093,7 @@ impl DeploymentController {
 
     async fn cleanup_orphaned_deployments(&mut self) {
         let tracked_job_ids: HashSet<String> = self.deployments.keys().cloned().collect();
-        let pending_deployment_ids: HashSet<&String> = self.pending_builds.keys().collect();
+        let pending_deployment_ids: HashSet<String> = self.pending_builds.keys().cloned().collect();
 
         let service_ids = match self.store.list_service_ids().await {
             Ok(ids) => ids,
@@ -1123,6 +1111,7 @@ impl DeploymentController {
                     deployment.status,
                     DeploymentStatus::Draining
                         | DeploymentStatus::Ready
+                        | DeploymentStatus::Building
                         | DeploymentStatus::PendingReady
                 ) {
                     continue;
@@ -1132,85 +1121,149 @@ impl DeploymentController {
                     continue;
                 }
 
-                let replicas = deployment.config.deploy.replicas;
-                let mut has_orphaned_replica = false;
-                for replica_index in 0..replicas {
-                    let job_id = replica_job_id(&deployment.id, replica_index);
-                    if !tracked_job_ids.contains(&job_id) {
-                        has_orphaned_replica = true;
-                        break;
-                    }
-                }
-                if !has_orphaned_replica {
-                    continue;
-                }
+                self.reconcile_orphaned_deployment(service_id, deployment, &tracked_job_ids)
+                    .await;
+            }
+        }
+    }
 
-                if deployment.status == DeploymentStatus::Draining {
+    async fn reconcile_orphaned_deployment(
+        &mut self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+        tracked_job_ids: &HashSet<String>,
+    ) {
+        let replicas = deployment.config.deploy.replicas;
+        let orphaned_replicas = (0..replicas)
+            .filter(|replica_index| {
+                let job_id = replica_job_id(&deployment.id, *replica_index);
+                !tracked_job_ids.contains(&job_id)
+            })
+            .collect::<Vec<_>>();
+
+        if orphaned_replicas.is_empty() {
+            return;
+        }
+
+        if deployment.status == DeploymentStatus::Draining {
+            self.logger.emit(
+                "info",
+                &format!(
+                    "cleaning up orphaned draining deployment `{}` for service `{service_id}`",
+                    deployment.id
+                ),
+            );
+            for replica_index in 0..replicas {
+                let hostname = deployment.hostname_for_replica(replica_index);
+                let _ = self.runtime.remove_container(&hostname).await;
+                deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                let _ = self
+                    .store
+                    .delete_replica_state(service_id, &deployment.id, replica_index)
+                    .await;
+            }
+            let deployment_ref = Deployment {
+                service_id: service_id.to_string(),
+                id: deployment.id.clone(),
+                replica_index: 0,
+            };
+            let _ = self
+                .store
+                .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                .await;
+            remove_build_dir(deployment, &self.config.data_dir);
+            self.prune_service_images(service_id).await;
+            return;
+        }
+
+        let replica_states = self
+            .store
+            .list_replica_states(service_id, &deployment.id)
+            .await
+            .unwrap_or_default();
+        let mut any_orphaned_container_alive = false;
+
+        for replica_index in &orphaned_replicas {
+            let hostname = deployment.hostname_for_replica(*replica_index);
+            let container_alive = self.runtime.inspect_container_ip(&hostname).await.is_some();
+            if container_alive {
+                any_orphaned_container_alive = true;
+                register_container_dns(
+                    &hostname,
+                    &self.dns_domain,
+                    &self.dns_manager,
+                    &self.runtime,
+                );
+                let replica_status = recovered_replica_status_for_deployment(deployment);
+                let needs_replica_state = replica_states
+                    .iter()
+                    .find(|state| state.replica_index == *replica_index)
+                    .is_none_or(|state| state.status != replica_status);
+                if needs_replica_state {
                     self.logger.emit(
                         "info",
                         &format!(
-                            "cleaning up orphaned draining deployment `{}` for service `{service_id}`",
+                            "restoring orphaned replica{replica_index} of deployment `{}` for service `{service_id}` as {replica_status:?}",
                             deployment.id
                         ),
                     );
-                    for replica_index in 0..replicas {
-                        let hostname = deployment.hostname_for_replica(replica_index);
-                        let _ = self.runtime.remove_container(&hostname).await;
-                        deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
-                        let _ = self
-                            .store
-                            .delete_replica_state(service_id, &deployment.id, replica_index)
-                            .await;
-                    }
-                    let deployment_ref = Deployment {
-                        service_id: service_id.clone(),
-                        id: deployment.id.clone(),
-                        replica_index: 0,
-                    };
                     let _ = self
                         .store
-                        .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                        .update_replica_status(
+                            service_id,
+                            &deployment.id,
+                            *replica_index,
+                            replica_status,
+                        )
                         .await;
-                    remove_build_dir(deployment, &self.config.data_dir);
-                    self.prune_service_images(service_id).await;
-                } else {
-                    let container_alive = self
-                        .runtime
-                        .inspect_container_ip(&deployment.hostname_for_replica(0))
-                        .await
-                        .is_some();
-                    if !container_alive {
-                        self.logger.emit(
-                            "info",
-                            &format!(
-                                "marking orphaned deployment `{}` for service `{service_id}` as terminated (container not running)",
-                                deployment.id
-                            ),
-                        );
-                        for replica_index in 0..replicas {
-                            let hostname = deployment.hostname_for_replica(replica_index);
-                            deregister_container_dns(
-                                &hostname,
-                                &self.dns_domain,
-                                &self.dns_manager,
-                            );
-                            let _ = self
-                                .store
-                                .delete_replica_state(service_id, &deployment.id, replica_index)
-                                .await;
-                        }
-                        let deployment_ref = Deployment {
-                            service_id: service_id.clone(),
-                            id: deployment.id.clone(),
-                            replica_index: 0,
-                        };
-                        let _ = self
-                            .store
-                            .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
-                            .await;
-                    }
                 }
+            } else {
+                deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                let _ = self
+                    .store
+                    .delete_replica_state(service_id, &deployment.id, *replica_index)
+                    .await;
             }
+        }
+
+        if any_orphaned_container_alive {
+            let deployment_status = recovered_replica_status_for_deployment(deployment);
+            if deployment.status != deployment_status {
+                let deployment_ref = Deployment {
+                    service_id: service_id.to_string(),
+                    id: deployment.id.clone(),
+                    replica_index: 0,
+                };
+                let _ = self
+                    .store
+                    .update_deployment_status(&deployment_ref, deployment_status)
+                    .await;
+            }
+        } else if orphaned_replicas.len() == replicas as usize {
+            self.logger.emit(
+                "info",
+                &format!(
+                    "marking orphaned deployment `{}` for service `{service_id}` as terminated (container not running)",
+                    deployment.id
+                ),
+            );
+            for replica_index in 0..replicas {
+                let hostname = deployment.hostname_for_replica(replica_index);
+                deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                let _ = self
+                    .store
+                    .delete_replica_state(service_id, &deployment.id, replica_index)
+                    .await;
+            }
+            let deployment_ref = Deployment {
+                service_id: service_id.to_string(),
+                id: deployment.id.clone(),
+                replica_index: 0,
+            };
+            let _ = self
+                .store
+                .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
+                .await;
         }
     }
 
@@ -1375,18 +1428,24 @@ impl DeploymentController {
     }
 
     async fn reconcile_replicas(&mut self) {
-        let mut seen_deployments: HashMap<String, String> = HashMap::new();
+        let mut seen_deployments: HashMap<String, Deployment> = HashMap::new();
         for deployment in self.deployments.values() {
             seen_deployments
                 .entry(deployment.id.clone())
-                .or_insert_with(|| deployment.service_id.clone());
+                .or_insert_with(|| deployment.clone());
         }
 
         if seen_deployments.is_empty() {
             return;
         }
 
-        for (deployment_id, service_id) in &seen_deployments {
+        for (deployment_id, first_deployment) in &seen_deployments {
+            let service_id = &first_deployment.service_id;
+            let deployment_record = match self.store.read_service_deployment(first_deployment).await
+            {
+                Ok(Some(deployment)) => deployment,
+                _ => continue,
+            };
             let desired = match self.store.read_service_info(service_id).await {
                 Ok(Some(info)) => info.config.deploy.replicas,
                 _ => continue,
@@ -1410,12 +1469,6 @@ impl DeploymentController {
             }
 
             if desired > running_count {
-                let first = self.deployments.values().find(|d| d.id == *deployment_id);
-                let Some(first) = first else { continue };
-                let deployment_record = match self.store.read_service_deployment(first).await {
-                    Ok(Some(d)) => d,
-                    _ => continue,
-                };
                 let max_existing = running_indices.iter().copied().max().unwrap_or(0);
                 for replica_index in (max_existing + 1)..=(max_existing + (desired - running_count))
                 {
@@ -1428,7 +1481,7 @@ impl DeploymentController {
                     .await;
                 }
             } else if desired < running_count {
-                let mut sorted = running_indices;
+                let mut sorted = running_indices.clone();
                 sorted.sort();
                 sorted.reverse();
                 let excess = (running_count - desired) as usize;
@@ -1444,11 +1497,55 @@ impl DeploymentController {
                 }
             }
 
-            let replica_states = self
+            let mut replica_states = self
                 .store
                 .list_replica_states(service_id, deployment_id)
                 .await
                 .unwrap_or_default();
+            let mut repaired_replica_state = false;
+            for replica_index in running_indices
+                .iter()
+                .copied()
+                .filter(|index| *index < desired)
+            {
+                let current_replica_status = replica_states
+                    .iter()
+                    .find(|state| state.replica_index == replica_index)
+                    .map(|state| state.status.clone());
+                let replica_status = self
+                    .reconciled_replica_status(
+                        &deployment_record,
+                        replica_index,
+                        current_replica_status.as_ref(),
+                    )
+                    .await;
+                let needs_replica_state = current_replica_status.as_ref() != Some(&replica_status);
+                if needs_replica_state {
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "repairing replica{replica_index} state for running deployment `{deployment_id}` of service `{service_id}` as {replica_status:?}"
+                        ),
+                    );
+                    let _ = self
+                        .store
+                        .update_replica_status(
+                            service_id,
+                            deployment_id,
+                            replica_index,
+                            replica_status,
+                        )
+                        .await;
+                    repaired_replica_state = true;
+                }
+            }
+            if repaired_replica_state {
+                replica_states = self
+                    .store
+                    .list_replica_states(service_id, deployment_id)
+                    .await
+                    .unwrap_or_default();
+            }
             for state in &replica_states {
                 if state.replica_index >= desired {
                     let _ = self
@@ -1543,21 +1640,33 @@ impl DeploymentController {
                 &self.runtime,
             );
 
-            let has_healthcheck = deployment_record
-                .config
-                .deploy
-                .healthcheck_path
-                .as_ref()
-                .is_some_and(|p| !p.trim().is_empty());
-            let status = if has_healthcheck {
-                DeploymentStatus::PendingReady
-            } else {
-                DeploymentStatus::Ready
-            };
+            let status = initial_replica_status_for_deployment(deployment_record);
             let _ = self
                 .store
                 .update_replica_status(service_id, deployment_id, replica_index, status)
                 .await;
+        }
+    }
+
+    async fn reconciled_replica_status(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+        current_status: Option<&DeploymentStatus>,
+    ) -> DeploymentStatus {
+        if current_status == Some(&DeploymentStatus::Ready) {
+            DeploymentStatus::Ready
+        } else if deployment.config.provider == ServiceProvider::Docker
+            && !deployment_has_healthcheck(deployment)
+        {
+            let hostname = deployment.hostname_for_replica(replica_index);
+            if self.runtime.inspect_container_ip(&hostname).await.is_some() {
+                DeploymentStatus::Ready
+            } else {
+                DeploymentStatus::Building
+            }
+        } else {
+            initial_replica_status_for_deployment(deployment)
         }
     }
 }
@@ -1575,6 +1684,37 @@ fn remove_build_dir(deployment: &ServiceDeployment, data_dir: &std::path::Path) 
 
 fn replica_job_id(deployment_id: &str, replica_index: u32) -> String {
     format!("{deployment_id}-replica-{replica_index}")
+}
+
+fn deployment_has_healthcheck(deployment: &ServiceDeployment) -> bool {
+    deployment
+        .config
+        .deploy
+        .healthcheck_path
+        .as_ref()
+        .is_some_and(|path| !path.trim().is_empty())
+}
+
+fn initial_replica_status_for_deployment(deployment: &ServiceDeployment) -> DeploymentStatus {
+    if deployment_has_healthcheck(deployment) {
+        DeploymentStatus::PendingReady
+    } else if deployment.config.provider == ServiceProvider::Docker {
+        DeploymentStatus::Building
+    } else {
+        DeploymentStatus::Ready
+    }
+}
+
+fn recovered_replica_status_for_deployment(deployment: &ServiceDeployment) -> DeploymentStatus {
+    if deployment.status == DeploymentStatus::Ready {
+        DeploymentStatus::Ready
+    } else if deployment.config.provider == ServiceProvider::Docker
+        && !deployment_has_healthcheck(deployment)
+    {
+        DeploymentStatus::Ready
+    } else {
+        initial_replica_status_for_deployment(deployment)
+    }
 }
 
 fn deployment_hostname(service_id: &str, deployment_id: &str, replica_index: u32) -> String {
