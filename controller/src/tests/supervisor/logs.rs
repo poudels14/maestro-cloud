@@ -53,6 +53,18 @@ fn iso_prefixed_with_info_level() {
 }
 
 #[test]
+fn iso_prefixed_unknown_token_is_message_not_level() {
+    let line = "2026-03-15T20:28:36Z HTTPS://HTTPBIN.ORG/STATUS/200 error <urlopen error>";
+    let parsed = parse_log_line(line);
+    assert_eq!(
+        parsed.text,
+        "HTTPS://HTTPBIN.ORG/STATUS/200 error <urlopen error>"
+    );
+    assert!(parsed.level.is_none());
+    assert!(parsed.ts.is_some());
+}
+
+#[test]
 fn slash_timestamp_format() {
     let line = "2026/03/18 08:39:04 Starting up on port 80";
     let parsed = parse_log_line(line);

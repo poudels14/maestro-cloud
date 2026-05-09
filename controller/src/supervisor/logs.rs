@@ -100,22 +100,31 @@ pub fn parse_log_line(line: &str) -> ParsedLine {
         };
     }
 
-    // Try "2026-03-15T20:28:36Z ERR message..." format
+    // Try "2026-03-15T20:28:36Z ERR message..." format.
+    // If the token after the timestamp is not a known level, keep it in the message.
     if line.len() > 20 && line.as_bytes()[4] == b'-' && line.as_bytes()[10] == b'T' {
-        if let Some(space_idx) = line[..25.min(line.len())].find(' ') {
+        if let Some(space_idx) = line[..35.min(line.len())].find(' ') {
             let ts_str = &line[..space_idx];
             if let Some(ts) = parse_iso_timestamp(ts_str) {
                 let rest = line[space_idx + 1..].trim_start();
                 if let Some(msg_start) = rest.find(' ') {
                     let level_str = &rest[..msg_start];
-                    let text = rest[msg_start + 1..].trim_start();
-                    return ParsedLine {
-                        ts: Some(ts),
-                        level: Some(normalize_level(level_str)),
-                        text: text.to_string(),
-                        attrs: vec![],
-                    };
+                    if let Some(level) = normalize_known_level(level_str) {
+                        let text = rest[msg_start + 1..].trim_start();
+                        return ParsedLine {
+                            ts: Some(ts),
+                            level: Some(level),
+                            text: text.to_string(),
+                            attrs: vec![],
+                        };
+                    }
                 }
+                return ParsedLine {
+                    ts: Some(ts),
+                    level: None,
+                    text: rest.to_string(),
+                    attrs: vec![],
+                };
             }
         }
     }
@@ -233,6 +242,15 @@ fn normalize_level(s: &str) -> String {
         "trace" => "trace".to_string(),
         other => other.to_lowercase(),
     }
+}
+
+fn normalize_known_level(s: &str) -> Option<String> {
+    let normalized = normalize_level(s);
+    matches!(
+        normalized.as_str(),
+        "error" | "warn" | "info" | "debug" | "trace"
+    )
+    .then_some(normalized)
 }
 
 fn parse_slash_timestamp(s: &str) -> Option<u64> {
