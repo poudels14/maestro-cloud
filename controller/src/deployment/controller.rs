@@ -945,13 +945,19 @@ impl DeploymentController {
                         ),
                     );
                 }
-                if is_terminal(&new_status) {
-                    if let Ok(Some(deployment_record)) =
-                        self.store.read_service_deployment(&deployment).await
-                    {
-                        self.remove_replica_container(&deployment_record, deployment.replica_index)
-                            .await;
-                    }
+            }
+
+            if matches!(
+                finished_task.status,
+                SupervisedJobStatus::Completed
+                    | SupervisedJobStatus::Stopped
+                    | SupervisedJobStatus::Crashed
+            ) {
+                if let Ok(Some(deployment_record)) =
+                    self.store.read_service_deployment(&deployment).await
+                {
+                    self.remove_replica_container(&deployment_record, deployment.replica_index)
+                        .await;
                 }
             }
         }
@@ -963,6 +969,22 @@ impl DeploymentController {
         }
 
         let hostname = deployment.hostname_for_replica(replica_index);
+        self.remove_container_by_hostname(&hostname).await;
+        deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+    }
+
+    async fn remove_deployment_containers(&self, deployment: &ServiceDeployment) {
+        if deployment.config.provider != ServiceProvider::Docker {
+            return;
+        }
+
+        for replica_index in 0..deployment.config.deploy.replicas {
+            self.remove_replica_container(deployment, replica_index)
+                .await;
+        }
+    }
+
+    async fn remove_container_by_hostname(&self, hostname: &str) {
         if let Err(err) = self.runtime.remove_container(&hostname).await {
             self.logger.emit(
                 "warn",
@@ -971,7 +993,6 @@ impl DeploymentController {
                 ),
             );
         }
-        deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
     }
 
     async fn prune_images(&self) {
@@ -1035,6 +1056,14 @@ impl DeploymentController {
         let retained_images = active_images
             .chain(latest_built_image.into_iter())
             .collect::<HashSet<_>>();
+
+        for deployment in deployments
+            .iter()
+            .filter(|deployment| is_terminal(&deployment.status))
+        {
+            self.remove_deployment_containers(deployment).await;
+            remove_build_dir(deployment, &self.config.data_dir);
+        }
 
         let stale_images = deployments
             .iter()
@@ -1205,6 +1234,13 @@ impl DeploymentController {
                     let _ = self
                         .supervisor
                         .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    let hostname = deployment_hostname(
+                        &deployment.service_id,
+                        &deployment.id,
+                        deployment.replica_index,
+                    );
+                    self.remove_container_by_hostname(&hostname).await;
+                    deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
                     continue;
                 }
                 Err(err) => {
@@ -1247,8 +1283,8 @@ impl DeploymentController {
                     let _ = self
                         .supervisor
                         .shutdown_job(&job_id, ShutdownRequest::Graceful);
-                    let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
-                    deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                    self.remove_replica_container(&store_deployment, deployment.replica_index)
+                        .await;
                     remove_build_dir(&store_deployment, &self.config.data_dir);
                     self.prune_service_images(&deployment.service_id).await;
                 }
@@ -1256,8 +1292,8 @@ impl DeploymentController {
                 let _ = self
                     .supervisor
                     .shutdown_job(&job_id, ShutdownRequest::Graceful);
-                let hostname = store_deployment.hostname_for_replica(deployment.replica_index);
-                deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
+                self.remove_replica_container(&store_deployment, deployment.replica_index)
+                    .await;
                 remove_build_dir(&store_deployment, &self.config.data_dir);
                 self.prune_service_images(&deployment.service_id).await;
             }
@@ -1539,6 +1575,15 @@ fn remove_build_dir(deployment: &ServiceDeployment, data_dir: &std::path::Path) 
 
 fn replica_job_id(deployment_id: &str, replica_index: u32) -> String {
     format!("{deployment_id}-replica-{replica_index}")
+}
+
+fn deployment_hostname(service_id: &str, deployment_id: &str, replica_index: u32) -> String {
+    let short_id: String = deployment_id.chars().take(6).collect();
+    if replica_index == 0 {
+        format!("{service_id}-{short_id}")
+    } else {
+        format!("{service_id}-{short_id}-{replica_index}")
+    }
 }
 
 fn is_terminal(status: &DeploymentStatus) -> bool {
