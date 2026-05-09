@@ -372,6 +372,20 @@ impl ServiceDeployment {
         }
     }
 
+    pub fn has_build_step(&self) -> bool {
+        if self.config.build.is_some() {
+            return true;
+        }
+
+        self.config.provider == ServiceProvider::Docker
+            && self
+                .config
+                .image
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|image| !image.is_empty())
+    }
+
     pub fn new(config: ServiceConfig) -> Result<Self> {
         Ok(ServiceDeployment {
             id: utils::nanoid::unique_id(10),

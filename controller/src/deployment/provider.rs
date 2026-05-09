@@ -88,11 +88,22 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         image_tag: &str,
         log_sender: Option<flume::Sender<LogEntry>>,
     ) -> Result<BuildOutput> {
-        let build_config = deployment
-            .config
-            .build
-            .as_ref()
-            .ok_or_else(|| anyhow!("no build config"))?;
+        let Some(build_config) = deployment.config.build.as_ref() else {
+            let image = deployment
+                .config
+                .image
+                .as_deref()
+                .map(str::trim)
+                .filter(|image| !image.is_empty())
+                .ok_or_else(|| anyhow!("no image to pull"))?;
+            let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
+            self.runtime
+                .pull_image(image, log_sender.as_ref(), Some(&log_source_str))
+                .await?;
+            return Ok(BuildOutput {
+                image_tag: image.to_string(),
+            });
+        };
         let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
         let depot_project = self.depot_project(build_config);
         let use_depot = depot_project.is_some();
@@ -212,6 +223,9 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             };
 
             let mut extra_flags = Vec::new();
+            if built_image.is_some() {
+                extra_flags.push("--pull=never".to_string());
+            }
             if let Some(dns) = &self.dns_server {
                 extra_flags.extend(["--dns".to_string(), dns.clone()]);
             }
