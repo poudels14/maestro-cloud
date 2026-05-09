@@ -521,12 +521,16 @@ async fn init_probe(
                 "-v".into(),
                 format!("{}:/data", probe_data_abs.display()),
                 "-v".into(),
+                "/:/host/root:ro".into(),
+                "-v".into(),
                 format!(
                     "{}:/run/secrets/encryption-key:ro",
                     encryption_key_abs.display()
                 ),
                 "-e".into(),
                 format!("ETCD_ENDPOINT={etcd_scheme}://maestro-etcd:2379"),
+                "-e".into(),
+                "MAESTRO_HOST_ROOT=/host/root".into(),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
