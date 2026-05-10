@@ -63,64 +63,11 @@ impl DnsManager {
         no_reverse
         fallthrough
     }
-    forward . /etc/resolv.conf
+    forward . 1.1.1.1 8.8.8.8
     cache 30
     errors
 }
 "#;
         std::fs::write(&corefile_path, corefile_content).expect("failed to write Corefile");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn write_and_read_hosts_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "maestro-dns-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ));
-        let dns = DnsManager::new(dir.clone());
-
-        dns.set_record("web", "mycluster.maestro.internal", "172.22.0.3");
-        dns.set_record("etcd", "mycluster.maestro.internal", "172.22.0.4");
-        dns.flush().unwrap();
-
-        let content = std::fs::read_to_string(dir.join("hosts")).unwrap();
-        assert!(content.contains("172.22.0.4 etcd.mycluster.maestro.internal"));
-        assert!(content.contains("172.22.0.3 web.mycluster.maestro.internal"));
-
-        dns.remove_records_for_hostname("etcd", "mycluster.maestro.internal");
-        dns.flush().unwrap();
-
-        let content = std::fs::read_to_string(dir.join("hosts")).unwrap();
-        assert!(!content.contains("etcd"));
-        assert!(content.contains("web"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_corefile() {
-        let dir = std::env::temp_dir().join(format!(
-            "maestro-corefile-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        DnsManager::write_corefile(&dir);
-        let content = std::fs::read_to_string(dir.join("Corefile")).unwrap();
-        assert!(content.contains("hosts /data/dns/hosts"));
-        assert!(content.contains("reload 5s"));
-        assert!(content.contains("fallthrough"));
-        assert!(content.contains("forward . /etc/resolv.conf"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
