@@ -78,10 +78,10 @@ impl TrafficScraper {
         let is_priming = self.previous.is_empty();
         let mut deltas: Vec<TrafficPoint> = Vec::new();
 
-        for (key, cur) in &current {
-            let prev = self.previous.get(key).copied().unwrap_or_default();
-            let delta = compute_delta(prev, *cur);
-            if !is_priming && has_any_delta(&delta) {
+        if !is_priming {
+            for (key, cur) in &current {
+                let prev = self.previous.get(key).copied().unwrap_or_default();
+                let delta = compute_delta(prev, *cur);
                 deltas.push(TrafficPoint {
                     ts: now,
                     service_id: key.service_id.clone(),
@@ -119,10 +119,6 @@ fn compute_delta(prev: Cumulative, cur: Cumulative) -> Cumulative {
         lat_le_10s: diff(cur.lat_le_10s, prev.lat_le_10s),
         lat_total: diff(cur.lat_total, prev.lat_total),
     }
-}
-
-fn has_any_delta(c: &Cumulative) -> bool {
-    c.requests > 0 || c.bytes_in > 0 || c.bytes_out > 0 || c.lat_total > 0
 }
 
 fn parse_prometheus_text(body: &str) -> HashMap<SeriesKey, Cumulative> {
