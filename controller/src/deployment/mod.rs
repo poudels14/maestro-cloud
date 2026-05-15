@@ -334,6 +334,13 @@ async fn init_ingress(
         "--providers.etcd.rootKey=traefik".into(),
         "--providers.etcd.endpoints=maestro-etcd:2379".into(),
         "--entrypoints.web.address=:8888".into(),
+        "--entrypoints.metrics.address=:9100".into(),
+        "--metrics.prometheus=true".into(),
+        "--metrics.prometheus.entryPoint=metrics".into(),
+        "--metrics.prometheus.addEntryPointsLabels=true".into(),
+        "--metrics.prometheus.addRoutersLabels=true".into(),
+        "--metrics.prometheus.addServicesLabels=true".into(),
+        "--metrics.prometheus.buckets=1.0,5.0,10.0".into(),
     ];
     if etcd_certs.is_some() {
         image_and_args.extend([

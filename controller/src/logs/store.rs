@@ -154,6 +154,23 @@ impl LogStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_metrics_source_ts ON metrics (source, ts);
+
+            CREATE TABLE IF NOT EXISTS traffic_metrics (
+                ts INTEGER NOT NULL,
+                service_id TEXT NOT NULL,
+                deployment_id TEXT,
+                status_code INTEGER NOT NULL,
+                method TEXT NOT NULL,
+                requests INTEGER NOT NULL,
+                bytes_in INTEGER NOT NULL,
+                bytes_out INTEGER NOT NULL,
+                lat_le_1s INTEGER NOT NULL,
+                lat_le_5s INTEGER NOT NULL,
+                lat_le_10s INTEGER NOT NULL,
+                lat_total INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_traffic_service_ts ON traffic_metrics (service_id, ts);
             ",
         )?;
         Ok(Self {
@@ -494,11 +511,81 @@ impl LogStore {
             .unwrap_or_default()
             .as_millis() as i64
             - max_age_ms;
-        let deleted = conn.execute(
+        let mut deleted = conn.execute(
             "DELETE FROM metrics WHERE ts < ?1",
             rusqlite::params![cutoff],
         )?;
+        deleted += conn.execute(
+            "DELETE FROM traffic_metrics WHERE ts < ?1",
+            rusqlite::params![cutoff],
+        )?;
         Ok(deleted)
+    }
+
+    pub async fn append_traffic_metrics(
+        &self,
+        entries: &[crate::metrics::TrafficPoint],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO traffic_metrics (ts, service_id, deployment_id, status_code, method,
+                                          requests, bytes_in, bytes_out,
+                                          lat_le_1s, lat_le_5s, lat_le_10s, lat_total)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        )?;
+        for entry in entries {
+            stmt.execute(rusqlite::params![
+                entry.ts,
+                entry.service_id,
+                entry.deployment_id,
+                entry.status_code as i64,
+                entry.method,
+                entry.requests,
+                entry.bytes_in,
+                entry.bytes_out,
+                entry.lat_le_1s,
+                entry.lat_le_5s,
+                entry.lat_le_10s,
+                entry.lat_total,
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub async fn read_traffic_metrics(
+        &self,
+        service_id: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<crate::metrics::TrafficPoint>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare_cached(
+            "SELECT ts, service_id, deployment_id, status_code, method,
+                    requests, bytes_in, bytes_out,
+                    lat_le_1s, lat_le_5s, lat_le_10s, lat_total
+             FROM traffic_metrics WHERE service_id = ?1 AND ts >= ?2 AND ts <= ?3
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![service_id, from, to], |row| {
+            Ok(crate::metrics::TrafficPoint {
+                ts: row.get(0)?,
+                service_id: row.get(1)?,
+                deployment_id: row.get(2)?,
+                status_code: row.get::<_, i64>(3)? as u16,
+                method: row.get(4)?,
+                requests: row.get(5)?,
+                bytes_in: row.get(6)?,
+                bytes_out: row.get(7)?,
+                lat_le_1s: row.get(8)?,
+                lat_le_5s: row.get(9)?,
+                lat_le_10s: row.get(10)?,
+                lat_total: row.get(11)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
