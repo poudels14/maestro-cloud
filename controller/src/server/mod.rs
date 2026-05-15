@@ -133,6 +133,10 @@ impl Server {
                 "/api/services/{serviceId}/metrics",
                 get(Self::get_service_metrics),
             )
+            .route(
+                "/api/services/{serviceId}/traffic",
+                get(Self::get_service_traffic),
+            )
             .route("/api/disks", get(Self::get_disks))
             .route("/api/ingress/routes", get(Self::list_ingress_routes))
             .route(
@@ -835,6 +839,25 @@ impl Server {
         let source = format!("service:{service_id}");
         let entries = log_store
             .read_metrics(&source, from, to)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(entries))
+    }
+
+    async fn get_service_traffic(
+        Path(service_id): Path<String>,
+        Query(query): Query<MetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::metrics::TrafficPoint>>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        crate::validation::validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(Vec::new()));
+        };
+        let (from, to) = metrics_time_range(&query);
+        let entries = log_store
+            .read_traffic_metrics(service_id, from, to)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok(Json(entries))

@@ -1,4 +1,5 @@
 mod healthcheck;
+mod traffic;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,6 +45,10 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         crate::logs::LogStore::open(std::path::Path::new("/data/logs.db"))
             .expect("failed to open probe log store"),
     );
+    let traffic_log_store = log_store.clone();
+    tokio::spawn(async move {
+        traffic::run(traffic_log_store).await;
+    });
     let dns_domain = std::env::var("MAESTRO_DNS_DOMAIN").ok();
     let jwt_secret = std::env::var("MAESTRO_JWT_SECRET").ok();
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();

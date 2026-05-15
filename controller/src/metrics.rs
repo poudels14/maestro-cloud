@@ -23,6 +23,23 @@ pub struct MetricPoint {
     pub net_tx_bytes: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficPoint {
+    pub ts: i64,
+    pub service_id: String,
+    pub deployment_id: Option<String>,
+    pub status_code: u16,
+    pub method: String,
+    pub requests: i64,
+    pub bytes_in: i64,
+    pub bytes_out: i64,
+    pub lat_le_1s: i64,
+    pub lat_le_5s: i64,
+    pub lat_le_10s: i64,
+    pub lat_total: i64,
+}
+
 pub struct MetricsCollector {
     endpoint: String,
     cluster_suffix: String,
