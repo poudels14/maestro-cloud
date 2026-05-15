@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show, Suspense } from "solid-js";
+import { createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
 import { Clock, ExternalLink, GitCommitHorizontal, Rocket } from "lucide-solid";
 import clsx from "clsx";
 import {
@@ -11,13 +11,37 @@ import {
 import { DeploymentMenu, ErrorBanner, StatusBadge, StatusDot, timeAgo } from "../../lib/ui";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 
+const INITIAL_VISIBLE = 10;
+const LOAD_MORE_STEP = 10;
+
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
   const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
   const [showFreezeConfirm, setShowFreezeConfirm] = createSignal(false);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [sheetTab, setSheetTab] = createSignal<SheetTabId>("logs");
+  const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
   const selectedDeployment = () => deployments()?.find((d) => d.id === selectedId()) ?? null;
+
+  const visibleDeployments = () => deployments()?.slice(0, visibleCount()) ?? [];
+  const hasMore = () => (deployments()?.length ?? 0) > visibleCount();
+
+  let sentinelRef: HTMLDivElement | undefined;
+  const observerCleanup = () => {
+    if (!sentinelRef || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && hasMore()) {
+            setVisibleCount((c) => c + LOAD_MORE_STEP);
+          }
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinelRef);
+    onCleanup(() => observer.disconnect());
+  };
 
   return (
     <>
@@ -79,7 +103,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
           }
         >
           <div class="space-y-3">
-            <For each={deployments()}>
+            <For each={visibleDeployments()}>
               {(d, index) => {
                 const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
                 const isLatest = () => index() === 0;
@@ -225,6 +249,18 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                 );
               }}
             </For>
+            <Show when={hasMore()}>
+              <div
+                ref={(el) => {
+                  sentinelRef = el;
+                  observerCleanup();
+                }}
+                class="h-4"
+              />
+              <div class="text-center text-xs text-gray-400 py-2">
+                Showing {visibleCount()} of {deployments()?.length ?? 0} deployments…
+              </div>
+            </Show>
           </div>
         </Show>
       </Suspense>
