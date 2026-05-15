@@ -216,41 +216,53 @@ impl LogStore {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    pub async fn read_tail_by_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<LogEntry>> {
+    pub async fn read_tail_by_prefix_origin(
+        &self,
+        prefix: &str,
+        origin: Option<LogOrigin>,
+        limit: usize,
+    ) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let pattern = format!("{prefix}%");
+        let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
         let mut stmt = conn.prepare_cached(
             "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs WHERE source LIKE ?1
+               AND (?2 IS NULL OR origin = ?2)
              ORDER BY seq DESC
-             LIMIT ?2",
+             LIMIT ?3",
         )?;
-        let rows = stmt.query_map(rusqlite::params![pattern, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![pattern, origin_filter, limit as i64],
+            |row| Self::row_to_entry(row),
+        )?;
         let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
         entries.reverse();
         Ok(entries)
     }
 
-    pub async fn read_after_by_prefix(
+    pub async fn read_after_by_prefix_origin(
         &self,
         prefix: &str,
+        origin: Option<LogOrigin>,
         after_seq: i64,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let pattern = format!("{prefix}%");
+        let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
         let mut stmt = conn.prepare_cached(
             "SELECT seq, ts, level, stream, text, source, origin, attributes
              FROM logs
              WHERE source LIKE ?1 AND seq > ?2
+               AND (?3 IS NULL OR origin = ?3)
              ORDER BY seq ASC
-             LIMIT ?3",
+             LIMIT ?4",
         )?;
-        let rows = stmt.query_map(rusqlite::params![pattern, after_seq, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![pattern, after_seq, origin_filter, limit as i64],
+            |row| Self::row_to_entry(row),
+        )?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 

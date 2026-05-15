@@ -23,6 +23,7 @@ use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, SecretsConfig, ServiceConfig, ServiceDeployConfig,
     ServiceDeployment, ServiceProvider,
 };
+use crate::logs::store::LogOrigin;
 use crate::signal::ShutdownEvent;
 
 mod types;
@@ -117,6 +118,10 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}/logs",
                 get(Self::get_deployment_logs),
+            )
+            .route(
+                "/api/services/{serviceId}/logs",
+                get(Self::get_service_logs),
             )
             .route("/api/system/upgrade", post(Self::upgrade_system))
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
@@ -639,13 +644,52 @@ impl Server {
         }
 
         let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let origin = parse_phase(query.phase.as_deref())?;
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/{deployment_id}/");
             let entries = if let Some(after) = query.after {
-                log_store.read_after_by_prefix(&prefix, after, tail).await
+                log_store
+                    .read_after_by_prefix_origin(&prefix, origin, after, tail)
+                    .await
             } else {
-                log_store.read_tail_by_prefix(&prefix, tail).await
+                log_store
+                    .read_tail_by_prefix_origin(&prefix, origin, tail)
+                    .await
+            }
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let values: Vec<serde_json::Value> = entries
+                .into_iter()
+                .map(|e| serde_json::to_value(e).unwrap_or_default())
+                .collect();
+            return Ok(Json(values));
+        }
+
+        Ok(Json(Vec::new()))
+    }
+
+    async fn get_service_logs(
+        Path(service_id): Path<String>,
+        Query(query): Query<LogsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        crate::validation::validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let origin = parse_phase(query.phase.as_deref())?;
+
+        if let Some(log_store) = &state.log_store {
+            let prefix = format!("{service_id}/");
+            let entries = if let Some(after) = query.after {
+                log_store
+                    .read_after_by_prefix_origin(&prefix, origin, after, tail)
+                    .await
+            } else {
+                log_store
+                    .read_tail_by_prefix_origin(&prefix, origin, tail)
+                    .await
             }
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
             let values: Vec<serde_json::Value> = entries
@@ -994,11 +1038,25 @@ fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
 struct LogsQuery {
     tail: Option<usize>,
     after: Option<i64>,
+    phase: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct ForceQuery {
     force: Option<bool>,
+}
+
+fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, String)> {
+    match phase {
+        None => Ok(None),
+        Some("build") => Ok(Some(LogOrigin::Build)),
+        Some("deploy") | Some("service") => Ok(Some(LogOrigin::Service)),
+        Some("system") => Ok(Some(LogOrigin::System)),
+        Some(other) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("invalid phase '{other}', expected one of: build, deploy, system"),
+        )),
+    }
 }
 
 fn verify_jwt(
