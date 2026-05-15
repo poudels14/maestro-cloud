@@ -24,6 +24,7 @@ pub async fn run(log_store: Arc<LogStore>) {
         http_client,
         log_store,
         previous: HashMap::new(),
+        has_scraped: false,
     };
 
     let mut interval = tokio::time::interval(SCRAPE_INTERVAL);
@@ -40,6 +41,7 @@ struct TrafficScraper {
     http_client: reqwest::Client,
     log_store: Arc<LogStore>,
     previous: HashMap<SeriesKey, Cumulative>,
+    has_scraped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -75,10 +77,9 @@ impl TrafficScraper {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        let is_priming = self.previous.is_empty();
         let mut deltas: Vec<TrafficPoint> = Vec::new();
 
-        if !is_priming {
+        if self.has_scraped {
             for (key, cur) in &current {
                 let prev = self.previous.get(key).copied().unwrap_or_default();
                 let delta = compute_delta(prev, *cur);
@@ -100,6 +101,7 @@ impl TrafficScraper {
         }
 
         self.previous = current;
+        self.has_scraped = true;
 
         if !deltas.is_empty() {
             self.log_store.append_traffic_metrics(&deltas).await?;
