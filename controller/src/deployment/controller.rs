@@ -307,6 +307,13 @@ impl DeploymentController {
                 }
             }
 
+            self.logger.emit(
+                "info",
+                "marking active deployments terminated before reboot",
+            );
+            self.mark_deployments_terminated().await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
             self.logger
                 .emit("info", "NixOS upgrade complete, rebooting");
             let _ = tokio::process::Command::new("reboot").output().await;
@@ -350,12 +357,27 @@ impl DeploymentController {
         let service_ids = self.store.list_service_ids().await?;
         for service_id in service_ids {
             let status = self.store.get_service_status(&service_id).await?;
-            if status != Some(DeploymentStatus::Terminated) {
+            let needs_recovery = matches!(
+                status,
+                Some(DeploymentStatus::Terminated)
+                    | Some(DeploymentStatus::Ready)
+                    | Some(DeploymentStatus::PendingReady)
+                    | Some(DeploymentStatus::Building)
+            );
+            if !needs_recovery {
                 continue;
             }
             let Some(info) = self.store.read_service_info(&service_id).await? else {
                 continue;
             };
+            if !matches!(status, Some(DeploymentStatus::Terminated)) {
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "recovering stale deployment for `{service_id}` (status was {status:?} on startup with no live container)"
+                    ),
+                );
+            }
             let deployment = ServiceDeployment::new(info.config)?;
             let _ = self.store.queue_deployment(deployment).await?;
         }
