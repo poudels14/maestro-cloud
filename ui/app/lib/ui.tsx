@@ -13,21 +13,69 @@ export function timeAgo(ms: number): string {
   return `${days}d ago`;
 }
 
-export const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
-  QUEUED: { dot: "bg-amber-400", bg: "bg-amber-50", text: "text-amber-700" },
-  BUILDING: { dot: "bg-blue-400", bg: "bg-blue-50", text: "text-blue-700" },
-  PENDING_READY: { dot: "bg-cyan-400", bg: "bg-cyan-50", text: "text-cyan-700" },
-  READY: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
-  DEPLOYING: { dot: "bg-indigo-400", bg: "bg-indigo-50", text: "text-indigo-700" },
-  RUNNING: { dot: "bg-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700" },
-  FAILED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  CRASHED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  TERMINATED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  CANCELLED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  CANCELED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700" },
-  SYSTEM: { dot: "bg-violet-400", bg: "bg-violet-50", text: "text-violet-700" },
-  IDLE: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" },
-  STOPPED: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" }
+export const STATUS_COLORS: Record<
+  string,
+  { dot: string; bg: string; text: string; border: string }
+> = {
+  QUEUED: {
+    dot: "bg-amber-400",
+    bg: "bg-amber-50",
+    text: "text-amber-700",
+    border: "border-amber-200"
+  },
+  BUILDING: {
+    dot: "bg-blue-400",
+    bg: "bg-blue-50",
+    text: "text-blue-700",
+    border: "border-blue-200"
+  },
+  PENDING_READY: {
+    dot: "bg-cyan-400",
+    bg: "bg-cyan-50",
+    text: "text-cyan-700",
+    border: "border-cyan-200"
+  },
+  READY: {
+    dot: "bg-emerald-400",
+    bg: "bg-emerald-50",
+    text: "text-emerald-700",
+    border: "border-emerald-200"
+  },
+  DEPLOYING: {
+    dot: "bg-indigo-400",
+    bg: "bg-indigo-50",
+    text: "text-indigo-700",
+    border: "border-indigo-200"
+  },
+  RUNNING: {
+    dot: "bg-emerald-400",
+    bg: "bg-emerald-50",
+    text: "text-emerald-700",
+    border: "border-emerald-200"
+  },
+  FAILED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+  CRASHED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+  TERMINATED: {
+    dot: "bg-red-400",
+    bg: "bg-red-50",
+    text: "text-red-700",
+    border: "border-red-200"
+  },
+  CANCELLED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+  CANCELED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+  SYSTEM: {
+    dot: "bg-violet-400",
+    bg: "bg-violet-50",
+    text: "text-violet-700",
+    border: "border-violet-200"
+  },
+  IDLE: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600", border: "border-gray-200" },
+  STOPPED: {
+    dot: "bg-gray-400",
+    bg: "bg-gray-100",
+    text: "text-gray-600",
+    border: "border-gray-200"
+  }
 };
 
 export function StatusBadge(props: { status: string }) {
@@ -35,9 +83,10 @@ export function StatusBadge(props: { status: string }) {
   return (
     <span
       class={clsx(
-        "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full",
+        "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md border",
         colors().bg,
-        colors().text
+        colors().text,
+        colors().border
       )}
     >
       <span class={clsx("size-1.5 rounded-full inline-block", colors().dot)} />

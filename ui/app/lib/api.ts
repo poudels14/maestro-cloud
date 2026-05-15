@@ -80,6 +80,20 @@ export async function getLogs(
   return mapLogEntries(raw);
 }
 
+export async function getServiceLogs(
+  serviceId: string,
+  tail?: number,
+  afterSeq?: number
+): Promise<LogEntry[]> {
+  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
+  if (tail != null) url.searchParams.set("tail", String(tail));
+  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch service logs: ${res.statusText}`);
+  const raw = await res.json();
+  return mapLogEntries(raw);
+}
+
 export async function getSystemLogs(
   name: string,
   tail?: number,
