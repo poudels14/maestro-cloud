@@ -377,6 +377,39 @@ impl DeploymentController {
                         "recovering stale deployment for `{service_id}` (status was {status:?} on startup with no live container)"
                     ),
                 );
+                let stale_deployments = self
+                    .store
+                    .list_service_deployments(&service_id)
+                    .await
+                    .unwrap_or_default();
+                for stale in &stale_deployments {
+                    if matches!(
+                        stale.status,
+                        DeploymentStatus::Ready
+                            | DeploymentStatus::PendingReady
+                            | DeploymentStatus::Building
+                            | DeploymentStatus::Draining
+                    ) {
+                        let deployment_ref = Deployment {
+                            id: stale.id.clone(),
+                            service_id: service_id.clone(),
+                            replica_index: 0,
+                        };
+                        if let Err(err) = self
+                            .store
+                            .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
+                            .await
+                        {
+                            self.logger.emit(
+                                "warn",
+                                &format!(
+                                    "failed to mark stale deployment `{}` terminated: {err}",
+                                    stale.id
+                                ),
+                            );
+                        }
+                    }
+                }
             }
             let deployment = ServiceDeployment::new(info.config)?;
             let _ = self.store.queue_deployment(deployment).await?;
