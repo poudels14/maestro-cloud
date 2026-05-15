@@ -9,7 +9,7 @@ use crate::metrics::TrafficPoint;
 
 const SCRAPE_INTERVAL: Duration = Duration::from_secs(5);
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(3);
-const METRICS_URL: &str = "http://maestro-ingress:9100/metrics";
+const METRICS_URL: &str = "http://web:9100/metrics";
 
 pub async fn run(log_store: Arc<LogStore>) {
     let http_client = match reqwest::Client::builder().timeout(SCRAPE_TIMEOUT).build() {
