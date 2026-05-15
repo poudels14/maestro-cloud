@@ -91,6 +91,21 @@ export interface MetricPoint {
   netTxBytes: number;
 }
 
+export interface TrafficPoint {
+  ts: number;
+  serviceId: string;
+  deploymentId: string | null;
+  statusCode: number;
+  method: string;
+  requests: number;
+  bytesIn: number;
+  bytesOut: number;
+  latLe1s: number;
+  latLe5s: number;
+  latLe10s: number;
+  latTotal: number;
+}
+
 export interface DiskInfo {
   name: string;
   mountPoint: string;

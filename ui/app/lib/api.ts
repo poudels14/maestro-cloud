@@ -1,4 +1,12 @@
-import type { Deployment, DiskInfo, IngressRouting, LogEntry, MetricPoint, Service } from "./types";
+import type {
+  Deployment,
+  DiskInfo,
+  IngressRouting,
+  LogEntry,
+  MetricPoint,
+  Service,
+  TrafficPoint
+} from "./types";
 
 export interface ClusterInfo {
   clusterName: string;
@@ -153,6 +161,20 @@ export async function getServiceMetrics(
   if (to != null) url.searchParams.set("to", String(to));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch metrics: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getServiceTraffic(
+  serviceId: string,
+  from?: number,
+  to?: number
+): Promise<TrafficPoint[]> {
+  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/traffic`, location.origin);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`Failed to fetch traffic: ${res.statusText}`);
   return res.json();
 }
 

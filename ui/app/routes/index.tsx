@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import { ErrorBanner, StatusBadge } from "../lib/ui";
 import { TimelineChart } from "../components/TimelineChart";
+import { ClientOnly } from "../components/ClientOnly";
 
 export const Route = createFileRoute("/")({
   component: ServicesPage
@@ -355,8 +356,7 @@ function ServicesPage() {
       </header>
 
       <main class="max-w-5xl mx-auto px-6 py-8">
-        <Show
-          when={!import.meta.env.SSR}
+        <ClientOnly
           fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
         >
           <Show when={services.error}>
@@ -367,7 +367,12 @@ function ServicesPage() {
           <Suspense
             fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
           >
-            <Show when={services()}>
+            <Show
+              when={services()}
+              fallback={
+                <div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>
+              }
+            >
               {(list) => {
                 const userServices = () => list().filter((s) => !s.system);
                 const systemServices = () => list().filter((s) => s.system);
@@ -435,7 +440,7 @@ function ServicesPage() {
               }}
             </Show>
           </Suspense>
-        </Show>
+        </ClientOnly>
       </main>
 
       <DeleteConfirmDialog
