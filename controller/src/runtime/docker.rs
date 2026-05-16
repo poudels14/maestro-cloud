@@ -122,6 +122,11 @@ impl RuntimeProvider for DockerRuntimeProvider {
         Ok(())
     }
 
+    async fn prune_containers(&self) -> Result<()> {
+        cmd::run("docker", &["container", "prune", "-f"]).await?;
+        Ok(())
+    }
+
     async fn build_image(
         &self,
         spec: &BuildSpec,
