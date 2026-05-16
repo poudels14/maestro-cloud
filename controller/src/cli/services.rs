@@ -275,7 +275,13 @@ fn service_endpoint(service: &ServiceConfig) -> String {
     service
         .ingress
         .as_ref()
-        .map(|ingress| format!("{}:{}", ingress.host, ingress.port.unwrap_or(80)))
+        .map(|ingress| {
+            format!(
+                "{}:{}",
+                ingress.hosts().join(","),
+                ingress.port.unwrap_or(80)
+            )
+        })
         .unwrap_or_else(|| "-".to_string())
 }
 

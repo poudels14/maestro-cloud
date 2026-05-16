@@ -276,7 +276,12 @@ impl EtcdStateStore {
         let service_prefix = format!("traefik/http/services/{service_id}");
         let servers_prefix = format!("{service_prefix}/loadBalancer/servers/");
 
-        let rule = format!("Host(`{}`)", ingress.host);
+        let rule = ingress
+            .hosts()
+            .iter()
+            .map(|h| format!("Host(`{h}`)"))
+            .collect::<Vec<_>>()
+            .join(" || ");
         let port = ingress.port.unwrap_or(80);
 
         let mut put_ops = vec![
@@ -320,8 +325,8 @@ impl EtcdStateStore {
             .map(|c| format!("http://{c}:{port}"))
             .collect();
         eprintln!(
-            "configured ingress for `{service_id}`: {} -> [{}]",
-            ingress.host,
+            "configured ingress for `{service_id}`: [{}] -> [{}]",
+            ingress.hosts().join(", "),
             urls.join(", ")
         );
         Ok(())

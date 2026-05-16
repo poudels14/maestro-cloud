@@ -1374,8 +1374,8 @@ async fn compute_rollout_diff(
     if old.ingress != new_config.ingress {
         changes.push(RolloutChange {
             field: "ingress".into(),
-            from: old.ingress.as_ref().map(|i| i.host.clone()),
-            to: new_config.ingress.as_ref().map(|i| i.host.clone()),
+            from: old.ingress.as_ref().map(|i| i.hosts().join(",")),
+            to: new_config.ingress.as_ref().map(|i| i.hosts().join(",")),
         });
     }
 
