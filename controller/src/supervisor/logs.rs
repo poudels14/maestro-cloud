@@ -35,13 +35,17 @@ pub async fn read_pipe_to_collector(
             .as_millis() as i64
     };
 
+    let is_tailscale = source.as_ref() == "maestro-tailscale";
+
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
-        // tailscale's magicsock logs DERP peer discovery chatter every few seconds
-        if tee_to_stderr && !line.contains("magicsock:") {
+        let parsed = parse_log_line(&line);
+        if is_tailscale && is_tailscale_noise(&parsed.text) {
+            continue;
+        }
+        if tee_to_stderr {
             eprintln!("[{source}]: {line}");
         }
-        let parsed = parse_log_line(&line);
 
         let entry = crate::logs::LogEntry {
             seq: 0,
@@ -62,6 +66,20 @@ pub async fn read_pipe_to_collector(
             break;
         }
     }
+}
+
+fn is_tailscale_noise(line: &str) -> bool {
+    const NOISY_PREFIXES: &[&str] = &[
+        "magicsock:",
+        "derphttp.Client.",
+        "netstack: UDP session",
+        "netmap: suggested exit node",
+        "client -> backend close connection",
+        "backend -> client close connection",
+        "proxy connection closed",
+        "[RATELIMIT]",
+    ];
+    NOISY_PREFIXES.iter().any(|p| line.starts_with(p))
 }
 
 /// Parse a log line, extracting timestamp, level, and message from:
