@@ -99,6 +99,8 @@ enum CliCommand {
     },
     /// Create a default maestro.cluster.jsonc config file
     Init,
+    /// Show the controller's effective config (secrets are masked)
+    Config,
 }
 
 #[derive(Debug, Subcommand)]
@@ -461,6 +463,10 @@ async fn run() -> crate::error::Result<bool> {
             cfg.subnet = Some(subnet);
             let egress_deny = firewall::normalize_denies(&cfg.egress.deny)?;
 
+            let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
+                Error::internal(format!("failed to serialize masked config: {err}"))
+            })?;
+
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
             let cluster_alias = cfg.cluster.name.to_lowercase();
             let data_dir = data_dir.join(&cluster_alias);
@@ -592,6 +598,7 @@ async fn run() -> crate::error::Result<bool> {
                 force,
                 disable_etcd_cert: disable_etcd_cert || cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
+                maestro_config,
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
@@ -852,6 +859,10 @@ async fn run() -> crate::error::Result<bool> {
             cli::upgrade::run_upgrade_system(&host)
                 .await
                 .map(|()| false)
+        }
+        Some(CliCommand::Config) => {
+            let host = cli::contexts::active_host()?;
+            cli::config::run_config(&host).await.map(|()| false)
         }
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
