@@ -14,6 +14,8 @@ const CONTEXTS_FILE_ENV: &str = "MAESTRO_CONTEXTS_FILE";
 #[serde(rename_all = "camelCase")]
 pub struct Context {
     pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -96,13 +98,56 @@ pub fn active_host() -> Result<String> {
     active_host_at(&path)
 }
 
+pub fn active_token() -> Result<Option<String>> {
+    let path = contexts_path()?;
+    let config = load_contexts(&path)?;
+    let Some(active) = config.active.as_deref() else {
+        return Ok(None);
+    };
+    Ok(config.contexts.get(active).and_then(|c| c.token.clone()))
+}
+
+pub fn build_http_client() -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(token) = active_token()? {
+        let value =
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).map_err(|err| {
+                Error::invalid_config(format!("invalid token in active context: {err}"))
+            })?;
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::AUTHORIZATION, value);
+        builder = builder.default_headers(headers);
+    }
+    builder
+        .build()
+        .map_err(|err| Error::internal(format!("failed to build http client: {err}")))
+}
+
+pub fn save_active_token(token: &str) -> Result<()> {
+    let path = contexts_path()?;
+    let mut config = load_contexts(&path)?;
+    let active = config.active.clone().ok_or_else(no_active_context)?;
+    let context = config.contexts.get_mut(&active).ok_or_else(|| {
+        Error::invalid_config(format!(
+            "active context `{active}` is not present in contexts file"
+        ))
+    })?;
+    context.token = Some(token.to_string());
+    save_contexts(&path, &config)
+}
+
 pub fn set_context_at(path: &Path, name: &str, host: &str) -> Result<String> {
     let name = validate_context_name(name)?;
     let host = normalize_base_url(host)?;
     let mut config = load_contexts(path)?;
-    config
-        .contexts
-        .insert(name.clone(), Context { host: host.clone() });
+    let existing_token = config.contexts.get(&name).and_then(|c| c.token.clone());
+    config.contexts.insert(
+        name.clone(),
+        Context {
+            host: host.clone(),
+            token: existing_token,
+        },
+    );
     if config.active.is_none() {
         config.active = Some(name);
     }
