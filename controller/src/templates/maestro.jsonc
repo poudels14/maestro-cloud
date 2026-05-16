@@ -15,7 +15,7 @@
   "depot": {
     "token": ""
   },
-  "jwt-secret": "",
+  "jwt-secret-key": "",
   "tailscale": {
     "auth-key": ""
   },

@@ -59,7 +59,7 @@ pub struct StartConfig {
     #[serde(default)]
     pub tailscale: Option<TailscaleConfig>,
     #[serde(default)]
-    pub jwt_secret: Option<String>,
+    pub jwt_secret_key: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -172,7 +172,7 @@ pub struct MaskedConfig {
     pub encryption_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tailscale: Option<TailscaleView>,
-    pub jwt_secret: Option<String>,
+    pub jwt_secret_key: Option<String>,
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datadog: Option<DatadogView>,
@@ -249,7 +249,7 @@ impl StartConfig {
             tailscale: self.tailscale.as_ref().map(|ts| TailscaleView {
                 auth_key: mask(&ts.auth_key),
             }),
-            jwt_secret: self.jwt_secret.as_deref().and_then(mask),
+            jwt_secret_key: self.jwt_secret_key.as_deref().and_then(mask),
             tags: self.tags.clone(),
             datadog: self.datadog.as_ref().map(|dd| DatadogView {
                 api_key: mask(&dd.api_key),

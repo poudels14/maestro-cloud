@@ -577,8 +577,8 @@ async fn init_probe(
                     "ETCD_KEY_FILE=/certs/client-key.pem".into(),
                 ]);
             }
-            if let Some(secret) = &config.jwt_secret {
-                probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET={secret}")]);
+            if let Some(secret) = &config.jwt_secret_key {
+                probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET_KEY={secret}")]);
             }
             if let Some(system_type) = &config.system_type {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
