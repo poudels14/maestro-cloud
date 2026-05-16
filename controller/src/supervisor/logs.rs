@@ -108,8 +108,8 @@ pub fn parse_log_line(line: &str) -> ParsedLine {
             .or_else(|| parsed.get("message"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or(line)
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| line.to_string());
 
         return ParsedLine {
             ts,

@@ -80,7 +80,7 @@ impl LogSink for DatadogSink {
                     message: entry.text.clone(),
                     hostname: hostname.unwrap_or_else(|| entry.source.to_string()),
                     service: service.unwrap_or_else(|| entry.source.to_string()),
-                    ddsource: Some("maestro".to_string()),
+                    ddsource: Some(dd_source(&entry.source).to_string()),
                     ddtags,
                     status: dd_status(&entry.level),
                 }
@@ -145,6 +145,13 @@ fn build_dd_tags(
     };
 
     (ddtags, service, hostname)
+}
+
+fn dd_source(source: &str) -> &'static str {
+    match source {
+        "maestro-ingress" => "traefik",
+        _ => "maestro",
+    }
 }
 
 fn dd_status(level: &str) -> String {
