@@ -54,12 +54,9 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
   const secretSource = s.deploy.secrets?.source ?? null;
 
-  const ingressItems = s.ingress
-    ? [
-        { label: "Host", value: s.ingress.host },
-        { label: "Port", value: String(s.ingress.port ?? 80) }
-      ]
-    : null;
+  const ingressHosts = s.ingress
+    ? [s.ingress.host, ...(s.ingress.hosts ?? [])].filter((host): host is string => !!host)
+    : [];
 
   return (
     <div class="space-y-6">
@@ -99,8 +96,43 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
           </Show>
         </div>
       </Show>
-      <Show when={ingressItems}>
-        {(items) => <ConfigSection title="Ingress" items={items()} />}
+      <Show when={s.ingress}>
+        {(ingress) => (
+          <div>
+            <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Ingress</h4>
+            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                <span class="text-xs text-gray-500 shrink-0">
+                  {ingressHosts.length > 1 ? "Hosts" : "Host"}
+                </span>
+                <Show
+                  when={ingressHosts.length > 1}
+                  fallback={
+                    <span class="text-sm font-mono text-gray-800 text-right truncate">
+                      {ingressHosts[0] ?? "(not set)"}
+                    </span>
+                  }
+                >
+                  <div class="flex flex-col items-end gap-1 min-w-0">
+                    <For each={ingressHosts}>
+                      {(host) => (
+                        <span class="text-sm font-mono text-gray-800 text-right truncate max-w-full">
+                          {host}
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                <span class="text-xs text-gray-500 shrink-0">Port</span>
+                <span class="text-sm font-mono text-gray-800 text-right truncate">
+                  {String(ingress().port ?? 80)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
       </Show>
       <Show when={isIngress && ingressRoutes()?.length}>
         <div>

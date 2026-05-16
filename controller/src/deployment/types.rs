@@ -114,9 +114,25 @@ impl ServiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IngressConfig {
-    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+}
+
+impl IngressConfig {
+    pub fn hosts(&self) -> Vec<&str> {
+        let mut hosts = Vec::with_capacity(1 + self.hosts.len());
+        if let Some(host) = &self.host {
+            hosts.push(host.as_str());
+        }
+        for host in &self.hosts {
+            hosts.push(host.as_str());
+        }
+        hosts
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

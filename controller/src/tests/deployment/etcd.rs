@@ -1434,7 +1434,8 @@ async fn continuous_redeploy_maintains_ingress_backends() {
     store.seed_service_config(
         service_id,
         Some(IngressConfig {
-            host: "test.local".to_string(),
+            host: Some("test.local".to_string()),
+            hosts: Vec::new(),
             port: Some(80),
         }),
     );
