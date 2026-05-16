@@ -814,6 +814,7 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         disable_etcd_cert: true,
         enable_ingress_access_logs: false,
         maestro_config: String::new(),
+        cloudflare_tunnel_token: None,
     }
 }
 
@@ -1120,6 +1121,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
             disable_etcd_cert: true,
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
+            cloudflare_tunnel_token: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1217,6 +1219,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             disable_etcd_cert: true,
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
+            cloudflare_tunnel_token: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1333,6 +1336,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             disable_etcd_cert: true,
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
+            cloudflare_tunnel_token: None,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1465,6 +1469,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             disable_etcd_cert: true,
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
+            cloudflare_tunnel_token: None,
         },
         store.clone(),
         JobSupervisor::new(),

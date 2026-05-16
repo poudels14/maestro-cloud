@@ -236,6 +236,12 @@ struct StartArgs {
         help = "Exclude maestro-tailscale logs from Datadog (included by default)"
     )]
     dd_no_tailscale_logs: bool,
+    #[arg(
+        long = "cloudflare-tunnel-token",
+        env = "CLOUDFLARE_TUNNEL_TOKEN",
+        help = "Cloudflare Tunnel token; enables maestro-cloudflared"
+    )]
+    cloudflare_tunnel_token: Option<String>,
     #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
     system: Option<config::SystemType>,
     #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
@@ -355,6 +361,7 @@ async fn run() -> crate::error::Result<bool> {
                     dd_site,
                     dd_no_ingress_logs,
                     dd_no_tailscale_logs,
+                    cloudflare_tunnel_token,
                     system,
                     runtime: runtime_flag,
                     force,
@@ -399,6 +406,7 @@ async fn run() -> crate::error::Result<bool> {
                     system: None,
                     runtime: Default::default(),
                     depot: Default::default(),
+                    cloudflare: None,
                     disable_etcd_cert: false,
                 },
             };
@@ -420,6 +428,13 @@ async fn run() -> crate::error::Result<bool> {
                     include_tailscale_logs: true,
                 });
                 dd.api_key = api_key;
+            }
+            if let Some(token) = cloudflare_tunnel_token {
+                cfg.cloudflare = Some(config::CloudflareConfig {
+                    tunnel: config::CloudflareTunnelConfig {
+                        token: SecretString::new(token),
+                    },
+                });
             }
             if let Some(dd) = cfg.datadog.as_mut() {
                 if let Some(site) = explicit_datadog_site.clone() {
@@ -604,6 +619,7 @@ async fn run() -> crate::error::Result<bool> {
                 disable_etcd_cert: cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
                 maestro_config,
+                cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {

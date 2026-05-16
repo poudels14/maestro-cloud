@@ -21,9 +21,12 @@ pub mod types;
 
 pub use types::ControllerConfig;
 
-const PROBE_IMAGE_TAG: &str = "maestro-probe";
-const ADMIN_IMAGE_TAG: &str = "maestro-admin";
-const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
+pub const ETCD_IMAGE_TAG: &str = "quay.io/coreos/etcd:v3.6.8";
+pub const INGRESS_IMAGE_TAG: &str = "traefik:v3.6";
+pub const PROBE_IMAGE_TAG: &str = "maestro-probe";
+pub const ADMIN_IMAGE_TAG: &str = "maestro-admin";
+pub const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
+pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
 pub struct SystemStartupInfo {
     pub dns_manager: Arc<DnsManager>,
     pub nameserver_ip: Option<String>,
@@ -67,11 +70,13 @@ pub async fn start_system_jobs(
     let ingress_container = format!("maestro-ingress-{suffix}");
     let admin_container = format!("maestro-admin-{suffix}");
     let tailscale_container = format!("maestro-tailscale-{suffix}");
+    let cloudflared_container = format!("maestro-cloudflared-{suffix}");
     let _ = runtime.remove_container(&etcd_container).await;
     let _ = runtime.remove_container(&probe_container).await;
     let _ = runtime.remove_container(&ingress_container).await;
     let _ = runtime.remove_container(&admin_container).await;
     let _ = runtime.remove_container(&tailscale_container).await;
+    let _ = runtime.remove_container(&cloudflared_container).await;
     if config.force {
         let static_ips = config
             .subnet
@@ -202,6 +207,20 @@ pub async fn start_system_jobs(
     )
     .await;
 
+    if config.cloudflare_tunnel_token.is_some() {
+        init_cloudflared(
+            &cloudflared_container,
+            &dns_domain,
+            &dns_flag,
+            logger,
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    }
+
     SystemStartupInfo {
         dns_manager,
         nameserver_ip,
@@ -249,7 +268,7 @@ async fn init_etcd(
         "http"
     };
     let mut image_and_args = vec![
-        "quay.io/coreos/etcd:v3.6.8".into(),
+        ETCD_IMAGE_TAG.into(),
         "etcd".into(),
         format!("--name=maestro-{}", config.cluster_name),
         "--data-dir=/data".into(),
@@ -331,7 +350,7 @@ async fn init_ingress(
     extra_flags.extend(ip_flags);
 
     let mut image_and_args = vec![
-        "traefik:v3.6".into(),
+        INGRESS_IMAGE_TAG.into(),
         "--providers.etcd=true".into(),
         "--providers.etcd.rootKey=traefik".into(),
         "--providers.etcd.endpoints=maestro-etcd:2379".into(),
@@ -771,6 +790,85 @@ async fn init_tailnet(
             config.cluster_alias
         ),
     );
+}
+
+async fn init_cloudflared(
+    container_name: &str,
+    dns_domain: &str,
+    dns_flag: &[String],
+    logger: &Logger,
+    config: &ControllerConfig,
+    runtime: &Arc<dyn RuntimeProvider>,
+    log_sender: &flume::Sender<LogEntry>,
+    supervisor: &mut JobSupervisor,
+) {
+    let token = config
+        .cloudflare_tunnel_token
+        .as_ref()
+        .expect("init_cloudflared called without cloudflare tunnel token");
+    let token_path = config.data_dir.join("system/cloudflared/token");
+    std::fs::create_dir_all(token_path.parent().expect("cloudflared parent dir"))
+        .expect("Failed to create cloudflared data dir");
+    let token_abs = std::fs::canonicalize(config.data_dir.join("system/cloudflared"))
+        .expect("failed to canonicalize cloudflared dir")
+        .join("token");
+
+    let mut flags: Vec<String> = vec![
+        "-v".to_string(),
+        format!("{}:/run/secrets/cf-tunnel-token:ro", token_abs.display()),
+    ];
+    flags.extend_from_slice(dns_flag);
+
+    let entrypoint_args = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "TUNNEL_TOKEN=$(cat /run/secrets/cf-tunnel-token) exec cloudflared tunnel --no-autoupdate run".to_string(),
+    ];
+
+    await_job_running(
+        supervisor,
+        SupervisedJobConfig {
+            id: "maestro-cloudflared".to_string(),
+            command: runtime.run_command(&RunSpec {
+                container_name: container_name.to_string(),
+                hostname: "maestro-cloudflared".to_string(),
+                dns_domain: Some(dns_domain.to_string()),
+                network: config.network.clone(),
+                extra_flags: {
+                    let mut all_flags = vec!["--entrypoint".to_string(), "/bin/sh".to_string()];
+                    all_flags.extend(flags);
+                    all_flags
+                },
+                image_and_args: {
+                    let mut args = vec![CLOUDFLARED_IMAGE_TAG.to_string()];
+                    args.extend(entrypoint_args.into_iter().skip(1));
+                    args
+                },
+            }),
+            name: "maestro-cloudflared".to_string(),
+            max_restarts: None,
+            restart_delay_ms: 1_000,
+            max_restart_delay_ms: Some(15_000),
+            shutdown_grace_period_ms: 10_000,
+            container: Some(ContainerRef {
+                name: container_name.to_string(),
+                runtime_cli: runtime.cli_name().to_string(),
+            }),
+            secrets_mount: Some(crate::supervisor::SecretsMount {
+                host_path: token_path,
+                container_path: "/run/secrets/cf-tunnel-token".to_string(),
+                content: token.as_str().to_string(),
+            }),
+            log_config: Some(LogConfig {
+                sender: log_sender.clone(),
+                tags: Default::default(),
+                origin: LogOrigin::System,
+            }),
+        },
+    )
+    .await;
+
+    logger.emit("info", "cloudflared tunnel started");
 }
 
 struct SystemIps {
