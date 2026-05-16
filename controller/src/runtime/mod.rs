@@ -68,6 +68,10 @@ pub trait RuntimeProvider: Send + Sync {
         Ok(())
     }
 
+    async fn prune_containers(&self) -> Result<()> {
+        Ok(())
+    }
+
     async fn build_image(
         &self,
         spec: &BuildSpec,

@@ -165,6 +165,7 @@ impl DeploymentController {
                     }
                 }
                 _ = image_prune_interval.tick() => {
+                    self.prune_containers().await;
                     self.prune_images().await;
                 }
                 _ = sleep(POLL_INTERVAL) => {
@@ -1058,6 +1059,18 @@ impl DeploymentController {
                 "warn",
                 &format!(
                     "failed to remove container `{hostname}` during deployment cleanup: {err}"
+                ),
+            );
+        }
+    }
+
+    async fn prune_containers(&self) {
+        if let Err(err) = self.runtime.prune_containers().await {
+            self.logger.emit(
+                "warn",
+                &format!(
+                    "failed to prune stopped {} containers: {err}",
+                    self.runtime.cli_name()
                 ),
             );
         }

@@ -44,6 +44,19 @@ pub async fn start_system_jobs(
         let _ = std::fs::remove_dir_all(&secrets_dir);
     }
 
+    if let Err(err) = runtime.prune_containers().await {
+        logger.emit(
+            "warn",
+            &format!("failed to prune stopped containers on startup: {err}"),
+        );
+    }
+    if let Err(err) = runtime.prune_images().await {
+        logger.emit(
+            "warn",
+            &format!("failed to prune unused images on startup: {err}"),
+        );
+    }
+
     let etcd_certs = if config.disable_etcd_cert {
         logger.emit(
             "warn",

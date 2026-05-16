@@ -197,6 +197,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         Ok(())
     }
 
+    async fn prune_containers(&self) -> Result<()> {
+        cmd::run("nerdctl", &["container", "prune", "-f"]).await?;
+        Ok(())
+    }
+
     async fn build_image(
         &self,
         spec: &BuildSpec,
