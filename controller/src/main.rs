@@ -224,10 +224,15 @@ struct StartArgs {
     )]
     dd_site: Option<String>,
     #[arg(
-        long = "datadog-include-system-logs",
-        help = "Include maestro system logs in Datadog (excluded by default)"
+        long = "datadog-no-ingress-logs",
+        help = "Exclude maestro-ingress (Traefik) logs from Datadog (included by default)"
     )]
-    dd_include_system_logs: bool,
+    dd_no_ingress_logs: bool,
+    #[arg(
+        long = "datadog-no-tailscale-logs",
+        help = "Exclude maestro-tailscale logs from Datadog (included by default)"
+    )]
+    dd_no_tailscale_logs: bool,
     #[arg(long = "system", help = "Host system type for upgrades (e.g., nixos)")]
     system: Option<config::SystemType>,
     #[arg(long = "runtime", help = "Container runtime: docker or nerdctl")]
@@ -345,7 +350,8 @@ async fn run() -> crate::error::Result<bool> {
                     tags,
                     dd_api_key,
                     dd_site,
-                    dd_include_system_logs,
+                    dd_no_ingress_logs,
+                    dd_no_tailscale_logs,
                     system,
                     runtime: runtime_flag,
                     force,
@@ -377,9 +383,18 @@ async fn run() -> crate::error::Result<bool> {
                         let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
                             api_key: String::new(),
                             site: None,
-                            include_system_logs: false,
+                            include_ingress_logs: true,
+                            include_tailscale_logs: true,
                         });
                         dd.api_key = api_key;
+                    }
+                    if let Some(dd) = cfg.datadog.as_mut() {
+                        if dd_no_ingress_logs {
+                            dd.include_ingress_logs = false;
+                        }
+                        if dd_no_tailscale_logs {
+                            dd.include_tailscale_logs = false;
+                        }
                     }
                     if subnet.is_some() {
                         cfg.subnet = subnet;
@@ -412,7 +427,8 @@ async fn run() -> crate::error::Result<bool> {
                     datadog: dd_api_key.map(|api_key| config::DatadogConfig {
                         api_key,
                         site: explicit_datadog_site.clone(),
-                        include_system_logs: dd_include_system_logs,
+                        include_ingress_logs: !dd_no_ingress_logs,
+                        include_tailscale_logs: !dd_no_tailscale_logs,
                     }),
                     system: None,
                     runtime: Default::default(),
@@ -424,6 +440,13 @@ async fn run() -> crate::error::Result<bool> {
             if let (Some(site), Some(dd)) = (explicit_datadog_site.clone(), cfg.datadog.as_mut()) {
                 dd.site = Some(site);
             }
+            let datadog_site = explicit_datadog_site.or_else(|| {
+                cfg.datadog
+                    .as_ref()
+                    .and_then(|dd| dd.site.clone())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            });
 
             let enable_tailscale = enable_tailscale || cfg.tailscale.is_some();
             if enable_tailscale && cfg.tailscale.is_none() {
@@ -512,9 +535,20 @@ async fn run() -> crate::error::Result<bool> {
 
             let mut background_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
+            let enable_ingress_access_logs = cfg
+                .datadog
+                .as_ref()
+                .map(|dd| dd.include_ingress_logs)
+                .unwrap_or(false);
+
             if let Some(dd) = cfg.datadog {
-                if let Some(site) = explicit_datadog_site {
-                    let dd_sink = logs::DatadogSink::new(dd.api_key, &site, dd.include_system_logs);
+                if let Some(site) = datadog_site {
+                    let dd_sink = logs::DatadogSink::new(
+                        dd.api_key,
+                        &site,
+                        dd.include_ingress_logs,
+                        dd.include_tailscale_logs,
+                    );
                     let dd_worker = logs::SinkWorker::new(
                         log_store.clone(),
                         Box::new(dd_sink),
@@ -523,7 +557,7 @@ async fn run() -> crate::error::Result<bool> {
                     background_handles.push(dd_worker.spawn());
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
                 } else {
-                    logger.emit("warn", "datadog config present but sink is disabled; pass --datadog-site to enable");
+                    logger.emit("warn", "datadog config present but sink is disabled; set datadog.site in config or pass --datadog-site");
                 }
             }
 
@@ -557,6 +591,7 @@ async fn run() -> crate::error::Result<bool> {
                 system_type: system.or(cfg.system),
                 force,
                 disable_etcd_cert: disable_etcd_cert || cfg.disable_etcd_cert,
+                enable_ingress_access_logs,
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {

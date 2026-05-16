@@ -342,6 +342,13 @@ async fn init_ingress(
         "--metrics.prometheus.addServicesLabels=true".into(),
         "--metrics.prometheus.buckets=1.0,5.0,10.0".into(),
     ];
+    if config.enable_ingress_access_logs {
+        image_and_args.extend([
+            "--accesslog=true".into(),
+            "--accesslog.format=json".into(),
+            "--accesslog.fields.defaultmode=keep".into(),
+        ]);
+    }
     if etcd_certs.is_some() {
         image_and_args.extend([
             "--providers.etcd.tls.cert=/certs/client.pem".into(),
