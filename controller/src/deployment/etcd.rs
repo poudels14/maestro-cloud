@@ -8,11 +8,12 @@ use etcd_client::{
 };
 
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_UPGRADE_REQUEST_KEY, deployment_build_env_key,
-    deployment_build_secrets_key, deployment_deploy_env_key, deployment_deploy_secrets_key,
-    deployment_prefix, replica_state_key, replica_states_prefix, service_deployment_history_key,
-    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
-    service_id_from_info_key, service_info_key, service_prefix,
+    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_RESTART_REQUEST_KEY, SYSTEM_UPGRADE_REQUEST_KEY,
+    deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
+    deployment_deploy_secrets_key, deployment_prefix, replica_state_key, replica_states_prefix,
+    service_deployment_history_key, service_deployment_history_prefix,
+    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
+    service_info_key, service_prefix,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -1385,6 +1386,31 @@ impl ClusterStore for EtcdStateStore {
             .delete(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(), None)
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
+        Ok(())
+    }
+
+    async fn read_system_restart_request(&self) -> anyhow::Result<bool> {
+        let response = self
+            .get(SYSTEM_RESTART_REQUEST_KEY.as_bytes().to_vec(), None)
+            .await?;
+        Ok(!response.kvs().is_empty())
+    }
+
+    async fn put_system_restart_request(&self) -> anyhow::Result<()> {
+        let mut client = self.client.lock().await;
+        client
+            .put(SYSTEM_RESTART_REQUEST_KEY.as_bytes(), b"1".to_vec(), None)
+            .await
+            .map_err(|err| anyhow!("failed to write restart request: {err}"))?;
+        Ok(())
+    }
+
+    async fn delete_system_restart_request(&self) -> anyhow::Result<()> {
+        let mut client = self.client.lock().await;
+        client
+            .delete(SYSTEM_RESTART_REQUEST_KEY.as_bytes(), None)
+            .await
+            .map_err(|err| anyhow!("failed to delete restart request: {err}"))?;
         Ok(())
     }
 

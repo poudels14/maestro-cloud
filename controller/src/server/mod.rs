@@ -128,6 +128,7 @@ impl Server {
                 get(Self::get_service_logs),
             )
             .route("/api/system/upgrade", post(Self::upgrade_system))
+            .route("/api/system/restart", post(Self::restart_system))
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
             .route("/api/logs", post(Self::ingest_logs))
             .route("/api/metrics", post(Self::ingest_metrics))
@@ -916,6 +917,21 @@ impl Server {
             "accepted": true,
             "system": system_type,
         })))
+    }
+
+    async fn restart_system(
+        headers: HeaderMap,
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        verify_jwt(&state.jwt_secret, &headers)?;
+        eprintln!("restart request received");
+        state
+            .store
+            .put_system_restart_request()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        eprintln!("restart request accepted");
+        Ok(Json(json!({ "accepted": true })))
     }
 
     async fn get_disks() -> Json<Vec<DiskInfo>> {
