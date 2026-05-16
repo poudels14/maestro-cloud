@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::cli::contexts;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Deserialize)]
@@ -10,7 +11,7 @@ struct UpgradeSystemResponse {
 
 pub async fn run_upgrade_system(host: &str) -> Result<()> {
     let endpoint = upgrade_system_endpoint(host)?;
-    let response = reqwest::Client::new()
+    let response = contexts::build_http_client()?
         .post(&endpoint)
         .send()
         .await
