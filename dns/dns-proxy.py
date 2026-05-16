@@ -128,8 +128,7 @@ def derive_alias(cluster_name):
     return cluster_name
 
 
-def discover_peers(my_cluster):
-    peers = {}
+def fetch_tailscale_status():
     try:
         result = subprocess.run(
             ["tailscale", "status", "--json"],
@@ -138,23 +137,61 @@ def discover_peers(my_cluster):
             timeout=10,
         )
         if result.returncode != 0:
-            return peers
-        status = json.loads(result.stdout)
-
-        for node in status.get("Peer", {}).values():
-            hostname = node.get("HostName", "")
-            if not hostname.startswith("maestro-tailscale-"):
-                continue
-            cluster = hostname[len("maestro-tailscale-"):]
-            if cluster == my_cluster:
-                continue
-            tailscale_ips = node.get("TailscaleIPs", [])
-            ipv4 = next((ip for ip in tailscale_ips if "." in ip), None)
-            if ipv4 and verify_peer(ipv4):
-                peers[cluster] = ipv4
+            return None
+        return json.loads(result.stdout)
     except Exception as err:
-        print(f"peer discovery error: {err}", file=sys.stderr, flush=True)
+        print(f"tailscale status error: {err}", file=sys.stderr, flush=True)
+        return None
+
+
+def extract_cluster_peers(status, my_cluster):
+    peers = {}
+    for node in (status.get("Peer") or {}).values():
+        hostname = node.get("HostName", "")
+        if not hostname.startswith("maestro-tailscale-"):
+            continue
+        cluster = hostname[len("maestro-tailscale-"):]
+        if cluster == my_cluster:
+            continue
+        tailscale_ips = node.get("TailscaleIPs", [])
+        ipv4 = next((ip for ip in tailscale_ips if "." in ip), None)
+        if ipv4 and verify_peer(ipv4):
+            peers[cluster] = ipv4
     return peers
+
+
+def audit_peer_changes(status, last_peers):
+    users = status.get("User") or {}
+    current = {}
+    for node_id, node in (status.get("Peer") or {}).items():
+        hostname = node.get("HostName", "")
+        ips = node.get("TailscaleIPs", [])
+        ipv4 = next((ip for ip in ips if "." in ip), "")
+        user_login = users.get(str(node.get("UserID", "")), {}).get("LoginName", "unknown")
+        current[node_id] = {
+            "hostname": hostname,
+            "user": user_login,
+            "ip": ipv4,
+            "os": node.get("OS", "unknown"),
+        }
+
+    for node_id in set(current.keys()) - set(last_peers.keys()):
+        p = current[node_id]
+        print(
+            f"tailscale peer added: id={node_id} hostname={p['hostname']} "
+            f"user={p['user']} ip={p['ip']} os={p['os']}",
+            file=sys.stderr, flush=True,
+        )
+
+    for node_id in set(last_peers.keys()) - set(current.keys()):
+        p = last_peers[node_id]
+        print(
+            f"tailscale peer removed: id={node_id} hostname={p['hostname']} "
+            f"user={p['user']} ip={p['ip']} os={p['os']}",
+            file=sys.stderr, flush=True,
+        )
+
+    return current
 
 
 def compute_alias_owners(my_cluster, my_alias, peers):
@@ -175,10 +212,14 @@ def compute_alias_owners(my_cluster, my_alias, peers):
 
 
 def peer_refresh_loop(my_cluster, my_alias, state_ref, lock):
+    audit_peers = {}
     while True:
         time.sleep(PEER_REFRESH_INTERVAL)
         try:
-            new_peers = discover_peers(my_cluster)
+            status = fetch_tailscale_status()
+            if status is None:
+                continue
+            new_peers = extract_cluster_peers(status, my_cluster)
             alias_owners = compute_alias_owners(my_cluster, my_alias, new_peers)
             with lock:
                 state_ref["peers"] = new_peers
@@ -189,6 +230,7 @@ def peer_refresh_loop(my_cluster, my_alias, state_ref, lock):
                     file=sys.stderr,
                     flush=True,
                 )
+            audit_peers = audit_peer_changes(status, audit_peers)
         except Exception as err:
             print(f"peer refresh error: {err}", file=sys.stderr, flush=True)
 
@@ -295,7 +337,8 @@ def main():
     my_alias = (
         sys.argv[2].lower() if len(sys.argv) >= 3 and sys.argv[2] else derive_alias(my_cluster)
     )
-    peers = discover_peers(my_cluster)
+    status = fetch_tailscale_status()
+    peers = extract_cluster_peers(status, my_cluster) if status else {}
     alias_owners = compute_alias_owners(my_cluster, my_alias, peers)
     state = {"peers": peers, "alias_owners": alias_owners}
     lock = threading.Lock()
