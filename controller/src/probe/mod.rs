@@ -51,7 +51,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         traffic::run(traffic_log_store).await;
     });
     let dns_domain = std::env::var("MAESTRO_DNS_DOMAIN").ok();
-    let jwt_secret = std::env::var("MAESTRO_JWT_SECRET").ok();
+    let jwt_secret_key = std::env::var("MAESTRO_JWT_SECRET_KEY").ok();
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
     let cluster_name = std::env::var("MAESTRO_CLUSTER_NAME").unwrap_or_default();
     let cluster_alias = std::env::var("MAESTRO_CLUSTER_ALIAS").unwrap_or_default();
@@ -66,7 +66,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
-        jwt_secret,
+        jwt_secret_key,
         system_type,
         cluster_name,
         cluster_alias,

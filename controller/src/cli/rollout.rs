@@ -59,7 +59,7 @@ pub async fn run_rollout(
     host: &str,
     apply: bool,
     force: bool,
-    jwt_secret: Option<&str>,
+    jwt_secret_key: Option<&str>,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
@@ -104,7 +104,7 @@ pub async fn run_rollout(
     if force {
         rollout_url.query_pairs_mut().append_pair("force", "true");
     }
-    let auth_token = jwt_secret
+    let auth_token = jwt_secret_key
         .map(|secret| generate_jwt(secret))
         .transpose()
         .map_err(|err| Error::internal(format!("failed to generate auth token: {err}")))?;

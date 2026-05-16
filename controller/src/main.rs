@@ -69,11 +69,11 @@ enum CliCommand {
         #[arg(long = "force", help = "Force rollout even if deploy is frozen")]
         force: bool,
         #[arg(
-            long = "jwt-secret",
-            env = "MAESTRO_JWT_SECRET",
+            long = "jwt-secret-key",
+            env = "MAESTRO_JWT_SECRET_KEY",
             help = "Secret for signing JWT auth tokens"
         )]
-        jwt_secret: Option<String>,
+        jwt_secret_key: Option<String>,
     },
     /// List services in the active context
     Services,
@@ -206,11 +206,11 @@ struct StartArgs {
     )]
     encryption_key: Option<String>,
     #[arg(
-        long = "jwt-secret",
-        env = "MAESTRO_JWT_SECRET",
+        long = "jwt-secret-key",
+        env = "MAESTRO_JWT_SECRET_KEY",
         help = "Secret for signing JWT auth tokens (enables rollout authentication)"
     )]
-    jwt_secret: Option<String>,
+    jwt_secret_key: Option<String>,
     #[arg(
         long = "tag",
         help = "Tags for log sinks like Datadog (key:value, can be repeated)"
@@ -350,7 +350,7 @@ async fn run() -> crate::error::Result<bool> {
                     enable_tailscale,
                     tailscale_authkey,
                     encryption_key,
-                    jwt_secret,
+                    jwt_secret_key,
                     tags,
                     dd_api_key,
                     dd_site,
@@ -377,8 +377,8 @@ async fn run() -> crate::error::Result<bool> {
                     if let Some(key) = encryption_key {
                         cfg.encryption_key = key;
                     }
-                    if let Some(secret) = jwt_secret {
-                        cfg.jwt_secret = Some(secret);
+                    if let Some(secret) = jwt_secret_key {
+                        cfg.jwt_secret_key = Some(secret);
                     }
                     if let Some(authkey) = tailscale_authkey {
                         cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
@@ -424,7 +424,7 @@ async fn run() -> crate::error::Result<bool> {
                     egress: config::EgressConfig { deny: egress_deny },
                     encryption_key: encryption_key
                         .ok_or_else(|| Error::invalid_input("--encryption-key is required"))?,
-                    jwt_secret,
+                    jwt_secret_key,
                     tailscale: tailscale_authkey
                         .map(|key| config::TailscaleConfig { auth_key: key }),
                     tags,
@@ -593,7 +593,7 @@ async fn run() -> crate::error::Result<bool> {
                 subnet: cfg.subnet,
                 tailscale_authkey,
                 encryption_key: SecretString::new(cfg.encryption_key),
-                jwt_secret: cfg.jwt_secret,
+                jwt_secret_key: cfg.jwt_secret_key,
                 build_command_env,
                 tags: parse_tags(cfg.tags)?,
                 system_type: system.or(cfg.system),
@@ -759,11 +759,11 @@ async fn run() -> crate::error::Result<bool> {
             config,
             apply,
             force,
-            jwt_secret,
+            jwt_secret_key,
         }) => {
             let host = cli::contexts::active_host()?;
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret.as_deref())
+            cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret_key.as_deref())
                 .await
                 .map(|()| false)
         }

@@ -3,8 +3,10 @@ use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::Response,
     routing::{delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
@@ -52,7 +54,7 @@ struct DiskInfo {
 struct AppState {
     store: Arc<dyn ClusterStore>,
     log_store: Option<Arc<crate::logs::LogStore>>,
-    jwt_secret: Option<String>,
+    jwt_secret_key: Option<String>,
     system_type: Option<String>,
     cluster_name: String,
     cluster_alias: String,
@@ -67,7 +69,7 @@ impl Server {
     pub(crate) fn new(
         store: Arc<dyn ClusterStore>,
         log_store: Option<Arc<crate::logs::LogStore>>,
-        jwt_secret: Option<String>,
+        jwt_secret_key: Option<String>,
         system_type: Option<String>,
         cluster_name: String,
         cluster_alias: String,
@@ -77,7 +79,7 @@ impl Server {
             state: AppState {
                 store,
                 log_store,
-                jwt_secret,
+                jwt_secret_key,
                 system_type,
                 cluster_name,
                 cluster_alias,
@@ -87,12 +89,18 @@ impl Server {
     }
 
     fn app(&self) -> Router {
-        Router::new()
+        let auth = middleware::from_fn_with_state(self.state.clone(), require_jwt);
+        let protected = Router::new()
+            .route("/api/services/rollout", post(Self::rollout_service))
+            .route("/api/system/upgrade", post(Self::upgrade_system))
+            .route("/api/system/restart", post(Self::restart_system))
+            .route_layer(auth);
+
+        let public = Router::new()
             .route("/_healthy", get(Self::healthy))
             .route("/api/cluster", get(Self::get_cluster_info))
             .route("/api/config", get(Self::get_config))
             .route("/api/services", get(Self::list_services))
-            .route("/api/services/rollout", post(Self::rollout_service))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
             .route(
                 "/api/services/{serviceId}/deployments",
@@ -127,8 +135,6 @@ impl Server {
                 "/api/services/{serviceId}/logs",
                 get(Self::get_service_logs),
             )
-            .route("/api/system/upgrade", post(Self::upgrade_system))
-            .route("/api/system/restart", post(Self::restart_system))
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
             .route("/api/logs", post(Self::ingest_logs))
             .route("/api/metrics", post(Self::ingest_metrics))
@@ -147,8 +153,9 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/metrics/containers",
                 get(Self::get_container_metrics),
-            )
-            .with_state(self.state.clone())
+            );
+
+        public.merge(protected).with_state(self.state.clone())
     }
 
     pub(crate) async fn serve(
@@ -219,7 +226,6 @@ impl Server {
         State(state): State<AppState>,
         body: Bytes,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
-        verify_jwt(&state.jwt_secret, &headers)?;
         let request: RolloutServiceRequest = parse_json_body(&headers, body)?;
         let service_config = build_service_config(request).map_err(|err| {
             (
@@ -901,10 +907,8 @@ impl Server {
     }
 
     async fn upgrade_system(
-        headers: HeaderMap,
         State(state): State<AppState>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-        verify_jwt(&state.jwt_secret, &headers)?;
         let system_type = state.system_type.as_deref().unwrap_or("controller");
         eprintln!("upgrade request system={system_type}");
         state
@@ -920,10 +924,8 @@ impl Server {
     }
 
     async fn restart_system(
-        headers: HeaderMap,
         State(state): State<AppState>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-        verify_jwt(&state.jwt_secret, &headers)?;
         eprintln!("restart request received");
         state
             .store
@@ -1114,14 +1116,16 @@ fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, St
     }
 }
 
-fn verify_jwt(
-    jwt_secret: &Option<String>,
-    headers: &HeaderMap,
-) -> Result<(), (StatusCode, String)> {
-    let Some(secret) = jwt_secret else {
-        return Ok(());
+async fn require_jwt(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(secret) = state.jwt_secret_key.as_ref() else {
+        return Ok(next.run(request).await);
     };
-    let token = headers
+    let token = request
+        .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
@@ -1139,7 +1143,7 @@ fn verify_jwt(
             format!("invalid auth token: {err}"),
         )
     })?;
-    Ok(())
+    Ok(next.run(request).await)
 }
 
 fn parse_json_body<T: DeserializeOwned>(
