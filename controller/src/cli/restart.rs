@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::cli::contexts;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Deserialize)]
@@ -10,7 +11,7 @@ struct RestartResponse {
 pub async fn run_restart(host: &str) -> Result<()> {
     let base = normalize_base_url(host)?;
     let endpoint = format!("{base}/api/system/restart");
-    let response = reqwest::Client::new()
+    let response = contexts::build_http_client()?
         .post(&endpoint)
         .send()
         .await

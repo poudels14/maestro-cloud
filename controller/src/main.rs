@@ -103,6 +103,11 @@ enum CliCommand {
     Config,
     /// Restart the maestro controller (stops all containers and restarts the process)
     Restart,
+    /// Generate and save a JWT auth token for the active context
+    Auth {
+        #[arg(long = "days", help = "Token lifetime in days (default: 7)")]
+        days: Option<u64>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -870,6 +875,7 @@ async fn run() -> crate::error::Result<bool> {
             let host = cli::contexts::active_host()?;
             cli::restart::run_restart(&host).await.map(|()| false)
         }
+        Some(CliCommand::Auth { days }) => cli::auth::run_auth(days).map(|()| false),
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
             Path::new(DEFAULT_CLUSTER_CONFIG_PATH),
