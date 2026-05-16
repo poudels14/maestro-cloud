@@ -2,7 +2,7 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::logs::Logger;
 use crate::utils::crypto::SecretString;
@@ -159,6 +159,112 @@ pub struct DatadogConfig {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct MaskedConfig {
+    pub cluster: ClusterView,
+    pub ingress: IngressView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subnet: Option<String>,
+    pub egress: EgressView,
+    pub encryption_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleView>,
+    pub jwt_secret: Option<String>,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datadog: Option<DatadogView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub runtime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depot: Option<DepotView>,
+    pub disable_etcd_cert: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ClusterView {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IngressView {
+    pub ports: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct EgressView {
+    pub deny: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct TailscaleView {
+    pub auth_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DatadogView {
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    pub include_ingress_logs: bool,
+    pub include_tailscale_logs: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DepotView {
+    pub token: Option<String>,
+}
+
+fn mask(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some("***".to_string())
+    }
+}
+
+impl StartConfig {
+    pub fn masked(&self) -> MaskedConfig {
+        MaskedConfig {
+            cluster: ClusterView {
+                name: self.cluster.name.clone(),
+            },
+            ingress: IngressView {
+                ports: self.ingress.resolved_ports(),
+            },
+            subnet: self.subnet.clone(),
+            egress: EgressView {
+                deny: self.egress.deny.clone(),
+            },
+            encryption_key: mask(&self.encryption_key),
+            tailscale: self.tailscale.as_ref().map(|ts| TailscaleView {
+                auth_key: mask(&ts.auth_key),
+            }),
+            jwt_secret: self.jwt_secret.as_deref().and_then(mask),
+            tags: self.tags.clone(),
+            datadog: self.datadog.as_ref().map(|dd| DatadogView {
+                api_key: mask(&dd.api_key),
+                site: dd.site.clone(),
+                include_ingress_logs: dd.include_ingress_logs,
+                include_tailscale_logs: dd.include_tailscale_logs,
+            }),
+            system: self.system.as_ref().map(|s| s.to_string()),
+            runtime: self.runtime.to_string(),
+            depot: self.depot.as_ref().map(|depot| DepotView {
+                token: depot.token.as_ref().and_then(|t| mask(t.as_str())),
+            }),
+            disable_etcd_cert: self.disable_etcd_cert,
+        }
+    }
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {

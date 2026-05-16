@@ -56,6 +56,7 @@ struct AppState {
     system_type: Option<String>,
     cluster_name: String,
     cluster_alias: String,
+    masked_config: Option<Arc<crate::config::MaskedConfig>>,
 }
 
 pub(crate) struct Server {
@@ -70,6 +71,7 @@ impl Server {
         system_type: Option<String>,
         cluster_name: String,
         cluster_alias: String,
+        masked_config: Option<Arc<crate::config::MaskedConfig>>,
     ) -> Self {
         Self {
             state: AppState {
@@ -79,6 +81,7 @@ impl Server {
                 system_type,
                 cluster_name,
                 cluster_alias,
+                masked_config,
             },
         }
     }
@@ -87,6 +90,7 @@ impl Server {
         Router::new()
             .route("/_healthy", get(Self::healthy))
             .route("/api/cluster", get(Self::get_cluster_info))
+            .route("/api/config", get(Self::get_config))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout", post(Self::rollout_service))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
@@ -175,6 +179,18 @@ impl Server {
 
     async fn healthy() -> &'static str {
         "ok"
+    }
+
+    async fn get_config(
+        State(state): State<AppState>,
+    ) -> Result<Json<Arc<crate::config::MaskedConfig>>, (StatusCode, String)> {
+        match &state.masked_config {
+            Some(config) => Ok(Json(config.clone())),
+            None => Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "MAESTRO_CONFIG env var not set".to_string(),
+            )),
+        }
     }
 
     async fn get_cluster_info(State(state): State<AppState>) -> Json<serde_json::Value> {

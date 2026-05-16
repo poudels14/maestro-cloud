@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
+
 use crate::deployment::dns::DnsManager;
 use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
@@ -555,6 +557,11 @@ async fn init_probe(
                 format!("MAESTRO_CLUSTER_NAME={}", config.cluster_name),
                 "-e".into(),
                 format!("MAESTRO_CLUSTER_ALIAS={}", config.cluster_alias),
+                "-e".into(),
+                format!(
+                    "MAESTRO_CONFIG={}",
+                    base64::engine::general_purpose::STANDARD.encode(&config.maestro_config)
+                ),
             ];
             if etcd_certs.is_some() {
                 let certs_abs = std::fs::canonicalize(config.certs_dir())

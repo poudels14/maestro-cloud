@@ -30,6 +30,7 @@ pub struct ControllerConfig {
     pub force: bool,
     pub disable_etcd_cert: bool,
     pub enable_ingress_access_logs: bool,
+    pub maestro_config: String,
 }
 
 impl ControllerConfig {

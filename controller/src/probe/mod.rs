@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use backon::{BackoffBuilder, ExponentialBuilder};
+use base64::Engine;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::broadcast;
 use tokio::time::sleep;
@@ -54,6 +55,14 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
     let cluster_name = std::env::var("MAESTRO_CLUSTER_NAME").unwrap_or_default();
     let cluster_alias = std::env::var("MAESTRO_CLUSTER_ALIAS").unwrap_or_default();
+    let masked_config = std::env::var("MAESTRO_CONFIG").ok().map(|encoded| {
+        let json = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
+            .expect("failed to base64-decode MAESTRO_CONFIG");
+        let parsed: crate::config::MaskedConfig =
+            serde_json::from_slice(&json).expect("failed to parse MAESTRO_CONFIG");
+        Arc::new(parsed)
+    });
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
@@ -61,6 +70,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         system_type,
         cluster_name,
         cluster_alias,
+        masked_config,
     );
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
