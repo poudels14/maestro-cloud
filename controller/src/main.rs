@@ -68,12 +68,6 @@ enum CliCommand {
         apply: bool,
         #[arg(long = "force", help = "Force rollout even if deploy is frozen")]
         force: bool,
-        #[arg(
-            long = "jwt-secret-key",
-            env = "MAESTRO_JWT_SECRET_KEY",
-            help = "Secret for signing JWT auth tokens"
-        )]
-        jwt_secret_key: Option<String>,
     },
     /// List services in the active context
     Services,
@@ -374,43 +368,13 @@ async fn run() -> crate::error::Result<bool> {
                 .filter(|s| !s.is_empty())
                 .map(ToString::to_string);
 
+            if config.is_none() && encryption_key.is_none() {
+                return Err(Error::invalid_input("--encryption-key is required"));
+            }
             let mut cfg = match config {
-                Some(source) => {
-                    let mut cfg = config::load_config(&source)
-                        .await
-                        .map_err(|err| Error::invalid_config(err.to_string()))?;
-                    if let Some(key) = encryption_key {
-                        cfg.encryption_key = key;
-                    }
-                    if let Some(secret) = jwt_secret_key {
-                        cfg.jwt_secret_key = Some(secret);
-                    }
-                    if let Some(authkey) = tailscale_authkey {
-                        cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
-                    }
-                    if let Some(api_key) = dd_api_key {
-                        let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
-                            api_key: String::new(),
-                            site: None,
-                            include_ingress_logs: true,
-                            include_tailscale_logs: true,
-                        });
-                        dd.api_key = api_key;
-                    }
-                    if let Some(dd) = cfg.datadog.as_mut() {
-                        if dd_no_ingress_logs {
-                            dd.include_ingress_logs = false;
-                        }
-                        if dd_no_tailscale_logs {
-                            dd.include_tailscale_logs = false;
-                        }
-                    }
-                    if subnet.is_some() {
-                        cfg.subnet = subnet;
-                    }
-                    cfg.egress.deny.extend(egress_deny.clone());
-                    cfg
-                }
+                Some(source) => config::load_config(&source)
+                    .await
+                    .map_err(|err| Error::invalid_config(err.to_string()))?,
                 None => config::StartConfig {
                     cluster: config::ClusterConfig {
                         name: cluster_name
@@ -425,37 +389,71 @@ async fn run() -> crate::error::Result<bool> {
                             ingress_port.clone()
                         },
                     },
-                    subnet,
-                    egress: config::EgressConfig { deny: egress_deny },
-                    encryption_key: encryption_key
-                        .ok_or_else(|| Error::invalid_input("--encryption-key is required"))?,
-                    jwt_secret_key,
-                    tailscale: tailscale_authkey
-                        .map(|key| config::TailscaleConfig { auth_key: key }),
-                    tags,
-                    datadog: dd_api_key.map(|api_key| config::DatadogConfig {
-                        api_key,
-                        site: explicit_datadog_site.clone(),
-                        include_ingress_logs: !dd_no_ingress_logs,
-                        include_tailscale_logs: !dd_no_tailscale_logs,
-                    }),
+                    subnet: None,
+                    egress: Default::default(),
+                    encryption_key: String::new(),
+                    jwt_secret_key: None,
+                    tailscale: None,
+                    tags: tags.clone(),
+                    datadog: None,
                     system: None,
                     runtime: Default::default(),
                     depot: Default::default(),
-                    disable_etcd_cert,
+                    disable_etcd_cert: false,
                 },
             };
 
-            if let (Some(site), Some(dd)) = (explicit_datadog_site.clone(), cfg.datadog.as_mut()) {
-                dd.site = Some(site);
+            if let Some(key) = encryption_key {
+                cfg.encryption_key = key;
             }
-            let datadog_site = explicit_datadog_site.or_else(|| {
-                cfg.datadog
-                    .as_ref()
-                    .and_then(|dd| dd.site.clone())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            });
+            if let Some(secret) = jwt_secret_key {
+                cfg.jwt_secret_key = Some(secret);
+            }
+            if let Some(authkey) = tailscale_authkey {
+                cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
+            }
+            if let Some(api_key) = dd_api_key {
+                let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
+                    api_key: String::new(),
+                    site: None,
+                    include_ingress_logs: true,
+                    include_tailscale_logs: true,
+                });
+                dd.api_key = api_key;
+            }
+            if let Some(dd) = cfg.datadog.as_mut() {
+                if let Some(site) = explicit_datadog_site.clone() {
+                    dd.site = Some(site);
+                }
+                if dd_no_ingress_logs {
+                    dd.include_ingress_logs = false;
+                }
+                if dd_no_tailscale_logs {
+                    dd.include_tailscale_logs = false;
+                }
+            }
+            if subnet.is_some() {
+                cfg.subnet = subnet;
+            }
+            if !egress_deny.is_empty() {
+                cfg.egress.deny.extend(egress_deny.clone());
+            }
+            if let Some(runtime) = runtime_flag {
+                cfg.runtime = runtime;
+            }
+            if let Some(sys) = system {
+                cfg.system = Some(sys);
+            }
+            if disable_etcd_cert {
+                cfg.disable_etcd_cert = true;
+            }
+
+            let datadog_site = cfg
+                .datadog
+                .as_ref()
+                .and_then(|dd| dd.site.clone())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
 
             let enable_tailscale = enable_tailscale || cfg.tailscale.is_some();
             if enable_tailscale && cfg.tailscale.is_none() {
@@ -509,7 +507,7 @@ async fn run() -> crate::error::Result<bool> {
             } else {
                 None
             };
-            let runtime_type = runtime_flag.unwrap_or(cfg.runtime);
+            let runtime_type = cfg.runtime;
             let runtime = runtime::create_provider(runtime_type);
             let build_command_env = cfg
                 .depot
@@ -601,9 +599,9 @@ async fn run() -> crate::error::Result<bool> {
                 jwt_secret_key: cfg.jwt_secret_key,
                 build_command_env,
                 tags: parse_tags(cfg.tags)?,
-                system_type: system.or(cfg.system),
+                system_type: cfg.system,
                 force,
-                disable_etcd_cert: disable_etcd_cert || cfg.disable_etcd_cert,
+                disable_etcd_cert: cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
                 maestro_config,
             };
@@ -764,11 +762,10 @@ async fn run() -> crate::error::Result<bool> {
             config,
             apply,
             force,
-            jwt_secret_key,
         }) => {
             let host = cli::contexts::active_host()?;
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::rollout::run_rollout(&config_path, &host, apply, force, jwt_secret_key.as_deref())
+            cli::rollout::run_rollout(&config_path, &host, apply, force)
                 .await
                 .map(|()| false)
         }
