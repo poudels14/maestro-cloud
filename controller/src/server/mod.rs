@@ -33,11 +33,28 @@ mod types;
 const DEFAULT_LOG_LIMIT: usize = 1000;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
-    ("maestro-etcd", "etcd", "quay.io/coreos/etcd:v3.6.8"),
-    ("maestro-ingress", "ingress", "traefik:v3.6"),
-    ("maestro-probe", "controller", "maestro-probe"),
-    ("maestro-admin", "admin", "maestro-admin"),
-    ("maestro-tailscale", "tailscale", "maestro-tailscale"),
+    ("maestro-etcd", "etcd", crate::deployment::ETCD_IMAGE_TAG),
+    (
+        "maestro-ingress",
+        "ingress",
+        crate::deployment::INGRESS_IMAGE_TAG,
+    ),
+    (
+        "maestro-probe",
+        "controller",
+        crate::deployment::PROBE_IMAGE_TAG,
+    ),
+    ("maestro-admin", "admin", crate::deployment::ADMIN_IMAGE_TAG),
+    (
+        "maestro-tailscale",
+        "tailscale",
+        crate::deployment::TAILSCALE_IMAGE_TAG,
+    ),
+    (
+        "maestro-cloudflared",
+        "cloudflared",
+        crate::deployment::CLOUDFLARED_IMAGE_TAG,
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize)]

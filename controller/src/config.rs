@@ -71,6 +71,8 @@ pub struct StartConfig {
     #[serde(default)]
     pub depot: Option<DepotConfig>,
     #[serde(default)]
+    pub cloudflare: Option<CloudflareConfig>,
+    #[serde(default)]
     pub disable_etcd_cert: bool,
 }
 
@@ -86,6 +88,18 @@ pub struct EgressConfig {
 pub struct DepotConfig {
     #[serde(default)]
     pub token: Option<SecretString>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CloudflareConfig {
+    pub tunnel: CloudflareTunnelConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CloudflareTunnelConfig {
+    pub token: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -181,6 +195,8 @@ pub struct MaskedConfig {
     pub runtime: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depot: Option<DepotView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloudflare: Option<CloudflareView>,
     pub disable_etcd_cert: bool,
 }
 
@@ -224,6 +240,18 @@ pub struct DepotView {
     pub token: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CloudflareView {
+    pub tunnel: CloudflareTunnelView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CloudflareTunnelView {
+    pub token: Option<String>,
+}
+
 fn mask(value: &str) -> Option<String> {
     if value.is_empty() {
         None
@@ -261,6 +289,11 @@ impl StartConfig {
             runtime: self.runtime.to_string(),
             depot: self.depot.as_ref().map(|depot| DepotView {
                 token: depot.token.as_ref().and_then(|t| mask(t.as_str())),
+            }),
+            cloudflare: self.cloudflare.as_ref().map(|cf| CloudflareView {
+                tunnel: CloudflareTunnelView {
+                    token: mask(cf.tunnel.token.as_str()),
+                },
             }),
             disable_etcd_cert: self.disable_etcd_cert,
         }

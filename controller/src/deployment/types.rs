@@ -31,6 +31,7 @@ pub struct ControllerConfig {
     pub disable_etcd_cert: bool,
     pub enable_ingress_access_logs: bool,
     pub maestro_config: String,
+    pub cloudflare_tunnel_token: Option<SecretString>,
 }
 
 impl ControllerConfig {
