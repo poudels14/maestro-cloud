@@ -23,6 +23,7 @@
   "datadog": {
     "api-key": "$API_KEY",
     "site": "datadoghq.com",
-    "include-system-logs": false
+    "include-ingress-logs": true,
+    "include-tailscale-logs": true
   }
 }

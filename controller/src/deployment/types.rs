@@ -29,6 +29,7 @@ pub struct ControllerConfig {
     pub system_type: Option<crate::config::SystemType>,
     pub force: bool,
     pub disable_etcd_cert: bool,
+    pub enable_ingress_access_logs: bool,
 }
 
 impl ControllerConfig {

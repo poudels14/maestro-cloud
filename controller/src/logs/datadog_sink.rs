@@ -14,22 +14,40 @@ use super::store::{LogEntry, LogOrigin};
 pub struct DatadogSink {
     api_key: String,
     endpoint: String,
-    include_system_logs: bool,
+    include_ingress_logs: bool,
+    include_tailscale_logs: bool,
     client: reqwest::Client,
 }
 
 impl DatadogSink {
-    pub fn new(api_key: String, site: &str, include_system_logs: bool) -> Self {
+    pub fn new(
+        api_key: String,
+        site: &str,
+        include_ingress_logs: bool,
+        include_tailscale_logs: bool,
+    ) -> Self {
         let endpoint = format!("https://http-intake.logs.{site}/api/v2/logs");
         Self {
             api_key,
             endpoint,
-            include_system_logs,
+            include_ingress_logs,
+            include_tailscale_logs,
             client: reqwest::Client::builder()
                 .http1_only()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("failed to build http client"),
+        }
+    }
+
+    fn should_send(&self, entry: &LogEntry) -> bool {
+        match entry.origin {
+            LogOrigin::Service => true,
+            LogOrigin::Build => false,
+            LogOrigin::System => {
+                (self.include_ingress_logs && entry.source.as_ref() == "maestro-ingress")
+                    || (self.include_tailscale_logs && entry.source.as_ref() == "maestro-tailscale")
+            }
         }
     }
 }
@@ -55,10 +73,7 @@ impl LogSink for DatadogSink {
     async fn send(&self, entries: &[LogEntry]) -> Result<()> {
         let dd_entries: Vec<DatadogLogEntry> = entries
             .iter()
-            .filter(|entry| {
-                entry.origin == LogOrigin::Service
-                    || (self.include_system_logs && entry.origin == LogOrigin::System)
-            })
+            .filter(|entry| self.should_send(entry))
             .map(|entry| {
                 let (ddtags, service, hostname) = build_dd_tags(&entry.tags);
                 DatadogLogEntry {

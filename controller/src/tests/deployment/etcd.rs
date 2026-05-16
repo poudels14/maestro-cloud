@@ -812,6 +812,7 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         system_type: None,
         force: false,
         disable_etcd_cert: true,
+        enable_ingress_access_logs: false,
     }
 }
 
@@ -1116,6 +1117,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
             system_type: None,
             force: false,
             disable_etcd_cert: true,
+            enable_ingress_access_logs: false,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1211,6 +1213,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             system_type: None,
             force: false,
             disable_etcd_cert: true,
+            enable_ingress_access_logs: false,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1325,6 +1328,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             system_type: None,
             force: false,
             disable_etcd_cert: true,
+            enable_ingress_access_logs: false,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1455,6 +1459,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             system_type: None,
             force: false,
             disable_etcd_cert: true,
+            enable_ingress_access_logs: false,
         },
         store.clone(),
         JobSupervisor::new(),

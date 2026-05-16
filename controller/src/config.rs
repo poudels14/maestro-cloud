@@ -151,8 +151,14 @@ pub struct DatadogConfig {
     pub api_key: String,
     #[serde(default)]
     pub site: Option<String>,
-    #[serde(default)]
-    pub include_system_logs: bool,
+    #[serde(default = "default_true")]
+    pub include_ingress_logs: bool,
+    #[serde(default = "default_true")]
+    pub include_tailscale_logs: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {
