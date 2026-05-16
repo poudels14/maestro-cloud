@@ -806,24 +806,9 @@ async fn init_cloudflared(
         .cloudflare_tunnel_token
         .as_ref()
         .expect("init_cloudflared called without cloudflare tunnel token");
-    let token_path = config.data_dir.join("system/cloudflared/token");
-    std::fs::create_dir_all(token_path.parent().expect("cloudflared parent dir"))
-        .expect("Failed to create cloudflared data dir");
-    let token_abs = std::fs::canonicalize(config.data_dir.join("system/cloudflared"))
-        .expect("failed to canonicalize cloudflared dir")
-        .join("token");
 
-    let mut flags: Vec<String> = vec![
-        "-v".to_string(),
-        format!("{}:/run/secrets/cf-tunnel-token:ro", token_abs.display()),
-    ];
+    let mut flags: Vec<String> = vec!["-e".to_string(), format!("TUNNEL_TOKEN={}", token.as_str())];
     flags.extend_from_slice(dns_flag);
-
-    let entrypoint_args = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "TUNNEL_TOKEN=$(cat /run/secrets/cf-tunnel-token) exec cloudflared tunnel --no-autoupdate run".to_string(),
-    ];
 
     await_job_running(
         supervisor,
@@ -834,16 +819,13 @@ async fn init_cloudflared(
                 hostname: "maestro-cloudflared".to_string(),
                 dns_domain: Some(dns_domain.to_string()),
                 network: config.network.clone(),
-                extra_flags: {
-                    let mut all_flags = vec!["--entrypoint".to_string(), "/bin/sh".to_string()];
-                    all_flags.extend(flags);
-                    all_flags
-                },
-                image_and_args: {
-                    let mut args = vec![CLOUDFLARED_IMAGE_TAG.to_string()];
-                    args.extend(entrypoint_args.into_iter().skip(1));
-                    args
-                },
+                extra_flags: flags,
+                image_and_args: vec![
+                    CLOUDFLARED_IMAGE_TAG.to_string(),
+                    "tunnel".to_string(),
+                    "--no-autoupdate".to_string(),
+                    "run".to_string(),
+                ],
             }),
             name: "maestro-cloudflared".to_string(),
             max_restarts: None,
@@ -854,11 +836,7 @@ async fn init_cloudflared(
                 name: container_name.to_string(),
                 runtime_cli: runtime.cli_name().to_string(),
             }),
-            secrets_mount: Some(crate::supervisor::SecretsMount {
-                host_path: token_path,
-                container_path: "/run/secrets/cf-tunnel-token".to_string(),
-                content: token.as_str().to_string(),
-            }),
+            secrets_mount: None,
             log_config: Some(LogConfig {
                 sender: log_sender.clone(),
                 tags: Default::default(),
