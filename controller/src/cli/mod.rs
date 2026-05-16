@@ -3,6 +3,7 @@ pub mod config;
 pub mod contexts;
 pub mod logs;
 pub mod redeploy;
+pub mod restart;
 pub mod rollout;
 pub mod services;
 pub mod upgrade;

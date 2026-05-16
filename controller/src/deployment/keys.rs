@@ -62,6 +62,7 @@ pub fn deployment_deploy_secrets_key(service_id: &str, deployment_id: &str) -> S
 }
 
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
+pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
 
 pub fn service_id_from_info_key(key: &str) -> Option<String> {
     let remainder = key.strip_prefix(&format!("{SERVICES_ROOT}/"))?;

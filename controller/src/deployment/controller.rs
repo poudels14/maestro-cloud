@@ -137,6 +137,7 @@ impl DeploymentController {
         let tmp_dir = self.config.data_dir.join("tmp");
         let _ = std::fs::remove_dir_all(&tmp_dir);
         let _ = self.store.delete_system_upgrade_request().await;
+        let _ = self.store.delete_system_restart_request().await;
 
         if let Err(err) = self.queue_terminated_active_deployments().await {
             self.logger.emit(
@@ -169,6 +170,13 @@ impl DeploymentController {
                 _ = sleep(POLL_INTERVAL) => {
                     if let Some(reason) = self.check_system_upgrade().await {
                         exit_reason = reason;
+                        if !shutdown_started {
+                            self.shutdown_all(ShutdownRequest::Graceful).await;
+                            shutdown_started = true;
+                        }
+                    }
+                    if self.check_system_restart().await {
+                        exit_reason = ControllerExitReason::Restart;
                         if !shutdown_started {
                             self.shutdown_all(ShutdownRequest::Graceful).await;
                             shutdown_started = true;
@@ -233,6 +241,21 @@ impl DeploymentController {
                 &format!("build canceled for deployment `{deployment_id}`"),
             );
         }
+    }
+
+    async fn check_system_restart(&self) -> bool {
+        let requested = self
+            .store
+            .read_system_restart_request()
+            .await
+            .ok()
+            .unwrap_or(false);
+        if requested {
+            self.logger
+                .emit("info", "restart requested, draining and restarting");
+            self.mark_deployments_terminated().await;
+        }
+        requested
     }
 
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {

@@ -101,6 +101,8 @@ enum CliCommand {
     Init,
     /// Show the controller's effective config (secrets are masked)
     Config,
+    /// Restart the maestro controller (stops all containers and restarts the process)
+    Restart,
 }
 
 #[derive(Debug, Subcommand)]
@@ -863,6 +865,10 @@ async fn run() -> crate::error::Result<bool> {
         Some(CliCommand::Config) => {
             let host = cli::contexts::active_host()?;
             cli::config::run_config(&host).await.map(|()| false)
+        }
+        Some(CliCommand::Restart) => {
+            let host = cli::contexts::active_host()?;
+            cli::restart::run_restart(&host).await.map(|()| false)
         }
         Some(CliCommand::Init) => cli::init_config(
             Path::new("maestro.jsonc"),
