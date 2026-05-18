@@ -10,37 +10,26 @@ function LogsTab(props: { service: Service }) {
     () => (isSystem ? null : props.service.id),
     (id) => getDeployments(id)
   );
-  const latestDeployment = () => deployments()?.[0] ?? null;
+  const hasAnyDeployment = () => (deployments()?.length ?? 0) > 0;
 
   return (
     <Show
-      when={!isSystem && latestDeployment()}
+      when={isSystem || hasAnyDeployment()}
       fallback={
-        isSystem ? (
-          <LogViewer
-            serviceId={props.service.id}
-            deploymentId={null}
-            isSystem={true}
-            hasBuild={false}
-          />
-        ) : (
-          <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
-            <p class="text-sm text-gray-400">
-              No deployments yet. Deploy this service to see logs.
-            </p>
-          </div>
-        )
+        <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
+          <p class="text-sm text-gray-400">
+            No deployments yet. Deploy this service to see logs.
+          </p>
+        </div>
       }
     >
-      {(dep) => (
-        <LogViewer
-          serviceId={props.service.id}
-          deploymentId={dep().id}
-          isSystem={false}
-          hasBuild={!!props.service.build}
-          phase="deploy"
-        />
-      )}
+      <LogViewer
+        serviceId={props.service.id}
+        deploymentId={null}
+        isSystem={isSystem}
+        hasBuild={!!props.service.build}
+        phase="deploy"
+      />
     </Show>
   );
 }

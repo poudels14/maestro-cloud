@@ -148,14 +148,16 @@ function LogViewer(props: {
 
   const fetchTail = async (tailSize: number) => {
     if (props.isSystem) return getSystemLogs(props.serviceId, tailSize);
-    if (props.deploymentId) return getLogs(props.serviceId, props.deploymentId, tailSize);
-    return getServiceLogs(props.serviceId, tailSize);
+    if (props.deploymentId)
+      return getLogs(props.serviceId, props.deploymentId, tailSize, undefined, props.phase);
+    return getServiceLogs(props.serviceId, tailSize, undefined, props.phase);
   };
 
   const fetchAfter = async (tailSize: number, after: number) => {
     if (props.isSystem) return getSystemLogs(props.serviceId, tailSize, after);
-    if (props.deploymentId) return getLogs(props.serviceId, props.deploymentId, tailSize, after);
-    return getServiceLogs(props.serviceId, tailSize, after);
+    if (props.deploymentId)
+      return getLogs(props.serviceId, props.deploymentId, tailSize, after, props.phase);
+    return getServiceLogs(props.serviceId, tailSize, after, props.phase);
   };
 
   const fetchInitialLogs = async () => {
