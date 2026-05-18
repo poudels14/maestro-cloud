@@ -20,6 +20,7 @@ export interface Build {
 
 export interface Ingress {
   host: string;
+  hosts?: string[];
   port?: number;
 }
 

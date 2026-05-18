@@ -49,6 +49,13 @@ export async function redeployService(serviceId: string, force?: boolean) {
   if (!res.ok) throw new Error(`Failed to redeploy: ${res.statusText}`);
 }
 
+export async function restartService(serviceId: string, force?: boolean) {
+  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/restart`, location.origin);
+  if (force) url.searchParams.set("force", "true");
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to restart: ${res.statusText}`);
+}
+
 export async function freezeService(serviceId: string, frozen: boolean) {
   const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/freeze`, {
     method: "PATCH",

@@ -486,6 +486,58 @@ impl DeploymentController {
 
         let service_log_source = format!("{}/{}/", queued_deployment.service_id, deployment_id);
 
+        if let Some(build_info) = queued_deployment.deployment.build.clone() {
+            let should_pull = match &queued_deployment.deployment.config.build {
+                None => true,
+                Some(build) => build.registry.is_some(),
+            };
+            if should_pull {
+                let log_source_str =
+                    format!("{}/{}/restart", queued_deployment.service_id, deployment_id);
+                if let Err(err) = self
+                    .runtime
+                    .pull_image(
+                        &build_info.docker_image_id,
+                        self.log_sender.as_ref(),
+                        Some(&log_source_str),
+                    )
+                    .await
+                {
+                    let error_msg = format!(
+                        "failed to pull image `{}`: {err}",
+                        build_info.docker_image_id
+                    );
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "{}/{}: {error_msg}",
+                            queued_deployment.service_id, deployment_id
+                        ),
+                    );
+                    self.logger.emit_from_source(
+                        "error",
+                        &error_msg,
+                        &service_log_source,
+                        LogOrigin::Service,
+                    );
+                    let _ = self
+                        .store
+                        .update_deployment_status(
+                            &Deployment {
+                                id: deployment_id.clone(),
+                                service_id: queued_deployment.service_id.clone(),
+                                replica_index: 0,
+                            },
+                            DeploymentStatus::Crashed,
+                        )
+                        .await;
+                    return Ok(());
+                }
+            }
+            self.deploy_service(&mut queued_deployment).await;
+            return Ok(());
+        }
+
         if queued_deployment.deployment.has_build_step() {
             self.prune_images().await;
 
