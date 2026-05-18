@@ -1515,9 +1515,7 @@ impl DeploymentController {
                 .filter(|d| {
                     matches!(
                         d.status,
-                        DeploymentStatus::Ready
-                            | DeploymentStatus::PendingReady
-                            | DeploymentStatus::Building
+                        DeploymentStatus::Ready | DeploymentStatus::PendingReady
                     )
                 })
                 .collect();
