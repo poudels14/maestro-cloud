@@ -433,6 +433,7 @@ async fn run() -> crate::error::Result<bool> {
                 cfg.cloudflare = Some(config::CloudflareConfig {
                     tunnel: config::CloudflareTunnelConfig {
                         token: SecretString::new(token),
+                        replicas: None,
                     },
                 });
             }
@@ -619,6 +620,12 @@ async fn run() -> crate::error::Result<bool> {
                 disable_etcd_cert: cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
                 maestro_config,
+                cloudflare_tunnel_replicas: cfg
+                    .cloudflare
+                    .as_ref()
+                    .and_then(|cf| cf.tunnel.replicas)
+                    .unwrap_or(2)
+                    .max(1),
                 cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
             };
 

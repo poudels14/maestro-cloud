@@ -83,13 +83,20 @@ pub async fn start_system_jobs(
     let ingress_container = format!("maestro-ingress-{suffix}");
     let admin_container = format!("maestro-admin-{suffix}");
     let tailscale_container = format!("maestro-tailscale-{suffix}");
-    let cloudflared_container = format!("maestro-cloudflared-{suffix}");
+    let cloudflared_container_prefix = format!("maestro-cloudflared-{suffix}");
     let _ = runtime.remove_container(&etcd_container).await;
     let _ = runtime.remove_container(&probe_container).await;
     let _ = runtime.remove_container(&ingress_container).await;
     let _ = runtime.remove_container(&admin_container).await;
     let _ = runtime.remove_container(&tailscale_container).await;
-    let _ = runtime.remove_container(&cloudflared_container).await;
+    let _ = runtime
+        .remove_container(&cloudflared_container_prefix)
+        .await;
+    for replica in 1..=config.cloudflare_tunnel_replicas {
+        let _ = runtime
+            .remove_container(&format!("{cloudflared_container_prefix}-{replica}"))
+            .await;
+    }
     if config.force {
         let static_ips = config
             .subnet
@@ -222,7 +229,7 @@ pub async fn start_system_jobs(
 
     if config.cloudflare_tunnel_token.is_some() {
         init_cloudflared(
-            &cloudflared_container,
+            &cloudflared_container_prefix,
             &dns_domain,
             &dns_flag,
             logger,
@@ -806,7 +813,7 @@ async fn init_tailnet(
 }
 
 async fn init_cloudflared(
-    container_name: &str,
+    container_name_prefix: &str,
     dns_domain: &str,
     dns_flag: &[String],
     logger: &Logger,
@@ -823,43 +830,60 @@ async fn init_cloudflared(
     let mut flags: Vec<String> = vec!["-e".to_string(), format!("TUNNEL_TOKEN={}", token.as_str())];
     flags.extend_from_slice(dns_flag);
 
-    await_job_running(
-        supervisor,
-        SupervisedJobConfig {
-            id: "maestro-cloudflared".to_string(),
-            command: runtime.run_command(&RunSpec {
-                container_name: container_name.to_string(),
-                hostname: "maestro-cloudflared".to_string(),
-                dns_domain: Some(dns_domain.to_string()),
-                network: config.network.clone(),
-                extra_flags: flags,
-                image_and_args: vec![
-                    CLOUDFLARED_IMAGE_TAG.to_string(),
-                    "tunnel".to_string(),
-                    "--no-autoupdate".to_string(),
-                    "run".to_string(),
-                ],
-            }),
-            name: "maestro-cloudflared".to_string(),
-            max_restarts: None,
-            restart_delay_ms: 1_000,
-            max_restart_delay_ms: Some(15_000),
-            shutdown_grace_period_ms: 10_000,
-            container: Some(ContainerRef {
-                name: container_name.to_string(),
-                runtime_cli: runtime.cli_name().to_string(),
-            }),
-            secrets_mount: None,
-            log_config: Some(LogConfig {
-                sender: log_sender.clone(),
-                tags: Default::default(),
-                origin: LogOrigin::System,
-            }),
-        },
-    )
-    .await;
+    for replica in 1..=config.cloudflare_tunnel_replicas {
+        let container_name = format!("{container_name_prefix}-{replica}");
+        let hostname = format!("maestro-cloudflared-{replica}");
+        let job_id = format!("maestro-cloudflared-{replica}");
 
-    logger.emit("info", "cloudflared tunnel started");
+        await_job_running(
+            supervisor,
+            SupervisedJobConfig {
+                id: job_id.clone(),
+                command: runtime.run_command(&RunSpec {
+                    container_name: container_name.clone(),
+                    hostname,
+                    dns_domain: Some(dns_domain.to_string()),
+                    network: config.network.clone(),
+                    extra_flags: flags.clone(),
+                    image_and_args: vec![
+                        CLOUDFLARED_IMAGE_TAG.to_string(),
+                        "tunnel".to_string(),
+                        "--no-autoupdate".to_string(),
+                        "run".to_string(),
+                    ],
+                }),
+                name: job_id,
+                max_restarts: None,
+                restart_delay_ms: 1_000,
+                max_restart_delay_ms: Some(15_000),
+                shutdown_grace_period_ms: 10_000,
+                container: Some(ContainerRef {
+                    name: container_name,
+                    runtime_cli: runtime.cli_name().to_string(),
+                }),
+                secrets_mount: None,
+                log_config: Some(LogConfig {
+                    sender: log_sender.clone(),
+                    tags: Default::default(),
+                    origin: LogOrigin::System,
+                }),
+            },
+        )
+        .await;
+    }
+
+    logger.emit(
+        "info",
+        &format!(
+            "cloudflared tunnel started ({} replica{})",
+            config.cloudflare_tunnel_replicas,
+            if config.cloudflare_tunnel_replicas == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ),
+    );
 }
 
 struct SystemIps {
