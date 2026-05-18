@@ -1,5 +1,5 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { EllipsisVertical, Ban, RotateCw, Square, AlertTriangle } from "lucide-solid";
+import { EllipsisVertical, Ban, RotateCw, RefreshCw, Square, AlertTriangle } from "lucide-solid";
 import clsx from "clsx";
 
 export function timeAgo(ms: number): string {
@@ -138,6 +138,7 @@ export function DeploymentMenu(props: {
   onCancel: () => void;
   onStop: () => void;
   onRedeploy: () => void;
+  onRestart: () => void;
 }) {
   const [open, setOpen] = createSignal(false);
   let menuRef: HTMLDivElement | undefined;
@@ -208,6 +209,17 @@ export function DeploymentMenu(props: {
             >
               <RotateCw class="size-3" />
               Redeploy
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onRestart();
+              }}
+              class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 outline-none"
+            >
+              <RefreshCw class="size-3" />
+              Restart
             </button>
           </Show>
         </div>

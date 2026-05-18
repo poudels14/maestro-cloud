@@ -22,8 +22,8 @@ use self::types::{
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, SecretsConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, ServiceProvider,
+    CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
+    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
 };
 use crate::logs::store::LogOrigin;
 use crate::signal::ShutdownEvent;
@@ -134,6 +134,10 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/redeploy",
                 post(Self::redeploy_service),
+            )
+            .route(
+                "/api/services/{serviceId}/restart",
+                post(Self::restart_service),
             )
             .route(
                 "/api/services/{serviceId}/freeze",
@@ -562,6 +566,88 @@ impl Server {
 
         let deployment = ServiceDeployment::new(config)
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let outcome = state
+            .store
+            .queue_deployment(deployment)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(RolloutServiceResponse {
+            queued: true,
+            replicas: None,
+            deployment_id: Some(outcome.deployment.id.clone()),
+            deployment_index: Some(outcome.deployment_index),
+            service_id: outcome.deployment.config.id.clone(),
+            status: Some(outcome.deployment.status),
+            version: outcome.deployment.config.version.clone(),
+        }))
+    }
+
+    async fn restart_service(
+        Path(service_id): Path<String>,
+        Query(query): Query<ForceQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        crate::validation::validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        let info = state
+            .store
+            .read_service_info(&service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        let Some(info) = info else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("service `{service_id}` not found"),
+            ));
+        };
+
+        if info.deploy_frozen && !query.force.unwrap_or(false) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("deploy is frozen for service `{service_id}`; use ?force=true to override"),
+            ));
+        }
+
+        let deployments = state
+            .store
+            .list_service_deployments(&service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        let previous = deployments
+            .iter()
+            .find(|deployment| deployment.build.is_some())
+            .ok_or_else(|| {
+                (
+                    StatusCode::CONFLICT,
+                    format!("service `{service_id}` has no built image to restart from"),
+                )
+            })?;
+
+        let previous_image = previous
+            .build
+            .as_ref()
+            .expect("previous deployment has build info")
+            .docker_image_id
+            .clone();
+        let previous_git_commit = previous.git_commit.clone();
+
+        let mut config = info.config;
+        if let Some(secrets) = config.deploy.secrets.as_mut() {
+            secrets.items.clear();
+        }
+
+        let mut deployment = ServiceDeployment::new(config)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        deployment.build = Some(DeploymentBuildInfo {
+            docker_image_id: previous_image,
+        });
+        deployment.git_commit = previous_git_commit;
+
         let outcome = state
             .store
             .queue_deployment(deployment)

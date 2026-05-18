@@ -6,6 +6,7 @@ import {
   getClusterInfo,
   getDeployments,
   redeployService,
+  restartService,
   stopDeployment
 } from "../../lib/api";
 import { DeploymentMenu, ErrorBanner, StatusBadge, StatusDot, timeAgo } from "../../lib/ui";
@@ -17,7 +18,9 @@ const LOAD_MORE_STEP = 10;
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const [deployments, { refetch }] = createResource(() => props.serviceId, getDeployments);
   const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
-  const [showFreezeConfirm, setShowFreezeConfirm] = createSignal(false);
+  const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<"redeploy" | "restart" | null>(
+    null
+  );
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [sheetTab, setSheetTab] = createSignal<SheetTabId>("logs");
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
@@ -57,35 +60,43 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
           </span>
         </div>
       </Show>
-      <Show when={showFreezeConfirm()}>
-        <div class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center">
-          <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
-            <h3 class="text-base font-semibold text-gray-900 mb-2">Deploy is frozen</h3>
-            <p class="text-sm text-gray-500 mb-5">
-              Deploys are frozen for this service. Are you sure you want to force a redeploy?
-            </p>
-            <div class="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowFreezeConfirm(false)}
-                class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors outline-none"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  setShowFreezeConfirm(false);
-                  await redeployService(props.serviceId, true);
-                  refetch();
-                }}
-                class="px-3 py-1.5 text-sm text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors outline-none"
-              >
-                Force deploy
-              </button>
+      <Show when={freezeConfirmAction()}>
+        {(action) => (
+          <div class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center">
+            <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+              <h3 class="text-base font-semibold text-gray-900 mb-2">Deploy is frozen</h3>
+              <p class="text-sm text-gray-500 mb-5">
+                Deploys are frozen for this service. Are you sure you want to force a{" "}
+                {action() === "restart" ? "restart" : "redeploy"}?
+              </p>
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFreezeConfirmAction(null)}
+                  class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors outline-none"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = action();
+                    setFreezeConfirmAction(null);
+                    if (next === "restart") {
+                      await restartService(props.serviceId, true);
+                    } else {
+                      await redeployService(props.serviceId, true);
+                    }
+                    refetch();
+                  }}
+                  class="px-3 py-1.5 text-sm text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors outline-none"
+                >
+                  Force {action() === "restart" ? "restart" : "deploy"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </Show>
       <Suspense
         fallback={<div class="text-xs text-gray-400 py-8 text-center">Loading deployments…</div>}
@@ -179,9 +190,16 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                               }}
                               onRedeploy={() => {
                                 if (props.deployFrozen) {
-                                  setShowFreezeConfirm(true);
+                                  setFreezeConfirmAction("redeploy");
                                 } else {
                                   redeployService(props.serviceId).then(() => refetch());
+                                }
+                              }}
+                              onRestart={() => {
+                                if (props.deployFrozen) {
+                                  setFreezeConfirmAction("restart");
+                                } else {
+                                  restartService(props.serviceId).then(() => refetch());
                                 }
                               }}
                             />
