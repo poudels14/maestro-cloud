@@ -378,7 +378,19 @@ impl Server {
             });
         }
 
+        let cloudflared_replicas = state
+            .masked_config
+            .as_ref()
+            .and_then(|cfg| cfg.cloudflare.as_ref())
+            .and_then(|cf| cf.tunnel.replicas)
+            .unwrap_or(2)
+            .max(1);
+
         for (id, name, image) in SYSTEM_SERVICES {
+            let replicas = match *id {
+                "maestro-cloudflared" => cloudflared_replicas,
+                _ => 1,
+            };
             items.push(ServiceListItem {
                 service: ServiceConfig {
                     id: id.to_string(),
@@ -392,7 +404,7 @@ impl Server {
                         expose_ports: vec![],
                         command: None,
                         healthcheck_path: None,
-                        replicas: 1,
+                        replicas,
                         max_restarts: None,
                         env: Default::default(),
                         secrets: None,

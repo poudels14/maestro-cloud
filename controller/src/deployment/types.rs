@@ -32,6 +32,7 @@ pub struct ControllerConfig {
     pub enable_ingress_access_logs: bool,
     pub maestro_config: String,
     pub cloudflare_tunnel_token: Option<SecretString>,
+    pub cloudflare_tunnel_replicas: u32,
 }
 
 impl ControllerConfig {

@@ -815,6 +815,7 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         enable_ingress_access_logs: false,
         maestro_config: String::new(),
         cloudflare_tunnel_token: None,
+        cloudflare_tunnel_replicas: 1,
     }
 }
 
@@ -1122,6 +1123,7 @@ async fn stress_supervisor_updates_deployment_statuses() {
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
             cloudflare_tunnel_token: None,
+            cloudflare_tunnel_replicas: 1,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1220,6 +1222,7 @@ async fn queued_deployment_starts_even_with_running_job_for_same_service() {
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
             cloudflare_tunnel_token: None,
+            cloudflare_tunnel_replicas: 1,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1337,6 +1340,7 @@ async fn stop_requested_active_deployment_is_marked_removed() {
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
             cloudflare_tunnel_token: None,
+            cloudflare_tunnel_replicas: 1,
         },
         store.clone(),
         JobSupervisor::new(),
@@ -1471,6 +1475,7 @@ async fn continuous_redeploy_maintains_ingress_backends() {
             enable_ingress_access_logs: false,
             maestro_config: String::new(),
             cloudflare_tunnel_token: None,
+            cloudflare_tunnel_replicas: 1,
         },
         store.clone(),
         JobSupervisor::new(),

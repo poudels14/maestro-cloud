@@ -100,6 +100,8 @@ pub struct CloudflareConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CloudflareTunnelConfig {
     pub token: SecretString,
+    #[serde(default)]
+    pub replicas: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -250,6 +252,8 @@ pub struct CloudflareView {
 #[serde(rename_all = "kebab-case")]
 pub struct CloudflareTunnelView {
     pub token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<u32>,
 }
 
 fn mask(value: &str) -> Option<String> {
@@ -293,6 +297,7 @@ impl StartConfig {
             cloudflare: self.cloudflare.as_ref().map(|cf| CloudflareView {
                 tunnel: CloudflareTunnelView {
                     token: mask(cf.tunnel.token.as_str()),
+                    replicas: cf.tunnel.replicas,
                 },
             }),
             disable_etcd_cert: self.disable_etcd_cert,
