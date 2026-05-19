@@ -47,6 +47,19 @@ export interface Deploy {
   replicas?: number;
   env?: EnvConfig;
   secrets?: SecretsConfig | null;
+  volumes?: VolumeMount[];
+}
+
+export interface VolumeMount {
+  hostPath: string;
+  mountPath: string;
+  readOnly?: boolean;
+  owner?: VolumeOwner;
+}
+
+export interface VolumeOwner {
+  uid: number;
+  gid?: number;
 }
 
 export interface Service {

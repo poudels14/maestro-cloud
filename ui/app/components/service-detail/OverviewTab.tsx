@@ -54,6 +54,8 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
   const secretSource = s.deploy.secrets?.source ?? null;
 
+  const volumes = s.deploy.volumes ?? [];
+
   const ingressHosts = s.ingress
     ? [s.ingress.host, ...(s.ingress.hosts ?? [])].filter((host): host is string => !!host)
     : [];
@@ -214,6 +216,35 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
               </For>
             </div>
           </Show>
+        </div>
+      </Show>
+      <Show when={volumes.length > 0}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Volumes</h4>
+          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <For each={volumes}>
+              {(volume) => (
+                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                  <span class="text-xs font-mono text-gray-500 shrink-0 truncate">
+                    {volume.hostPath}
+                  </span>
+                  <span class="text-sm font-mono text-gray-800 text-right truncate">
+                    {volume.mountPath}
+                    <Show when={volume.readOnly}>
+                      <span class="ml-1.5 text-xs text-gray-400">(ro)</span>
+                    </Show>
+                    <Show when={volume.owner}>
+                      {(owner) => (
+                        <span class="ml-1.5 text-xs text-gray-400">
+                          {owner().uid}:{owner().gid ?? owner().uid}
+                        </span>
+                      )}
+                    </Show>
+                  </span>
+                </div>
+              )}
+            </For>
+          </div>
         </div>
       </Show>
       <Show when={!s.system}>

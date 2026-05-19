@@ -52,6 +52,7 @@ fn deployment_with_source(
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
+                volumes: vec![],
             },
             ingress: None,
         },
@@ -255,6 +256,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
+                volumes: vec![],
             },
             ingress: None,
         },
@@ -402,6 +404,7 @@ impl InMemoryStore {
                     max_restarts: None,
                     env: Default::default(),
                     secrets: None,
+                    volumes: vec![],
                 },
                 ingress: None,
             };
@@ -452,6 +455,7 @@ impl InMemoryStore {
                     max_restarts: None,
                     env: Default::default(),
                     secrets: None,
+                    volumes: vec![],
                 },
                 ingress: None,
             };
@@ -523,6 +527,7 @@ impl InMemoryStore {
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
+                volumes: vec![],
             },
             ingress,
         };
@@ -557,6 +562,7 @@ impl InMemoryStore {
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
+                volumes: vec![],
             },
             ingress: None,
         };
@@ -604,6 +610,7 @@ impl InMemoryStore {
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
+                volumes: vec![],
             },
             ingress: None,
         };

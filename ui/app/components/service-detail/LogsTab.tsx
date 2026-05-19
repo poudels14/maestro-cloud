@@ -17,9 +17,7 @@ function LogsTab(props: { service: Service }) {
       when={isSystem || hasAnyDeployment()}
       fallback={
         <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
-          <p class="text-sm text-gray-400">
-            No deployments yet. Deploy this service to see logs.
-          </p>
+          <p class="text-sm text-gray-400">No deployments yet. Deploy this service to see logs.</p>
         </div>
       }
     >

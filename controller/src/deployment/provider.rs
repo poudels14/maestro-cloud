@@ -238,6 +238,13 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
             if let Some((host_path, container_path)) = &mount_arg {
                 extra_flags.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
             }
+            for volume in &deployment.config.deploy.volumes {
+                let suffix = if volume.read_only { ":ro" } else { "" };
+                extra_flags.extend([
+                    "-v".to_string(),
+                    format!("{}:{}{suffix}", volume.host_path, volume.mount_path),
+                ]);
+            }
 
             let mut image_and_args = vec![image.to_string()];
             for flag in &deployment.config.deploy.flags {

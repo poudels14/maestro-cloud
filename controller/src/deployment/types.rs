@@ -215,6 +215,33 @@ pub struct ServiceDeployConfig {
     pub env: EnvConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<VolumeMount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeMount {
+    pub host_path: String,
+    pub mount_path: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<VolumeOwner>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeOwner {
+    pub uid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+}
+
+impl VolumeOwner {
+    pub fn resolved_gid(&self) -> u32 {
+        self.gid.unwrap_or(self.uid)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

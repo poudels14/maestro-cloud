@@ -148,6 +148,46 @@
           "not": {
             "required": ["source", "items"]
           }
+        },
+        "volumes": {
+          "type": "array",
+          "description": "Bind-mount host directories into the container. Equivalent to `docker run -v hostPath:containerPath`.",
+          "items": {
+            "type": "object",
+            "required": ["hostPath", "mountPath"],
+            "additionalProperties": false,
+            "properties": {
+              "hostPath": {
+                "type": "string",
+                "pattern": "^/",
+                "description": "Absolute path on the host."
+              },
+              "mountPath": {
+                "type": "string",
+                "pattern": "^/",
+                "description": "Absolute path inside the container where the host path is mounted."
+              },
+              "readOnly": {
+                "type": "boolean",
+                "default": false
+              },
+              "owner": {
+                "type": "object",
+                "description": "If set, maestro chowns the host path (non-recursive) before starting the container. Useful when the container's image runs as a non-root user.",
+                "required": ["uid"],
+                "additionalProperties": false,
+                "properties": {
+                  "uid": { "type": "integer", "minimum": 0 },
+                  "gid": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Defaults to uid when omitted (matches the common image convention where uid == gid)."
+                  }
+                }
+              }
+            }
+          },
+          "default": []
         }
       }
     },
