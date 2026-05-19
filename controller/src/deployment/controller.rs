@@ -76,6 +76,9 @@ pub struct DeploymentController {
     shutdown_in_progress: bool,
     logger: Logger,
     log_sender: Option<flume::Sender<LogEntry>>,
+    slack: crate::slack::SlackNotifier,
+    notified_ready: HashSet<String>,
+    notified_crashed: HashSet<String>,
 }
 
 impl DeploymentController {
@@ -108,6 +111,12 @@ impl DeploymentController {
                 .unwrap_or_else(|_| config.data_dir.clone())
                 .join("secrets"),
         };
+        let logger = Logger::new(log_sender.clone());
+        let slack = crate::slack::SlackNotifier::new(
+            config.slack_webhook_url.clone(),
+            config.cluster_name.clone(),
+            logger.clone(),
+        );
         Self {
             config,
             runtime,
@@ -121,8 +130,11 @@ impl DeploymentController {
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
             shutdown_in_progress: false,
-            logger: Logger::new(log_sender.clone()),
+            logger,
             log_sender,
+            slack,
+            notified_ready: HashSet::new(),
+            notified_crashed: HashSet::new(),
         }
     }
 
@@ -466,6 +478,18 @@ impl DeploymentController {
         self.supervisor
     }
 
+    fn notify_deployment_crashed_once(
+        &mut self,
+        service_id: &str,
+        deployment_id: &str,
+        reason: &str,
+    ) {
+        if self.notified_crashed.insert(deployment_id.to_string()) {
+            self.slack
+                .notify_deployment_crashed(service_id, deployment_id, reason);
+        }
+    }
+
     async fn process_queued_deployment(
         &mut self,
         mut queued_deployment: QueuedDeployment,
@@ -483,6 +507,12 @@ impl DeploymentController {
         if !claimed {
             return Ok(());
         }
+
+        self.slack.notify_deployment_queued(
+            &queued_deployment.service_id,
+            &deployment_id,
+            &queued_deployment.deployment.config.version,
+        );
 
         let service_log_source = format!("{}/{}/", queued_deployment.service_id, deployment_id);
 
@@ -531,6 +561,11 @@ impl DeploymentController {
                             DeploymentStatus::Crashed,
                         )
                         .await;
+                    self.notify_deployment_crashed_once(
+                        &queued_deployment.service_id.clone(),
+                        &deployment_id,
+                        &error_msg,
+                    );
                     return Ok(());
                 }
             }
@@ -572,6 +607,11 @@ impl DeploymentController {
                             DeploymentStatus::Crashed,
                         )
                         .await;
+                    self.notify_deployment_crashed_once(
+                        &queued_deployment.service_id.clone(),
+                        &deployment_id,
+                        &error_msg,
+                    );
                     self.prune_service_images(&queued_deployment.service_id)
                         .await;
                     return Ok(());
@@ -628,6 +668,7 @@ impl DeploymentController {
                     }
                 }
                 Err(err) => {
+                    let reason = format!("source resolution failed: {err}");
                     self.logger.emit(
                         "error",
                         &format!(
@@ -644,6 +685,11 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
+                    self.notify_deployment_crashed_once(
+                        &deployment_ref.service_id.clone(),
+                        &deployment_ref.id.clone(),
+                        &reason,
+                    );
                     let _ = std::fs::remove_dir_all(&build_dir);
                     self.prune_service_images(&queued_deployment.service_id)
                         .await;
@@ -692,6 +738,7 @@ impl DeploymentController {
                 let pending = self.pending_builds.remove(&deployment_id).unwrap();
                 pending.handle.abort();
                 let _ = std::fs::remove_dir_all(&pending.build_dir);
+                let reason = format!("build timed out ({}s limit)", BUILD_TIMEOUT.as_secs());
                 self.logger.emit(
                     "error",
                     &format!(
@@ -708,6 +755,11 @@ impl DeploymentController {
                     .store
                     .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                     .await;
+                self.notify_deployment_crashed_once(
+                    &deployment_ref.service_id.clone(),
+                    &deployment_ref.id.clone(),
+                    &reason,
+                );
                 continue;
             }
 
@@ -781,6 +833,7 @@ impl DeploymentController {
                     self.prune_service_images(&cleanup_service_id).await;
                 }
                 Err(build_err) => {
+                    let reason = format!("build failed: {build_err}");
                     self.logger.emit(
                         "error",
                         &format!(
@@ -796,6 +849,7 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
+                    self.notify_deployment_crashed_once(&service_id, &deployment_id, &reason);
                     self.prune_service_images(&service_id).await;
                 }
             }
@@ -844,6 +898,7 @@ impl DeploymentController {
                         DeploymentStatus::Crashed,
                     )
                     .await;
+                self.notify_deployment_crashed_once(service_id, deployment_id, &error_msg);
                 self.prune_service_images(service_id).await;
                 return;
             }
@@ -1711,6 +1766,10 @@ impl DeploymentController {
                     .store
                     .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
                     .await;
+                if self.notified_ready.insert(deployment_id.clone()) {
+                    self.slack
+                        .notify_deployment_ready(service_id, deployment_id);
+                }
             }
         }
     }

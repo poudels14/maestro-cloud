@@ -73,6 +73,8 @@ pub struct StartConfig {
     #[serde(default)]
     pub cloudflare: Option<CloudflareConfig>,
     #[serde(default)]
+    pub slack: Option<SlackConfig>,
+    #[serde(default)]
     pub disable_etcd_cert: bool,
 }
 
@@ -102,6 +104,12 @@ pub struct CloudflareTunnelConfig {
     pub token: SecretString,
     #[serde(default)]
     pub replicas: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SlackConfig {
+    pub webhook_url: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -199,6 +207,8 @@ pub struct MaskedConfig {
     pub depot: Option<DepotView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloudflare: Option<CloudflareView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slack: Option<SlackView>,
     pub disable_etcd_cert: bool,
 }
 
@@ -256,6 +266,12 @@ pub struct CloudflareTunnelView {
     pub replicas: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SlackView {
+    pub webhook_url: Option<String>,
+}
+
 fn mask(value: &str) -> Option<String> {
     if value.is_empty() {
         None
@@ -299,6 +315,9 @@ impl StartConfig {
                     token: mask(cf.tunnel.token.as_str()),
                     replicas: cf.tunnel.replicas,
                 },
+            }),
+            slack: self.slack.as_ref().map(|sl| SlackView {
+                webhook_url: mask(sl.webhook_url.as_str()),
             }),
             disable_etcd_cert: self.disable_etcd_cert,
         }
