@@ -95,6 +95,30 @@ pub fn validate_service_provider_config(
             );
         }
     }
+    for (index, volume) in deploy.volumes.iter().enumerate() {
+        if volume.host_path.trim().is_empty() {
+            return Err(format!("deploy.volumes[{index}].hostPath cannot be empty"));
+        }
+        if volume.mount_path.trim().is_empty() {
+            return Err(format!("deploy.volumes[{index}].mountPath cannot be empty"));
+        }
+        if !volume.host_path.starts_with('/') {
+            return Err(format!(
+                "deploy.volumes[{index}].hostPath must be an absolute path"
+            ));
+        }
+        if !volume.mount_path.starts_with('/') {
+            return Err(format!(
+                "deploy.volumes[{index}].mountPath must be an absolute path"
+            ));
+        }
+        if let Some(reason) = sensitive_host_path_reason(&volume.host_path) {
+            return Err(format!(
+                "deploy.volumes[{index}].hostPath `{}` is not allowed ({reason})",
+                volume.host_path
+            ));
+        }
+    }
     match provider {
         ServiceProvider::Docker => {
             let (build, image) = validate_build_config(build, image)?;
@@ -125,4 +149,41 @@ fn validate_env_config(config: &EnvConfig, field: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn sensitive_host_path_reason(path: &str) -> Option<&'static str> {
+    if path.split('/').any(|seg| seg == ".." || seg == ".") {
+        return Some("path traversal segments (`..`, `.`) are not allowed");
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Some("`/` is reserved");
+    }
+    const EXACT: &[&str] = &[
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/var/run/containerd/containerd.sock",
+        "/run/containerd/containerd.sock",
+    ];
+    for &deny in EXACT {
+        if trimmed == deny {
+            return Some("container runtime socket");
+        }
+    }
+    const PREFIXES: &[(&str, &str)] = &[
+        ("/etc", "host config directory"),
+        ("/proc", "kernel /proc"),
+        ("/sys", "kernel /sys"),
+        ("/dev", "host /dev"),
+        ("/boot", "host /boot"),
+        ("/root", "root user home"),
+        ("/var/lib/docker", "docker state directory"),
+        ("/var/lib/containerd", "containerd state directory"),
+    ];
+    for &(deny, reason) in PREFIXES {
+        if trimmed == deny || trimmed.starts_with(&format!("{deny}/")) {
+            return Some(reason);
+        }
+    }
+    None
 }

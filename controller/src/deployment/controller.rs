@@ -915,6 +915,33 @@ impl DeploymentController {
             );
         }
 
+        if let Err(err) = prepare_volumes(&queued_deployment.deployment) {
+            let error_msg = format!("failed to prepare volumes: {err}");
+            self.logger.emit(
+                "error",
+                &format!("{service_id}/{deployment_id}: {error_msg}"),
+            );
+            self.logger.emit_from_source(
+                "error",
+                &error_msg,
+                &service_log_source,
+                LogOrigin::Service,
+            );
+            let _ = self
+                .store
+                .update_deployment_status(
+                    &Deployment {
+                        id: deployment_id.clone(),
+                        service_id: service_id.clone(),
+                        replica_index: 0,
+                    },
+                    DeploymentStatus::Crashed,
+                )
+                .await;
+            self.notify_deployment_crashed_once(service_id, deployment_id, &error_msg);
+            return;
+        }
+
         let replicas = queued_deployment.deployment.config.deploy.replicas;
         let replica_status = initial_replica_status_for_deployment(&queued_deployment.deployment);
 
@@ -1985,4 +2012,17 @@ fn deregister_container_dns(
         dns.remove_records_for_hostname(hostname, domain);
         let _ = dns.flush();
     }
+}
+
+fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
+    for volume in &deployment.config.deploy.volumes {
+        let path = std::path::Path::new(&volume.host_path);
+        if !path.exists() {
+            std::fs::create_dir_all(path)?;
+        }
+        if let Some(owner) = volume.owner.as_ref() {
+            std::os::unix::fs::chown(path, Some(owner.uid), Some(owner.resolved_gid()))?;
+        }
+    }
+    Ok(())
 }

@@ -30,6 +30,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             max_restarts: None,
             env: Default::default(),
             secrets: None,
+            volumes: vec![],
         },
         ingress: None,
     }
@@ -54,6 +55,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             max_restarts: None,
             env: Default::default(),
             secrets: None,
+            volumes: vec![],
         },
         ingress: None,
     }

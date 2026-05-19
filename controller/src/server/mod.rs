@@ -415,6 +415,7 @@ impl Server {
                         max_restarts: None,
                         env: Default::default(),
                         secrets: None,
+                        volumes: vec![],
                     },
                     ingress: None,
                 },
