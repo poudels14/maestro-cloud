@@ -301,6 +301,7 @@ fn service_payload(
         resolved_env.insert(key.clone(), SecretString::new(resolved));
     }
     deploy.env.items = resolved_env;
+    expand_source(&mut deploy.env.source, service_id, "env.source")?;
 
     if let Some(secrets) = &mut deploy.secrets {
         let mut resolved_items = std::collections::HashMap::new();
@@ -311,6 +312,7 @@ fn service_payload(
             resolved_items.insert(key.clone(), resolved);
         }
         secrets.items = resolved_items;
+        expand_source(&mut secrets.source, service_id, "secrets.source")?;
     }
 
     let build = if let Some(mut build) = build {
@@ -322,6 +324,12 @@ fn service_payload(
             resolved_build_env.insert(key.clone(), SecretString::new(resolved));
         }
         build.env.items = resolved_build_env;
+        expand_source(&mut build.env.source, service_id, "build.env.source")?;
+        expand_source(
+            &mut build.secrets.source,
+            service_id,
+            "build.secrets.source",
+        )?;
         Some(build)
     } else {
         None
@@ -342,6 +350,20 @@ fn expand_env_value(value: &str) -> std::result::Result<String, String> {
     shellexpand::env(value)
         .map(|s| s.into_owned())
         .map_err(|err| err.to_string())
+}
+
+fn expand_source(
+    source: &mut Option<String>,
+    service_id: &str,
+    field: &str,
+) -> std::result::Result<(), Error> {
+    if let Some(value) = source {
+        let resolved = expand_env_value(value.as_str()).map_err(|err| {
+            Error::invalid_config(format!("service `{service_id}` {field}: {err}"))
+        })?;
+        *value = resolved;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
