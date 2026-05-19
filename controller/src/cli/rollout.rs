@@ -324,6 +324,16 @@ fn service_payload(
             resolved_build_env.insert(key.clone(), SecretString::new(resolved));
         }
         build.env.items = resolved_build_env;
+        let mut resolved_build_secrets = std::collections::HashMap::new();
+        for (key, value) in &build.secrets.items {
+            let resolved = expand_env_value(value.as_str()).map_err(|err| {
+                Error::invalid_config(format!(
+                    "service `{service_id}` build.secrets `{key}`: {err}"
+                ))
+            })?;
+            resolved_build_secrets.insert(key.clone(), SecretString::new(resolved));
+        }
+        build.secrets.items = resolved_build_secrets;
         expand_source(&mut build.env.source, service_id, "build.env.source")?;
         expand_source(
             &mut build.secrets.source,
