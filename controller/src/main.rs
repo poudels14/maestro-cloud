@@ -10,6 +10,7 @@ mod probe;
 mod runtime;
 mod server;
 mod signal;
+mod slack;
 mod supervisor;
 mod utils;
 mod validation;
@@ -407,6 +408,7 @@ async fn run() -> crate::error::Result<bool> {
                     runtime: Default::default(),
                     depot: Default::default(),
                     cloudflare: None,
+                    slack: None,
                     disable_etcd_cert: false,
                 },
             };
@@ -627,6 +629,7 @@ async fn run() -> crate::error::Result<bool> {
                     .unwrap_or(2)
                     .max(1),
                 cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
+                slack_webhook_url: cfg.slack.map(|sl| sl.webhook_url),
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {

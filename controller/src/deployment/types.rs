@@ -33,6 +33,7 @@ pub struct ControllerConfig {
     pub maestro_config: String,
     pub cloudflare_tunnel_token: Option<SecretString>,
     pub cloudflare_tunnel_replicas: u32,
+    pub slack_webhook_url: Option<SecretString>,
 }
 
 impl ControllerConfig {

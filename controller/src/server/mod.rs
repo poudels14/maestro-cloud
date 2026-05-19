@@ -76,6 +76,7 @@ struct AppState {
     cluster_name: String,
     cluster_alias: String,
     masked_config: Option<Arc<crate::config::MaskedConfig>>,
+    slack: crate::slack::SlackNotifier,
 }
 
 pub(crate) struct Server {
@@ -91,6 +92,7 @@ impl Server {
         cluster_name: String,
         cluster_alias: String,
         masked_config: Option<Arc<crate::config::MaskedConfig>>,
+        slack: crate::slack::SlackNotifier,
     ) -> Self {
         Self {
             state: AppState {
@@ -101,6 +103,7 @@ impl Server {
                 cluster_name,
                 cluster_alias,
                 masked_config,
+                slack,
             },
         }
     }
@@ -678,6 +681,8 @@ impl Server {
             .delete_service(service_id)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        state.slack.notify_service_removed(service_id);
 
         Ok(StatusCode::NO_CONTENT)
     }

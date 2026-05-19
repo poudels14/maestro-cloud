@@ -622,6 +622,12 @@ async fn init_probe(
             if let Some(system_type) = &config.system_type {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
             }
+            if let Some(slack_url) = &config.slack_webhook_url {
+                probe_flags.extend([
+                    "-e".into(),
+                    format!("MAESTRO_SLACK_WEBHOOK_URL={}", slack_url.as_str()),
+                ]);
+            }
             probe_flags.extend_from_slice(dns_flag);
             probe_flags.extend(ip_flags);
             runtime.run_command(&RunSpec {

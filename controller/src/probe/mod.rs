@@ -63,6 +63,15 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             serde_json::from_slice(&json).expect("failed to parse MAESTRO_CONFIG");
         Arc::new(parsed)
     });
+    let slack_webhook_url = std::env::var("MAESTRO_SLACK_WEBHOOK_URL")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(crate::utils::crypto::SecretString::new);
+    let slack_notifier = crate::slack::SlackNotifier::new(
+        slack_webhook_url,
+        cluster_name.clone(),
+        crate::logs::Logger::noop(),
+    );
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
@@ -71,6 +80,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         cluster_name,
         cluster_alias,
         masked_config,
+        slack_notifier,
     );
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
