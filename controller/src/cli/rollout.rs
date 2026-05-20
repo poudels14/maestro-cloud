@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, io::IsTerminal, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +54,13 @@ struct PatchServiceResponse {
     version: String,
 }
 
-pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: bool) -> Result<()> {
+pub async fn run_rollout(
+    config_path: &Path,
+    host: &str,
+    apply: bool,
+    force: bool,
+    filter: &[String],
+) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             Error::not_found(format!("{} does not exist", config_path.display()))
@@ -71,6 +77,41 @@ pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: boo
         )));
     }
 
+    for requested in filter {
+        if !cluster.services.contains_key(requested) {
+            let available = cluster
+                .services
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::invalid_input(format!(
+                "service `{requested}` not found in {}. Available: {available}",
+                config_path.display()
+            )));
+        }
+    }
+
+    let resolved_filter =
+        if filter.is_empty() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+            prompt_service_selection(&cluster)?
+        } else {
+            filter.to_vec()
+        };
+
+    let selected: Vec<(&String, &ServiceTemplate)> = cluster
+        .services
+        .iter()
+        .filter(|(id, _)| {
+            resolved_filter.is_empty() || resolved_filter.iter().any(|name| name == *id)
+        })
+        .collect();
+
+    if selected.is_empty() {
+        println!("[maestro]: no services selected; nothing to do");
+        return Ok(());
+    }
+
     let base_url = normalize_base_url(host)?;
     let client = crate::cli::contexts::build_http_client()?;
 
@@ -78,7 +119,7 @@ pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: boo
         let diff_url = format!("{base_url}/api/services/rollout/diff");
         let mut has_changes = false;
 
-        for (service_id, service_template) in &cluster.services {
+        for (service_id, service_template) in &selected {
             let payload = service_payload(service_id, service_template)?;
             let diff = call_diff_endpoint(&client, &diff_url, &payload, service_id).await?;
             print_diff(&diff);
@@ -98,9 +139,18 @@ pub async fn run_rollout(config_path: &Path, host: &str, apply: bool, force: boo
     if force {
         rollout_url.query_pairs_mut().append_pair("force", "true");
     }
-    println!("[maestro]: rolling out services");
+    let selected_ids: Vec<&str> = selected.iter().map(|(id, _)| id.as_str()).collect();
+    if selected.len() == cluster.services.len() {
+        println!("[maestro]: rolling out {} services", selected.len());
+    } else {
+        println!(
+            "[maestro]: rolling out {} service(s): {}",
+            selected.len(),
+            selected_ids.join(", ")
+        );
+    }
 
-    for (service_id, service_template) in &cluster.services {
+    for (service_id, service_template) in &selected {
         let payload = service_payload(service_id, service_template)?;
         let response =
             call_rollout_endpoint(&client, rollout_url.as_str(), &payload, service_id).await?;
@@ -374,6 +424,21 @@ fn expand_source(
         *value = resolved;
     }
     Ok(())
+}
+
+fn prompt_service_selection(cluster: &ClusterConfig) -> Result<Vec<String>> {
+    let service_ids: Vec<String> = cluster.services.keys().cloned().collect();
+    let defaults: Vec<bool> = vec![true; service_ids.len()];
+    let chosen = dialoguer::MultiSelect::new()
+        .with_prompt("Select services to rollout (space to toggle, enter to confirm)")
+        .items(&service_ids)
+        .defaults(&defaults)
+        .interact()
+        .map_err(|err| Error::external(format!("service selection prompt failed: {err}")))?;
+    Ok(chosen
+        .into_iter()
+        .map(|index| service_ids[index].clone())
+        .collect())
 }
 
 #[cfg(test)]

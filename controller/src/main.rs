@@ -69,6 +69,11 @@ enum CliCommand {
         apply: bool,
         #[arg(long = "force", help = "Force rollout even if deploy is frozen")]
         force: bool,
+        #[arg(
+            long = "service",
+            help = "Only deploy the named service(s). Can be repeated. Default: all services in the config."
+        )]
+        services: Vec<String>,
     },
     /// List services in the active context
     Services,
@@ -788,10 +793,11 @@ async fn run() -> crate::error::Result<bool> {
             config,
             apply,
             force,
+            services,
         }) => {
             let host = cli::contexts::active_host()?;
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::rollout::run_rollout(&config_path, &host, apply, force)
+            cli::rollout::run_rollout(&config_path, &host, apply, force, &services)
                 .await
                 .map(|()| false)
         }
