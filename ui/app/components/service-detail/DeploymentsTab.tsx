@@ -124,14 +124,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                   Object.entries(d.config.deploy.secrets?.keys ?? {})
                     .filter(([, meta]) => meta.changed)
                     .map(([key]) => key);
-                const deploymentDomain = () => {
-                  const info = clusterInfo();
-                  if (!info) return null;
-                  const idPrefix = d.id.slice(0, 6);
-                  const host = `${d.config.id}-${idPrefix}.${info.canonicalDomain}`;
-                  const port = d.config.ingress?.port ?? null;
-                  return { host, port };
-                };
                 const showReplicas = () =>
                   d.replicas &&
                   d.replicas.length > 0 &&
@@ -218,35 +210,56 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                           {shortId}
                         </span>
                       </div>
-                      <Show when={deploymentDomain()}>
-                        {(domain) => {
-                          const port = domain().port;
-                          const label = port ? `${domain().host}:${port}` : domain().host;
-                          const href = `http://${label}`;
-                          return (
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              class="group inline-flex items-center gap-1.5 text-xs font-mono text-gray-500 hover:text-indigo-600 bg-gray-50 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-200 rounded-md px-2 py-1 transition-colors mb-3"
-                            >
-                              <span class="truncate max-w-[420px]">{label}</span>
-                              <ExternalLink class="size-3 text-gray-400 group-hover:text-indigo-500 shrink-0" />
-                            </a>
-                          );
-                        }}
-                      </Show>
                       <Show when={showReplicas()}>
-                        <div class="flex items-center gap-1.5 mb-1 flex-wrap">
+                        <div class="bg-white rounded-md border border-gray-200 divide-y divide-gray-100 mb-1">
                           <For each={d.replicas}>
-                            {(replica) => (
-                              <span class="inline-flex items-center gap-1.5 text-[11px] bg-white border border-gray-200 rounded-md px-1.5 py-0.5">
-                                <StatusDot status={replica.status} />
-                                <span class="font-mono text-gray-600">#{replica.replicaIndex}</span>
-                                <span class="text-gray-400">{replica.status.toLowerCase()}</span>
-                              </span>
-                            )}
+                            {(replica) => {
+                              const shortDepId = d.id.slice(0, 6);
+                              const hostname =
+                                replica.replicaIndex === 0
+                                  ? `${d.config.id}-${shortDepId}`
+                                  : `${d.config.id}-${shortDepId}-${replica.replicaIndex}`;
+                              const fqdn = () => {
+                                const info = clusterInfo();
+                                return info ? `${hostname}.${info.canonicalDomain}` : null;
+                              };
+                              const href = () => {
+                                const host = fqdn();
+                                if (!host) return null;
+                                const port = d.config.ingress?.port;
+                                return port ? `http://${host}:${port}` : `http://${host}`;
+                              };
+                              return (
+                                <div class="flex items-center gap-2 text-xs px-2.5 py-1.5">
+                                  <StatusDot status={replica.status} />
+                                  <Show
+                                    when={href()}
+                                    fallback={
+                                      <span class="font-mono text-gray-700 truncate">
+                                        {fqdn() ?? hostname}
+                                      </span>
+                                    }
+                                  >
+                                    {(url) => (
+                                      <a
+                                        href={url()}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        title="Open in new tab"
+                                        class="group inline-flex items-center gap-1 font-mono text-gray-700 hover:text-indigo-600 truncate"
+                                      >
+                                        <span class="truncate">{fqdn()}</span>
+                                        <ExternalLink class="size-3 text-gray-400 group-hover:text-indigo-500 shrink-0" />
+                                      </a>
+                                    )}
+                                  </Show>
+                                  <span class="text-gray-400 ml-auto">
+                                    {replica.status.toLowerCase()}
+                                  </span>
+                                </div>
+                              );
+                            }}
                           </For>
                         </div>
                       </Show>

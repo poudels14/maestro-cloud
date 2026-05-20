@@ -49,6 +49,11 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
           <p class="text-sm text-gray-500 truncate">{sourceName}</p>
         </div>
         <div class="flex items-center gap-2 shrink-0">
+          <Show when={s.deployFrozen}>
+            <span class="inline-flex items-center text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+              frozen
+            </span>
+          </Show>
           <StatusBadge status={status} />
           <Show when={!isSystem}>
             <div onClick={(e: MouseEvent) => e.stopPropagation()}>
