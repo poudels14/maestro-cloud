@@ -268,14 +268,23 @@ fn parse_labels(raw: &str) -> HashMap<String, String> {
 }
 
 fn split_service_label(raw: &str) -> Option<(String, Option<String>)> {
-    let stripped = raw.split('@').next().unwrap_or(raw);
-    let (svc, dep) = match stripped.rsplit_once('-') {
+    let (name, provider) = match raw.rsplit_once('@') {
+        Some((n, p)) => (n, Some(p)),
+        None => (raw, None),
+    };
+    if name.is_empty() {
+        return None;
+    }
+    if matches!(provider, Some("etcd")) {
+        return Some((name.to_string(), None));
+    }
+    let (svc, dep) = match name.rsplit_once('-') {
         Some((head, tail))
             if tail.len() == 6 && tail.chars().all(|c| c.is_ascii_alphanumeric()) =>
         {
             (head.to_string(), Some(tail.to_string()))
         }
-        _ => (stripped.to_string(), None),
+        _ => (name.to_string(), None),
     };
     if svc.is_empty() {
         return None;
