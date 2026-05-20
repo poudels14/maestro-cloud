@@ -395,6 +395,8 @@ async fn init_ingress(
             "--accesslog=true".into(),
             "--accesslog.format=json".into(),
             "--accesslog.fields.defaultmode=keep".into(),
+            "--accesslog.fields.headers.names.X-Forwarded-For=keep".into(),
+            "--accesslog.fields.headers.names.CF-Connecting-IP=keep".into(),
         ]);
     }
     if etcd_certs.is_some() {
