@@ -219,7 +219,56 @@ impl DeploymentController {
             self.process_queued_deployment(queued_deployment).await?;
         }
         self.cleanup_orphaned_deployments().await;
+        self.reconcile_stable_dns().await;
         Ok(())
+    }
+
+    async fn reconcile_stable_dns(&self) {
+        let (Some(dns), Some(domain)) = (self.dns_manager.as_ref(), self.dns_domain.as_deref())
+        else {
+            return;
+        };
+        let infos = match self.store.list_service_infos().await {
+            Ok(infos) => infos,
+            Err(_) => return,
+        };
+        let mut touched = false;
+        for info in &infos {
+            let service_id = &info.config.id;
+            let deployments = self
+                .store
+                .list_service_deployments(service_id)
+                .await
+                .unwrap_or_default();
+            let Some(latest_ready) = deployments
+                .iter()
+                .find(|d| d.status == DeploymentStatus::Ready)
+            else {
+                dns.remove_records_for_hostname(service_id, domain);
+                touched = true;
+                continue;
+            };
+            let replica_states = self
+                .store
+                .list_replica_states(service_id, &latest_ready.id)
+                .await
+                .unwrap_or_default();
+            let mut ips: Vec<String> = replica_states
+                .iter()
+                .filter(|r| r.status == DeploymentStatus::Ready)
+                .flat_map(|r| {
+                    let hostname = latest_ready.hostname_for_replica(r.replica_index);
+                    dns.lookup(&hostname, domain)
+                })
+                .collect();
+            ips.sort();
+            ips.dedup();
+            dns.set_records(service_id, domain, &ips);
+            touched = true;
+        }
+        if touched {
+            let _ = dns.flush();
+        }
     }
 
     async fn abort_canceled_builds(&mut self) {

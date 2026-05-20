@@ -10,7 +10,8 @@ pub struct DnsManager {
 }
 
 struct DnsManagerInner {
-    records: HashMap<String, String>, // fqdn → IP
+    // fqdn → IPs (multiple entries = multiple A records)
+    records: HashMap<String, Vec<String>>,
 }
 
 impl DnsManager {
@@ -29,9 +30,23 @@ impl DnsManager {
     }
 
     pub fn set_record(&self, hostname: &str, domain: &str, ip: &str) {
+        self.set_records(hostname, domain, std::slice::from_ref(&ip.to_string()));
+    }
+
+    pub fn set_records(&self, hostname: &str, domain: &str, ips: &[String]) {
         let fqdn = format!("{hostname}.{domain}");
         let mut inner = self.inner.lock().expect("dns lock");
-        inner.records.insert(fqdn, ip.to_string());
+        if ips.is_empty() {
+            inner.records.remove(&fqdn);
+        } else {
+            inner.records.insert(fqdn, ips.to_vec());
+        }
+    }
+
+    pub fn lookup(&self, hostname: &str, domain: &str) -> Vec<String> {
+        let fqdn = format!("{hostname}.{domain}");
+        let inner = self.inner.lock().expect("dns lock");
+        inner.records.get(&fqdn).cloned().unwrap_or_default()
     }
 
     pub fn remove_records_for_hostname(&self, hostname: &str, domain: &str) {
@@ -46,7 +61,7 @@ impl DnsManager {
         entries.sort_by_key(|(fqdn, _)| (*fqdn).clone());
         let content: String = entries
             .iter()
-            .map(|(fqdn, ip)| format!("{ip} {fqdn}"))
+            .flat_map(|(fqdn, ips)| ips.iter().map(move |ip| format!("{ip} {fqdn}")))
             .collect::<Vec<_>>()
             .join("\n");
         let tmp_path = self.hosts_path.with_extension("tmp");
@@ -64,7 +79,7 @@ impl DnsManager {
         fallthrough
     }
     forward . 1.1.1.1 8.8.8.8
-    cache 30
+    cache 5
     errors
 }
 "#;
