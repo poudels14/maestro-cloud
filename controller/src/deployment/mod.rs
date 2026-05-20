@@ -185,6 +185,7 @@ pub async fn start_system_jobs(
             .as_ref()
             .map(|ips| ip_flag(&ips.ingress))
             .unwrap_or_default(),
+        network_cidr.as_deref(),
         etcd_certs.as_ref(),
         logger,
         config,
@@ -338,6 +339,7 @@ async fn init_ingress(
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
+    network_cidr: Option<&str>,
     etcd_certs: Option<&EtcdCerts>,
     logger: &Logger,
     config: &ControllerConfig,
@@ -383,6 +385,11 @@ async fn init_ingress(
         "--metrics.prometheus.addServicesLabels=true".into(),
         "--metrics.prometheus.buckets=1.0,5.0,10.0".into(),
     ];
+    if let Some(cidr) = network_cidr {
+        image_and_args.push(format!(
+            "--entrypoints.web.forwardedHeaders.trustedIPs={cidr}"
+        ));
+    }
     if config.enable_ingress_access_logs {
         image_and_args.extend([
             "--accesslog=true".into(),
