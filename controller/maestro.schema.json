@@ -118,6 +118,13 @@
         "healthcheckPath": {
           "type": "string"
         },
+        "healthcheckInterval": {
+          "type": "integer",
+          "description": "Seconds between healthchecks once a replica is steady-state Ready. Clamped to [5, 300]. During startup (until the first successful check) and any time a replica is unhealthy, maestro rechecks every 5s regardless of this value.",
+          "minimum": 5,
+          "maximum": 300,
+          "default": 60
+        },
         "replicas": {
           "type": "integer",
           "minimum": 1,

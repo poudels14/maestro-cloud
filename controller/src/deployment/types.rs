@@ -207,6 +207,8 @@ pub struct ServiceDeployConfig {
     pub command: Option<Command>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck_path: Option<String>,
+    #[serde(default = "default_healthcheck_interval")]
+    pub healthcheck_interval: u32,
     #[serde(default = "default_replicas")]
     pub replicas: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,6 +219,14 @@ pub struct ServiceDeployConfig {
     pub secrets: Option<SecretsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeMount>,
+}
+
+pub const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;
+pub const MAX_HEALTHCHECK_INTERVAL_SECS: u32 = 300;
+pub const DEFAULT_HEALTHCHECK_INTERVAL_SECS: u32 = 60;
+
+fn default_healthcheck_interval() -> u32 {
+    DEFAULT_HEALTHCHECK_INTERVAL_SECS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -42,7 +42,8 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
           }
         ]
       : []),
-    { label: "Healthcheck path", value: s.deploy.healthcheckPath }
+    { label: "Healthcheck path", value: s.deploy.healthcheckPath },
+    { label: "Healthcheck interval", value: `${s.deploy.healthcheckInterval}s` }
   ];
 
   const envItems = Object.entries(s.deploy.env?.items ?? {}).map(([key, value]) => ({

@@ -53,6 +53,7 @@ fn deployment_with_source(
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress: None,
         },
@@ -257,6 +258,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress: None,
         },
@@ -405,6 +407,7 @@ impl InMemoryStore {
                     env: Default::default(),
                     secrets: None,
                     volumes: vec![],
+                    healthcheck_interval: 60,
                 },
                 ingress: None,
             };
@@ -456,6 +459,7 @@ impl InMemoryStore {
                     env: Default::default(),
                     secrets: None,
                     volumes: vec![],
+                    healthcheck_interval: 60,
                 },
                 ingress: None,
             };
@@ -528,6 +532,7 @@ impl InMemoryStore {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress,
         };
@@ -563,6 +568,7 @@ impl InMemoryStore {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress: None,
         };
@@ -611,6 +617,7 @@ impl InMemoryStore {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress: None,
         };

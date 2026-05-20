@@ -164,6 +164,7 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                healthcheck_interval: 60,
             },
             ingress: ingress_port.map(|port| crate::deployment::types::IngressConfig {
                 host: Some("svc.local".to_string()),
@@ -232,8 +233,9 @@ async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
         .build()
         .expect("build reqwest client");
     let mut state = HashMap::new();
+    let mut last_polled = HashMap::new();
 
-    crate::probe::healthcheck::check_deployments(&store, &http, &mut state, None)
+    crate::probe::healthcheck::check_deployments(&store, &http, &mut state, &mut last_polled, None)
         .await
         .expect("healthcheck should complete");
 

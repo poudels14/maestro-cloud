@@ -411,6 +411,8 @@ impl Server {
                         expose_ports: vec![],
                         command: None,
                         healthcheck_path: None,
+                        healthcheck_interval:
+                            crate::deployment::types::DEFAULT_HEALTHCHECK_INTERVAL_SECS,
                         replicas,
                         max_restarts: None,
                         env: Default::default(),

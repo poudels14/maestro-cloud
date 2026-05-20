@@ -1,5 +1,6 @@
 use crate::deployment::types::{
-    EnvConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
+    EnvConfig, MAX_HEALTHCHECK_INTERVAL_SECS, MIN_HEALTHCHECK_INTERVAL_SECS, ServiceBuildConfig,
+    ServiceDeployConfig, ServiceProvider,
 };
 
 pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
@@ -119,10 +120,15 @@ pub fn validate_service_provider_config(
             ));
         }
     }
+    let mut resolved_deploy = deploy.clone();
+    resolved_deploy.healthcheck_interval = resolved_deploy
+        .healthcheck_interval
+        .clamp(MIN_HEALTHCHECK_INTERVAL_SECS, MAX_HEALTHCHECK_INTERVAL_SECS);
+
     match provider {
         ServiceProvider::Docker => {
             let (build, image) = validate_build_config(build, image)?;
-            Ok((build, image, deploy.clone()))
+            Ok((build, image, resolved_deploy))
         }
         ServiceProvider::Shell => {
             if build.is_some() || image.is_some() {
@@ -131,13 +137,13 @@ pub fn validate_service_provider_config(
                         .to_string(),
                 );
             }
-            let Some(command) = deploy.command.as_ref() else {
+            let Some(command) = resolved_deploy.command.as_ref() else {
                 return Err("shell provider requires deploy.command".to_string());
             };
             if command.command.trim().is_empty() {
                 return Err("shell provider requires non-empty deploy.command.command".to_string());
             }
-            Ok((None, None, deploy.clone()))
+            Ok((None, None, resolved_deploy))
         }
     }
 }

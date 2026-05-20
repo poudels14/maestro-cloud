@@ -31,6 +31,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             env: Default::default(),
             secrets: None,
             volumes: vec![],
+            healthcheck_interval: 60,
         },
         ingress: None,
     }
@@ -56,6 +57,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             env: Default::default(),
             secrets: None,
             volumes: vec![],
+            healthcheck_interval: 60,
         },
         ingress: None,
     }

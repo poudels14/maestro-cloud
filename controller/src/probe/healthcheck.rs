@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -6,6 +7,7 @@ use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{Deployment, DeploymentStatus, ReplicaState, ServiceDeployment};
 
 const MAX_HEALTHCHECK_FAILURES: u32 = 10;
+const UNHEALTHY_RECHECK_SECS: u64 = 5;
 
 /// Tracks whether each replica was healthy on the last check.
 /// Keys are "{deployment_id}-replica{replica_index}".
@@ -15,6 +17,7 @@ pub async fn check_deployments(
     store: &dyn ClusterStore,
     http: &reqwest::Client,
     state: &mut HealthState,
+    last_polled: &mut HashMap<String, Instant>,
     dns_domain: Option<&str>,
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
@@ -60,6 +63,7 @@ pub async fn check_deployments(
                 store,
                 http,
                 state,
+                last_polled,
                 &service_id,
                 &deployment,
                 &checkable_replicas,
@@ -73,6 +77,7 @@ pub async fn check_deployments(
     }
 
     state.retain(|key, _| active_keys.contains(key));
+    last_polled.retain(|key, _| active_keys.contains(key));
     Ok(())
 }
 
@@ -80,6 +85,7 @@ async fn check_replicas(
     store: &dyn ClusterStore,
     http: &reqwest::Client,
     state: &mut HealthState,
+    last_polled: &mut HashMap<String, Instant>,
     service_id: &str,
     deployment: &ServiceDeployment,
     replicas: &[&ReplicaState],
@@ -96,8 +102,28 @@ async fn check_replicas(
         return Ok(());
     };
 
+    let healthy_interval =
+        Duration::from_secs(deployment.config.deploy.healthcheck_interval as u64);
+    let unhealthy_interval = Duration::from_secs(UNHEALTHY_RECHECK_SECS);
+
+    let now = Instant::now();
+
     for replica in replicas {
         let key = replica_health_key(&deployment.id, replica.replica_index);
+        let last_known_healthy = state.get(&key).copied().unwrap_or(false);
+        let is_steady_state = replica.status == DeploymentStatus::Ready && last_known_healthy;
+        let due_after = if is_steady_state {
+            healthy_interval
+        } else {
+            unhealthy_interval
+        };
+        if let Some(last) = last_polled.get(&key) {
+            if now.saturating_duration_since(*last) < due_after {
+                continue;
+            }
+        }
+        last_polled.insert(key.clone(), now);
+
         let Some(url) = build_health_url_for_replica(
             deployment,
             replica.replica_index,

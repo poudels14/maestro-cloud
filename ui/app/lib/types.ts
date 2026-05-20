@@ -44,6 +44,7 @@ export interface SecretsConfig {
 export interface Deploy {
   command?: BuildCommand | null;
   healthcheckPath: string;
+  healthcheckInterval: number;
   replicas?: number;
   env?: EnvConfig;
   secrets?: SecretsConfig | null;
