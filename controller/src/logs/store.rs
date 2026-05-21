@@ -133,7 +133,8 @@ impl LogStore {
                 text TEXT NOT NULL,
                 source TEXT NOT NULL,
                 origin TEXT NOT NULL DEFAULT 'system',
-                attributes TEXT NOT NULL DEFAULT '{}'
+                tags TEXT NOT NULL DEFAULT '[]',
+                attributes TEXT NOT NULL DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS sink_cursors (
@@ -173,6 +174,15 @@ impl LogStore {
             CREATE INDEX IF NOT EXISTS idx_traffic_service_ts ON traffic_metrics (service_id, ts);
             ",
         )?;
+
+        let has_tags = conn.prepare("SELECT tags FROM logs LIMIT 0").is_ok();
+        if !has_tags {
+            conn.execute_batch(
+                "ALTER TABLE logs RENAME COLUMN attributes TO tags;
+                 ALTER TABLE logs ADD COLUMN attributes TEXT NOT NULL DEFAULT '[]';",
+            )?;
+        }
+
         Ok(Self {
             path: path.to_path_buf(),
             conn: Mutex::new(conn),
@@ -186,11 +196,12 @@ impl LogStore {
         }
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "INSERT INTO logs (ts, level, stream, text, source, origin, attributes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO logs (ts, level, stream, text, source, origin, tags, attributes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for entry in entries {
-            let attrs = serde_json::to_string(&entry.tags).unwrap_or_default();
+            let tags_json = serde_json::to_string(&entry.tags).unwrap_or_default();
+            let attrs_json = serde_json::to_string(&entry.attrs).unwrap_or_else(|_| "[]".into());
             stmt.execute(rusqlite::params![
                 entry.ts,
                 entry.level,
@@ -198,7 +209,8 @@ impl LogStore {
                 entry.text,
                 entry.source,
                 entry.origin.as_str(),
-                attrs,
+                tags_json,
+                attrs_json,
             ])?;
         }
         drop(stmt);
@@ -210,7 +222,7 @@ impl LogStore {
     pub async fn read_tail_all(&self, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs ORDER BY seq DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
@@ -224,7 +236,7 @@ impl LogStore {
     pub async fn read_after_all(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
@@ -243,7 +255,7 @@ impl LogStore {
         let pattern = format!("{prefix}%");
         let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE source LIKE ?1
                AND (?2 IS NULL OR origin = ?2)
              ORDER BY seq DESC
@@ -269,7 +281,7 @@ impl LogStore {
         let pattern = format!("{prefix}%");
         let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs
              WHERE source LIKE ?1 AND seq > ?2
                AND (?3 IS NULL OR origin = ?3)
@@ -286,7 +298,7 @@ impl LogStore {
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE source = ?1
              ORDER BY seq DESC
              LIMIT ?2",
@@ -303,7 +315,7 @@ impl LogStore {
         let conn = self.conn.lock().await;
         let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
         let query = format!(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE source IN ({})
              ORDER BY seq DESC
              LIMIT ?{}",
@@ -327,7 +339,7 @@ impl LogStore {
     pub async fn read_after(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE seq > ?1
              ORDER BY seq ASC
              LIMIT ?2",
@@ -346,7 +358,7 @@ impl LogStore {
     ) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs WHERE source = ?1 AND seq > ?2
              ORDER BY seq ASC
              LIMIT ?3",
@@ -366,7 +378,7 @@ impl LogStore {
         let conn = self.conn.lock().await;
         let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
         let query = format!(
-            "SELECT seq, ts, level, stream, text, source, origin, attributes
+            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
              FROM logs
              WHERE source IN ({}) AND seq > ?{}
              ORDER BY seq ASC
@@ -590,9 +602,11 @@ impl LogStore {
 
     fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
         let origin_str: String = row.get(6)?;
-        let attrs_str: String = row.get(7)?;
+        let tags_str: String = row.get(7)?;
+        let attrs_str: String = row.get(8)?;
         let tags: serde_json::Value =
-            serde_json::from_str(&attrs_str).unwrap_or(serde_json::Value::Null);
+            serde_json::from_str(&tags_str).unwrap_or(serde_json::Value::Null);
+        let attrs: Vec<(String, String)> = serde_json::from_str(&attrs_str).unwrap_or_default();
         Ok(LogEntry {
             seq: row.get(0)?,
             ts: row.get(1)?,
@@ -602,7 +616,11 @@ impl LogStore {
             source: row.get::<_, String>(5)?.into(),
             origin: LogOrigin::from_str(&origin_str),
             tags: Arc::new(tags),
-            attrs: vec![],
+            attrs,
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/logs/store.rs"]
+mod tests;

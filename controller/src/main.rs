@@ -1079,15 +1079,30 @@ fn print_log_entry(entry: &logs::LogEntry, show_source: bool) {
     let ts = chrono::DateTime::from_timestamp_millis(entry.ts)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_else(|| entry.ts.to_string());
+    let attrs = entry
+        .attrs
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let suffix = if attrs.is_empty() {
+        String::new()
+    } else {
+        format!("  {attrs}")
+    };
     if show_source {
         println!(
-            "{ts}  {:<5}  [{}]  {}",
+            "{ts}  {:<5}  [{}]  {}{suffix}",
             entry.level.to_uppercase(),
             entry.source,
             entry.text
         );
     } else {
-        println!("{ts}  {:<5}  {}", entry.level.to_uppercase(), entry.text);
+        println!(
+            "{ts}  {:<5}  {}{suffix}",
+            entry.level.to_uppercase(),
+            entry.text
+        );
     }
 }
 

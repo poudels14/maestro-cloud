@@ -62,6 +62,8 @@ struct DatadogLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     ddtags: Option<String>,
     status: String,
+    #[serde(flatten, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    attrs: std::collections::BTreeMap<String, String>,
 }
 
 #[async_trait]
@@ -76,6 +78,11 @@ impl LogSink for DatadogSink {
             .filter(|entry| self.should_send(entry))
             .map(|entry| {
                 let (ddtags, service, hostname) = build_dd_tags(&entry.tags);
+                let attrs = entry
+                    .attrs
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
                 DatadogLogEntry {
                     message: entry.text.clone(),
                     hostname: hostname.unwrap_or_else(|| entry.source.to_string()),
@@ -83,6 +90,7 @@ impl LogSink for DatadogSink {
                     ddsource: Some(dd_source(&entry.source).to_string()),
                     ddtags,
                     status: dd_status(&entry.level),
+                    attrs,
                 }
             })
             .collect();
