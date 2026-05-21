@@ -179,6 +179,8 @@ pub struct DatadogConfig {
     pub include_ingress_logs: bool,
     #[serde(default = "default_true")]
     pub include_tailscale_logs: bool,
+    #[serde(default)]
+    pub include_metrics: bool,
 }
 
 fn default_true() -> bool {
@@ -244,6 +246,8 @@ pub struct DatadogView {
     pub site: Option<String>,
     pub include_ingress_logs: bool,
     pub include_tailscale_logs: bool,
+    #[serde(default)]
+    pub include_metrics: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +308,7 @@ impl StartConfig {
                 site: dd.site.clone(),
                 include_ingress_logs: dd.include_ingress_logs,
                 include_tailscale_logs: dd.include_tailscale_logs,
+                include_metrics: dd.include_metrics,
             }),
             system: self.system.as_ref().map(|s| s.to_string()),
             runtime: self.runtime.to_string(),

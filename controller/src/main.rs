@@ -447,6 +447,7 @@ async fn run() -> crate::error::Result<bool> {
                     site: None,
                     include_ingress_logs: true,
                     include_tailscale_logs: true,
+                    include_metrics: false,
                 });
                 dd.api_key = api_key;
             }
@@ -592,6 +593,7 @@ async fn run() -> crate::error::Result<bool> {
             let mut metrics_datadog_tx: Option<flume::Sender<metrics::MetricBatch>> = None;
             if let Some(dd) = cfg.datadog {
                 if let Some(site) = datadog_site {
+                    let include_metrics = dd.include_metrics;
                     let metrics_api_key = dd.api_key.clone();
                     let dd_sink = logs::DatadogSink::new(
                         dd.api_key,
@@ -607,18 +609,29 @@ async fn run() -> crate::error::Result<bool> {
                     background_handles.push(dd_worker.spawn());
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
 
-                    let (metrics_tx, metrics_rx) = flume::bounded(1024);
-                    let metrics_sink = metrics::datadog::DatadogMetricsSink::new(
-                        &site,
-                        SecretString::new(metrics_api_key),
-                        metrics_rx,
-                        cluster_name.clone(),
-                        parse_tags(cfg.tags.clone()).unwrap_or_default(),
-                        signal_tx.subscribe(),
-                        logger.clone(),
-                    );
-                    background_handles.push(metrics_sink.spawn());
-                    metrics_datadog_tx = Some(metrics_tx);
+                    if include_metrics {
+                        let (metrics_tx, metrics_rx) = flume::bounded(1024);
+                        let metrics_sink = metrics::datadog::DatadogMetricsSink::new(
+                            &site,
+                            SecretString::new(metrics_api_key),
+                            metrics_rx,
+                            cluster_name.clone(),
+                            parse_tags(cfg.tags.clone()).unwrap_or_default(),
+                            signal_tx.subscribe(),
+                            logger.clone(),
+                        );
+                        background_handles.push(metrics_sink.spawn());
+                        metrics_datadog_tx = Some(metrics_tx);
+                        logger.emit(
+                            "info",
+                            &format!("datadog metrics sink enabled (site: {site})"),
+                        );
+                    } else {
+                        logger.emit(
+                            "info",
+                            "datadog metrics disabled; set datadog.include-metrics=true to enable",
+                        );
+                    }
                 } else {
                     logger.emit("warn", "datadog config present but sink is disabled; set datadog.site in config or pass --datadog-site");
                 }
