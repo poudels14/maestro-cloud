@@ -572,6 +572,14 @@ impl Server {
                 ),
             ));
         }
+        if body.replicas > 1 && crate::validation::has_writable_volume(&info.config.deploy) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "cannot scale above 1 replica while a writable volume is mounted; \
+                 mark the volume `readOnly: true` first"
+                    .to_string(),
+            ));
+        }
 
         let new_override = if body.replicas == configured {
             None
