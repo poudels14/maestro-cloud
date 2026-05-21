@@ -9,7 +9,9 @@ use tokio::sync::broadcast;
 use crate::logs::Logger;
 use crate::signal::ShutdownEvent;
 
-const COLLECT_INTERVAL: Duration = Duration::from_secs(5);
+pub mod datadog;
+
+const COLLECT_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +23,21 @@ pub struct MetricPoint {
     pub memory_limit_bytes: i64,
     pub net_rx_bytes: i64,
     pub net_tx_bytes: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskPoint {
+    pub ts: i64,
+    pub mount_point: String,
+    pub total_bytes: i64,
+    pub available_bytes: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetricBatch {
+    pub points: Vec<MetricPoint>,
+    pub disks: Vec<DiskPoint>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -47,6 +64,7 @@ pub struct MetricsCollector {
     client: reqwest::Client,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     logger: Logger,
+    datadog_tx: Option<flume::Sender<MetricBatch>>,
 }
 
 impl MetricsCollector {
@@ -56,6 +74,7 @@ impl MetricsCollector {
         runtime_cli: String,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
         logger: Logger,
+        datadog_tx: Option<flume::Sender<MetricBatch>>,
     ) -> Self {
         Self {
             endpoint,
@@ -67,6 +86,7 @@ impl MetricsCollector {
                 .expect("failed to build metrics http client"),
             signal_rx,
             logger,
+            datadog_tx,
         }
     }
 
@@ -107,7 +127,7 @@ impl MetricsCollector {
 
         let mut points: Vec<MetricPoint> = Vec::new();
 
-        points.push(collect_node_metrics(now));
+        points.push(collect_node_metrics(now).await);
 
         let raw_stats = collect_container_stats(&self.runtime_cli)
             .await
@@ -169,14 +189,25 @@ impl MetricsCollector {
             .await
             .map_err(|err| anyhow!("failed to send metrics: {err}"))?;
 
+        if let Some(tx) = &self.datadog_tx {
+            let batch = MetricBatch {
+                points,
+                disks: collect_disks(now),
+            };
+            if tx.try_send(batch).is_err() {
+                self.logger
+                    .emit("warn", "datadog metrics channel full; dropping batch");
+            }
+        }
+
         Ok(())
     }
 }
 
-fn collect_node_metrics(ts: i64) -> MetricPoint {
+async fn collect_node_metrics(ts: i64) -> MetricPoint {
     let mut sys = System::new();
     sys.refresh_cpu_all();
-    std::thread::sleep(Duration::from_millis(200));
+    tokio::time::sleep(Duration::from_millis(200)).await;
     sys.refresh_cpu_all();
     sys.refresh_memory();
 
@@ -201,6 +232,26 @@ fn collect_node_metrics(ts: i64) -> MetricPoint {
         net_rx_bytes: net_rx,
         net_tx_bytes: net_tx,
     }
+}
+
+fn collect_disks(ts: i64) -> Vec<DiskPoint> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let mut seen = std::collections::HashSet::new();
+    disks
+        .iter()
+        .filter_map(|disk| {
+            let mount = disk.mount_point().display().to_string();
+            if !seen.insert(mount.clone()) {
+                return None;
+            }
+            Some(DiskPoint {
+                ts,
+                mount_point: mount,
+                total_bytes: disk.total_space() as i64,
+                available_bytes: disk.available_space() as i64,
+            })
+        })
+        .collect()
 }
 
 struct ContainerStats {
