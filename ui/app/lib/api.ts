@@ -65,6 +65,25 @@ export async function freezeService(serviceId: string, frozen: boolean) {
   if (!res.ok) throw new Error(`Failed to update freeze status: ${res.statusText}`);
 }
 
+export async function setServiceReplicas(serviceId: string, replicas: number) {
+  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ replicas })
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to update replicas: ${res.statusText}`);
+  }
+}
+
+export async function clearServiceReplicasOverride(serviceId: string) {
+  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
+    method: "DELETE"
+  });
+  if (!res.ok) throw new Error(`Failed to clear replicas override: ${res.statusText}`);
+}
+
 export async function cancelDeployment(serviceId: string, deploymentId: string) {
   const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`;
   const res = await fetch(url, { method: "PATCH" });

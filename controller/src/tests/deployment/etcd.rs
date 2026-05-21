@@ -1049,6 +1049,7 @@ impl ClusterStore for InMemoryStore {
         Ok(state.configs.get(service_id).map(|config| ServiceInfo {
             config: config.clone(),
             deploy_frozen: false,
+            replicas_override: None,
         }))
     }
 

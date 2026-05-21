@@ -2,7 +2,14 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { Eye, EyeOff } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
-import { freezeService, getIngressRoutes } from "../../lib/api";
+import {
+  clearServiceReplicasOverride,
+  freezeService,
+  getIngressRoutes,
+  setServiceReplicas
+} from "../../lib/api";
+
+const MAX_REPLICAS = 25;
 
 function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const s = props.service;
@@ -32,8 +39,53 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
   const buildSecretKeys = Object.keys(s.build?.secrets?.items ?? {}).sort();
   const buildSecretSource = s.build?.secrets?.source ?? null;
 
+  const configuredReplicas = () => s.deploy.replicas ?? 1;
+  const effectiveReplicas = () => s.replicasOverride ?? configuredReplicas();
+  const [replicasInput, setReplicasInput] = createSignal(effectiveReplicas());
+  const [replicasError, setReplicasError] = createSignal<string | null>(null);
+  const [replicasSaving, setReplicasSaving] = createSignal(false);
+
+  const applyReplicas = async () => {
+    setReplicasError(null);
+    const next = Number(replicasInput());
+    if (!Number.isInteger(next) || next < 1) {
+      setReplicasError("replicas must be an integer >= 1");
+      return;
+    }
+    if (next < configuredReplicas()) {
+      setReplicasError(`cannot go below configured (${configuredReplicas()})`);
+      return;
+    }
+    if (next > MAX_REPLICAS) {
+      setReplicasError(`cannot exceed ${MAX_REPLICAS}`);
+      return;
+    }
+    setReplicasSaving(true);
+    try {
+      await setServiceReplicas(s.id, next);
+      props.onServiceUpdate();
+    } catch (err) {
+      setReplicasError(err instanceof Error ? err.message : "failed to update");
+    } finally {
+      setReplicasSaving(false);
+    }
+  };
+
+  const revertReplicas = async () => {
+    setReplicasError(null);
+    setReplicasSaving(true);
+    try {
+      await clearServiceReplicasOverride(s.id);
+      setReplicasInput(configuredReplicas());
+      props.onServiceUpdate();
+    } catch (err) {
+      setReplicasError(err instanceof Error ? err.message : "failed to revert");
+    } finally {
+      setReplicasSaving(false);
+    }
+  };
+
   const deployItems = [
-    { label: "Replicas", value: String(s.deploy.replicas ?? 1) },
     ...(s.deploy.command
       ? [
           {
@@ -181,6 +233,67 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
         </div>
       </Show>
       <ConfigSection title="Deploy" items={deployItems} />
+      <Show when={!s.system}>
+        <div class="bg-white rounded-lg border border-gray-200 px-4 py-2.5 flex items-center justify-between gap-4">
+          <div class="flex items-baseline gap-2 min-w-0">
+            <span class="text-xs text-gray-500 shrink-0">Replicas</span>
+            <Show when={s.replicasOverride}>
+              <span class="text-[11px] text-amber-600">
+                override · config: {configuredReplicas()}
+              </span>
+            </Show>
+            <Show when={replicasError()}>
+              <span class="text-[11px] text-red-600 truncate">{replicasError()}</span>
+            </Show>
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            <Show when={replicasInput() !== effectiveReplicas()}>
+              <button
+                type="button"
+                onClick={applyReplicas}
+                disabled={replicasSaving()}
+                class="mr-1 px-2 py-1 text-xs font-medium rounded-md bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:bg-gray-100 disabled:text-gray-400 transition-colors"
+              >
+                Save
+              </button>
+            </Show>
+            <button
+              type="button"
+              onClick={() => setReplicasInput(Math.max(configuredReplicas(), replicasInput() - 1))}
+              disabled={replicasSaving() || replicasInput() <= configuredReplicas()}
+              class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              min={configuredReplicas()}
+              max={MAX_REPLICAS}
+              value={replicasInput()}
+              onInput={(e) => setReplicasInput(Number(e.currentTarget.value))}
+              class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-indigo-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              disabled={replicasSaving()}
+            />
+            <button
+              type="button"
+              onClick={() => setReplicasInput(Math.min(MAX_REPLICAS, replicasInput() + 1))}
+              disabled={replicasSaving() || replicasInput() >= MAX_REPLICAS}
+              class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={revertReplicas}
+              disabled={replicasSaving() || !s.replicasOverride}
+              title="Revert to configured value"
+              class="ml-1 size-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 rounded-md"
+            >
+              ↺
+            </button>
+          </div>
+        </div>
+      </Show>
       <Show when={envItems.length > 0 || envSource}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">

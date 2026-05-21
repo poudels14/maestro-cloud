@@ -26,6 +26,8 @@ pub(crate) struct ServiceListItem {
     pub(crate) system: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) deploy_frozen: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) replicas_override: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -99,4 +101,18 @@ pub(crate) struct FreezeRequest {
 pub(crate) struct FreezeResponse {
     pub(crate) service_id: String,
     pub(crate) deploy_frozen: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct ReplicasOverrideRequest {
+    pub(crate) replicas: u32,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReplicasResponse {
+    pub(crate) service_id: String,
+    pub(crate) replicas: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) replicas_override: Option<u32>,
 }

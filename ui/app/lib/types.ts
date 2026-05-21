@@ -74,6 +74,7 @@ export interface Service {
   ingress?: Ingress | null;
   system?: boolean;
   deployFrozen?: boolean;
+  replicasOverride?: number | null;
 }
 
 export interface ReplicaState {
