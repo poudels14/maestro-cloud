@@ -131,7 +131,7 @@ enum ContextsCommand {
     /// Set the active context
     Use {
         #[arg(help = "Context name")]
-        name: String,
+        name: Option<String>,
     },
     /// List configured contexts
     List,
@@ -826,7 +826,7 @@ async fn run() -> crate::error::Result<bool> {
             ContextsCommand::Set(ContextSetArgs { name, host }) => {
                 cli::contexts::set_context(name.as_deref(), host.as_deref())
             }
-            ContextsCommand::Use { name } => cli::contexts::use_context(&name),
+            ContextsCommand::Use { name } => cli::contexts::use_context(name.as_deref()),
             ContextsCommand::List => cli::contexts::list_contexts(),
             ContextsCommand::Show { name } => cli::contexts::show_context(name.as_deref()),
             ContextsCommand::Remove { name } => cli::contexts::remove_context(&name),
