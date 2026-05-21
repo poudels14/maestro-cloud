@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createEffect, createResource, Show } from "solid-js";
+import { useQuery } from "@tanstack/solid-query";
+import { createEffect, Show } from "solid-js";
 import type { Service } from "../lib/types";
-import { getServices } from "../lib/api";
+import { servicesQuery } from "../lib/queries";
 import { TabButton } from "../lib/ui";
 import { ServiceSidebar } from "../components/service-detail/Sidebar";
 import { OverviewTab } from "../components/service-detail/OverviewTab";
@@ -19,30 +20,29 @@ export const Route = createFileRoute("/services/$serviceId/$tab")({
 function ServiceDetailPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const [services, { refetch: refetchServices }] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getServices
-  );
-  const tab = useTab();
+  const services = useQuery(() => servicesQuery());
+  const tab = () => {
+    const raw = params().tab;
+    return VALID_TABS.has(raw) ? (raw as DetailTab) : "overview";
+  };
 
-  const selected = () => services()?.find((s) => s.id === params().serviceId);
+  const selected = () => services.data?.find((s) => s.id === params().serviceId);
 
-  const navigateTab = (t: DetailTab) =>
+  const navigateTab = (next: DetailTab) =>
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: params().serviceId, tab: t }
+      params: { serviceId: params().serviceId, tab: next }
     });
 
-  const navigateService = (s: Service) =>
-    navigate({ to: "/services/$serviceId/$tab", params: { serviceId: s.id, tab } });
+  const navigateService = (service: Service) =>
+    navigate({ to: "/services/$serviceId/$tab", params: { serviceId: service.id, tab: tab() } });
 
-  const serviceList = () => services() ?? [];
-  const loading = () => services.loading || services() === undefined;
+  const loading = () => services.isLoading;
 
   return (
     <div class="h-screen flex bg-[#fafafa]">
       <ServiceSidebar
-        services={serviceList()}
+        services={services.data ?? []}
         selected={selected() ?? null}
         onSelect={navigateService}
         onBack={() => navigate({ to: "/" })}
@@ -68,12 +68,7 @@ function ServiceDetailPage() {
       </Show>
       <Show when={!loading() && selected()}>
         {(service) => (
-          <ServiceDetailPanel
-            service={service()}
-            tab={tab}
-            navigateTab={navigateTab}
-            onServiceUpdate={refetchServices}
-          />
+          <ServiceDetailPanel service={service()} tab={tab()} navigateTab={navigateTab} />
         )}
       </Show>
     </div>
@@ -84,12 +79,9 @@ function ServiceDetailPanel(props: {
   service: Service;
   tab: DetailTab;
   navigateTab: (t: DetailTab) => void;
-  onServiceUpdate: () => void;
 }) {
-  const s = props.service;
-
   createEffect(() => {
-    if (s.system && props.tab === "deployments") {
+    if (props.service.system && props.tab === "deployments") {
       props.navigateTab("logs");
     }
   });
@@ -108,7 +100,7 @@ function ServiceDetailPanel(props: {
             active={props.tab === "metrics"}
             onClick={() => props.navigateTab("metrics")}
           />
-          <Show when={!s.system}>
+          <Show when={!props.service.system}>
             <TabButton
               label="Deployments"
               active={props.tab === "deployments"}
@@ -125,25 +117,23 @@ function ServiceDetailPanel(props: {
       <div class="flex-1 overflow-y-auto py-5 bg-[#fafafa]">
         <div class="max-w-4xl mx-auto px-6">
           <Show when={props.tab === "overview"}>
-            <OverviewTab service={s} onServiceUpdate={props.onServiceUpdate} />
+            <OverviewTab service={props.service} />
           </Show>
           <Show when={props.tab === "deployments"}>
-            <DeploymentsTab serviceId={s.id} hasBuild={!!s.build} deployFrozen={!!s.deployFrozen} />
+            <DeploymentsTab
+              serviceId={props.service.id}
+              hasBuild={!!props.service.build}
+              deployFrozen={!!props.service.deployFrozen}
+            />
           </Show>
           <Show when={props.tab === "metrics"}>
-            <MetricsTab service={s} />
+            <MetricsTab service={props.service} />
           </Show>
           <Show when={props.tab === "logs"}>
-            <LogsTab service={s} />
+            <LogsTab service={props.service} />
           </Show>
         </div>
       </div>
     </div>
   );
-}
-
-function useTab(): DetailTab {
-  const params = Route.useParams();
-  const raw = () => params().tab;
-  return VALID_TABS.has(raw()) ? (raw() as DetailTab) : "overview";
 }

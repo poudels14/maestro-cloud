@@ -1,449 +1,153 @@
-import { createResource, createSignal, For, Show } from "solid-js";
-import { Eye, EyeOff } from "lucide-solid";
-import clsx from "clsx";
+import { For, Show } from "solid-js";
 import type { Service } from "../../lib/types";
-import {
-  clearServiceReplicasOverride,
-  freezeService,
-  getIngressRoutes,
-  setServiceReplicas
-} from "../../lib/api";
+import { ConfigSection } from "./overview/ConfigSection";
+import { ReplicasEditor } from "./overview/ReplicasEditor";
+import { IngressInfo } from "./overview/IngressInfo";
+import { VolumesList } from "./overview/VolumesList";
+import { FreezeToggle } from "./overview/FreezeToggle";
 
-const MAX_REPLICAS = 25;
-
-function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
-  const s = props.service;
-
-  const isIngress = s.id === "maestro-ingress";
-  const [ingressRoutes] = createResource(
-    () => (isIngress ? true : null),
-    () => getIngressRoutes()
-  );
-
-  const sourceItems =
-    s.build != null
-      ? [
-          { label: "Git repository", value: s.build.repo },
-          ...(s.build.branch ? [{ label: "Branch", value: s.build.branch }] : []),
-          { label: "Dockerfile", value: s.build.dockerfile },
-          ...(s.build.registry ? [{ label: "Registry", value: s.build.registry }] : []),
-          ...(s.build.watch ? [{ label: "Watch", value: "enabled" }] : [])
-        ]
-      : [{ label: "Image", value: s.image ?? "(not set)" }];
-
-  const buildEnvItems = Object.entries(s.build?.env?.items ?? {}).map(([key, value]) => ({
-    label: key,
-    value
-  }));
-  const buildEnvSource = s.build?.env?.source ?? null;
-  const buildSecretKeys = Object.keys(s.build?.secrets?.items ?? {}).sort();
-  const buildSecretSource = s.build?.secrets?.source ?? null;
-
-  const configuredReplicas = () => s.deploy.replicas ?? 1;
-  const effectiveReplicas = () => s.replicasOverride ?? configuredReplicas();
-  const hasWritableVolume = () => (s.deploy.volumes ?? []).some((v) => !v.readOnly);
-  const scalingLocked = () => hasWritableVolume();
-  const [replicasInput, setReplicasInput] = createSignal(effectiveReplicas());
-  const [replicasError, setReplicasError] = createSignal<string | null>(null);
-  const [replicasSaving, setReplicasSaving] = createSignal(false);
-
-  const applyReplicas = async () => {
-    setReplicasError(null);
-    const next = Number(replicasInput());
-    if (!Number.isInteger(next) || next < 1) {
-      setReplicasError("replicas must be an integer >= 1");
-      return;
+function OverviewTab(props: { service: Service }) {
+  const sourceItems = () => {
+    const build = props.service.build;
+    if (!build) {
+      return [{ label: "Image", value: props.service.image ?? "(not set)" }];
     }
-    if (next < configuredReplicas()) {
-      setReplicasError(`cannot go below configured (${configuredReplicas()})`);
-      return;
-    }
-    if (next > MAX_REPLICAS) {
-      setReplicasError(`cannot exceed ${MAX_REPLICAS}`);
-      return;
-    }
-    setReplicasSaving(true);
-    try {
-      await setServiceReplicas(s.id, next);
-      props.onServiceUpdate();
-    } catch (err) {
-      setReplicasError(err instanceof Error ? err.message : "failed to update");
-    } finally {
-      setReplicasSaving(false);
-    }
+    return [
+      { label: "Git repository", value: build.repo },
+      ...(build.branch ? [{ label: "Branch", value: build.branch }] : []),
+      { label: "Dockerfile", value: build.dockerfile },
+      ...(build.registry ? [{ label: "Registry", value: build.registry }] : []),
+      ...(build.watch ? [{ label: "Watch", value: "enabled" }] : [])
+    ];
   };
 
-  const revertReplicas = async () => {
-    setReplicasError(null);
-    setReplicasSaving(true);
-    try {
-      await clearServiceReplicasOverride(s.id);
-      setReplicasInput(configuredReplicas());
-      props.onServiceUpdate();
-    } catch (err) {
-      setReplicasError(err instanceof Error ? err.message : "failed to revert");
-    } finally {
-      setReplicasSaving(false);
+  const buildEnvItems = () =>
+    Object.entries(props.service.build?.env?.items ?? {}).map(([key, value]) => ({
+      label: key,
+      value
+    }));
+  const buildEnvSource = () => props.service.build?.env?.source ?? null;
+  const buildSecretKeys = () => Object.keys(props.service.build?.secrets?.items ?? {}).sort();
+  const buildSecretSource = () => props.service.build?.secrets?.source ?? null;
+
+  const deployItems = () => {
+    const items: { label: string; value: string }[] = [];
+    const command = props.service.deploy.command;
+    if (command) {
+      items.push({
+        label: "Deploy command",
+        value: `${command.command} ${command.args.join(" ")}`.trim()
+      });
     }
+    items.push({ label: "Healthcheck path", value: props.service.deploy.healthcheckPath });
+    items.push({
+      label: "Healthcheck interval",
+      value: `${props.service.deploy.healthcheckInterval}s`
+    });
+    return items;
   };
 
-  const deployItems = [
-    ...(s.deploy.command
-      ? [
-          {
-            label: "Deploy command",
-            value: `${s.deploy.command.command} ${s.deploy.command.args.join(" ")}`.trim()
-          }
-        ]
-      : []),
-    { label: "Healthcheck path", value: s.deploy.healthcheckPath },
-    { label: "Healthcheck interval", value: `${s.deploy.healthcheckInterval}s` }
-  ];
-
-  const envItems = Object.entries(s.deploy.env?.items ?? {}).map(([key, value]) => ({
-    label: key,
-    value
-  }));
-  const envSource = s.deploy.env?.source ?? null;
-
-  const secretKeys = Object.keys(s.deploy.secrets?.keys ?? {}).sort();
-  const secretSource = s.deploy.secrets?.source ?? null;
-
-  const volumes = s.deploy.volumes ?? [];
-
-  const ingressHosts = s.ingress
-    ? [s.ingress.host, ...(s.ingress.hosts ?? [])].filter((host): host is string => !!host)
-    : [];
+  const envItems = () =>
+    Object.entries(props.service.deploy.env?.items ?? {}).map(([key, value]) => ({
+      label: key,
+      value
+    }));
+  const envSource = () => props.service.deploy.env?.source ?? null;
+  const secretKeys = () => Object.keys(props.service.deploy.secrets?.keys ?? {}).sort();
+  const secretSource = () => props.service.deploy.secrets?.source ?? null;
+  const secretMountPath = () => props.service.deploy.secrets?.mountPath ?? null;
 
   return (
     <div class="space-y-6">
-      <ConfigSection title="Source" items={sourceItems} />
-      <Show when={buildEnvItems.length > 0 || buildEnvSource}>
+      <ConfigSection title="Source" items={sourceItems()} />
+
+      <Show when={buildEnvItems().length > 0 || buildEnvSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Build Environment
-            <Show when={buildEnvSource}>
-              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildEnvSource}</span>
+            <Show when={buildEnvSource()}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildEnvSource()}</span>
             </Show>
           </h4>
-          <Show when={buildEnvItems.length > 0}>
-            <ConfigSection items={buildEnvItems} maskValues />
+          <Show when={buildEnvItems().length > 0}>
+            <ConfigSection items={buildEnvItems()} maskValues />
           </Show>
         </div>
       </Show>
-      <Show when={buildSecretKeys.length > 0 || buildSecretSource}>
+
+      <Show when={buildSecretKeys().length > 0 || buildSecretSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Build Secrets
-            <Show when={buildSecretSource}>
-              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildSecretSource}</span>
+            <Show when={buildSecretSource()}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildSecretSource()}</span>
             </Show>
           </h4>
-          <Show when={buildSecretKeys.length > 0}>
-            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-              <For each={buildSecretKeys}>
-                {(key) => (
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">{key}</span>
-                    <span class="text-sm font-mono text-gray-400">••••••••</span>
-                  </div>
-                )}
-              </For>
-            </div>
+          <Show when={buildSecretKeys().length > 0}>
+            <SecretsList keys={buildSecretKeys()} />
           </Show>
         </div>
       </Show>
-      <Show when={s.ingress}>
-        {(ingress) => (
-          <div>
-            <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Ingress</h4>
-            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs text-gray-500 shrink-0">
-                  {ingressHosts.length > 1 ? "Hosts" : "Host"}
-                </span>
-                <Show
-                  when={ingressHosts.length > 1}
-                  fallback={
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
-                      {ingressHosts[0] ?? "(not set)"}
-                    </span>
-                  }
-                >
-                  <div class="flex flex-col items-end gap-1 min-w-0">
-                    <For each={ingressHosts}>
-                      {(host) => (
-                        <span class="text-sm font-mono text-gray-800 text-right truncate max-w-full">
-                          {host}
-                        </span>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </div>
-              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs text-gray-500 shrink-0">Port</span>
-                <span class="text-sm font-mono text-gray-800 text-right truncate">
-                  {String(ingress().port ?? 80)}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
+
+      <IngressInfo service={props.service} />
+
+      <ConfigSection title="Deploy" items={deployItems()} />
+
+      <Show when={!props.service.system}>
+        <ReplicasEditor service={props.service} />
       </Show>
-      <Show when={isIngress && ingressRoutes()?.length}>
-        <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Routes</h4>
-          <div class="space-y-3">
-            <For each={ingressRoutes()}>
-              {(route) => (
-                <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Service</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
-                      {route.serviceId}
-                    </span>
-                  </div>
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Rule</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
-                      {route.rule}
-                    </span>
-                  </div>
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Entry points</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
-                      {route.entryPoints.join(", ")}
-                    </span>
-                  </div>
-                  <For each={route.servers}>
-                    {(server, idx) => (
-                      <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                        <span class="text-xs text-gray-500 shrink-0">
-                          {route.servers.length > 1 ? `Server ${idx() + 1}` : "Server"}
-                        </span>
-                        <span class="text-sm font-mono text-gray-800 text-right truncate">
-                          {server}
-                        </span>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              )}
-            </For>
-          </div>
-        </div>
-      </Show>
-      <ConfigSection title="Deploy" items={deployItems} />
-      <Show when={!s.system}>
-        <div class="bg-white rounded-lg border border-gray-200 px-4 py-2.5 flex items-center justify-between gap-4">
-          <div class="flex items-baseline gap-2 min-w-0">
-            <span class="text-xs text-gray-500 shrink-0">Replicas</span>
-            <Show when={s.replicasOverride}>
-              <span class="text-[11px] text-amber-600">
-                override · config: {configuredReplicas()}
-              </span>
-            </Show>
-            <Show when={scalingLocked() && !replicasError()}>
-              <span class="text-[11px] text-gray-400 truncate">locked at 1 (writable volume)</span>
-            </Show>
-            <Show when={replicasError()}>
-              <span class="text-[11px] text-red-600 truncate">{replicasError()}</span>
-            </Show>
-          </div>
-          <div class="flex items-center gap-1 shrink-0">
-            <Show when={replicasInput() !== effectiveReplicas()}>
-              <button
-                type="button"
-                onClick={applyReplicas}
-                disabled={replicasSaving()}
-                class="mr-1 px-2 py-1 text-xs font-medium rounded-md bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:bg-gray-100 disabled:text-gray-400 transition-colors"
-              >
-                Save
-              </button>
-            </Show>
-            <button
-              type="button"
-              onClick={() => setReplicasInput(Math.max(configuredReplicas(), replicasInput() - 1))}
-              disabled={replicasSaving() || replicasInput() <= configuredReplicas()}
-              class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
-            >
-              −
-            </button>
-            <input
-              type="number"
-              min={configuredReplicas()}
-              max={MAX_REPLICAS}
-              value={replicasInput()}
-              onInput={(e) => setReplicasInput(Number(e.currentTarget.value))}
-              class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-indigo-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              disabled={replicasSaving()}
-            />
-            <button
-              type="button"
-              onClick={() => setReplicasInput(Math.min(MAX_REPLICAS, replicasInput() + 1))}
-              disabled={replicasSaving() || replicasInput() >= MAX_REPLICAS || scalingLocked()}
-              title={scalingLocked() ? "writable volume — cannot scale" : undefined}
-              class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={revertReplicas}
-              disabled={replicasSaving() || !s.replicasOverride}
-              title="Revert to configured value"
-              class="ml-1 size-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 rounded-md"
-            >
-              ↺
-            </button>
-          </div>
-        </div>
-      </Show>
-      <Show when={envItems.length > 0 || envSource}>
+
+      <Show when={envItems().length > 0 || envSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Deploy Environment
-            <Show when={envSource}>
-              <span class="ml-1.5 text-gray-300 normal-case font-mono">{envSource}</span>
+            <Show when={envSource()}>
+              <span class="ml-1.5 text-gray-300 normal-case font-mono">{envSource()}</span>
             </Show>
           </h4>
-          <Show when={envItems.length > 0}>
-            <ConfigSection items={envItems} maskValues />
+          <Show when={envItems().length > 0}>
+            <ConfigSection items={envItems()} maskValues />
           </Show>
         </div>
       </Show>
-      <Show when={secretKeys.length > 0 || secretSource}>
+
+      <Show when={secretKeys().length > 0 || secretSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
             Deploy Secrets
-            <span class="ml-1.5 text-gray-300 normal-case">
-              (mounted at {s.deploy.secrets?.mountPath})
-            </span>
+            <Show when={secretMountPath()}>
+              <span class="ml-1.5 text-gray-300 normal-case">(mounted at {secretMountPath()})</span>
+            </Show>
           </h4>
-          <Show when={secretSource}>
-            <div class="text-xs font-mono text-gray-400 mb-2">{secretSource}</div>
+          <Show when={secretSource()}>
+            <div class="text-xs font-mono text-gray-400 mb-2">{secretSource()}</div>
           </Show>
-          <Show when={secretKeys.length > 0}>
-            <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-              <For each={secretKeys}>
-                {(key) => (
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">{key}</span>
-                    <span class="text-sm font-mono text-gray-400">••••••••</span>
-                  </div>
-                )}
-              </For>
-            </div>
+          <Show when={secretKeys().length > 0}>
+            <SecretsList keys={secretKeys()} />
           </Show>
         </div>
       </Show>
-      <Show when={volumes.length > 0}>
-        <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Volumes</h4>
-          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-            <For each={volumes}>
-              {(volume) => (
-                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                  <span class="text-xs font-mono text-gray-500 shrink-0 truncate">
-                    {volume.hostPath}
-                  </span>
-                  <span class="text-sm font-mono text-gray-800 text-right truncate">
-                    {volume.mountPath}
-                    <Show when={volume.readOnly}>
-                      <span class="ml-1.5 text-xs text-gray-400">(ro)</span>
-                    </Show>
-                    <Show when={volume.owner}>
-                      {(owner) => (
-                        <span class="ml-1.5 text-xs text-gray-400">
-                          {owner().uid}:{owner().gid ?? owner().uid}
-                        </span>
-                      )}
-                    </Show>
-                  </span>
-                </div>
-              )}
-            </For>
-          </div>
-        </div>
-      </Show>
-      <Show when={!s.system}>
-        <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
-            Deploy freeze
-          </h4>
-          <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex items-center justify-between">
-            <div>
-              <p class="text-sm text-gray-700">
-                {s.deployFrozen ? "Deploys are frozen" : "Deploys are active"}
-              </p>
-              <p class="text-xs text-gray-400 mt-0.5">
-                {s.deployFrozen
-                  ? "Auto-deploys from git watch are paused. Manual deploys require force."
-                  : "Services will auto-deploy when new commits are detected."}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={async () => {
-                await freezeService(s.id, !s.deployFrozen);
-                props.onServiceUpdate();
-              }}
-              class={clsx(
-                "px-3 py-1.5 text-xs font-medium rounded-lg transition-colors outline-none",
-                {
-                  "bg-amber-100 text-amber-700 hover:bg-amber-200": s.deployFrozen,
-                  "bg-gray-100 text-gray-600 hover:bg-gray-200": !s.deployFrozen
-                }
-              )}
-            >
-              {s.deployFrozen ? "Unfreeze" : "Freeze"}
-            </button>
-          </div>
-        </div>
+
+      <VolumesList service={props.service} />
+
+      <Show when={!props.service.system}>
+        <FreezeToggle service={props.service} />
       </Show>
     </div>
   );
 }
 
-function ConfigSection(props: {
-  title?: string;
-  items: { label: string; value: string }[];
-  maskValues?: boolean;
-}) {
-  const [revealed, setRevealed] = createSignal(false);
-  const masked = () => props.maskValues && !revealed();
-
+function SecretsList(props: { keys: string[] }) {
   return (
-    <div>
-      <Show when={props.title}>
-        <div class="flex items-center justify-between mb-2">
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider">{props.title}</h4>
-          <Show when={props.maskValues}>
-            <button
-              type="button"
-              onClick={() => setRevealed(!revealed())}
-              class="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <Show when={revealed()} fallback={<Eye class="size-3.5" />}>
-                <EyeOff class="size-3.5" />
-              </Show>
-            </button>
-          </Show>
-        </div>
-      </Show>
-      <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-        <For each={props.items}>
-          {(item) => (
-            <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-              <span class="text-xs text-gray-500 shrink-0">{item.label}</span>
-              <span class="text-sm font-mono text-gray-800 text-right truncate">
-                {masked() ? "••••••••" : item.value}
-              </span>
-            </div>
-          )}
-        </For>
-      </div>
+    <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+      <For each={props.keys}>
+        {(key) => (
+          <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+            <span class="text-xs text-gray-500 shrink-0">{key}</span>
+            <span class="text-sm font-mono text-gray-400">••••••••</span>
+          </div>
+        )}
+      </For>
     </div>
   );
 }

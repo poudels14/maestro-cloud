@@ -1,12 +1,16 @@
 /// <reference types="vite/client" />
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/solid-router";
-import { createEffect, createResource, createSignal, onCleanup, Show, Suspense } from "solid-js";
+import { QueryClientProvider, useQuery } from "@tanstack/solid-query";
+import { createSignal, createEffect, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";
-import { getClusterInfo } from "../lib/api";
+import { queryClient } from "../lib/queryClient";
+import { clusterInfoQuery } from "../lib/queries";
+import { ClientOnly } from "../components/ClientOnly";
 import appCss from "../app.css?url";
 
 export const Route = createRootRoute({
+  ssr: true,
   head: () => ({
     links: [
       { rel: "stylesheet", href: appCss },
@@ -39,46 +43,50 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
-  const [clusterInfo, { refetch }] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getClusterInfo
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RootDocument>
+        <ClientOnly>
+          <UpgradeBanner />
+        </ClientOnly>
+        <Outlet />
+      </RootDocument>
+    </QueryClientProvider>
   );
-  const isUpgrading = () => clusterInfo()?.upgrading ?? false;
+}
+
+function UpgradeBanner() {
+  const cluster = useQuery(() => clusterInfoQuery({ pollWhenUpgrading: true }));
+  const isUpgrading = () => cluster.data?.upgrading ?? false;
   const [dismissed, setDismissed] = createSignal(false);
 
   createEffect(() => {
-    if (!isUpgrading()) return;
-    setDismissed(false);
-    const interval = setInterval(() => refetch(), 5000);
-    onCleanup(() => clearInterval(interval));
+    if (!isUpgrading()) setDismissed(false);
   });
 
   return (
-    <RootDocument>
-      <Show when={isUpgrading() && !dismissed()}>
-        <div class="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-center">
-          <span class="text-xs font-medium text-amber-700">
-            System upgrade in progress — the cluster will reboot shortly
-          </span>
-          <button
-            type="button"
-            onClick={() => setDismissed(true)}
-            class="absolute right-4 text-amber-400 hover:text-amber-600"
+    <Show when={isUpgrading() && !dismissed()}>
+      <div class="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-center">
+        <span class="text-xs font-medium text-amber-700">
+          System upgrade in progress — the cluster will reboot shortly
+        </span>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          class="absolute right-4 text-amber-400 hover:text-amber-600"
+        >
+          <svg
+            class="size-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
           >
-            <svg
-              class="size-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      </Show>
-      <Outlet />
-    </RootDocument>
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </Show>
   );
 }
 

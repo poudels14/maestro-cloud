@@ -1,8 +1,9 @@
-import { createMemo, createResource, createSignal, For, Show, onCleanup } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
 import type { Service, TrafficPoint } from "../../lib/types";
-import { getServiceMetrics, getServiceTraffic } from "../../lib/api";
-import { ErrorBanner } from "../../lib/ui";
+import { serviceMetricsQuery, serviceTrafficQuery } from "../../lib/queries";
+import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
 import { TimelineChart } from "../TimelineChart";
 
 const TIME_RANGES = [
@@ -11,43 +12,23 @@ const TIME_RANGES = [
   { label: "24h", ms: 86_400_000 },
   { label: "7d", ms: 604_800_000 }
 ];
-const METRICS_POLL_MS = 10_000;
 const SCRAPE_INTERVAL_S = 5;
 
 function MetricsTab(props: { service: Service }) {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
 
-  const [metrics, { refetch: refetchMetrics }] = createResource(
-    () => ({ serviceId: props.service.id, range: rangeMs() }),
-    ({ serviceId, range }) => {
-      const now = Date.now();
-      return getServiceMetrics(serviceId, now - range, now);
-    }
-  );
+  const metrics = useQuery(() => serviceMetricsQuery(props.service.id, rangeMs()));
+  const traffic = useQuery(() => serviceTrafficQuery(props.service.id, rangeMs()));
 
-  const [traffic, { refetch: refetchTraffic }] = createResource(
-    () => ({ serviceId: props.service.id, range: rangeMs() }),
-    ({ serviceId, range }) => {
-      const now = Date.now();
-      return getServiceTraffic(serviceId, now - range, now);
-    }
-  );
-
-  const pollTimer = setInterval(() => {
-    refetchMetrics();
-    refetchTraffic();
-  }, METRICS_POLL_MS);
-  onCleanup(() => clearInterval(pollTimer));
-
-  const data = () => metrics() ?? [];
+  const metricsData = () => metrics.data ?? [];
   const xMax = () => Date.now();
   const xMin = () => xMax() - rangeMs();
-  const cpuData = () => data().map((m) => ({ ts: m.ts, value: m.cpuPercent }));
-  const memData = () => data().map((m) => ({ ts: m.ts, value: m.memoryBytes }));
-  const netRxData = () => data().map((m) => ({ ts: m.ts, value: m.netRxBytes }));
-  const netTxData = () => data().map((m) => ({ ts: m.ts, value: m.netTxBytes }));
+  const cpuData = () => metricsData().map((m) => ({ ts: m.ts, value: m.cpuPercent }));
+  const memData = () => metricsData().map((m) => ({ ts: m.ts, value: m.memoryBytes }));
+  const netRxData = () => metricsData().map((m) => ({ ts: m.ts, value: m.netRxBytes }));
+  const netTxData = () => metricsData().map((m) => ({ ts: m.ts, value: m.netTxBytes }));
 
-  const trafficByTs = createMemo(() => groupByTimestamp(traffic() ?? []));
+  const trafficByTs = createMemo(() => groupByTimestamp(traffic.data ?? []));
   const totalReqRate = () =>
     trafficByTs().map(([ts, points]) => ({
       ts,
@@ -81,8 +62,8 @@ function MetricsTab(props: { service: Service }) {
 
   return (
     <div class="space-y-4">
-      <Show when={metrics.error}>
-        <ErrorBanner message="Failed to load metrics" onRetry={refetchMetrics} />
+      <Show when={metrics.isError}>
+        <ErrorBanner message="Failed to load metrics" onRetry={() => metrics.refetch()} />
       </Show>
       <div class="flex justify-end">
         <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
@@ -103,8 +84,7 @@ function MetricsTab(props: { service: Service }) {
         </div>
       </div>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">CPU Usage</h3>
+      <ChartCard title="CPU Usage">
         <TimelineChart
           data={cpuData()}
           label="CPU"
@@ -113,10 +93,9 @@ function MetricsTab(props: { service: Service }) {
           xMin={xMin()}
           xMax={xMax()}
         />
-      </div>
+      </ChartCard>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Memory</h3>
+      <ChartCard title="Memory">
         <TimelineChart
           data={memData()}
           label="Memory"
@@ -125,10 +104,9 @@ function MetricsTab(props: { service: Service }) {
           xMin={xMin()}
           xMax={xMax()}
         />
-      </div>
+      </ChartCard>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Network I/O</h3>
+      <ChartCard title="Network I/O">
         <TimelineChart
           data={netRxData()}
           label="RX"
@@ -138,22 +116,15 @@ function MetricsTab(props: { service: Service }) {
           xMax={xMax()}
           secondarySeries={{ data: netTxData(), color: "#f59e0b", label: "TX" }}
         />
-      </div>
+      </ChartCard>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">HTTP Requests</h3>
-          <div class="flex items-center gap-3 text-[11px] text-gray-500">
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-indigo-500" />
-              Total
-            </span>
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-red-500" />
-              Errors (4xx/5xx)
-            </span>
-          </div>
-        </div>
+      <ChartCard
+        title="HTTP Requests"
+        legend={[
+          { color: "bg-indigo-500", label: "Total" },
+          { color: "bg-red-500", label: "Errors (4xx/5xx)" }
+        ]}
+      >
         <TimelineChart
           data={totalReqRate()}
           label="req/s"
@@ -163,22 +134,15 @@ function MetricsTab(props: { service: Service }) {
           xMax={xMax()}
           secondarySeries={{ data: errorReqRate(), color: "#ef4444", label: "errors/s" }}
         />
-      </div>
+      </ChartCard>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">Latency</h3>
-          <div class="flex items-center gap-3 text-[11px] text-gray-500">
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-cyan-500" />
-              p50
-            </span>
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-amber-500" />
-              p95
-            </span>
-          </div>
-        </div>
+      <ChartCard
+        title="Latency"
+        legend={[
+          { color: "bg-cyan-500", label: "p50" },
+          { color: "bg-amber-500", label: "p95" }
+        ]}
+      >
         <TimelineChart
           data={p50LatencyMs()}
           label="p50"
@@ -188,22 +152,15 @@ function MetricsTab(props: { service: Service }) {
           xMax={xMax()}
           secondarySeries={{ data: p95LatencyMs(), color: "#f59e0b", label: "p95" }}
         />
-      </div>
+      </ChartCard>
 
-      <div class="bg-white rounded-lg border border-gray-200 p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">HTTP Bandwidth</h3>
-          <div class="flex items-center gap-3 text-[11px] text-gray-500">
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-emerald-500" />
-              In
-            </span>
-            <span class="inline-flex items-center gap-1">
-              <span class="size-2 rounded-full bg-orange-500" />
-              Out
-            </span>
-          </div>
-        </div>
+      <ChartCard
+        title="HTTP Bandwidth"
+        legend={[
+          { color: "bg-emerald-500", label: "In" },
+          { color: "bg-orange-500", label: "Out" }
+        ]}
+      >
         <TimelineChart
           data={bytesInRate()}
           label="in/s"
@@ -213,8 +170,35 @@ function MetricsTab(props: { service: Service }) {
           xMax={xMax()}
           secondarySeries={{ data: bytesOutRate(), color: "#f97316", label: "out/s" }}
         />
-      </div>
+      </ChartCard>
     </div>
+  );
+}
+
+function ChartCard(props: {
+  title: string;
+  legend?: { color: string; label: string }[];
+  children: any;
+}) {
+  return (
+    <Card class="p-4">
+      <div class="flex items-center justify-between mb-3">
+        <SectionHeader class="text-xs">{props.title}</SectionHeader>
+        <Show when={props.legend}>
+          <div class="flex items-center gap-3 text-[11px] text-gray-500">
+            <For each={props.legend}>
+              {(entry) => (
+                <span class="inline-flex items-center gap-1">
+                  <span class={clsx("size-2 rounded-full", entry.color)} />
+                  {entry.label}
+                </span>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+      {props.children}
+    </Card>
   );
 }
 
@@ -275,30 +259,30 @@ function bucketPercentileSec(points: TrafficPoint[], p: number): number {
   return 10;
 }
 
-function formatBytes(v: number) {
-  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)} GB`;
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} MB`;
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)} KB`;
-  return `${Math.round(v)} B`;
+function formatBytes(value: number) {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB`;
+  return `${Math.round(value)} B`;
 }
 
-function formatBytesRate(v: number) {
-  return `${formatBytes(v)}/s`;
+function formatBytesRate(value: number) {
+  return `${formatBytes(value)}/s`;
 }
 
-function formatPercent(v: number) {
-  return `${v.toFixed(1)}%`;
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
 }
 
-function formatRate(v: number) {
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}k/s`;
-  if (v >= 10) return `${v.toFixed(0)}/s`;
-  return `${v.toFixed(2)}/s`;
+function formatRate(value: number) {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k/s`;
+  if (value >= 10) return `${value.toFixed(0)}/s`;
+  return `${value.toFixed(2)}/s`;
 }
 
-function formatMs(v: number) {
-  if (v >= 1000) return `${(v / 1000).toFixed(2)}s`;
-  return `${Math.round(v)}ms`;
+function formatMs(value: number) {
+  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
+  return `${Math.round(value)}ms`;
 }
 
 export { MetricsTab };
