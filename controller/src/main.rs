@@ -74,6 +74,12 @@ enum CliCommand {
             help = "Only deploy the named service(s). Can be repeated. Default: all services in the config."
         )]
         services: Vec<String>,
+        #[arg(
+            short = 'y',
+            long = "yes",
+            help = "Skip the cluster-confirmation prompt"
+        )]
+        yes: bool,
     },
     /// List services in the active context
     Services,
@@ -98,6 +104,12 @@ enum CliCommand {
     Upgrade {
         #[command(subcommand)]
         target: UpgradeTarget,
+        #[arg(
+            short = 'y',
+            long = "yes",
+            help = "Skip the cluster-confirmation prompt"
+        )]
+        yes: bool,
     },
     /// Create a default maestro.cluster.jsonc config file
     Init,
@@ -796,10 +808,11 @@ async fn run() -> crate::error::Result<bool> {
             apply,
             force,
             services,
+            yes,
         }) => {
             let host = cli::contexts::active_host()?;
             let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::rollout::run_rollout(&config_path, &host, apply, force, &services)
+            cli::rollout::run_rollout(&config_path, &host, apply, force, &services, yes)
                 .await
                 .map(|()| false)
         }
@@ -896,9 +909,10 @@ async fn run() -> crate::error::Result<bool> {
         }
         Some(CliCommand::Upgrade {
             target: UpgradeTarget::System,
+            yes,
         }) => {
             let host = cli::contexts::active_host()?;
-            cli::upgrade::run_upgrade_system(&host)
+            cli::upgrade::run_upgrade_system(&host, yes)
                 .await
                 .map(|()| false)
         }
