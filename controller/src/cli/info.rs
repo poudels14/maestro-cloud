@@ -104,12 +104,27 @@ struct SlackView {
     webhook_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SlackWebhookView {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    enabled: bool,
+}
+
 pub async fn run_info(host: &str) -> Result<()> {
     let base = crate::cli::contexts::normalize_base_url(host)?;
     let client = crate::cli::contexts::build_http_client()?;
 
     let cluster: ClusterInfo = fetch(&client, &format!("{base}/api/cluster")).await?;
     let config: MaskedConfigView = fetch(&client, &format!("{base}/api/config")).await?;
+    let slack_webhooks: Vec<SlackWebhookView> =
+        fetch(&client, &format!("{base}/api/webhooks/slack"))
+            .await
+            .unwrap_or_default();
 
     println!("Cluster");
     println!("  name              {}", cluster.cluster_name);
@@ -153,6 +168,26 @@ pub async fn run_info(host: &str) -> Result<()> {
     }
     if !config.tags.is_empty() {
         println!("  tags              {}", config.tags.join(", "));
+    }
+
+    if !slack_webhooks.is_empty() {
+        println!("\nSlack webhooks");
+        for webhook in &slack_webhooks {
+            let status = if webhook.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            let categories = if webhook.categories.is_empty() {
+                "(none)".to_string()
+            } else {
+                webhook.categories.join(",")
+            };
+            println!(
+                "  {:<32} {status:<9} categories: {categories}",
+                webhook.name
+            );
+        }
     }
 
     println!("\nIntegrations");

@@ -5,6 +5,8 @@ import type {
   LogEntry,
   MetricPoint,
   Service,
+  SlackCategory,
+  SlackWebhook,
   TrafficPoint
 } from "./types";
 
@@ -240,4 +242,57 @@ export async function getContainerMetrics(
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch container metrics: ${res.statusText}`);
   return res.json();
+}
+
+export async function listSlackWebhooks(): Promise<SlackWebhook[]> {
+  const res = await fetch("/api/webhooks/slack");
+  if (!res.ok) throw new Error(`Failed to load webhooks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createSlackWebhook(payload: {
+  name: string;
+  url: string;
+  categories: SlackCategory[];
+  enabled?: boolean;
+}): Promise<SlackWebhook> {
+  const res = await fetch("/api/webhooks/slack", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to create webhook: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateSlackWebhook(
+  id: string,
+  patch: Partial<{ name: string; url: string; categories: SlackCategory[]; enabled: boolean }>
+): Promise<SlackWebhook> {
+  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to update webhook: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteSlackWebhook(id: string): Promise<void> {
+  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete webhook: ${res.statusText}`);
+}
+
+export async function testSlackWebhook(id: string): Promise<void> {
+  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}/test`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Test message failed: ${res.statusText}`);
+  }
 }

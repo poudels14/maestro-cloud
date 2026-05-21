@@ -17,9 +17,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use self::types::{
-    CancelDeploymentResponse, RemoveDeploymentResponse, ReplicasOverrideRequest, ReplicasResponse,
-    RolloutChange, RolloutDiffResponse, RolloutDiffStatus, RolloutServiceRequest,
-    RolloutServiceResponse, ServiceListItem,
+    CancelDeploymentResponse, CreateSlackWebhookRequest, RemoveDeploymentResponse,
+    ReplicasOverrideRequest, ReplicasResponse, RolloutChange, RolloutDiffResponse,
+    RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
+    SlackWebhookView, UpdateSlackWebhookRequest,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -151,6 +152,18 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/replicas",
                 patch(Self::set_service_replicas).delete(Self::clear_service_replicas),
+            )
+            .route(
+                "/api/webhooks/slack",
+                get(Self::list_slack_webhooks).post(Self::create_slack_webhook),
+            )
+            .route(
+                "/api/webhooks/slack/{id}",
+                patch(Self::update_slack_webhook).delete(Self::delete_slack_webhook),
+            )
+            .route(
+                "/api/webhooks/slack/{id}/test",
+                post(Self::test_slack_webhook),
             )
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}",
@@ -631,6 +644,171 @@ impl Server {
             replicas: info.config.deploy.replicas,
             replicas_override: None,
         }))
+    }
+
+    async fn list_slack_webhooks(
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<SlackWebhookView>>, (StatusCode, String)> {
+        let webhooks = state
+            .store
+            .list_slack_webhooks()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(webhooks.iter().map(slack_webhook_view).collect()))
+    }
+
+    async fn create_slack_webhook(
+        State(state): State<AppState>,
+        Json(body): Json<CreateSlackWebhookRequest>,
+    ) -> Result<Json<SlackWebhookView>, (StatusCode, String)> {
+        validate_webhook_url(&body.url)?;
+        if body.name.trim().is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "name cannot be empty".to_string()));
+        }
+        if body.categories.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "at least one category must be selected".to_string(),
+            ));
+        }
+
+        let mut webhooks = state
+            .store
+            .list_slack_webhooks()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        let new_webhook = crate::slack::SlackWebhook {
+            id: format!("wh_{}", crate::utils::nanoid::unique_id(10)),
+            name: body.name.trim().to_string(),
+            url: crate::utils::crypto::SecretString::new(body.url),
+            categories: body.categories,
+            enabled: body.enabled.unwrap_or(true),
+        };
+        webhooks.push(new_webhook.clone());
+
+        state
+            .store
+            .write_slack_webhooks(&webhooks)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(slack_webhook_view(&new_webhook)))
+    }
+
+    async fn update_slack_webhook(
+        Path(id): Path<String>,
+        State(state): State<AppState>,
+        Json(body): Json<UpdateSlackWebhookRequest>,
+    ) -> Result<Json<SlackWebhookView>, (StatusCode, String)> {
+        let mut webhooks = state
+            .store
+            .list_slack_webhooks()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        let target = webhooks
+            .iter_mut()
+            .find(|w| w.id == id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("webhook `{id}` not found")))?;
+
+        if let Some(name) = body.name {
+            if name.trim().is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "name cannot be empty".to_string()));
+            }
+            target.name = name.trim().to_string();
+        }
+        if let Some(url) = body.url {
+            validate_webhook_url(&url)?;
+            target.url = crate::utils::crypto::SecretString::new(url);
+        }
+        if let Some(categories) = body.categories {
+            if categories.is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "at least one category must be selected".to_string(),
+                ));
+            }
+            target.categories = categories;
+        }
+        if let Some(enabled) = body.enabled {
+            target.enabled = enabled;
+        }
+
+        let updated = target.clone();
+
+        state
+            .store
+            .write_slack_webhooks(&webhooks)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(slack_webhook_view(&updated)))
+    }
+
+    async fn delete_slack_webhook(
+        Path(id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        let mut webhooks = state
+            .store
+            .list_slack_webhooks()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let before = webhooks.len();
+        webhooks.retain(|w| w.id != id);
+        if webhooks.len() == before {
+            return Err((StatusCode::NOT_FOUND, format!("webhook `{id}` not found")));
+        }
+        state
+            .store
+            .write_slack_webhooks(&webhooks)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    async fn test_slack_webhook(
+        Path(id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        let webhooks = state
+            .store
+            .list_slack_webhooks()
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let webhook = webhooks
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("webhook `{id}` not found")))?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let text = format!(
+            ":test_tube: [{}] test message from maestro webhook `{}`",
+            state.cluster_name, webhook.name
+        );
+        let response = client
+            .post(webhook.url.as_str())
+            .json(&serde_json::json!({ "text": text }))
+            .send()
+            .await
+            .map_err(|err| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to deliver test message: {err}"),
+                )
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!("slack returned {status}: {body}"),
+            ));
+        }
+        Ok(StatusCode::NO_CONTENT)
     }
 
     async fn redeploy_service(
@@ -1727,6 +1905,42 @@ fn diff_secrets(
             }
         }
     }
+}
+
+fn slack_webhook_view(webhook: &crate::slack::SlackWebhook) -> SlackWebhookView {
+    SlackWebhookView {
+        id: webhook.id.clone(),
+        name: webhook.name.clone(),
+        url: mask_webhook_url(webhook.url.as_str()),
+        categories: webhook.categories.clone(),
+        enabled: webhook.enabled,
+    }
+}
+
+fn mask_webhook_url(url: &str) -> String {
+    if url.is_empty() {
+        return String::new();
+    }
+    if let Some(idx) = url.rfind('/') {
+        let (head, tail) = url.split_at(idx + 1);
+        let visible_tail: String = tail.chars().take(4).collect();
+        return format!("{head}{visible_tail}…");
+    }
+    "***".to_string()
+}
+
+fn validate_webhook_url(url: &str) -> Result<(), (StatusCode, String)> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "url cannot be empty".to_string()));
+    }
+    if !trimmed.starts_with("https://") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook url must use https".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

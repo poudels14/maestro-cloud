@@ -63,6 +63,16 @@ export interface VolumeOwner {
   gid?: number;
 }
 
+export type SlackCategory = "info" | "error";
+
+export interface SlackWebhook {
+  id: string;
+  name: string;
+  url: string;
+  categories: SlackCategory[];
+  enabled: boolean;
+}
+
 export interface Service {
   id: string;
   name: string;

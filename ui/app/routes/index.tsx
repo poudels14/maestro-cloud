@@ -16,6 +16,7 @@ import {
 import { ErrorBanner, StatusBadge } from "../lib/ui";
 import { TimelineChart } from "../components/TimelineChart";
 import { ClientOnly } from "../components/ClientOnly";
+import { SlackWebhooks } from "../components/SlackWebhooks";
 
 export const Route = createFileRoute("/")({
   component: ServicesPage
@@ -440,6 +441,8 @@ function ServicesPage() {
                         </For>
                       </div>
                     </Show>
+
+                    <SlackWebhooks />
                   </>
                 );
               }}

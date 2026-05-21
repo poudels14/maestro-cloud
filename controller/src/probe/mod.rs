@@ -68,6 +68,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         .map(crate::utils::crypto::SecretString::new);
     let slack_notifier = crate::slack::SlackNotifier::new(
         slack_webhook_url,
+        Some(store.clone()),
         cluster_name.clone(),
         crate::logs::Logger::noop(),
     );
