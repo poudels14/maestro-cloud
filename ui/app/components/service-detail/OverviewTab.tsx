@@ -41,6 +41,8 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
 
   const configuredReplicas = () => s.deploy.replicas ?? 1;
   const effectiveReplicas = () => s.replicasOverride ?? configuredReplicas();
+  const hasWritableVolume = () => (s.deploy.volumes ?? []).some((v) => !v.readOnly);
+  const scalingLocked = () => hasWritableVolume();
   const [replicasInput, setReplicasInput] = createSignal(effectiveReplicas());
   const [replicasError, setReplicasError] = createSignal<string | null>(null);
   const [replicasSaving, setReplicasSaving] = createSignal(false);
@@ -242,6 +244,9 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
                 override · config: {configuredReplicas()}
               </span>
             </Show>
+            <Show when={scalingLocked() && !replicasError()}>
+              <span class="text-[11px] text-gray-400 truncate">locked at 1 (writable volume)</span>
+            </Show>
             <Show when={replicasError()}>
               <span class="text-[11px] text-red-600 truncate">{replicasError()}</span>
             </Show>
@@ -277,7 +282,8 @@ function OverviewTab(props: { service: Service; onServiceUpdate: () => void }) {
             <button
               type="button"
               onClick={() => setReplicasInput(Math.min(MAX_REPLICAS, replicasInput() + 1))}
-              disabled={replicasSaving() || replicasInput() >= MAX_REPLICAS}
+              disabled={replicasSaving() || replicasInput() >= MAX_REPLICAS || scalingLocked()}
+              title={scalingLocked() ? "writable volume — cannot scale" : undefined}
               class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
             >
               +

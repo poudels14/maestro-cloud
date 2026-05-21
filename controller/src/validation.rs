@@ -120,6 +120,14 @@ pub fn validate_service_provider_config(
             ));
         }
     }
+    if deploy.replicas > 1 && has_writable_volume(deploy) {
+        return Err(format!(
+            "deploy.replicas ({}) cannot exceed 1 while a writable volume is mounted; \
+             multiple replicas would share the host path and risk data corruption. \
+             Mark the volume `readOnly: true` or keep replicas: 1.",
+            deploy.replicas
+        ));
+    }
     let mut resolved_deploy = deploy.clone();
     resolved_deploy.healthcheck_interval = resolved_deploy
         .healthcheck_interval
@@ -146,6 +154,10 @@ pub fn validate_service_provider_config(
             Ok((None, None, resolved_deploy))
         }
     }
+}
+
+pub fn has_writable_volume(deploy: &ServiceDeployConfig) -> bool {
+    deploy.volumes.iter().any(|volume| !volume.read_only)
 }
 
 fn validate_env_config(config: &EnvConfig, field: &str) -> Result<(), String> {
