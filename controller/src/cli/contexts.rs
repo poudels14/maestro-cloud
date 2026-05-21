@@ -45,10 +45,14 @@ pub fn set_context(name: Option<&str>, host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub fn use_context(name: &str) -> Result<()> {
+pub fn use_context(name: Option<&str>) -> Result<()> {
     let path = contexts_path()?;
-    use_context_at(&path, name)?;
-    println!("[maestro]: active context set to `{}`", name.trim());
+    let name = match name {
+        Some(name) => name.trim().to_string(),
+        None => prompt_select_context(&path)?,
+    };
+    use_context_at(&path, &name)?;
+    println!("[maestro]: active context set to `{name}`");
     Ok(())
 }
 
@@ -291,6 +295,25 @@ fn prompt_required(label: &str) -> Result<String> {
         return Err(Error::invalid_input(format!("{label} is required")));
     }
     Ok(value)
+}
+
+fn prompt_select_context(path: &Path) -> Result<String> {
+    let config = load_contexts(path)?;
+    if config.contexts.is_empty() {
+        return Err(Error::not_found(
+            "no contexts configured; run `maestro contexts set <name> <host>` first",
+        ));
+    }
+    let names: Vec<String> = config.contexts.keys().cloned().collect();
+    let starting_cursor = config
+        .active
+        .as_deref()
+        .and_then(|active| names.iter().position(|name| name == active))
+        .unwrap_or(0);
+    inquire::Select::new("Select a context", names)
+        .with_starting_cursor(starting_cursor)
+        .prompt()
+        .map_err(|err| Error::external(format!("context selection prompt failed: {err}")))
 }
 
 fn no_active_context() -> Error {
