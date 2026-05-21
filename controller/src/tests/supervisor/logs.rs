@@ -27,6 +27,48 @@ fn json_with_numeric_ts() {
 }
 
 #[test]
+fn json_with_time_field_for_timestamp() {
+    let line = r#"{"level":"info","time":"2026-05-21T07:05:29.899Z","msg":"request"}"#;
+    let parsed = parse_log_line(line);
+    assert_eq!(parsed.text, "request");
+    assert_eq!(parsed.level.as_deref(), Some("info"));
+    assert!(parsed.ts.is_some());
+}
+
+#[test]
+fn json_collects_extra_fields_as_attrs() {
+    let line = r#"{"level":"info","time":"2026-05-21T07:05:29.899Z","http.method":"GET","http.url_details.path":"/api/trpc/users.getCurrentUser","http.status_code":200,"duration":933354417,"msg":"request"}"#;
+    let parsed = parse_log_line(line);
+    assert_eq!(parsed.text, "request");
+    assert_eq!(parsed.level.as_deref(), Some("info"));
+    assert!(parsed.ts.is_some());
+
+    let attrs: std::collections::HashMap<_, _> = parsed.attrs.into_iter().collect();
+    assert_eq!(attrs.len(), 4);
+    assert_eq!(attrs.get("http.method").map(String::as_str), Some("GET"));
+    assert_eq!(
+        attrs.get("http.url_details.path").map(String::as_str),
+        Some("/api/trpc/users.getCurrentUser")
+    );
+    assert_eq!(
+        attrs.get("http.status_code").map(String::as_str),
+        Some("200")
+    );
+    assert_eq!(attrs.get("duration").map(String::as_str), Some("933354417"));
+}
+
+#[test]
+fn json_attrs_serialize_nested_values() {
+    let line = r#"{"msg":"x","obj":{"a":1},"arr":[1,2],"flag":true,"nothing":null}"#;
+    let parsed = parse_log_line(line);
+    let attrs: std::collections::HashMap<_, _> = parsed.attrs.into_iter().collect();
+    assert_eq!(attrs.get("obj").map(String::as_str), Some(r#"{"a":1}"#));
+    assert_eq!(attrs.get("arr").map(String::as_str), Some("[1,2]"));
+    assert_eq!(attrs.get("flag").map(String::as_str), Some("true"));
+    assert_eq!(attrs.get("nothing").map(String::as_str), Some("null"));
+}
+
+#[test]
 fn json_without_msg_uses_full_line() {
     let line = r#"{"level":"debug","data":"something"}"#;
     let parsed = parse_log_line(line);
@@ -115,6 +157,21 @@ fn strip_ansi_codes() {
     let input = "\x1b[31mred text\x1b[0m";
     let stripped = strip_ansi(input);
     assert_eq!(stripped, "red text");
+}
+
+#[test]
+fn parse_strips_ansi_from_input() {
+    let line = "\x1b[31mERR\x1b[0m something broke";
+    let parsed = parse_log_line(&format!("2026-03-15T20:28:36Z {line}"));
+    assert_eq!(parsed.level.as_deref(), Some("error"));
+    assert_eq!(parsed.text, "something broke");
+}
+
+#[test]
+fn parse_strips_ansi_from_plain_text() {
+    let line = "[23:41:21.644] \x1b[32mINFO\x1b[39m: \x1b[36mrequest\x1b[39m";
+    let parsed = parse_log_line(line);
+    assert_eq!(parsed.text, "[23:41:21.644] INFO: request");
 }
 
 #[test]

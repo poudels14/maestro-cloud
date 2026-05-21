@@ -87,11 +87,15 @@ fn is_tailscale_noise(line: &str) -> bool {
 /// - Prefixed logs: `2026-03-15T20:28:36Z ERR Provider error, retrying...`
 /// - Plain text: everything else
 pub fn parse_log_line(line: &str) -> ParsedLine {
+    let stripped = strip_ansi(line);
+    let line = stripped.as_str();
+
     // Try JSON first
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
         let ts = parsed
             .get("ts")
             .or_else(|| parsed.get("timestamp"))
+            .or_else(|| parsed.get("time"))
             .and_then(|v| match v {
                 serde_json::Value::String(s) => parse_iso_timestamp(s),
                 serde_json::Value::Number(n) => n.as_u64(),
@@ -111,11 +115,21 @@ pub fn parse_log_line(line: &str) -> ParsedLine {
             .map(|s| s.to_string())
             .unwrap_or_else(|| line.to_string());
 
+        let attrs = if let serde_json::Value::Object(map) = &parsed {
+            const RESERVED: &[&str] = &["ts", "timestamp", "time", "level", "msg", "message"];
+            map.iter()
+                .filter(|(key, _)| !RESERVED.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), json_attr_value(value)))
+                .collect()
+        } else {
+            vec![]
+        };
+
         return ParsedLine {
             ts,
             level,
             text,
-            attrs: vec![],
+            attrs,
         };
     }
 
@@ -275,6 +289,14 @@ fn normalize_known_level(s: &str) -> Option<String> {
 fn parse_slash_timestamp(s: &str) -> Option<u64> {
     let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y/%m/%d %H:%M:%S").ok()?;
     Some(naive.and_utc().timestamp_millis() as u64)
+}
+
+fn json_attr_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => value.to_string(),
+    }
 }
 
 fn strip_ansi(s: &str) -> String {
