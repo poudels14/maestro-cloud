@@ -116,3 +116,36 @@ pub(crate) struct ReplicasResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) replicas_override: Option<u32>,
 }
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SlackWebhookView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) categories: Vec<crate::slack::SlackCategory>,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreateSlackWebhookRequest {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) categories: Vec<crate::slack::SlackCategory>,
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateSlackWebhookRequest {
+    #[serde(default)]
+    pub(crate) name: Option<String>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+    #[serde(default)]
+    pub(crate) categories: Option<Vec<crate::slack::SlackCategory>>,
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
+}

@@ -1368,6 +1368,23 @@ impl ClusterStore for EtcdStateStore {
         Ok(())
     }
 
+    async fn list_slack_webhooks(&self) -> anyhow::Result<Vec<crate::slack::SlackWebhook>> {
+        Ok(self
+            .read_encrypted::<Vec<crate::slack::SlackWebhook>>(
+                crate::deployment::keys::SLACK_WEBHOOKS_KEY,
+            )
+            .await)
+    }
+
+    async fn write_slack_webhooks(
+        &self,
+        webhooks: &[crate::slack::SlackWebhook],
+    ) -> anyhow::Result<()> {
+        self.write_encrypted(crate::deployment::keys::SLACK_WEBHOOKS_KEY, &webhooks)
+            .await;
+        Ok(())
+    }
+
     async fn delete_service(&self, service_id: &str) -> anyhow::Result<()> {
         let mut client = self.client.lock().await;
 

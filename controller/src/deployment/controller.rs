@@ -114,6 +114,7 @@ impl DeploymentController {
         let logger = Logger::new(log_sender.clone());
         let slack = crate::slack::SlackNotifier::new(
             config.slack_webhook_url.clone(),
+            Some(store.clone()),
             config.cluster_name.clone(),
             logger.clone(),
         );

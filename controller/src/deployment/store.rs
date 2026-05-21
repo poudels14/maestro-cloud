@@ -176,6 +176,14 @@ pub trait ClusterStore: Send + Sync {
         bail!("set_replicas_override not implemented")
     }
 
+    async fn list_slack_webhooks(&self) -> Result<Vec<crate::slack::SlackWebhook>> {
+        Ok(Vec::new())
+    }
+
+    async fn write_slack_webhooks(&self, _webhooks: &[crate::slack::SlackWebhook]) -> Result<()> {
+        bail!("write_slack_webhooks not implemented")
+    }
+
     async fn read_system_upgrade_request(&self) -> Result<Option<String>> {
         bail!("read_system_upgrade_request not implemented")
     }
