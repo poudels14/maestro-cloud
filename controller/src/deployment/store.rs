@@ -168,6 +168,14 @@ pub trait ClusterStore: Send + Sync {
         bail!("set_deploy_frozen not implemented")
     }
 
+    async fn set_replicas_override(
+        &self,
+        _service_id: &str,
+        _override_value: Option<u32>,
+    ) -> Result<()> {
+        bail!("set_replicas_override not implemented")
+    }
+
     async fn read_system_upgrade_request(&self) -> Result<Option<String>> {
         bail!("read_system_upgrade_request not implemented")
     }

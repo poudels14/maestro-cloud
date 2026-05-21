@@ -520,6 +520,17 @@ pub struct ServiceInfo {
     pub config: ServiceConfig,
     #[serde(default)]
     pub deploy_frozen: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replicas_override: Option<u32>,
+}
+
+impl ServiceInfo {
+    pub fn effective_replicas(&self) -> u32 {
+        match self.replicas_override {
+            Some(override_value) => override_value.max(self.config.deploy.replicas),
+            None => self.config.deploy.replicas,
+        }
+    }
 }
 
 fn default_replicas() -> u32 {

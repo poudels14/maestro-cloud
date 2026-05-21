@@ -585,6 +585,9 @@ impl ClusterStore for EtcdStateStore {
                 .as_ref()
                 .map(|s| s.info.deploy_frozen)
                 .unwrap_or(false),
+            replicas_override: existing_info
+                .as_ref()
+                .and_then(|s| s.info.replicas_override),
             config: queued_deployment
                 .deployment
                 .config
@@ -1122,15 +1125,14 @@ impl ClusterStore for EtcdStateStore {
             let deployment_json = serde_json::to_string(&stripped_deployment)
                 .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
 
-            let existing_frozen = self
-                .read_service_info(&deployment.config.id)
-                .await
-                .ok()
-                .flatten()
-                .map(|i| i.deploy_frozen)
-                .unwrap_or(false);
             let info = ServiceInfo {
-                deploy_frozen: existing_frozen,
+                deploy_frozen: existing_info
+                    .as_ref()
+                    .map(|s| s.info.deploy_frozen)
+                    .unwrap_or(false),
+                replicas_override: existing_info
+                    .as_ref()
+                    .and_then(|s| s.info.replicas_override),
                 config: deployment.config.strip_secrets(&Default::default()),
             };
             let info_json = serde_json::to_string(&info)
@@ -1326,6 +1328,33 @@ impl ClusterStore for EtcdStateStore {
         let mut info: ServiceInfo = serde_json::from_slice(kv.value())
             .map_err(|err| anyhow!("invalid service info JSON: {err}"))?;
         info.deploy_frozen = frozen;
+        let info_json = serde_json::to_string(&info)
+            .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
+        self.txn(
+            vec![compare_mod_revision_or_absent(
+                &key,
+                Some(kv.mod_revision() as u64),
+            )],
+            vec![request_put(&key, &info_json)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn set_replicas_override(
+        &self,
+        service_id: &str,
+        override_value: Option<u32>,
+    ) -> anyhow::Result<()> {
+        let key = service_info_key(service_id);
+        let response = self.get(key.as_bytes().to_vec(), None).await?;
+        let kv = response
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("service `{service_id}` not found"))?;
+        let mut info: ServiceInfo = serde_json::from_slice(kv.value())
+            .map_err(|err| anyhow!("invalid service info JSON: {err}"))?;
+        info.replicas_override = override_value;
         let info_json = serde_json::to_string(&info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
         self.txn(

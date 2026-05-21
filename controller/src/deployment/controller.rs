@@ -1721,7 +1721,7 @@ impl DeploymentController {
                 _ => continue,
             };
             let desired = match self.store.read_service_info(service_id).await {
-                Ok(Some(info)) => info.config.deploy.replicas,
+                Ok(Some(info)) => info.effective_replicas(),
                 _ => continue,
             };
 

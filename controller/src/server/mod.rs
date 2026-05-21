@@ -17,8 +17,9 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use self::types::{
-    CancelDeploymentResponse, RemoveDeploymentResponse, RolloutChange, RolloutDiffResponse,
-    RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
+    CancelDeploymentResponse, RemoveDeploymentResponse, ReplicasOverrideRequest, ReplicasResponse,
+    RolloutChange, RolloutDiffResponse, RolloutDiffStatus, RolloutServiceRequest,
+    RolloutServiceResponse, ServiceListItem,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -31,6 +32,7 @@ use crate::signal::ShutdownEvent;
 mod types;
 
 const DEFAULT_LOG_LIMIT: usize = 1000;
+const MAX_REPLICAS_OVERRIDE: u32 = 25;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", crate::deployment::ETCD_IMAGE_TAG),
@@ -145,6 +147,10 @@ impl Server {
             .route(
                 "/api/services/{serviceId}/freeze",
                 patch(Self::freeze_service),
+            )
+            .route(
+                "/api/services/{serviceId}/replicas",
+                patch(Self::set_service_replicas).delete(Self::clear_service_replicas),
             )
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}",
@@ -379,6 +385,7 @@ impl Server {
                 .unwrap_or(None);
             items.push(ServiceListItem {
                 deploy_frozen: info.deploy_frozen,
+                replicas_override: info.replicas_override,
                 service: info.config,
                 status,
                 system: false,
@@ -424,6 +431,7 @@ impl Server {
                 status: Some(crate::deployment::types::DeploymentStatus::Ready),
                 system: true,
                 deploy_frozen: false,
+                replicas_override: None,
             });
         }
 
@@ -520,6 +528,100 @@ impl Server {
         Ok(Json(types::FreezeResponse {
             service_id,
             deploy_frozen: body.frozen,
+        }))
+    }
+
+    async fn set_service_replicas(
+        Path(service_id): Path<String>,
+        State(state): State<AppState>,
+        Json(body): Json<ReplicasOverrideRequest>,
+    ) -> Result<Json<ReplicasResponse>, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        crate::validation::validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        if body.replicas == 0 {
+            return Err((StatusCode::BAD_REQUEST, "replicas must be >= 1".to_string()));
+        }
+        if body.replicas > MAX_REPLICAS_OVERRIDE {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("replicas must be <= {MAX_REPLICAS_OVERRIDE}"),
+            ));
+        }
+
+        let info = state
+            .store
+            .read_service_info(&service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("service `{service_id}` not found"),
+                )
+            })?;
+
+        let configured = info.config.deploy.replicas;
+        if body.replicas < configured {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "replicas override ({}) cannot be less than the configured value ({configured})",
+                    body.replicas
+                ),
+            ));
+        }
+
+        let new_override = if body.replicas == configured {
+            None
+        } else {
+            Some(body.replicas)
+        };
+
+        state
+            .store
+            .set_replicas_override(&service_id, new_override)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(ReplicasResponse {
+            service_id,
+            replicas: body.replicas,
+            replicas_override: new_override,
+        }))
+    }
+
+    async fn clear_service_replicas(
+        Path(service_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<ReplicasResponse>, (StatusCode, String)> {
+        let service_id = service_id.trim().to_string();
+        crate::validation::validate_service_id(&service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+
+        let info = state
+            .store
+            .read_service_info(&service_id)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("service `{service_id}` not found"),
+                )
+            })?;
+
+        state
+            .store
+            .set_replicas_override(&service_id, None)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+        Ok(Json(ReplicasResponse {
+            service_id,
+            replicas: info.config.deploy.replicas,
+            replicas_override: None,
         }))
     }
 
