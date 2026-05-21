@@ -589,8 +589,10 @@ async fn run() -> crate::error::Result<bool> {
                 .map(|dd| dd.include_ingress_logs)
                 .unwrap_or(false);
 
+            let mut metrics_datadog_tx: Option<flume::Sender<metrics::MetricBatch>> = None;
             if let Some(dd) = cfg.datadog {
                 if let Some(site) = datadog_site {
+                    let metrics_api_key = dd.api_key.clone();
                     let dd_sink = logs::DatadogSink::new(
                         dd.api_key,
                         &site,
@@ -604,6 +606,19 @@ async fn run() -> crate::error::Result<bool> {
                     );
                     background_handles.push(dd_worker.spawn());
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
+
+                    let (metrics_tx, metrics_rx) = flume::bounded(1024);
+                    let metrics_sink = metrics::datadog::DatadogMetricsSink::new(
+                        &site,
+                        SecretString::new(metrics_api_key),
+                        metrics_rx,
+                        cluster_name.clone(),
+                        parse_tags(cfg.tags.clone()).unwrap_or_default(),
+                        signal_tx.subscribe(),
+                        logger.clone(),
+                    );
+                    background_handles.push(metrics_sink.spawn());
+                    metrics_datadog_tx = Some(metrics_tx);
                 } else {
                     logger.emit("warn", "datadog config present but sink is disabled; set datadog.site in config or pass --datadog-site");
                 }
@@ -742,6 +757,7 @@ async fn run() -> crate::error::Result<bool> {
                 runtime.cli_name().to_string(),
                 metrics_signal_rx,
                 logger,
+                metrics_datadog_tx,
             );
             let metrics_handle = tokio::spawn(metrics_collector.run());
 
