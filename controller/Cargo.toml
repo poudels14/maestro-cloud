@@ -51,4 +51,4 @@ rcgen = { version = "0.14.7", features = ["pem"] }
 rustls = { version = "0.23.37", features = ["ring"] }
 dotenvy = "0.15.7"
 rpassword = "7.5.2"
-dialoguer = { version = "0.12.0", default-features = false, features = ["fuzzy-select"] }
+inquire = "0.9.4"

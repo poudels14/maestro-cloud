@@ -60,6 +60,7 @@ pub async fn run_rollout(
     apply: bool,
     force: bool,
     filter: &[String],
+    yes: bool,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(config_path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
@@ -134,12 +135,24 @@ pub async fn run_rollout(
         return Ok(());
     }
 
+    let selected_ids: Vec<&str> = selected.iter().map(|(id, _)| id.as_str()).collect();
+    let confirmed = crate::cli::confirm::confirm_action(
+        host,
+        &format!("About to roll out {} service(s)", selected.len()),
+        &[format!("Services: {}", selected_ids.join(", "))],
+        yes,
+    )
+    .await?;
+    if !confirmed {
+        println!("[maestro]: aborted");
+        return Ok(());
+    }
+
     let mut rollout_url = reqwest::Url::parse(&format!("{base_url}/api/services/rollout"))
         .map_err(|err| Error::invalid_input(format!("invalid rollout URL: {err}")))?;
     if force {
         rollout_url.query_pairs_mut().append_pair("force", "true");
     }
-    let selected_ids: Vec<&str> = selected.iter().map(|(id, _)| id.as_str()).collect();
     if selected.len() == cluster.services.len() {
         println!("[maestro]: rolling out {} services", selected.len());
     } else {
@@ -428,17 +441,15 @@ fn expand_source(
 
 fn prompt_service_selection(cluster: &ClusterConfig) -> Result<Vec<String>> {
     let service_ids: Vec<String> = cluster.services.keys().cloned().collect();
-    let defaults: Vec<bool> = vec![true; service_ids.len()];
-    let chosen = dialoguer::MultiSelect::new()
-        .with_prompt("Select services to rollout (space to toggle, enter to confirm)")
-        .items(&service_ids)
-        .defaults(&defaults)
-        .interact()
-        .map_err(|err| Error::external(format!("service selection prompt failed: {err}")))?;
-    Ok(chosen
-        .into_iter()
-        .map(|index| service_ids[index].clone())
-        .collect())
+    let defaults: Vec<usize> = (0..service_ids.len()).collect();
+    let chosen = inquire::MultiSelect::new(
+        "Select services to rollout (space to toggle, enter to confirm)",
+        service_ids.clone(),
+    )
+    .with_default(&defaults)
+    .prompt()
+    .map_err(|err| Error::external(format!("service selection prompt failed: {err}")))?;
+    Ok(chosen)
 }
 
 #[cfg(test)]

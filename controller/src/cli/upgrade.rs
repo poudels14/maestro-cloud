@@ -9,7 +9,19 @@ struct UpgradeSystemResponse {
     system: String,
 }
 
-pub async fn run_upgrade_system(host: &str) -> Result<()> {
+pub async fn run_upgrade_system(host: &str, yes: bool) -> Result<()> {
+    let confirmed = crate::cli::confirm::confirm_action(
+        host,
+        "About to upgrade the host operating system",
+        &[],
+        yes,
+    )
+    .await?;
+    if !confirmed {
+        println!("[maestro]: aborted");
+        return Ok(());
+    }
+
     let endpoint = upgrade_system_endpoint(host)?;
     let response = contexts::build_http_client()?
         .post(&endpoint)
