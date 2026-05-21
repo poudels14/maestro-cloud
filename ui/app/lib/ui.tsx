@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import type { JSX } from "solid-js";
 import { EllipsisVertical, Ban, RotateCw, RefreshCw, Square, AlertTriangle } from "lucide-solid";
 import clsx from "clsx";
 
@@ -243,5 +244,21 @@ export function ErrorBanner(props: { message: string; onRetry?: () => void }) {
         </button>
       </Show>
     </div>
+  );
+}
+
+export function Card(props: { class?: string; children: JSX.Element }) {
+  return (
+    <div class={clsx("bg-white rounded-lg border border-gray-200", props.class)}>
+      {props.children}
+    </div>
+  );
+}
+
+export function SectionHeader(props: { class?: string; children: JSX.Element }) {
+  return (
+    <h2 class={clsx("text-sm font-medium text-gray-400 uppercase tracking-wider", props.class)}>
+      {props.children}
+    </h2>
   );
 }

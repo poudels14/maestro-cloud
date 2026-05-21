@@ -1,462 +1,69 @@
-import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { createResource, createSignal, For, onCleanup, Show, Suspense } from "solid-js";
-import clsx from "clsx";
-import { EllipsisVertical, Monitor, Rocket, Trash2 } from "lucide-solid";
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Dialog } from "@kobalte/core/dialog";
-import type { Service } from "../lib/types";
-import {
-  deleteService,
-  getClusterInfo,
-  getClusterMetrics,
-  getDisks,
-  getNodeMetrics,
-  getServices
-} from "../lib/api";
-import { ErrorBanner, StatusBadge } from "../lib/ui";
-import { TimelineChart } from "../components/TimelineChart";
+import { createFileRoute } from "@tanstack/solid-router";
+import { useQuery } from "@tanstack/solid-query";
+import { Show } from "solid-js";
+import { Monitor } from "lucide-solid";
+import { clusterInfoQuery } from "../lib/queries";
 import { ClientOnly } from "../components/ClientOnly";
 import { SlackWebhooks } from "../components/SlackWebhooks";
+import { NodeMetricsSection } from "../components/home/NodeMetricsSection";
+import { DisksSection } from "../components/home/DisksSection";
+import { ServicesGrid } from "../components/home/ServicesGrid";
 
 export const Route = createFileRoute("/")({
-  component: ServicesPage
+  component: HomePage
 });
 
-function ServiceCard(props: { service: Service; onClick: () => void; onDelete: () => void }) {
-  const s = props.service;
-  const isSystem = s.system === true;
-  const status = isSystem ? "SYSTEM" : (s.status ?? "IDLE");
-  const sourceName =
-    s.build != null
-      ? s.build.repo
-          .replace(/\.git$/, "")
-          .split("/")
-          .slice(-2)
-          .join("/")
-      : (s.image ?? "(no source)");
-
-  return (
-    <div
-      onClick={props.onClick}
-      class="bg-white border border-gray-200 rounded-lg p-5 hover:border-indigo-200 hover:shadow-sm transition-all text-left w-full cursor-pointer outline-none group relative"
-    >
-      <div class="flex items-start justify-between gap-4">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2.5 mb-1">
-            <span class="text-base font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
-              {s.name}
-            </span>
-          </div>
-          <p class="text-sm text-gray-500 truncate">{sourceName}</p>
-        </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <Show when={s.deployFrozen}>
-            <span class="inline-flex items-center text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-              frozen
-            </span>
-          </Show>
-          <StatusBadge status={status} />
-          <Show when={!isSystem}>
-            <div onClick={(e: MouseEvent) => e.stopPropagation()}>
-              <DropdownMenu>
-                <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-colors outline-none">
-                  <EllipsisVertical class="size-4" />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
-                    <DropdownMenu.Item
-                      class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
-                      onSelect={() => props.onDelete()}
-                    >
-                      <Trash2 class="size-3.5" />
-                      Remove service
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu>
-            </div>
-          </Show>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DeleteConfirmDialog(props: {
-  open: boolean;
-  serviceName: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <Dialog
-      open={props.open}
-      onOpenChange={(open) => {
-        if (!open) props.onCancel();
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 bg-black/30 z-50" />
-        <Dialog.Content class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-xl z-50 p-6 w-full max-w-sm outline-none">
-          <Dialog.Title class="text-base font-semibold text-gray-900 mb-2">
-            Remove service
-          </Dialog.Title>
-          <Dialog.Description class="text-sm text-gray-500 mb-5">
-            Are you sure you want to remove{" "}
-            <span class="font-medium text-gray-700">{props.serviceName}</span>? This will delete all
-            deployments and cannot be undone.
-          </Dialog.Description>
-          <div class="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={props.onCancel}
-              class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors outline-none"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={props.onConfirm}
-              class="px-3 py-1.5 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors outline-none"
-            >
-              Remove
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog>
-  );
-}
-
-function HomeMetrics() {
-  const metricsSource = () => {
-    const now = Date.now();
-    return { from: now - 3_600_000, to: now };
-  };
-
-  const [nodeMetrics, { refetch: refetchNode }] = createResource(metricsSource, ({ from, to }) =>
-    getNodeMetrics(from, to)
-  );
-  const [clusterMetrics, { refetch: refetchCluster }] = createResource(
-    metricsSource,
-    ({ from, to }) => getClusterMetrics(from, to)
-  );
-  const [disks, { refetch: refetchDisks }] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getDisks
-  );
-
-  const pollTimer = setInterval(() => {
-    refetchNode();
-    refetchCluster();
-    refetchDisks();
-  }, 10_000);
-  onCleanup(() => clearInterval(pollTimer));
-
-  const formatBytes = (v: number) => {
-    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)} GB`;
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} MB`;
-    return `${Math.round(v / 1_000)} KB`;
-  };
-  const formatPct = (v: number) => `${v.toFixed(1)}%`;
-
-  const latestNode = () => {
-    const data = nodeMetrics() ?? [];
-    return data.length > 0 ? data[data.length - 1] : null;
-  };
-  const latestCluster = () => {
-    const data = clusterMetrics() ?? [];
-    return data.length > 0 ? data[data.length - 1] : null;
-  };
-
-  return (
-    <div class="mb-10 space-y-6">
-      <Show when={nodeMetrics.error || clusterMetrics.error}>
-        <ErrorBanner
-          message="Failed to load metrics"
-          onRetry={() => {
-            refetchNode();
-            refetchCluster();
-          }}
-        />
-      </Show>
-      <div>
-        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Node</h2>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="flex items-baseline justify-between mb-3">
-              <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</h3>
-              <Show when={latestNode()}>
-                {(node) => (
-                  <span class="text-xs text-gray-400">{formatPct(node().cpuPercent)}</span>
-                )}
-              </Show>
-            </div>
-            <TimelineChart
-              data={(nodeMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
-              label="CPU"
-              color="#6366f1"
-              yFormat={formatPct}
-              height={140}
-            />
-          </div>
-          <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="flex items-baseline justify-between mb-3">
-              <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">Memory</h3>
-              <Show when={latestNode()}>
-                {(node) => (
-                  <span class="text-xs text-gray-400">
-                    {formatBytes(node().memoryBytes)} / {formatBytes(node().memoryLimitBytes)}
-                  </span>
-                )}
-              </Show>
-            </div>
-            <TimelineChart
-              data={(nodeMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
-              label="Memory"
-              color="#8b5cf6"
-              yFormat={formatBytes}
-              height={140}
-            />
-          </div>
-        </div>
-      </div>
-      <div>
-        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Cluster</h2>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="flex items-baseline justify-between mb-3">
-              <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</h3>
-              <Show when={latestCluster()}>
-                {(cluster) => (
-                  <span class="text-xs text-gray-400">{formatPct(cluster().cpuPercent)}</span>
-                )}
-              </Show>
-            </div>
-            <TimelineChart
-              data={(clusterMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
-              label="CPU"
-              color="#0ea5e9"
-              yFormat={formatPct}
-              height={140}
-            />
-          </div>
-          <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="flex items-baseline justify-between mb-3">
-              <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">Memory</h3>
-              <Show when={latestCluster()}>
-                {(cluster) => (
-                  <span class="text-xs text-gray-400">
-                    {formatBytes(cluster().memoryBytes)} / {formatBytes(cluster().memoryLimitBytes)}
-                  </span>
-                )}
-              </Show>
-            </div>
-            <TimelineChart
-              data={(clusterMetrics() ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
-              label="Memory"
-              color="#14b8a6"
-              yFormat={formatBytes}
-              height={140}
-            />
-          </div>
-        </div>
-      </div>
-      <Show when={(disks() ?? []).length > 0}>
-        <div>
-          <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Disks</h2>
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <For each={disks()}>
-              {(disk) => {
-                const usedBytes = () => disk.totalBytes - disk.availableBytes;
-                const usedPercent = () =>
-                  disk.totalBytes > 0 ? (usedBytes() / disk.totalBytes) * 100 : 0;
-                return (
-                  <div class="bg-white rounded-lg border border-gray-200 p-4">
-                    <div class="flex items-baseline justify-between mb-1">
-                      <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider truncate">
-                        {disk.mountPoint}
-                      </h3>
-                      <span class="text-xs text-gray-400 shrink-0 ml-2">
-                        {formatBytes(usedBytes())} / {formatBytes(disk.totalBytes)}
-                      </span>
-                    </div>
-                    <Show when={disk.name || disk.fileSystem}>
-                      <p class="text-xs text-gray-400 mb-3 truncate">
-                        {[disk.name, disk.fileSystem].filter(Boolean).join(" · ")}
-                      </p>
-                    </Show>
-                    <div class="w-full bg-gray-100 rounded-full h-2">
-                      <div
-                        class={clsx("h-2 rounded-full", {
-                          "bg-red-500": usedPercent() > 90,
-                          "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
-                          "bg-indigo-500": usedPercent() <= 70
-                        })}
-                        style={{ width: `${Math.min(usedPercent(), 100)}%` }}
-                      />
-                    </div>
-                    <p class="text-xs text-gray-400 mt-1.5">{usedPercent().toFixed(1)}% used</p>
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-function ServicesPage() {
-  const [services, { refetch }] = createResource(
-    () => (import.meta.env.SSR ? null : true),
-    getServices
-  );
-  const navigate = useNavigate();
-  const [deleteTarget, setDeleteTarget] = createSignal<Service | null>(null);
-
-  const confirmDelete = async () => {
-    const target = deleteTarget();
-    if (target) {
-      await deleteService(target.id);
-      setDeleteTarget(null);
-      refetch();
-    }
-  };
-
-  const [clusterInfo] = createResource(() => (import.meta.env.SSR ? null : true), getClusterInfo);
-
+function HomePage() {
   return (
     <div class="min-h-screen bg-[#fafafa]">
-      <header class="bg-white border-b border-gray-200">
-        <div class="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div class="flex items-center gap-2.5">
-            <div class="size-7 rounded-lg bg-indigo-500 flex items-center justify-center">
-              <Monitor class="size-4 text-white" />
-            </div>
-            <span class="text-sm font-semibold text-gray-900 tracking-tight">Maestro</span>
-          </div>
-          <Show when={clusterInfo()}>
-            {(info) => (
-              <div class="flex items-center gap-4 text-xs font-mono">
-                <span class="text-gray-400">{info().clusterName}</span>
-                <a
-                  href={`http://${info().canonicalDomain}`}
-                  title="Canonical domain"
-                  class="text-gray-500 hover:text-gray-700 no-underline"
-                >
-                  {info().canonicalDomain}
-                </a>
-                <a
-                  href={`http://${info().aliasDomain}`}
-                  title="Alias domain"
-                  class="text-gray-300 hover:text-gray-500 no-underline"
-                >
-                  {info().aliasDomain}
-                </a>
-              </div>
-            )}
-          </Show>
-        </div>
-      </header>
-
+      <HomeHeader />
       <main class="max-w-5xl mx-auto px-6 py-8">
-        <ClientOnly
-          fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
-        >
-          <Show when={services.error}>
-            <div class="mb-6">
-              <ErrorBanner message="Failed to load services" onRetry={refetch} />
-            </div>
-          </Show>
-          <Suspense
-            fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
-          >
-            <Show
-              when={services()}
-              fallback={
-                <div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>
-              }
-            >
-              {(list) => {
-                const userServices = () => list().filter((s) => !s.system);
-                const systemServices = () => list().filter((s) => s.system);
-
-                return (
-                  <>
-                    <HomeMetrics />
-
-                    <div class="flex items-baseline gap-2 mb-6">
-                      <h1 class="text-xl font-semibold text-gray-900">Services</h1>
-                      <span class="text-sm text-gray-400">{userServices().length}</span>
-                    </div>
-                    <Show
-                      when={userServices().length > 0}
-                      fallback={
-                        <div class="text-center py-20">
-                          <Rocket class="size-10 text-gray-300 mx-auto mb-3" />
-                          <p class="text-sm text-gray-400">No services configured yet.</p>
-                        </div>
-                      }
-                    >
-                      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        <For each={userServices()}>
-                          {(service) => (
-                            <ServiceCard
-                              service={service}
-                              onClick={() =>
-                                navigate({
-                                  to: "/services/$serviceId/$tab",
-                                  params: { serviceId: service.id, tab: "overview" }
-                                })
-                              }
-                              onDelete={() => setDeleteTarget(service)}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-
-                    <Show when={systemServices().length > 0}>
-                      <div class="flex items-baseline gap-2 mb-4 mt-10">
-                        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
-                          System
-                        </h2>
-                      </div>
-                      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        <For each={systemServices()}>
-                          {(service) => (
-                            <ServiceCard
-                              service={service}
-                              onClick={() =>
-                                navigate({
-                                  to: "/services/$serviceId/$tab",
-                                  params: { serviceId: service.id, tab: "overview" }
-                                })
-                              }
-                              onDelete={() => {}}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-
-                    <SlackWebhooks />
-                  </>
-                );
-              }}
-            </Show>
-          </Suspense>
+        <ClientOnly fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}>
+          <div class="mb-10 space-y-6">
+            <NodeMetricsSection />
+            <DisksSection />
+          </div>
+          <ServicesGrid />
+          <SlackWebhooks />
         </ClientOnly>
       </main>
-
-      <DeleteConfirmDialog
-        open={deleteTarget() !== null}
-        serviceName={deleteTarget()?.name ?? ""}
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
     </div>
+  );
+}
+
+function HomeHeader() {
+  const cluster = useQuery(() => clusterInfoQuery());
+  return (
+    <header class="bg-white border-b border-gray-200">
+      <div class="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="size-7 rounded-lg bg-indigo-500 flex items-center justify-center">
+            <Monitor class="size-4 text-white" />
+          </div>
+          <span class="text-sm font-semibold text-gray-900 tracking-tight">Maestro</span>
+        </div>
+        <Show when={cluster.data}>
+          {(info) => (
+            <div class="flex items-center gap-4 text-xs font-mono">
+              <span class="text-gray-400">{info().clusterName}</span>
+              <a
+                href={`http://${info().canonicalDomain}`}
+                title="Canonical domain"
+                class="text-gray-500 hover:text-gray-700 no-underline"
+              >
+                {info().canonicalDomain}
+              </a>
+              <a
+                href={`http://${info().aliasDomain}`}
+                title="Alias domain"
+                class="text-gray-300 hover:text-gray-500 no-underline"
+              >
+                {info().aliasDomain}
+              </a>
+            </div>
+          )}
+        </Show>
+      </div>
+    </header>
   );
 }

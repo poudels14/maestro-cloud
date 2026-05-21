@@ -1,27 +1,46 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import clsx from "clsx";
 import { Plus, Send, Trash2 } from "lucide-solid";
 import type { SlackCategory, SlackWebhook } from "../lib/types";
 import {
   createSlackWebhook,
   deleteSlackWebhook,
-  listSlackWebhooks,
   testSlackWebhook,
   updateSlackWebhook
 } from "../lib/api";
+import { queryKeys, slackWebhooksQuery } from "../lib/queries";
+import { SectionHeader } from "../lib/ui";
+import { ConfirmDialog } from "./home/ConfirmDialog";
 
 const ALL_CATEGORIES: SlackCategory[] = ["info", "error"];
 
 function SlackWebhooks() {
-  const [webhooks, { refetch }] = createResource(listSlackWebhooks);
+  const queryClient = useQueryClient();
+  const webhooks = useQuery(() => slackWebhooksQuery());
   const [showForm, setShowForm] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
+  const [pendingDelete, setPendingDelete] = createSignal<SlackWebhook | null>(null);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
+
+  const deleteMutation = useMutation(() => ({
+    mutationFn: (id: string) => deleteSlackWebhook(id),
+    onSuccess: () => {
+      setPendingDelete(null);
+      invalidate();
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "delete failed");
+      setPendingDelete(null);
+    }
+  }));
 
   return (
     <div>
       <div class="flex items-baseline gap-2 mb-4 mt-10">
-        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Slack webhooks</h2>
-        <span class="text-sm text-gray-400">{webhooks()?.length ?? 0}</span>
+        <SectionHeader>Slack webhooks</SectionHeader>
+        <span class="text-sm text-gray-400">{webhooks.data?.length ?? 0}</span>
       </div>
       <Show when={actionError()}>
         <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
@@ -30,15 +49,18 @@ function SlackWebhooks() {
       </Show>
       <div class="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
         <Show
-          when={(webhooks()?.length ?? 0) > 0}
+          when={(webhooks.data?.length ?? 0) > 0}
           fallback={<div class="px-4 py-3 text-xs text-gray-400">No webhooks configured.</div>}
         >
-          <For each={webhooks()}>
+          <For each={webhooks.data}>
             {(webhook) => (
               <WebhookRow
                 webhook={webhook}
-                onChange={() => refetch()}
                 onError={(msg) => setActionError(msg)}
+                onRequestDelete={() => {
+                  setActionError(null);
+                  setPendingDelete(webhook);
+                }}
               />
             )}
           </For>
@@ -64,58 +86,52 @@ function SlackWebhooks() {
             onSaved={() => {
               setShowForm(false);
               setActionError(null);
-              refetch();
             }}
             onError={(msg) => setActionError(msg)}
           />
         </Show>
       </div>
+      <ConfirmDialog
+        open={pendingDelete() !== null}
+        title="Delete webhook"
+        description={
+          <>
+            Are you sure you want to delete{" "}
+            <span class="font-medium text-gray-700">{pendingDelete()?.name}</span>? No more
+            notifications will be sent to this webhook.
+          </>
+        }
+        confirmLabel="Delete"
+        confirmBusyLabel="Deleting…"
+        busy={deleteMutation.isPending}
+        onConfirm={() => {
+          const target = pendingDelete();
+          if (target) deleteMutation.mutate(target.id);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
 
 function WebhookRow(props: {
   webhook: SlackWebhook;
-  onChange: () => void;
   onError: (msg: string) => void;
+  onRequestDelete: () => void;
 }) {
-  const [busy, setBusy] = createSignal<"toggle" | "test" | "delete" | null>(null);
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
 
-  const toggleEnabled = async () => {
-    setBusy("toggle");
-    try {
-      await updateSlackWebhook(props.webhook.id, { enabled: !props.webhook.enabled });
-      props.onChange();
-    } catch (err) {
-      props.onError(err instanceof Error ? err.message : "toggle failed");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const sendTest = async () => {
-    setBusy("test");
-    try {
-      await testSlackWebhook(props.webhook.id);
-    } catch (err) {
-      props.onError(err instanceof Error ? err.message : "test failed");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const remove = async () => {
-    if (!confirm(`Delete webhook "${props.webhook.name}"?`)) return;
-    setBusy("delete");
-    try {
-      await deleteSlackWebhook(props.webhook.id);
-      props.onChange();
-    } catch (err) {
-      props.onError(err instanceof Error ? err.message : "delete failed");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const toggleMutation = useMutation(() => ({
+    mutationFn: (enabled: boolean) => updateSlackWebhook(props.webhook.id, { enabled }),
+    onSuccess: invalidate,
+    onError: (err) => props.onError(err instanceof Error ? err.message : "toggle failed")
+  }));
+  const testMutation = useMutation(() => ({
+    mutationFn: () => testSlackWebhook(props.webhook.id),
+    onError: (err) => props.onError(err instanceof Error ? err.message : "test failed")
+  }));
+  const busy = () => toggleMutation.isPending || testMutation.isPending;
 
   return (
     <div class="px-4 py-3 flex items-center justify-between gap-4">
@@ -148,8 +164,8 @@ function WebhookRow(props: {
       <div class="flex items-center gap-1 shrink-0">
         <button
           type="button"
-          onClick={toggleEnabled}
-          disabled={busy() !== null}
+          onClick={() => toggleMutation.mutate(!props.webhook.enabled)}
+          disabled={busy()}
           class={clsx("text-xs px-2 py-1 rounded-md transition-colors", {
             "bg-gray-100 text-gray-600 hover:bg-gray-200": props.webhook.enabled,
             "bg-gray-50 text-gray-400 hover:bg-gray-100": !props.webhook.enabled
@@ -159,8 +175,8 @@ function WebhookRow(props: {
         </button>
         <button
           type="button"
-          onClick={sendTest}
-          disabled={busy() !== null}
+          onClick={() => testMutation.mutate()}
+          disabled={busy()}
           title="Send test message"
           class="size-7 flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md disabled:opacity-50"
         >
@@ -168,8 +184,8 @@ function WebhookRow(props: {
         </button>
         <button
           type="button"
-          onClick={remove}
-          disabled={busy() !== null}
+          onClick={() => props.onRequestDelete()}
+          disabled={busy()}
           title="Delete webhook"
           class="size-7 flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50"
         >
@@ -185,10 +201,25 @@ function WebhookForm(props: {
   onSaved: () => void;
   onError: (msg: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const [name, setName] = createSignal("");
   const [url, setUrl] = createSignal("");
   const [categories, setCategories] = createSignal<SlackCategory[]>(["info", "error"]);
-  const [saving, setSaving] = createSignal(false);
+
+  const createMutation = useMutation(() => ({
+    mutationFn: () =>
+      createSlackWebhook({
+        name: name().trim(),
+        url: url().trim(),
+        categories: categories(),
+        enabled: true
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
+      props.onSaved();
+    },
+    onError: (err) => props.onError(err instanceof Error ? err.message : "create failed")
+  }));
 
   const toggleCategory = (category: SlackCategory) => {
     setCategories((current) =>
@@ -196,7 +227,7 @@ function WebhookForm(props: {
     );
   };
 
-  const save = async () => {
+  const save = () => {
     if (!name().trim()) {
       props.onError("Name is required");
       return;
@@ -209,20 +240,7 @@ function WebhookForm(props: {
       props.onError("Select at least one category");
       return;
     }
-    setSaving(true);
-    try {
-      await createSlackWebhook({
-        name: name().trim(),
-        url: url().trim(),
-        categories: categories(),
-        enabled: true
-      });
-      props.onSaved();
-    } catch (err) {
-      props.onError(err instanceof Error ? err.message : "create failed");
-    } finally {
-      setSaving(false);
-    }
+    createMutation.mutate();
   };
 
   return (
@@ -233,7 +251,7 @@ function WebhookForm(props: {
           placeholder="Name (e.g. #deploys)"
           value={name()}
           onInput={(e) => setName(e.currentTarget.value)}
-          disabled={saving()}
+          disabled={createMutation.isPending}
           class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
         />
         <input
@@ -241,7 +259,7 @@ function WebhookForm(props: {
           placeholder="https://hooks.slack.com/services/..."
           value={url()}
           onInput={(e) => setUrl(e.currentTarget.value)}
-          disabled={saving()}
+          disabled={createMutation.isPending}
           class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
         />
         <div class="flex items-center gap-2">
@@ -253,7 +271,7 @@ function WebhookForm(props: {
                   type="checkbox"
                   checked={categories().includes(category)}
                   onChange={() => toggleCategory(category)}
-                  disabled={saving()}
+                  disabled={createMutation.isPending}
                   class="size-3.5"
                 />
                 {category}
@@ -265,7 +283,7 @@ function WebhookForm(props: {
           <button
             type="button"
             onClick={save}
-            disabled={saving()}
+            disabled={createMutation.isPending}
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300"
           >
             Save
@@ -273,7 +291,7 @@ function WebhookForm(props: {
           <button
             type="button"
             onClick={props.onCancel}
-            disabled={saving()}
+            disabled={createMutation.isPending}
             class="px-3 py-1.5 text-xs font-medium rounded-md text-gray-600 hover:bg-gray-100"
           >
             Cancel
