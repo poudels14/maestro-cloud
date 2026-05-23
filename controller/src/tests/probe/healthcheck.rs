@@ -235,9 +235,22 @@ async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
     let mut state = HashMap::new();
     let mut last_polled = HashMap::new();
 
-    crate::probe::healthcheck::check_deployments(&store, &http, &mut state, &mut last_polled, None)
-        .await
-        .expect("healthcheck should complete");
+    let slack = crate::slack::SlackNotifier::new(
+        None,
+        None,
+        "test".to_string(),
+        crate::logs::Logger::noop(),
+    );
+    crate::probe::healthcheck::check_deployments(
+        &store,
+        &http,
+        &mut state,
+        &mut last_polled,
+        None,
+        &slack,
+    )
+    .await
+    .expect("healthcheck should complete");
 
     let deployment_after = store
         .deployment
