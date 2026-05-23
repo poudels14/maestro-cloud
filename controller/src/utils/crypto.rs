@@ -47,6 +47,16 @@ impl SecretString {
     pub fn as_str(&self) -> &str {
         &self.inner
     }
+
+    pub fn masked(&self) -> String {
+        let chars: Vec<char> = self.inner.chars().collect();
+        if chars.len() <= 4 {
+            return self.inner.clone();
+        }
+        let first: String = chars.iter().take(2).collect();
+        let last: String = chars.iter().skip(chars.len() - 2).collect();
+        format!("{first}*****{last}")
+    }
 }
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]

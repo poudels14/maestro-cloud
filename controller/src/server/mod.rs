@@ -473,6 +473,10 @@ impl Server {
                 .then_with(|| b.deployment.id.cmp(&a.deployment.id))
         });
 
+        for item in &mut deployments {
+            item.deployment.config = item.deployment.config.mask_secrets();
+        }
+
         Ok(Json(deployments))
     }
 

@@ -111,6 +111,22 @@ impl ServiceConfig {
         }
         config
     }
+
+    pub fn mask_secrets(&self) -> Self {
+        let mut config = self.clone();
+        for value in config.deploy.env.items.values_mut() {
+            *value = SecretString::new(value.masked());
+        }
+        if let Some(build) = &mut config.build {
+            for value in build.env.items.values_mut() {
+                *value = SecretString::new(value.masked());
+            }
+            for value in build.secrets.items.values_mut() {
+                *value = SecretString::new(value.masked());
+            }
+        }
+        config
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
