@@ -14,6 +14,18 @@ struct ClusterInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricPoint {
+    ts: i64,
+    #[serde(default)]
+    cpu_percent: f64,
+    #[serde(default)]
+    memory_bytes: i64,
+    #[serde(default)]
+    memory_limit_bytes: i64,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct MaskedConfigView {
     ingress: IngressView,
@@ -125,6 +137,10 @@ pub async fn run_info(host: &str) -> Result<()> {
         fetch(&client, &format!("{base}/api/webhooks/slack"))
             .await
             .unwrap_or_default();
+    let node_metric = fetch::<Vec<MetricPoint>>(&client, &format!("{base}/api/metrics/node"))
+        .await
+        .ok()
+        .and_then(|points| points.into_iter().last());
 
     println!("Cluster");
     println!("  name              {}", cluster.cluster_name);
@@ -133,6 +149,18 @@ pub async fn run_info(host: &str) -> Result<()> {
     println!("  alias domain      {}", cluster.alias_domain);
     if cluster.upgrading {
         println!("  upgrade           in progress");
+    }
+
+    if let Some(metric) = node_metric.as_ref() {
+        println!("\nMetrics");
+        println!("  node cpu          {}", format_cpu(metric.cpu_percent));
+        println!(
+            "  node memory       {}",
+            format_memory(metric.memory_bytes, metric.memory_limit_bytes)
+        );
+        if let Some(age) = metric_age_label(metric.ts) {
+            println!("  as of             {age}");
+        }
     }
 
     println!("\nNetwork");
@@ -245,6 +273,62 @@ fn format_slack(view: &SlackView) -> String {
         "webhook-url: {}",
         view.webhook_url.as_deref().unwrap_or("(unset)")
     )
+}
+
+fn format_cpu(percent: f64) -> String {
+    format!("{:.1}%", percent)
+}
+
+fn format_memory(used_bytes: i64, limit_bytes: i64) -> String {
+    let used = format_bytes(used_bytes);
+    if limit_bytes <= 0 {
+        return used;
+    }
+    let limit = format_bytes(limit_bytes);
+    let percent = (used_bytes as f64 / limit_bytes as f64) * 100.0;
+    format!("{used} / {limit} ({percent:.1}%)")
+}
+
+fn format_bytes(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    const TIB: f64 = GIB * 1024.0;
+    let value = bytes as f64;
+    if value >= TIB {
+        format!("{:.2} TiB", value / TIB)
+    } else if value >= GIB {
+        format!("{:.2} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn metric_age_label(ts_ms: i64) -> Option<String> {
+    if ts_ms <= 0 {
+        return None;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as i64;
+    let age_secs = (now_ms - ts_ms) / 1000;
+    if age_secs < 0 {
+        return Some("just now".to_string());
+    }
+    if age_secs < 60 {
+        return Some(format!("{age_secs}s ago"));
+    }
+    let minutes = age_secs / 60;
+    if minutes < 60 {
+        return Some(format!("{minutes}m ago"));
+    }
+    let hours = minutes / 60;
+    Some(format!("{hours}h ago"))
 }
 
 async fn fetch<T: serde::de::DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
