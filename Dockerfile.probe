@@ -7,4 +7,4 @@ RUN cargo build --release
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /app/target/release/maestro /maestro
-ENTRYPOINT ["/maestro", "service", "probe"]
+ENTRYPOINT ["/maestro", "daemon", "probe"]
