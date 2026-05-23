@@ -136,7 +136,14 @@ enum ClusterCommand {
     /// Show the controller's effective config (secrets are masked)
     Config,
     /// Restart the maestro controller (stops all containers and restarts the process)
-    Restart,
+    Restart {
+        #[arg(
+            short = 'y',
+            long = "yes",
+            help = "Skip the cluster-confirmation prompt"
+        )]
+        yes: bool,
+    },
     /// Upgrade system components
     #[command(after_help = "Example: maestro cluster upgrade system")]
     Upgrade {
@@ -894,7 +901,9 @@ async fn run() -> crate::error::Result<bool> {
             match command {
                 ClusterCommand::Info => cli::info::run_info(&host).await.map(|()| false),
                 ClusterCommand::Config => cli::config::run_config(&host).await.map(|()| false),
-                ClusterCommand::Restart => cli::restart::run_restart(&host).await.map(|()| false),
+                ClusterCommand::Restart { yes } => {
+                    cli::restart::run_restart(&host, yes).await.map(|()| false)
+                }
                 ClusterCommand::Upgrade {
                     target: UpgradeTarget::System,
                     yes,
