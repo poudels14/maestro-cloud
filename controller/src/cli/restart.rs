@@ -8,7 +8,19 @@ struct RestartResponse {
     accepted: bool,
 }
 
-pub async fn run_restart(host: &str) -> Result<()> {
+pub async fn run_restart(host: &str, yes: bool) -> Result<()> {
+    let confirmed = crate::cli::confirm::confirm_action(
+        host,
+        "About to restart the controller (all containers will be stopped)",
+        &[],
+        yes,
+    )
+    .await?;
+    if !confirmed {
+        println!("[maestro]: aborted");
+        return Ok(());
+    }
+
     let base = normalize_base_url(host)?;
     let endpoint = format!("{base}/api/system/restart");
     let response = contexts::build_http_client()?
