@@ -1,6 +1,6 @@
 use crate::deployment::types::{
-    EnvConfig, MAX_HEALTHCHECK_INTERVAL_SECS, MIN_HEALTHCHECK_INTERVAL_SECS, ServiceBuildConfig,
-    ServiceDeployConfig, ServiceProvider,
+    EnvConfig, IngressConfig, MAX_HEALTHCHECK_INTERVAL_SECS, MIN_HEALTHCHECK_INTERVAL_SECS,
+    ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
 };
 
 pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
@@ -158,6 +158,42 @@ pub fn validate_service_provider_config(
 
 pub fn has_writable_volume(deploy: &ServiceDeployConfig) -> bool {
     deploy.volumes.iter().any(|volume| !volume.read_only)
+}
+
+pub fn validate_ingress_config(ingress: &Option<IngressConfig>) -> Result<(), String> {
+    let Some(ingress) = ingress else {
+        return Ok(());
+    };
+    if let Some(port) = ingress.port {
+        if port == 0 {
+            return Err("ingress.port cannot be 0".to_string());
+        }
+    }
+    for (index, host) in ingress.hosts().iter().enumerate() {
+        validate_ingress_host(host, index)?;
+    }
+    Ok(())
+}
+
+fn validate_ingress_host(host: &str, index: usize) -> Result<(), String> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return Err(format!("ingress.hosts[{index}] cannot be empty"));
+    }
+    if trimmed.contains('`') {
+        return Err(format!(
+            "ingress.hosts[{index}] `{trimmed}` cannot contain backtick (`)"
+        ));
+    }
+    let looks_like_regex = trimmed
+        .chars()
+        .any(|c| !c.is_ascii_alphanumeric() && c != '.' && c != '-');
+    if !looks_like_regex {
+        return Ok(());
+    }
+    regex::Regex::new(trimmed)
+        .map_err(|err| format!("ingress.hosts[{index}] `{trimmed}` is not a valid regex: {err}"))?;
+    Ok(())
 }
 
 fn validate_env_config(config: &EnvConfig, field: &str) -> Result<(), String> {

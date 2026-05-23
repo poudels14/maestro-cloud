@@ -279,7 +279,7 @@ impl EtcdStateStore {
         let rule = ingress
             .hosts()
             .iter()
-            .map(|h| format!("Host(`{h}`)"))
+            .map(|h| host_rule(h))
             .collect::<Vec<_>>()
             .join(" || ");
         let port = ingress.port.unwrap_or(80);
@@ -1556,6 +1556,17 @@ fn request_put(key: &str, value: &str) -> TxnOp {
 fn decode_mod_revision(mod_revision: i64, key: &str) -> Result<u64> {
     u64::try_from(mod_revision)
         .map_err(|err| anyhow!("invalid mod_revision `{mod_revision}` for key `{key}`: {err}"))
+}
+
+fn host_rule(host: &str) -> String {
+    if host
+        .chars()
+        .any(|c| !c.is_ascii_alphanumeric() && c != '.' && c != '-')
+    {
+        format!("HostRegexp(`{host}`)")
+    } else {
+        format!("Host(`{host}`)")
+    }
 }
 
 fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
