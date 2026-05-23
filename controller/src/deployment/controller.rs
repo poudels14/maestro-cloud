@@ -220,8 +220,73 @@ impl DeploymentController {
             self.process_queued_deployment(queued_deployment).await?;
         }
         self.cleanup_orphaned_deployments().await;
+        self.reconcile_replica_dns().await;
         self.reconcile_stable_dns().await;
         Ok(())
+    }
+
+    async fn reconcile_replica_dns(&self) {
+        let (Some(dns), Some(domain)) = (self.dns_manager.as_ref(), self.dns_domain.as_deref())
+        else {
+            return;
+        };
+        let service_ids = match self.store.list_service_ids().await {
+            Ok(ids) => ids,
+            Err(_) => return,
+        };
+        let mut touched = false;
+        for service_id in &service_ids {
+            let deployments = self
+                .store
+                .list_service_deployments(service_id)
+                .await
+                .unwrap_or_default();
+            for deployment in &deployments {
+                if !matches!(
+                    deployment.status,
+                    DeploymentStatus::Building
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Ready
+                ) {
+                    continue;
+                }
+                let replicas = self
+                    .store
+                    .list_replica_states(service_id, &deployment.id)
+                    .await
+                    .unwrap_or_default();
+                for replica in &replicas {
+                    if !matches!(
+                        replica.status,
+                        DeploymentStatus::PendingReady | DeploymentStatus::Ready
+                    ) {
+                        continue;
+                    }
+                    let hostname = deployment.hostname_for_replica(replica.replica_index);
+                    let Some(ip) = self.runtime.inspect_container_ip(&hostname).await else {
+                        continue;
+                    };
+                    let existing = dns.lookup(&hostname, domain);
+                    if existing.as_slice() == [ip.clone()] {
+                        continue;
+                    }
+                    dns.set_record(&hostname, domain, &ip);
+                    touched = true;
+                    let from = if existing.is_empty() {
+                        "missing".to_string()
+                    } else {
+                        existing.join(",")
+                    };
+                    self.logger.emit(
+                        "info",
+                        &format!("reconciled DNS for `{hostname}`: {from} -> {ip}"),
+                    );
+                }
+            }
+        }
+        if touched {
+            let _ = dns.flush();
+        }
     }
 
     async fn reconcile_stable_dns(&self) {
@@ -1075,6 +1140,7 @@ impl DeploymentController {
                     &self.dns_domain,
                     &self.dns_manager,
                     &self.runtime,
+                    &self.logger,
                 );
             } else {
                 self.logger.emit(
@@ -1470,6 +1536,7 @@ impl DeploymentController {
                     &self.dns_domain,
                     &self.dns_manager,
                     &self.runtime,
+                    &self.logger,
                 );
                 let replica_status = recovered_replica_status_for_deployment(deployment);
                 let needs_replica_state = replica_states
@@ -1917,6 +1984,7 @@ impl DeploymentController {
                 &self.dns_domain,
                 &self.dns_manager,
                 &self.runtime,
+                &self.logger,
             );
 
             let status = initial_replica_status_for_deployment(deployment_record);
@@ -2038,16 +2106,25 @@ fn register_container_dns(
     dns_domain: &Option<String>,
     dns_manager: &Option<Arc<DnsManager>>,
     runtime: &Arc<dyn RuntimeProvider>,
+    logger: &Logger,
 ) {
     if let (Some(domain), Some(dns)) = (dns_domain.as_deref(), dns_manager.as_ref()) {
         let hostname = hostname.to_string();
         let domain = domain.to_string();
         let runtime = runtime.clone();
         let dns = dns.clone();
+        let logger = logger.clone();
         tokio::spawn(async move {
             if let Some(ip) = runtime.inspect_container_ip(&hostname).await {
                 dns.set_record(&hostname, &domain, &ip);
                 let _ = dns.flush();
+            } else {
+                logger.emit(
+                    "error",
+                    &format!(
+                        "failed to register DNS for `{hostname}`: container IP unavailable; will retry on next reconcile"
+                    ),
+                );
             }
         });
     }
