@@ -10,13 +10,13 @@ use crate::utils::crypto::SecretString;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ClusterConfig {
-    services: BTreeMap<String, ServiceTemplate>,
+pub(super) struct ClusterConfig {
+    pub(super) services: BTreeMap<String, ServiceTemplate>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ServiceTemplate {
+pub(super) struct ServiceTemplate {
     name: String,
     #[serde(default)]
     provider: ServiceProvider,
@@ -69,7 +69,7 @@ pub async fn run_rollout(
             Error::invalid_config(format!("failed to read {}: {err}", config_path.display()))
         }
     })?;
-    let cluster = parse_config(&raw)?;
+    let cluster = parse_cluster_config(&raw)?;
 
     if cluster.services.is_empty() {
         return Err(Error::invalid_config(format!(
@@ -312,10 +312,33 @@ async fn call_rollout_endpoint(
     Ok(payload)
 }
 
-fn parse_config(raw: &str) -> Result<ClusterConfig> {
+pub(super) fn parse_cluster_config(raw: &str) -> Result<ClusterConfig> {
     let parsed = json5::from_str(raw)
         .map_err(|err| Error::invalid_config(format!("failed to parse config: {err}")))?;
     Ok(parsed)
+}
+
+pub(super) fn validate_service_template(
+    service_id: &str,
+    template: &ServiceTemplate,
+) -> Result<()> {
+    let id = service_id.trim();
+    crate::validation::validate_service_id(id, "service id").map_err(Error::invalid_config)?;
+    if template.name.trim().is_empty() {
+        return Err(Error::invalid_config(format!(
+            "service `{service_id}` has empty name"
+        )));
+    }
+    crate::validation::validate_service_provider_config(
+        template.provider,
+        &template.build,
+        &template.image,
+        &template.deploy,
+    )
+    .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+    crate::validation::validate_ingress_config(&template.ingress)
+        .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+    Ok(())
 }
 
 fn normalize_base_url(host: &str) -> Result<String> {

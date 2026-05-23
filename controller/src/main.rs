@@ -45,16 +45,50 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
-    /// Manage the local Maestro controller service
-    Service {
+    /// Manage local Maestro config files
+    Config {
         #[command(subcommand)]
-        command: ServiceCommand,
+        command: ConfigCommand,
+    },
+    /// Manage Maestro daemons running on this host (controller, probe, log reader)
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+    /// Inspect the active cluster
+    Cluster {
+        #[command(subcommand)]
+        command: ClusterCommand,
     },
     /// Manage Maestro API contexts
     Contexts {
         #[command(subcommand)]
         command: ContextsCommand,
     },
+    /// Manage services in the active context
+    Services {
+        #[command(subcommand)]
+        command: ServicesCommand,
+    },
+    /// Stream logs from the active context
+    Logs(cli::logs::RemoteLogsArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Create a starter config file (interactive — choose cluster or services)
+    Init,
+    /// Validate a local config file (auto-detects cluster vs services)
+    Validate {
+        #[arg(help = "Path to the config file to validate")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServicesCommand {
+    /// List services in the active context
+    Ls,
     /// Deploy services from the config file (dry run by default)
     Rollout {
         #[arg(
@@ -81,12 +115,6 @@ enum CliCommand {
         )]
         yes: bool,
     },
-    /// List services in the active context
-    Services,
-    /// Show information about the active cluster
-    Info,
-    /// Stream logs from the active context
-    Logs(cli::logs::RemoteLogsArgs),
     /// Trigger a redeployment of a running service
     Redeploy {
         #[arg(help = "Service ID to redeploy")]
@@ -99,8 +127,18 @@ enum CliCommand {
         #[arg(help = "Deployment ID to cancel")]
         deployment_id: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ClusterCommand {
+    /// Show information about the active cluster
+    Info,
+    /// Show the controller's effective config (secrets are masked)
+    Config,
+    /// Restart the maestro controller (stops all containers and restarts the process)
+    Restart,
     /// Upgrade system components
-    #[command(after_help = "Example: maestro upgrade system")]
+    #[command(after_help = "Example: maestro cluster upgrade system")]
     Upgrade {
         #[command(subcommand)]
         target: UpgradeTarget,
@@ -110,17 +148,6 @@ enum CliCommand {
             help = "Skip the cluster-confirmation prompt"
         )]
         yes: bool,
-    },
-    /// Create a default maestro.cluster.jsonc config file
-    Init,
-    /// Show the controller's effective config (secrets are masked)
-    Config,
-    /// Restart the maestro controller (stops all containers and restarts the process)
-    Restart,
-    /// Generate and save a JWT auth token for the active context
-    Auth {
-        #[arg(long = "days", help = "Token lifetime in days (default: 7)")]
-        days: Option<u64>,
     },
 }
 
@@ -134,16 +161,16 @@ enum ContextsCommand {
         name: Option<String>,
     },
     /// List configured contexts
-    List,
-    /// Show a context, or the active context if omitted
-    Show {
-        #[arg(help = "Context name")]
-        name: Option<String>,
-    },
+    Ls,
     /// Remove a context
     Remove {
         #[arg(help = "Context name")]
         name: String,
+    },
+    /// Generate and save a JWT auth token for the active context
+    Login {
+        #[arg(long = "days", help = "Token lifetime in days (default: 7)")]
+        days: Option<u64>,
     },
 }
 
@@ -156,7 +183,7 @@ struct ContextSetArgs {
 }
 
 #[derive(Debug, Subcommand)]
-enum ServiceCommand {
+enum DaemonCommand {
     /// Start the cluster controller and all system services
     Start(StartArgs),
     /// Read logs from the local log store
@@ -360,9 +387,9 @@ async fn run() -> crate::error::Result<bool> {
             print!("{}", help_text());
             Ok(false)
         }
-        Some(CliCommand::Service {
+        Some(CliCommand::Daemon {
             command:
-                ServiceCommand::Start(StartArgs {
+                DaemonCommand::Start(StartArgs {
                     config,
                     cluster_name,
                     admin_port,
@@ -827,54 +854,62 @@ async fn run() -> crate::error::Result<bool> {
                 cli::contexts::set_context(name.as_deref(), host.as_deref())
             }
             ContextsCommand::Use { name } => cli::contexts::use_context(name.as_deref()),
-            ContextsCommand::List => cli::contexts::list_contexts(),
-            ContextsCommand::Show { name } => cli::contexts::show_context(name.as_deref()),
+            ContextsCommand::Ls => cli::contexts::list_contexts(),
             ContextsCommand::Remove { name } => cli::contexts::remove_context(&name),
+            ContextsCommand::Login { days } => cli::auth::run_auth(days),
         }
         .map(|()| false),
-        Some(CliCommand::Rollout {
-            config,
-            apply,
-            force,
-            services,
-            yes,
-        }) => {
+        Some(CliCommand::Services { command }) => {
             let host = cli::contexts::active_host()?;
-            let config_path = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
-            cli::rollout::run_rollout(&config_path, &host, apply, force, &services, yes)
-                .await
-                .map(|()| false)
+            match command {
+                ServicesCommand::Rollout {
+                    config,
+                    apply,
+                    force,
+                    services,
+                    yes,
+                } => {
+                    let config_path =
+                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
+                    cli::rollout::run_rollout(&config_path, &host, apply, force, &services, yes)
+                        .await
+                        .map(|()| false)
+                }
+                ServicesCommand::Ls => cli::services::run_services(&host).await.map(|()| false),
+                ServicesCommand::Redeploy { service_id } => {
+                    cli::redeploy::run_redeploy(&host, &service_id)
+                        .await
+                        .map(|()| false)
+                }
+                ServicesCommand::Cancel {
+                    service_id,
+                    deployment_id,
+                } => cli::cancel::run_cancel(&host, &service_id, &deployment_id)
+                    .await
+                    .map(|()| false),
+            }
         }
-        Some(CliCommand::Services) => {
+        Some(CliCommand::Cluster { command }) => {
             let host = cli::contexts::active_host()?;
-            cli::services::run_services(&host).await.map(|()| false)
-        }
-        Some(CliCommand::Info) => {
-            let host = cli::contexts::active_host()?;
-            cli::info::run_info(&host).await.map(|()| false)
+            match command {
+                ClusterCommand::Info => cli::info::run_info(&host).await.map(|()| false),
+                ClusterCommand::Config => cli::config::run_config(&host).await.map(|()| false),
+                ClusterCommand::Restart => cli::restart::run_restart(&host).await.map(|()| false),
+                ClusterCommand::Upgrade {
+                    target: UpgradeTarget::System,
+                    yes,
+                } => cli::upgrade::run_upgrade_system(&host, yes)
+                    .await
+                    .map(|()| false),
+            }
         }
         Some(CliCommand::Logs(args)) => {
             let host = cli::contexts::active_host()?;
             cli::logs::run_logs(&host, args).await.map(|()| false)
         }
-        Some(CliCommand::Redeploy { service_id }) => {
-            let host = cli::contexts::active_host()?;
-            cli::redeploy::run_redeploy(&host, &service_id)
-                .await
-                .map(|()| false)
-        }
-        Some(CliCommand::Cancel {
-            service_id,
-            deployment_id,
-        }) => {
-            let host = cli::contexts::active_host()?;
-            cli::cancel::run_cancel(&host, &service_id, &deployment_id)
-                .await
-                .map(|()| false)
-        }
-        Some(CliCommand::Service {
+        Some(CliCommand::Daemon {
             command:
-                ServiceCommand::Probe(ProbeArgs {
+                DaemonCommand::Probe(ProbeArgs {
                     etcd_endpoint,
                     port,
                 }),
@@ -882,9 +917,9 @@ async fn run() -> crate::error::Result<bool> {
             .await
             .map(|()| false)
             .map_err(|err| Error::internal(err.to_string())),
-        Some(CliCommand::Service {
+        Some(CliCommand::Daemon {
             command:
-                ServiceCommand::Logs(LogsArgs {
+                DaemonCommand::Logs(LogsArgs {
                     source,
                     data_dir,
                     cluster_name,
@@ -936,29 +971,10 @@ async fn run() -> crate::error::Result<bool> {
 
             Ok(false)
         }
-        Some(CliCommand::Upgrade {
-            target: UpgradeTarget::System,
-            yes,
-        }) => {
-            let host = cli::contexts::active_host()?;
-            cli::upgrade::run_upgrade_system(&host, yes)
-                .await
-                .map(|()| false)
-        }
-        Some(CliCommand::Config) => {
-            let host = cli::contexts::active_host()?;
-            cli::config::run_config(&host).await.map(|()| false)
-        }
-        Some(CliCommand::Restart) => {
-            let host = cli::contexts::active_host()?;
-            cli::restart::run_restart(&host).await.map(|()| false)
-        }
-        Some(CliCommand::Auth { days }) => cli::auth::run_auth(days).map(|()| false),
-        Some(CliCommand::Init) => cli::init_config(
-            Path::new("maestro.jsonc"),
-            Path::new(DEFAULT_CLUSTER_CONFIG_PATH),
-        )
-        .map(|()| false),
+        Some(CliCommand::Config { command }) => match command {
+            ConfigCommand::Init => cli::config::run_init().map(|()| false),
+            ConfigCommand::Validate { path } => cli::config::run_validate(&path).map(|()| false),
+        },
     }
 }
 

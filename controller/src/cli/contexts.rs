@@ -82,21 +82,6 @@ pub fn list_contexts() -> Result<()> {
     Ok(())
 }
 
-pub fn show_context(name: Option<&str>) -> Result<()> {
-    let path = contexts_path()?;
-    let config = load_contexts(&path)?;
-    let name = match name {
-        Some(name) => validate_context_name(name)?,
-        None => config.active.clone().ok_or_else(no_active_context)?,
-    };
-    let context = config
-        .contexts
-        .get(&name)
-        .ok_or_else(|| Error::not_found(format!("context `{name}` does not exist")))?;
-    println!("{name}\t{}", context.host);
-    Ok(())
-}
-
 pub fn active_host() -> Result<String> {
     let path = contexts_path()?;
     active_host_at(&path)

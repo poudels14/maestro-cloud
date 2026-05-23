@@ -27,7 +27,7 @@ This generates a `maestro.jsonc` file in your working directory with a sample se
 ### 2. Start the cluster
 
 ```bash
-maestro service start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
+maestro daemon start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
 ```
 
 Flags:
@@ -51,13 +51,13 @@ maestro contexts use local
 ```
 
 ```bash
-maestro rollout
+maestro services rollout
 ```
 
 ### 4. Redeploy a service
 
 ```bash
-maestro redeploy my-app
+maestro services redeploy my-app
 ```
 
 ## Config file
@@ -174,7 +174,7 @@ Tailscale enables remote access to your containers from any device on your tailn
 
 ```bash
 export TS_AUTHKEY=tskey-auth-...
-maestro service start \
+maestro daemon start \
   --cluster-name my-cluster \
   --ingress-port 80 --ingress-port 443 \
   --data-dir ./data \
@@ -234,10 +234,10 @@ Each cluster needs its own subnet to avoid IP conflicts:
 
 ```bash
 # Cluster 1
-maestro service start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
+maestro daemon start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
 
 # Cluster 2
-maestro service start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
+maestro daemon start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
 ```
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
@@ -303,7 +303,7 @@ Configure a context for the remote Maestro API, then trigger updates remotely:
 ```bash
 maestro contexts set prod http://127.0.0.1:3001
 maestro contexts use prod
-maestro upgrade system
+maestro cluster upgrade system
 ```
 
 ### Step 3: Manage the service

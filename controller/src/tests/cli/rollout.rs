@@ -23,7 +23,7 @@ fn sample_config() -> &'static str {
 
 #[test]
 fn parse_config_supports_jsonc() {
-    let parsed = parse_config(sample_config()).expect("should parse");
+    let parsed = parse_cluster_config(sample_config()).expect("should parse");
     assert_eq!(parsed.services.len(), 1);
 }
 
@@ -35,7 +35,7 @@ fn normalize_base_url_adds_http_when_missing() {
 
 #[test]
 fn service_payload_uses_map_key_as_service_id() {
-    let parsed = parse_config(sample_config()).expect("should parse");
+    let parsed = parse_cluster_config(sample_config()).expect("should parse");
     let template = parsed
         .services
         .get("service-1")
