@@ -564,6 +564,8 @@ async fn init_probe(
     let probe_dir = config.probe_dir();
     let probe_data_dir = probe_dir.join("data");
     std::fs::create_dir_all(&probe_data_dir).expect("Failed to create probe data dir");
+    std::fs::create_dir_all(probe_data_dir.join("uploads"))
+        .expect("Failed to create probe uploads dir");
     let probe_data_abs =
         std::fs::canonicalize(&probe_data_dir).expect("failed to canonicalize probe data dir");
     let encryption_key_path = probe_dir.join("encryption-key");

@@ -76,6 +76,8 @@ pub struct StartConfig {
     pub slack: Option<SlackConfig>,
     #[serde(default)]
     pub disable_etcd_cert: bool,
+    #[serde(default)]
+    pub allow_cli_deployment: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -212,6 +214,8 @@ pub struct MaskedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slack: Option<SlackView>,
     pub disable_etcd_cert: bool,
+    #[serde(default)]
+    pub allow_cli_deployment: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +329,7 @@ impl StartConfig {
                 webhook_url: mask(sl.webhook_url.as_str()),
             }),
             disable_etcd_cert: self.disable_etcd_cert,
+            allow_cli_deployment: self.allow_cli_deployment,
         }
     }
 }

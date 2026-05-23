@@ -34,6 +34,7 @@ use crate::{
 
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
 const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
+const DEFAULT_SERVICE_CONFIG_PATH: &str = "maestro.service.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 
 #[derive(Debug, Parser)]
@@ -126,6 +127,19 @@ enum ServicesCommand {
         service_id: String,
         #[arg(help = "Deployment ID to cancel")]
         deployment_id: String,
+    },
+    /// Deploy a service from a local context (tarball uploaded to the cluster)
+    Up {
+        #[arg(
+            long = "config",
+            help = "Path to maestro.service.jsonc (default: maestro.service.jsonc)"
+        )]
+        config: Option<PathBuf>,
+        #[arg(
+            long = "context",
+            help = "Path to the build context directory (default: current directory)"
+        )]
+        context: Option<PathBuf>,
     },
 }
 
@@ -463,6 +477,7 @@ async fn run() -> crate::error::Result<bool> {
                     cloudflare: None,
                     slack: None,
                     disable_etcd_cert: false,
+                    allow_cli_deployment: false,
                 },
             };
 
@@ -894,6 +909,14 @@ async fn run() -> crate::error::Result<bool> {
                 } => cli::cancel::run_cancel(&host, &service_id, &deployment_id)
                     .await
                     .map(|()| false),
+                ServicesCommand::Up { config, context } => {
+                    let config_path =
+                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_SERVICE_CONFIG_PATH));
+                    let context_dir = context.unwrap_or_else(|| PathBuf::from("."));
+                    cli::up::run_up(&host, &config_path, &context_dir)
+                        .await
+                        .map(|()| false)
+                }
             }
         }
         Some(CliCommand::Cluster { command }) => {

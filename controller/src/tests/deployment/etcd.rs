@@ -59,6 +59,7 @@ fn deployment_with_source(
         },
         git_commit: None,
         build: None,
+        upload_archive: None,
     }
 }
 
@@ -80,6 +81,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
         dns_domain: None,
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -120,6 +122,7 @@ fn command_planner_disables_pull_for_prepared_images() {
         dns_domain: None,
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -158,6 +161,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
         dns_domain: None,
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -196,7 +200,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
 fn command_planner_falls_back_to_explicit_deploy_command() {
     let deployment = deployment_with_source(
         Some(ServiceBuildConfig {
-            repo: "https://example.com/repo.git".to_string(),
+            repo: Some("https://example.com/repo.git".to_string()),
             branch: None,
             dockerfile: "Dockerfile".to_string(),
             watch: false,
@@ -219,6 +223,7 @@ fn command_planner_falls_back_to_explicit_deploy_command() {
         dns_domain: None,
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -264,6 +269,7 @@ fn shell_command_planner_uses_explicit_deploy_command() {
         },
         git_commit: None,
         build: None,
+        upload_archive: None,
     };
 
     let planner = ShellDeploymentProvider;
@@ -298,6 +304,7 @@ fn secrets_mount_content_quotes_values() {
         dns_domain: None,
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets-quote"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -425,6 +432,7 @@ impl InMemoryStore {
                     config: config.clone(),
                     git_commit: None,
                     build: None,
+                    upload_archive: None,
                 };
                 created_at += 1;
                 state
@@ -478,6 +486,7 @@ impl InMemoryStore {
                 config,
                 git_commit: None,
                 build: None,
+                upload_archive: None,
             };
             created_at += 1;
             state
@@ -583,6 +592,7 @@ impl InMemoryStore {
             config,
             git_commit: None,
             build: None,
+            upload_archive: None,
         };
         state
             .transitions
@@ -632,6 +642,7 @@ impl InMemoryStore {
             config,
             git_commit: None,
             build: None,
+            upload_archive: None,
         };
         state
             .transitions
@@ -662,6 +673,7 @@ impl InMemoryStore {
             config,
             git_commit: None,
             build: None,
+            upload_archive: None,
         };
         let id = deployment.id.clone();
         state

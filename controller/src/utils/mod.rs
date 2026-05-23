@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod certs;
 pub mod cmd;
 pub mod crypto;

@@ -174,6 +174,7 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
         },
         git_commit: None,
         build: None,
+        upload_archive: None,
     }
 }
 

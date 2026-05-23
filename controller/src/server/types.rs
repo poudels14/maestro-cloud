@@ -48,6 +48,15 @@ pub(crate) struct RolloutServiceRequest {
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct UploadServiceResponse {
+    pub(crate) service_id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) version: String,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CancelDeploymentResponse {
     pub(crate) canceled: bool,
     pub(crate) service_id: String,

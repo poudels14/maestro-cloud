@@ -24,10 +24,11 @@ pub fn validate_build_config(
 ) -> Result<(Option<ServiceBuildConfig>, Option<String>), String> {
     match (build, image) {
         (Some(build), None) => {
-            let repo = build.repo.trim();
-            if repo.is_empty() {
-                return Err("build.repo cannot be empty".to_string());
-            }
+            let repo = build
+                .repo
+                .as_ref()
+                .map(|repo| repo.trim().to_string())
+                .filter(|repo| !repo.is_empty());
             let dockerfile = build.dockerfile.trim();
             if dockerfile.is_empty() {
                 return Err("build.dockerfile cannot be empty".to_string());
@@ -50,7 +51,7 @@ pub fn validate_build_config(
                 .transpose()?;
             Ok((
                 Some(ServiceBuildConfig {
-                    repo: repo.to_string(),
+                    repo,
                     branch: build.branch.clone(),
                     dockerfile: dockerfile.to_string(),
                     watch: build.watch,
