@@ -16,18 +16,11 @@
         "replicas": 1,
         "healthcheckPath": "/health",
         "env": {
-          "source": "aws-secret://my-app/env-vars",
-          "items": {
-            "APP_NAME": "secrets-test"
-          }
+          "source": "aws-secret://my-app/env-vars"
         },
         "secrets": {
           "mountPath": "/app/.env",
-          "source": "aws-secret://my-app/secrets",
-          "items": {
-            "DB_PASSWORD": "local-test-password",
-            "API_KEY": "local-test-key"
-          }
+          "source": "aws-secret://my-app/secrets"
         }
       }
     }
