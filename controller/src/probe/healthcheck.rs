@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{Deployment, DeploymentStatus, ReplicaState, ServiceDeployment};
+use crate::slack::SlackNotifier;
 
 const MAX_HEALTHCHECK_FAILURES: u32 = 10;
 const UNHEALTHY_RECHECK_SECS: u64 = 5;
@@ -19,6 +20,7 @@ pub async fn check_deployments(
     state: &mut HealthState,
     last_polled: &mut HashMap<String, Instant>,
     dns_domain: Option<&str>,
+    slack: &SlackNotifier,
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
@@ -68,6 +70,7 @@ pub async fn check_deployments(
                 &deployment,
                 &checkable_replicas,
                 dns_domain,
+                slack,
             )
             .await
             {
@@ -90,6 +93,7 @@ async fn check_replicas(
     deployment: &ServiceDeployment,
     replicas: &[&ReplicaState],
     dns_domain: Option<&str>,
+    slack: &SlackNotifier,
 ) -> Result<()> {
     let health_path = deployment
         .config
@@ -151,25 +155,22 @@ async fn check_replicas(
             continue;
         };
 
-        let is_healthy = match http.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => true,
+        let (is_healthy, failure_reason) = match http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => (true, None),
             Ok(resp) => {
+                let status = resp.status();
                 eprintln!(
                     "healthcheck failed {}/{}/replica{} url={} status={}",
-                    service_id,
-                    deployment.id,
-                    replica.replica_index,
-                    url,
-                    resp.status()
+                    service_id, deployment.id, replica.replica_index, url, status
                 );
-                false
+                (false, Some(format!("HTTP {status}")))
             }
             Err(err) => {
                 eprintln!(
                     "healthcheck error {}/{}/replica{} url={} err={}",
                     service_id, deployment.id, replica.replica_index, url, err
                 );
-                false
+                (false, Some(format!("request error: {err}")))
             }
         };
 
@@ -220,6 +221,14 @@ async fn check_replicas(
                 "stopping deployment {}/{} after {} consecutive healthcheck failures on replica{}",
                 service_id, deployment.id, healthcheck_failures, replica.replica_index,
             );
+            let reason = format!(
+                "healthcheck failed {}× on `{}` (replica{}, last: {})",
+                healthcheck_failures,
+                health_path,
+                replica.replica_index,
+                failure_reason.as_deref().unwrap_or("unknown"),
+            );
+            slack.notify_deployment_crashed(service_id, &deployment.id, &reason);
             let _ = store
                 .stop_service_deployment(&Deployment {
                     service_id: service_id.to_string(),

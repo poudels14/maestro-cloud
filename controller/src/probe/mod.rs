@@ -72,6 +72,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         cluster_name.clone(),
         crate::logs::Logger::noop(),
     );
+    let healthcheck_slack = slack_notifier.clone();
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
@@ -113,6 +114,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
                     &mut health_state,
                     &mut last_polled,
                     dns_domain.as_deref(),
+                    &healthcheck_slack,
                 )
                 .await
                 {

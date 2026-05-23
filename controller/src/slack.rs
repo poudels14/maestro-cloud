@@ -66,35 +66,36 @@ impl SlackNotifier {
 
     pub fn notify_deployment_queued(&self, service_id: &str, deployment_id: &str, version: &str) {
         let text = format!(
-            ":rocket: [{}] deployment queued — `{service_id}/{}` v{version}",
+            ":rocket: *Deployment queued* — `{service_id}` (`{}`)\n> cluster: `{}` · version: `{}`",
+            short_id(deployment_id),
             self.inner.cluster_name,
-            short_id(deployment_id)
+            short_version(version),
         );
         self.dispatch(SlackCategory::Info, text);
     }
 
     pub fn notify_deployment_ready(&self, service_id: &str, deployment_id: &str) {
         let text = format!(
-            ":white_check_mark: [{}] deployment ready — `{service_id}/{}`",
+            ":white_check_mark: *Deployment ready* — `{service_id}` (`{}`)\n> cluster: `{}`",
+            short_id(deployment_id),
             self.inner.cluster_name,
-            short_id(deployment_id)
         );
         self.dispatch(SlackCategory::Info, text);
     }
 
     pub fn notify_deployment_crashed(&self, service_id: &str, deployment_id: &str, reason: &str) {
         let text = format!(
-            ":x: [{}] deployment crashed — `{service_id}/{}`: {reason}",
+            ":x: *Deployment crashed* — `{service_id}` (`{}`)\n> cluster: `{}`\n> reason: {reason}",
+            short_id(deployment_id),
             self.inner.cluster_name,
-            short_id(deployment_id)
         );
         self.dispatch(SlackCategory::Error, text);
     }
 
     pub fn notify_service_removed(&self, service_id: &str) {
         let text = format!(
-            ":wastebasket: [{}] service removed — `{service_id}`",
-            self.inner.cluster_name
+            ":wastebasket: *Service removed* — `{service_id}`\n> cluster: `{}`",
+            self.inner.cluster_name,
         );
         self.dispatch(SlackCategory::Info, text);
     }
@@ -149,4 +150,10 @@ async fn send(client: &reqwest::Client, logger: &Logger, url: &str, text: &str) 
 
 fn short_id(deployment_id: &str) -> String {
     deployment_id.chars().take(6).collect()
+}
+
+fn short_version(version: &str) -> String {
+    let stripped = version.strip_prefix("cfg-").unwrap_or(version);
+    let short: String = stripped.chars().take(7).collect();
+    format!("cfg-{short}")
 }
