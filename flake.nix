@@ -143,7 +143,7 @@
         extraArgs = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [];
-          description = "Extra arguments to pass to maestro service start";
+          description = "Extra arguments to pass to maestro daemon start";
         };
       };
 
@@ -317,7 +317,7 @@
               RestartSec = 5;
               ExecStart = utils.escapeSystemdExecArgs ([
                   "${cfg.package}/bin/maestro"
-                  "service"
+                  "daemon"
                   "start"
                   "--config"
                   cfg.config
