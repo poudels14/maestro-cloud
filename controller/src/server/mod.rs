@@ -1617,6 +1617,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     }
     let (build, image, deploy) =
         crate::validation::validate_service_provider_config(provider, &build, &image, &deploy)?;
+    crate::validation::validate_ingress_config(&ingress)?;
 
     let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
     let secrets_source = deploy.secrets.as_ref().and_then(|s| s.source.as_ref());

@@ -919,6 +919,7 @@ dependencies = [
  "nanoid",
  "os_pipe",
  "rcgen",
+ "regex",
  "reqwest",
  "rpassword",
  "rusqlite",
