@@ -1,6 +1,9 @@
-use anyhow::Result;
-use async_trait::async_trait;
 use std::collections::HashSet;
+use std::time::Duration;
+
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
+use backon::{ConstantBuilder, Retryable};
 
 use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
@@ -103,8 +106,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     }
 
     async fn inspect_container_ip(&self, name: &str) -> Option<String> {
-        for _ in 0..10 {
-            if let Ok(stdout) = cmd::run(
+        let backoff = ConstantBuilder::default()
+            .with_delay(Duration::from_millis(500))
+            .with_max_times(20);
+        let attempt = || async {
+            let stdout = cmd::run(
                 "nerdctl",
                 &[
                     "inspect",
@@ -114,15 +120,15 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
                 ],
             )
             .await
-            {
-                let ip = stdout.trim().to_string();
-                if !ip.is_empty() {
-                    return Some(ip);
-                }
+            .map_err(|err| anyhow!("nerdctl inspect failed for `{name}`: {err}"))?;
+            let ip = stdout.trim().to_string();
+            if ip.is_empty() {
+                Err(anyhow!("ip not yet assigned for `{name}`"))
+            } else {
+                Ok::<String, anyhow::Error>(ip)
             }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-        None
+        };
+        attempt.retry(backoff).await.ok()
     }
 
     async fn inspect_network_cidr(&self, name: &str) -> Option<String> {
