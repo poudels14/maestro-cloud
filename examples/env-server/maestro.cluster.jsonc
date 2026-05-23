@@ -12,8 +12,10 @@
         "replicas": 1,
         "healthcheckPath": "/health",
         "env": {
-          "APP_NAME": "maestro-test",
-          "APP_ENV": "${APP_ENV:-development}"
+          "items": {
+            "APP_NAME": "maestro-test",
+            "APP_ENV": "${APP_ENV:-development}"
+          }
         },
         "secrets": {
           "mountPath": "/app/.env",

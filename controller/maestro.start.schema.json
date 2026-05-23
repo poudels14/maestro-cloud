@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["cluster", "ingress", "encryption-key"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "cluster": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "default": []
+        }
+      }
+    },
+    "subnet": {
+      "type": "string"
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      }
+    },
+    "encryption-key": {
+      "type": "string"
+    },
+    "tailscale": {
+      "type": "object",
+      "required": ["auth-key"],
+      "additionalProperties": false,
+      "properties": {
+        "auth-key": {
+          "type": "string"
+        }
+      }
+    },
+    "jwt-secret-key": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "datadog": {
+      "type": "object",
+      "required": ["api-key"],
+      "additionalProperties": false,
+      "properties": {
+        "api-key": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string"
+        },
+        "include-ingress-logs": {
+          "type": "boolean",
+          "default": true
+        },
+        "include-tailscale-logs": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "system": {
+      "type": "string",
+      "enum": ["nixos"]
+    },
+    "runtime": {
+      "type": "string",
+      "enum": ["docker", "nerdctl"],
+      "default": "docker"
+    },
+    "depot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string"
+        }
+      }
+    },
+    "disable-etcd-cert": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
