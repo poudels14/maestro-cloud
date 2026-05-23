@@ -110,6 +110,7 @@ impl DeploymentController {
             secrets_dir: std::fs::canonicalize(&config.data_dir)
                 .unwrap_or_else(|_| config.data_dir.clone())
                 .join("secrets"),
+            uploads_dir: config.probe_dir().join("data/uploads"),
         };
         let logger = Logger::new(log_sender.clone());
         let slack = crate::slack::SlackNotifier::new(
@@ -1394,6 +1395,7 @@ impl DeploymentController {
         {
             self.remove_deployment_containers(deployment).await;
             remove_build_dir(deployment, &self.config.data_dir);
+            remove_upload_archive(deployment, &self.container_provider.uploads_dir);
         }
 
         let stale_images = deployments
@@ -1515,6 +1517,7 @@ impl DeploymentController {
                 .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                 .await;
             remove_build_dir(deployment, &self.config.data_dir);
+            remove_upload_archive(deployment, &self.container_provider.uploads_dir);
             self.prune_service_images(service_id).await;
             return;
         }
@@ -2026,6 +2029,15 @@ fn remove_build_dir(deployment: &ServiceDeployment, data_dir: &std::path::Path) 
         .join(&short_id);
     if build_dir.exists() {
         let _ = std::fs::remove_dir_all(&build_dir);
+    }
+}
+
+fn remove_upload_archive(deployment: &ServiceDeployment, uploads_dir: &std::path::Path) {
+    if let Some(filename) = deployment.upload_archive.as_deref() {
+        let archive_path = uploads_dir.join(filename);
+        if archive_path.exists() {
+            let _ = std::fs::remove_file(&archive_path);
+        }
     }
 }
 

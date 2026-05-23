@@ -173,7 +173,8 @@ pub enum ServiceProvider {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceBuildConfig {
-    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub dockerfile: String,
@@ -199,14 +200,18 @@ impl ServiceBuildConfig {
     pub fn source(&self) -> crate::builder::GitSource {
         let mut env = self.env.items.clone();
         env.extend(self.secrets.items.clone());
-        crate::builder::GitSource::new(&self.repo, self.branch.as_deref(), env)
+        crate::builder::GitSource::new(
+            self.repo.as_deref().unwrap_or(""),
+            self.branch.as_deref(),
+            env,
+        )
     }
 
     pub async fn resolved_source(&self, logger: &Logger) -> Result<crate::builder::GitSource> {
         let mut env = self.env.resolved(logger).await?;
         env.extend(self.secrets.resolved(logger).await?);
         Ok(crate::builder::GitSource::new(
-            &self.repo,
+            self.repo.as_deref().unwrap_or(""),
             self.branch.as_deref(),
             env,
         ))
@@ -434,6 +439,8 @@ pub struct ServiceDeployment {
     pub config: ServiceConfig,
     pub git_commit: Option<GitCommitInfo>,
     pub build: Option<DeploymentBuildInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_archive: Option<String>,
 }
 
 impl ServiceDeployment {
@@ -470,6 +477,7 @@ impl ServiceDeployment {
             config,
             git_commit: None,
             build: None,
+            upload_archive: None,
         })
     }
 

@@ -3,7 +3,7 @@ use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::Response,
@@ -20,7 +20,7 @@ use self::types::{
     CancelDeploymentResponse, CreateSlackWebhookRequest, RemoveDeploymentResponse,
     ReplicasOverrideRequest, ReplicasResponse, RolloutChange, RolloutDiffResponse,
     RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
-    SlackWebhookView, UpdateSlackWebhookRequest,
+    SlackWebhookView, UpdateSlackWebhookRequest, UploadServiceResponse,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -80,6 +80,8 @@ struct AppState {
     cluster_alias: String,
     masked_config: Option<Arc<crate::config::MaskedConfig>>,
     slack: crate::slack::SlackNotifier,
+    allow_cli_deployment: bool,
+    upload_dir: std::path::PathBuf,
 }
 
 pub(crate) struct Server {
@@ -96,6 +98,8 @@ impl Server {
         cluster_alias: String,
         masked_config: Option<Arc<crate::config::MaskedConfig>>,
         slack: crate::slack::SlackNotifier,
+        allow_cli_deployment: bool,
+        upload_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             state: AppState {
@@ -107,6 +111,8 @@ impl Server {
                 cluster_alias,
                 masked_config,
                 slack,
+                allow_cli_deployment,
+                upload_dir,
             },
         }
     }
@@ -115,6 +121,10 @@ impl Server {
         let auth = middleware::from_fn_with_state(self.state.clone(), require_jwt);
         let protected = Router::new()
             .route("/api/services/rollout", post(Self::rollout_service))
+            .route(
+                "/api/services/up",
+                post(Self::upload_service).layer(DefaultBodyLimit::disable()),
+            )
             .route("/api/system/upgrade", post(Self::upgrade_system))
             .route("/api/system/restart", post(Self::restart_system))
             .route_layer(auth);
@@ -276,6 +286,20 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        if let Some(build) = service_config.build.as_ref() {
+            if build
+                .repo
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "build.repo is required for rollout; use the `maestro services up` command to upload a local context".to_string(),
+                ));
+            }
+        }
         eprintln!(
             "rollout request service_id={} version={} force={}",
             service_config.id,
@@ -372,12 +396,167 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        if let Some(build) = service_config.build.as_ref() {
+            if build
+                .repo
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "build.repo is required for rollout; use the `maestro services up` command to upload a local context".to_string(),
+                ));
+            }
+        }
 
         let diff = compute_rollout_diff(state.store.as_ref(), &service_config)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
         Ok(Json(vec![diff]))
+    }
+
+    async fn upload_service(
+        State(state): State<AppState>,
+        mut multipart: Multipart,
+    ) -> Result<Json<UploadServiceResponse>, (StatusCode, String)> {
+        if !state.allow_cli_deployment {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "cli deployment is disabled on this cluster; set allow-cli-deployment: true in maestro.jsonc to enable".to_string(),
+            ));
+        }
+
+        std::fs::create_dir_all(&state.upload_dir).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create upload dir: {err}"),
+            )
+        })?;
+        let temp_filename = format!("upload-{}.tmp", crate::utils::nanoid::unique_id(16));
+        let temp_path = state.upload_dir.join(&temp_filename);
+
+        let mut spec_bytes: Option<Bytes> = None;
+        let mut archive_hash: Option<String> = None;
+        let mut archive_persisted = false;
+        while let Some(mut field) = multipart.next_field().await.map_err(|err| {
+            let _ = std::fs::remove_file(&temp_path);
+            (StatusCode::BAD_REQUEST, format!("invalid multipart: {err}"))
+        })? {
+            match field.name() {
+                Some("spec") => {
+                    spec_bytes = Some(field.bytes().await.map_err(|err| {
+                        let _ = std::fs::remove_file(&temp_path);
+                        (
+                            StatusCode::BAD_REQUEST,
+                            format!("failed to read spec part: {err}"),
+                        )
+                    })?);
+                }
+                Some("context") => {
+                    use std::io::Write;
+                    let mut file = std::fs::File::create(&temp_path).map_err(|err| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("failed to create upload temp file: {err}"),
+                        )
+                    })?;
+                    let mut hasher = Sha256::new();
+                    while let Some(chunk) = field.chunk().await.map_err(|err| {
+                        let _ = std::fs::remove_file(&temp_path);
+                        (
+                            StatusCode::BAD_REQUEST,
+                            format!("failed to read context chunk: {err}"),
+                        )
+                    })? {
+                        hasher.update(&chunk);
+                        file.write_all(&chunk).map_err(|err| {
+                            let _ = std::fs::remove_file(&temp_path);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("failed to write upload temp file: {err}"),
+                            )
+                        })?;
+                    }
+                    archive_hash = Some(hex_lower(hasher.finalize().as_slice()));
+                    archive_persisted = true;
+                }
+                _ => {}
+            }
+        }
+
+        let cleanup_temp = || {
+            if archive_persisted {
+                let _ = std::fs::remove_file(&temp_path);
+            }
+        };
+
+        let spec = spec_bytes.ok_or_else(|| {
+            cleanup_temp();
+            (
+                StatusCode::BAD_REQUEST,
+                "missing `spec` part in multipart payload".to_string(),
+            )
+        })?;
+        let archive_hash = archive_hash.ok_or_else(|| {
+            cleanup_temp();
+            (
+                StatusCode::BAD_REQUEST,
+                "missing `context` part in multipart payload".to_string(),
+            )
+        })?;
+
+        let request: RolloutServiceRequest = serde_json::from_slice(&spec).map_err(|err| {
+            cleanup_temp();
+            (StatusCode::BAD_REQUEST, format!("invalid spec json: {err}"))
+        })?;
+        let mut service_config = build_service_config(request).map_err(|err| {
+            cleanup_temp();
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid upload request payload: {err}"),
+            )
+        })?;
+
+        service_config.name = format!("[up] {}", service_config.name);
+        service_config.version = format!("{}-up-{}", service_config.version, &archive_hash[..12]);
+
+        let mut deployment = ServiceDeployment::new(service_config).map_err(|err| {
+            cleanup_temp();
+            (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+        })?;
+        let archive_filename = format!("{}-{}.tar.gz", deployment.config.id, deployment.id);
+        let archive_path = state.upload_dir.join(&archive_filename);
+        std::fs::rename(&temp_path, &archive_path).map_err(|err| {
+            cleanup_temp();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to finalize upload archive: {err}"),
+            )
+        })?;
+        deployment.upload_archive = Some(archive_filename);
+
+        let queued = match state.store.queue_deployment(deployment).await {
+            Ok(queued) => queued,
+            Err(err) => {
+                let _ = std::fs::remove_file(&archive_path);
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string()));
+            }
+        };
+
+        eprintln!(
+            "cli-upload queued service_id={} deployment_id={} index={}",
+            queued.deployment.config.id, queued.deployment.id, queued.deployment_index,
+        );
+
+        Ok(Json(UploadServiceResponse {
+            service_id: queued.deployment.config.id.clone(),
+            deployment_id: queued.deployment.id.clone(),
+            version: queued.deployment.config.version.clone(),
+            name: queued.deployment.config.name.clone(),
+        }))
     }
 
     async fn list_services(
@@ -1719,6 +1898,11 @@ fn is_active_service_status(status: Option<&crate::deployment::types::Deployment
     )
 }
 
+fn format_build_label(build: &crate::deployment::types::ServiceBuildConfig) -> String {
+    let source = build.repo.as_deref().unwrap_or("[up]");
+    format!("{source}:{}", build.dockerfile)
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -1759,14 +1943,8 @@ async fn compute_rollout_diff(
     if old.build != new_config.build {
         changes.push(RolloutChange {
             field: "build".into(),
-            from: old
-                .build
-                .as_ref()
-                .map(|b| format!("{}:{}", b.repo, b.dockerfile)),
-            to: new_config
-                .build
-                .as_ref()
-                .map(|b| format!("{}:{}", b.repo, b.dockerfile)),
+            from: old.build.as_ref().map(format_build_label),
+            to: new_config.build.as_ref().map(format_build_label),
         });
     }
 

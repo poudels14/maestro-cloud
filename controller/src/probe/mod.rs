@@ -73,6 +73,13 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         crate::logs::Logger::noop(),
     );
     let healthcheck_slack = slack_notifier.clone();
+    let allow_cli_deployment = masked_config
+        .as_ref()
+        .map(|cfg| cfg.allow_cli_deployment)
+        .unwrap_or(false);
+    let upload_dir = std::env::var("MAESTRO_UPLOAD_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/data/uploads"));
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
@@ -82,6 +89,8 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         cluster_alias,
         masked_config,
         slack_notifier,
+        allow_cli_deployment,
+        upload_dir,
     );
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();

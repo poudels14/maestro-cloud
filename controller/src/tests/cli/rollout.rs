@@ -44,7 +44,10 @@ fn service_payload_uses_map_key_as_service_id() {
     assert_eq!(payload.id, "service-1");
     assert_eq!(payload.name, "Service One");
     assert_eq!(
-        payload.build.as_ref().map(|build| build.repo.as_str()),
+        payload
+            .build
+            .as_ref()
+            .and_then(|build| build.repo.as_deref()),
         Some("https://example.com/org/repo.git"),
     );
     assert_eq!(payload.deploy.expose_ports, vec![8080, 8443]);

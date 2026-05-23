@@ -53,6 +53,7 @@ pub struct ContainerDeploymentProvider {
     pub dns_domain: Option<String>,
     pub dns_server: Option<String>,
     pub secrets_dir: std::path::PathBuf,
+    pub uploads_dir: std::path::PathBuf,
 }
 pub struct ShellDeploymentProvider;
 
@@ -64,6 +65,18 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         build_dir: &Path,
         log_sender: Option<&flume::Sender<LogEntry>>,
     ) -> Result<Option<GitCommitInfo>> {
+        if let Some(archive_filename) = deployment.upload_archive.as_deref() {
+            let archive_path = self.uploads_dir.join(archive_filename);
+            if build_dir.exists() {
+                std::fs::remove_dir_all(build_dir)?;
+            }
+            crate::utils::archive::extract_context_file(&archive_path, build_dir)?;
+            let _ = std::fs::remove_file(&archive_path);
+            return Ok(Some(GitCommitInfo {
+                reference: "upload".to_string(),
+                message: format!("maestro up: {archive_filename}"),
+            }));
+        }
         let Some(build_config) = deployment.config.build.as_ref() else {
             return Ok(None);
         };
