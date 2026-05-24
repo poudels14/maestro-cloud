@@ -2,8 +2,9 @@ use super::build_health_url_for_replica;
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     Deployment, DeploymentStatus, QueuedDeployment, ReplicaState, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    ServiceDeployConfig, ServiceDeployment,
 };
+use crate::health::{DEFAULT_MAX_HEALTHCHECK_FAILURES, DefaultHealthMonitor};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::{collections::HashMap, sync::Mutex};
@@ -72,6 +73,7 @@ impl ClusterStore for ProbeTestStore {
                 replica_index,
                 status,
                 healthcheck_failures: 0,
+                restart_attempts: 0,
             });
         }
         Ok(())
@@ -151,7 +153,6 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
             id: "svc".to_string(),
             name: "svc".to_string(),
             version: "v1".to_string(),
-            provider: ServiceProvider::Docker,
             build: None,
             image: Some("svc:latest".to_string()),
             deploy: ServiceDeployConfig {
@@ -217,9 +218,10 @@ fn health_url_uses_fqdn_when_dns_domain_is_provided() {
 }
 
 #[tokio::test]
-async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
+async fn marks_replica_crashed_after_tenth_consecutive_healthcheck_failure() {
+    use std::sync::Arc;
     let deployment = deployment_with_ports(Some(1), vec![]);
-    let store = ProbeTestStore {
+    let store = Arc::new(ProbeTestStore {
         deployment: Mutex::new(Some(deployment.clone())),
         replica_states: Mutex::new(HashMap::from([(
             ProbeTestStore::key(&deployment.config.id, &deployment.id),
@@ -227,28 +229,25 @@ async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
                 replica_index: 0,
                 status: DeploymentStatus::PendingReady,
                 healthcheck_failures: 9,
+                restart_attempts: 0,
             }],
         )])),
-    };
+    });
     let http = reqwest::Client::builder()
         .build()
         .expect("build reqwest client");
     let mut state = HashMap::new();
     let mut last_polled = HashMap::new();
 
-    let slack = crate::slack::SlackNotifier::new(
-        None,
-        None,
-        "test".to_string(),
-        crate::logs::Logger::noop(),
-    );
+    let store_arc: Arc<dyn ClusterStore> = store.clone();
+    let monitor = DefaultHealthMonitor::new(store_arc, DEFAULT_MAX_HEALTHCHECK_FAILURES);
     crate::probe::healthcheck::check_deployments(
-        &store,
+        store.as_ref(),
+        &monitor,
         &http,
         &mut state,
         &mut last_polled,
         None,
-        &slack,
     )
     .await
     .expect("healthcheck should complete");
@@ -259,7 +258,7 @@ async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
         .expect("deployment lock")
         .clone()
         .expect("deployment should exist");
-    assert_eq!(deployment_after.status, DeploymentStatus::Draining);
+    assert_eq!(deployment_after.status, DeploymentStatus::PendingReady);
 
     let replica_states = store
         .replica_states
@@ -269,5 +268,5 @@ async fn stops_deployment_after_tenth_consecutive_healthcheck_failure() {
         .cloned()
         .expect("replica state should exist");
     assert_eq!(replica_states[0].healthcheck_failures, 10);
-    assert_eq!(replica_states[0].status, DeploymentStatus::PendingReady);
+    assert_eq!(replica_states[0].status, DeploymentStatus::Crashed);
 }

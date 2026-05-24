@@ -1,12 +1,11 @@
 use super::*;
-use crate::deployment::types::{Command, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider};
+use crate::deployment::types::{Command, ServiceBuildConfig, ServiceDeployConfig};
 use crate::validation::validate_service_id;
 
 fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
     RolloutServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
-        provider: ServiceProvider::Docker,
         build: Some(ServiceBuildConfig {
             repo: Some("https://example.com/repo.git".to_string()),
             branch: None,
@@ -41,7 +40,6 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
     RolloutServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
-        provider: ServiceProvider::Docker,
         build: None,
         image: Some(image.to_string()),
         deploy: ServiceDeployConfig {
@@ -114,15 +112,6 @@ fn build_service_config_rejects_build_and_image_together() {
 
     let err = build_service_config(request).expect_err("should reject");
     assert!(err.contains("either `build` or `image`"));
-}
-
-#[test]
-fn build_service_config_rejects_shell_provider_with_image() {
-    let mut request = sample_patch_request_with_image("svc-1", "Service 1", "busybox:latest");
-    request.provider = ServiceProvider::Shell;
-
-    let err = build_service_config(request).expect_err("should reject");
-    assert!(err.contains("shell provider"));
 }
 
 #[test]

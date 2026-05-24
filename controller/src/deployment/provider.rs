@@ -3,7 +3,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 
 use crate::builder::{BuildSource, LogTarget};
 use crate::config::BuilderType;
@@ -25,26 +24,6 @@ pub struct BuildOutput {
     pub image_tag: String,
 }
 
-#[async_trait]
-pub trait ServiceCommandPlanner: Send + Sync {
-    async fn setup(
-        &self,
-        deployment: &ServiceDeployment,
-        build_dir: &Path,
-        log_sender: Option<&flume::Sender<LogEntry>>,
-    ) -> Result<Option<GitCommitInfo>>;
-
-    async fn build(
-        &self,
-        deployment: &ServiceDeployment,
-        build_dir: &Path,
-        image_tag: &str,
-        log_sender: Option<flume::Sender<LogEntry>>,
-    ) -> Result<BuildOutput>;
-
-    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput>;
-}
-
 #[derive(Clone)]
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
@@ -55,11 +34,9 @@ pub struct ContainerDeploymentProvider {
     pub secrets_dir: std::path::PathBuf,
     pub uploads_dir: std::path::PathBuf,
 }
-pub struct ShellDeploymentProvider;
 
-#[async_trait]
-impl ServiceCommandPlanner for ContainerDeploymentProvider {
-    async fn setup(
+impl ContainerDeploymentProvider {
+    pub async fn setup(
         &self,
         deployment: &ServiceDeployment,
         build_dir: &Path,
@@ -94,7 +71,7 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         }))
     }
 
-    async fn build(
+    pub async fn build(
         &self,
         deployment: &ServiceDeployment,
         build_dir: &Path,
@@ -189,7 +166,11 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
         })
     }
 
-    fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput> {
+    pub fn deploy(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+    ) -> Option<DeployOutput> {
         let built_image = deployment
             .build
             .as_ref()
@@ -281,20 +262,6 @@ impl ServiceCommandPlanner for ContainerDeploymentProvider {
                     }
                 }),
             })
-        } else if let Some(deploy_command) = deployment.config.deploy.command.as_ref() {
-            let shell_cmd = if deploy_command.args.is_empty() {
-                deploy_command.command.clone()
-            } else {
-                format!(
-                    "{} {}",
-                    deploy_command.command,
-                    deploy_command.args.join(" ")
-                )
-            };
-            Some(DeployOutput {
-                command: JobCommand::Shell(shell_cmd),
-                secrets_mount: None,
-            })
         } else {
             None
         }
@@ -312,44 +279,5 @@ impl ContainerDeploymentProvider {
             .map(|depot| depot.project.trim())
             .filter(|project| !project.is_empty())
             .map(ToString::to_string)
-    }
-}
-
-#[async_trait]
-impl ServiceCommandPlanner for ShellDeploymentProvider {
-    async fn setup(
-        &self,
-        _deployment: &ServiceDeployment,
-        _build_dir: &Path,
-        _log_sender: Option<&flume::Sender<LogEntry>>,
-    ) -> Result<Option<GitCommitInfo>> {
-        Ok(None)
-    }
-
-    async fn build(
-        &self,
-        _deployment: &ServiceDeployment,
-        _build_dir: &Path,
-        _image_tag: &str,
-        _log_sender: Option<flume::Sender<LogEntry>>,
-    ) -> Result<BuildOutput> {
-        Err(anyhow!("shell provider does not support build"))
-    }
-
-    fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<DeployOutput> {
-        let deploy_command = deployment.config.deploy.command.as_ref()?;
-        let command = deploy_command.command.trim();
-        if command.is_empty() {
-            return None;
-        }
-        let shell_cmd = if deploy_command.args.is_empty() {
-            command.to_string()
-        } else {
-            format!("{} {}", command, deploy_command.args.join(" "))
-        };
-        Some(DeployOutput {
-            command: JobCommand::Shell(shell_cmd),
-            secrets_mount: None,
-        })
     }
 }

@@ -2,9 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::types::{
-    IngressConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
-};
+use crate::deployment::types::{IngressConfig, ServiceBuildConfig, ServiceDeployConfig};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Deserialize)]
@@ -12,8 +10,6 @@ use crate::error::{Error, Result};
 pub(super) struct ServiceManifest {
     pub(super) id: String,
     pub(super) name: String,
-    #[serde(default)]
-    pub(super) provider: ServiceProvider,
     #[serde(default)]
     pub(super) build: Option<ServiceBuildConfig>,
     #[serde(default)]
@@ -28,7 +24,6 @@ pub(super) struct ServiceManifest {
 pub(super) struct UploadSpecPayload {
     pub(super) id: String,
     pub(super) name: String,
-    pub(super) provider: ServiceProvider,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) build: Option<ServiceBuildConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,7 +130,6 @@ pub(super) fn build_upload_payload(manifest: ServiceManifest) -> Result<UploadSp
         )));
     }
     let (build, image, deploy) = crate::validation::validate_service_provider_config(
-        manifest.provider,
         &manifest.build,
         &manifest.image,
         &manifest.deploy,
@@ -147,7 +141,6 @@ pub(super) fn build_upload_payload(manifest: ServiceManifest) -> Result<UploadSp
     Ok(UploadSpecPayload {
         id: service_id,
         name,
-        provider: manifest.provider,
         build,
         image,
         deploy,

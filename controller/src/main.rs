@@ -5,6 +5,7 @@ mod deployment;
 mod engine;
 mod error;
 mod firewall;
+mod health;
 mod logs;
 mod metrics;
 mod probe;

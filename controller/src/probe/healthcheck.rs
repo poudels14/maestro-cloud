@@ -4,10 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::deployment::store::ClusterStore;
-use crate::deployment::types::{Deployment, DeploymentStatus, ReplicaState, ServiceDeployment};
-use crate::slack::SlackNotifier;
+use crate::deployment::types::{DeploymentStatus, ReplicaState, ServiceDeployment};
+use crate::health::ReplicaHealthMonitor;
 
-const MAX_HEALTHCHECK_FAILURES: u32 = 10;
 const UNHEALTHY_RECHECK_SECS: u64 = 5;
 
 /// Tracks whether each replica was healthy on the last check.
@@ -16,11 +15,11 @@ pub type HealthState = HashMap<String, bool>;
 
 pub async fn check_deployments(
     store: &dyn ClusterStore,
+    monitor: &dyn ReplicaHealthMonitor,
     http: &reqwest::Client,
     state: &mut HealthState,
     last_polled: &mut HashMap<String, Instant>,
     dns_domain: Option<&str>,
-    slack: &SlackNotifier,
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
@@ -62,7 +61,7 @@ pub async fn check_deployments(
             }
 
             if let Err(err) = check_replicas(
-                store,
+                monitor,
                 http,
                 state,
                 last_polled,
@@ -70,7 +69,6 @@ pub async fn check_deployments(
                 &deployment,
                 &checkable_replicas,
                 dns_domain,
-                slack,
             )
             .await
             {
@@ -85,7 +83,7 @@ pub async fn check_deployments(
 }
 
 async fn check_replicas(
-    store: &dyn ClusterStore,
+    monitor: &dyn ReplicaHealthMonitor,
     http: &reqwest::Client,
     state: &mut HealthState,
     last_polled: &mut HashMap<String, Instant>,
@@ -93,7 +91,6 @@ async fn check_replicas(
     deployment: &ServiceDeployment,
     replicas: &[&ReplicaState],
     dns_domain: Option<&str>,
-    slack: &SlackNotifier,
 ) -> Result<()> {
     let health_path = deployment
         .config
@@ -139,19 +136,9 @@ async fn check_replicas(
                 service_id, deployment.id, replica.replica_index
             );
             state.remove(&key);
-            if replica.status != DeploymentStatus::Ready || replica.healthcheck_failures != 0 {
-                store
-                    .upsert_replica_state(
-                        service_id,
-                        &deployment.id,
-                        ReplicaState {
-                            replica_index: replica.replica_index,
-                            status: DeploymentStatus::Ready,
-                            healthcheck_failures: 0,
-                        },
-                    )
-                    .await?;
-            }
+            monitor
+                .report_healthy(service_id, &deployment.id, replica.replica_index)
+                .await?;
             continue;
         };
 
@@ -192,51 +179,20 @@ async fn check_replicas(
 
         state.insert(key, is_healthy);
 
-        let new_status = if is_healthy {
-            DeploymentStatus::Ready
-        } else {
-            DeploymentStatus::PendingReady
-        };
-        let healthcheck_failures = match is_healthy {
-            true => 0,
-            false => replica.healthcheck_failures.saturating_add(1),
-        };
-
-        if replica.status != new_status || replica.healthcheck_failures != healthcheck_failures {
-            store
-                .upsert_replica_state(
-                    service_id,
-                    &deployment.id,
-                    ReplicaState {
-                        replica_index: replica.replica_index,
-                        status: new_status,
-                        healthcheck_failures,
-                    },
-                )
+        if is_healthy {
+            monitor
+                .report_healthy(service_id, &deployment.id, replica.replica_index)
                 .await?;
-        }
-
-        if !is_healthy && healthcheck_failures >= MAX_HEALTHCHECK_FAILURES {
-            eprintln!(
-                "stopping deployment {}/{} after {} consecutive healthcheck failures on replica{}",
-                service_id, deployment.id, healthcheck_failures, replica.replica_index,
-            );
+        } else {
             let reason = format!(
-                "healthcheck failed {}× on `{}` (replica{}, last: {})",
-                healthcheck_failures,
+                "healthcheck failed on `{}` (replica{}, {})",
                 health_path,
                 replica.replica_index,
                 failure_reason.as_deref().unwrap_or("unknown"),
             );
-            slack.notify_deployment_crashed(service_id, &deployment.id, &reason);
-            let _ = store
-                .stop_service_deployment(&Deployment {
-                    service_id: service_id.to_string(),
-                    id: deployment.id.clone(),
-                    replica_index: replica.replica_index,
-                })
+            monitor
+                .report_unhealthy(service_id, &deployment.id, replica.replica_index, &reason)
                 .await?;
-            return Ok(());
         }
     }
 

@@ -12,6 +12,7 @@ use tokio::sync::broadcast;
 use tokio::time::sleep;
 
 use crate::deployment::etcd::EtcdStateStore;
+use crate::health::{DEFAULT_MAX_HEALTHCHECK_FAILURES, DefaultHealthMonitor, ReplicaHealthMonitor};
 use crate::server;
 use crate::signal::ShutdownEvent;
 
@@ -72,7 +73,6 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         cluster_name.clone(),
         crate::logs::Logger::noop(),
     );
-    let healthcheck_slack = slack_notifier.clone();
     let allow_cli_deployment = masked_config
         .as_ref()
         .map(|cfg| cfg.allow_cli_deployment)
@@ -102,6 +102,10 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     };
 
     let healthcheck_shutdown_tx = shutdown_tx.clone();
+    let healthcheck_monitor: Arc<dyn ReplicaHealthMonitor> = Arc::new(DefaultHealthMonitor::new(
+        store.clone(),
+        DEFAULT_MAX_HEALTHCHECK_FAILURES,
+    ));
     let healthcheck_future = async move {
         let http_client = reqwest::Client::builder()
             .timeout(HEALTH_TIMEOUT)
@@ -119,11 +123,11 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
                 sleep(POLL_TICK_INTERVAL).await;
                 if let Err(err) = healthcheck::check_deployments(
                     store.as_ref(),
+                    healthcheck_monitor.as_ref(),
                     &http_client,
                     &mut health_state,
                     &mut last_polled,
                     dns_domain.as_deref(),
-                    &healthcheck_slack,
                 )
                 .await
                 {

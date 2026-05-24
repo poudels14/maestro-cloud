@@ -23,11 +23,6 @@
         "name": {
           "type": "string"
         },
-        "provider": {
-          "type": "string",
-          "enum": ["docker", "shell"],
-          "default": "docker"
-        },
         "build": {
           "$ref": "#/$defs/build"
         },

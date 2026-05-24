@@ -87,8 +87,6 @@ pub struct ServiceConfig {
     pub id: String,
     pub name: String,
     pub version: String,
-    #[serde(default)]
-    pub provider: ServiceProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<ServiceBuildConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,14 +158,6 @@ pub struct IngressRouting {
     pub rule: String,
     pub entry_points: Vec<String>,
     pub servers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ServiceProvider {
-    #[default]
-    Docker,
-    Shell,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -423,6 +413,8 @@ pub struct ReplicaState {
     pub status: DeploymentStatus,
     #[serde(default)]
     pub healthcheck_failures: u32,
+    #[serde(default)]
+    pub restart_attempts: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -458,13 +450,11 @@ impl ServiceDeployment {
             return true;
         }
 
-        self.config.provider == ServiceProvider::Docker
-            && self
-                .config
-                .image
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|image| !image.is_empty())
+        self.config
+            .image
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|image| !image.is_empty())
     }
 
     pub fn new(config: ServiceConfig) -> Result<Self> {
