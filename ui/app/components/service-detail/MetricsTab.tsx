@@ -3,6 +3,13 @@ import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
 import type { Service, TrafficPoint } from "../../lib/types";
 import { serviceMetricsQuery, serviceTrafficQuery } from "../../lib/queries";
+import {
+  formatBytes,
+  formatBytesRate,
+  formatMs,
+  formatPercent,
+  formatRate
+} from "../../lib/format";
 import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
 import { TimelineChart } from "../TimelineChart";
 
@@ -257,32 +264,6 @@ function bucketPercentileSec(points: TrafficPoint[], p: number): number {
     return span === 0 ? 5 : 5 + 5 * ((rank - le5) / span);
   }
   return 10;
-}
-
-function formatBytes(value: number) {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB`;
-  return `${Math.round(value)} B`;
-}
-
-function formatBytesRate(value: number) {
-  return `${formatBytes(value)}/s`;
-}
-
-function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`;
-}
-
-function formatRate(value: number) {
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k/s`;
-  if (value >= 10) return `${value.toFixed(0)}/s`;
-  return `${value.toFixed(2)}/s`;
-}
-
-function formatMs(value: number) {
-  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
-  return `${Math.round(value)}ms`;
 }
 
 export { MetricsTab };

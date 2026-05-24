@@ -50,7 +50,7 @@ function DeploymentRow(props: Props) {
           !(props.isLatest && isLive()) && !props.isSelected
       })}
     >
-      <div class="px-5 py-4">
+      <div class="px-4 py-3 sm:px-5 sm:py-4">
         <div class="flex items-start justify-between gap-3 mb-2">
           <div class="min-w-0 flex-1">
             <div class="text-lg font-semibold text-gray-900 truncate leading-snug tracking-tight">

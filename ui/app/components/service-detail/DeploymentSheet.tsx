@@ -34,7 +34,7 @@ function DeploymentSheet(props: {
               const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
               return (
                 <>
-                  <div class="px-5 py-4 border-b border-gray-200 shrink-0">
+                  <div class="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200 shrink-0">
                     <div class="flex items-start justify-between gap-3 mb-3">
                       <div class="min-w-0 flex-1">
                         <div class="text-base font-semibold text-gray-900 leading-snug tracking-tight">
@@ -170,7 +170,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
     buildSecretSource();
 
   return (
-    <div class="p-5 space-y-5">
+    <div class="p-4 sm:p-5 space-y-4 sm:space-y-5">
       <div>
         <h4 class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-2">
           Deployment

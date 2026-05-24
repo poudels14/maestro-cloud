@@ -1,21 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  Show,
-  Switch,
-  Match,
-  on,
-  onCleanup
-} from "solid-js";
-import {
-  createSolidTable,
-  getCoreRowModel,
-  getExpandedRowModel,
-  flexRender,
-  type ColumnDef
-} from "@tanstack/solid-table";
+import { createEffect, createSignal, For, Show, Switch, Match, on, onCleanup } from "solid-js";
 import { ChevronUp, Search, X, Loader2 } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
@@ -47,49 +30,51 @@ function LogViewer(props: {
   const [search, setSearch] = createSignal("");
   const [levelFilter, setLevelFilter] = createSignal<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = createSignal(false);
+  const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
   const lastSeq = () => lines().at(-1)?.seq ?? 0;
 
-  const hasBuildLogs = () => lines().some((l) => l.source?.endsWith("/build"));
+  const hasBuildLogs = () => lines().some((line) => line.source?.endsWith("/build"));
+
   const phaseLines = () => {
-    const all = lines().filter((l) => l.text.trim().length > 0);
-    const phase = props.phase;
-    if (!phase) return all;
-    return all.filter((l) => {
-      if (phase === "build") return l.source?.endsWith("/build");
-      return !l.source?.endsWith("/build");
-    });
+    const all = lines().filter((line) => line.text.trim().length > 0);
+    if (!props.phase) return all;
+    if (props.phase === "build") return all.filter((line) => line.source?.endsWith("/build"));
+    return all.filter((line) => !line.source?.endsWith("/build"));
   };
+
   const filteredLines = () => {
     const query = search().trim().toLowerCase();
     const levels = levelFilter();
-    return phaseLines().filter((l) => {
-      if (levels.size > 0 && !levels.has(l.level.toLowerCase())) return false;
-      if (query.length > 0 && !l.text.toLowerCase().includes(query)) return false;
+    return phaseLines().filter((line) => {
+      if (levels.size > 0 && !levels.has(line.level.toLowerCase())) return false;
+      if (query.length > 0 && !line.text.toLowerCase().includes(query)) return false;
       return true;
     });
   };
-  const uniqueHosts = () => {
-    const set = new Set<string>();
+
+  const showHost = () => {
+    const seen = new Set<string>();
     for (const line of phaseLines()) {
       const host = line.hostname || line.source || "";
-      if (host) set.add(host);
+      if (host) seen.add(host);
+      if (seen.size > 1) return true;
     }
-    return set;
+    return false;
   };
-  const showHostColumn = () => uniqueHosts().size > 1;
+
   const availableLevels = () => {
     const present = new Set<string>();
     for (const line of phaseLines()) present.add(line.level.toLowerCase());
-    const ordered: string[] = [];
-    for (const lvl of ALWAYS_SHOW_LEVELS) ordered.push(lvl);
-    for (const lvl of OPTIONAL_LEVELS) {
-      if (present.has(lvl)) ordered.push(lvl);
+    const ordered: string[] = [...ALWAYS_SHOW_LEVELS];
+    for (const level of OPTIONAL_LEVELS) {
+      if (present.has(level)) ordered.push(level);
     }
-    for (const lvl of Array.from(present).sort()) {
-      if (!ordered.includes(lvl)) ordered.push(lvl);
+    for (const level of Array.from(present).sort()) {
+      if (!ordered.includes(level)) ordered.push(level);
     }
     return ordered;
   };
+
   const levelCounts = () => {
     const counts = new Map<string, number>();
     for (const line of phaseLines()) {
@@ -98,6 +83,7 @@ function LogViewer(props: {
     }
     return counts;
   };
+
   const toggleLevel = (level: string) => {
     const next = new Set(levelFilter());
     if (next.has(level)) next.delete(level);
@@ -105,46 +91,12 @@ function LogViewer(props: {
     setLevelFilter(next);
   };
 
-  const columns = createMemo<ColumnDef<LogEntry>[]>(() => {
-    const cols: ColumnDef<LogEntry>[] = [
-      { id: "expander", size: 22, header: () => null, cell: ExpanderCell },
-      { accessorKey: "ts", header: "Time", size: 140, cell: TimeCell }
-    ];
-    if (showHostColumn()) {
-      cols.push({
-        id: "host",
-        header: "Host",
-        size: 140,
-        accessorFn: (row) => row.hostname || row.source || "",
-        cell: HostCell
-      });
-    }
-    cols.push({
-      accessorKey: "level",
-      header: "Level",
-      size: 50,
-      cell: LevelCell
-    });
-    cols.push({
-      accessorKey: "text",
-      header: "Message",
-      cell: MessageCell
-    });
-    return cols;
-  });
-
-  const table = createSolidTable({
-    get data() {
-      return filteredLines();
-    },
-    get columns() {
-      return columns();
-    },
-    getRowId: (row) => String(row.seq),
-    getCoreRowModel: getCoreRowModel(),
-    getExpandedRowModel: getExpandedRowModel(),
-    getRowCanExpand: () => true
-  });
+  const toggleExpanded = (seq: number) => {
+    const next = new Set(expanded());
+    if (next.has(seq)) next.delete(seq);
+    else next.add(seq);
+    setExpanded(next);
+  };
 
   const fetchTail = async (tailSize: number) => {
     if (props.isSystem) return getSystemLogs(props.serviceId, tailSize);
@@ -204,6 +156,7 @@ function LogViewer(props: {
       () => props.deploymentId,
       () => {
         setLines([]);
+        setExpanded(new Set());
         setLoading(true);
         setTail(DEFAULT_LOG_TAIL);
         fetchInitialLogs();
@@ -252,34 +205,32 @@ function LogViewer(props: {
         </div>
       </Show>
       <div class="px-3 py-2 border-b border-gray-100 space-y-2">
-        <div class="flex items-center gap-2">
-          <div class="relative flex-1 min-w-0">
-            <Search class="size-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={search()}
-              onInput={(e) => setSearch(e.currentTarget.value)}
-              placeholder="Search logs…"
-              class="w-full text-sm pl-8 pr-16 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
-            />
-            <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              <Show when={search().length > 0}>
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  title="Clear"
-                  class="p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
-                >
-                  <X class="size-3" />
-                </button>
+        <div class="relative">
+          <Search class="size-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={search()}
+            onInput={(ev) => setSearch(ev.currentTarget.value)}
+            placeholder="Search logs…"
+            class="w-full text-sm pl-8 pr-16 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
+          />
+          <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            <Show when={search().length > 0}>
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                title="Clear"
+                class="p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
+              >
+                <X class="size-3" />
+              </button>
+            </Show>
+            <span class="text-[10px] font-mono text-gray-400 tabular-nums px-1">
+              {filteredLines().length}
+              <Show when={filteredLines().length !== phaseLines().length}>
+                <span class="text-gray-300"> / {phaseLines().length}</span>
               </Show>
-              <span class="text-[10px] font-mono text-gray-400 tabular-nums px-1">
-                {filteredLines().length}
-                <Show when={filteredLines().length !== phaseLines().length}>
-                  <span class="text-gray-300"> / {phaseLines().length}</span>
-                </Show>
-              </span>
-            </div>
+            </span>
           </div>
         </div>
         <Show when={availableLevels().length > 0}>
@@ -350,62 +301,74 @@ function LogViewer(props: {
                 </button>
               </div>
             </Show>
-            <table class="w-full font-mono text-xs border-collapse" style="table-layout: fixed">
-              <colgroup>
-                <For each={table.getVisibleLeafColumns()}>
-                  {(col) => (
-                    <col style={col.id === "text" ? undefined : { width: `${col.getSize()}px` }} />
-                  )}
-                </For>
-              </colgroup>
-              <tbody>
-                <For each={table.getRowModel().rows}>
-                  {(row) => (
-                    <>
-                      <tr
-                        class={clsx(
-                          "align-top border-b border-gray-50 cursor-pointer transition-colors",
-                          {
-                            "bg-indigo-50/60 hover:bg-indigo-50/80": row.getIsExpanded(),
-                            "bg-white hover:bg-gray-50":
-                              !row.getIsExpanded() && row.index % 2 === 0,
-                            "bg-gray-50/60 hover:bg-gray-100/60":
-                              !row.getIsExpanded() && row.index % 2 === 1
-                          }
-                        )}
-                        onClick={() => row.toggleExpanded()}
-                      >
-                        <For each={row.getVisibleCells()}>
-                          {(cell) => (
-                            <td
-                              class={clsx("py-1 overflow-hidden", {
-                                "pl-2": cell.column.id === "expander",
-                                "pr-2": cell.column.id === "ts",
-                                "px-2": cell.column.id !== "expander" && cell.column.id !== "text",
-                                "pl-2 pr-4": cell.column.id === "text"
-                              })}
-                            >
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </td>
-                          )}
-                        </For>
-                      </tr>
-                      <Show when={row.getIsExpanded()}>
-                        <tr class="border-b border-gray-100 bg-gray-50/80">
-                          <td colSpan={table.getVisibleLeafColumns().length} class="px-4 py-3">
-                            <LogDetailPanel entry={row.original} />
-                          </td>
-                        </tr>
-                      </Show>
-                    </>
-                  )}
-                </For>
-              </tbody>
-            </table>
+            <ul class="font-mono text-xs">
+              <For each={filteredLines()}>
+                {(line, index) => (
+                  <LogRow
+                    line={line}
+                    index={index()}
+                    showHost={showHost()}
+                    expanded={expanded().has(line.seq)}
+                    onToggle={() => toggleExpanded(line.seq)}
+                  />
+                )}
+              </For>
+            </ul>
           </Match>
         </Switch>
       </div>
     </div>
+  );
+}
+
+function LogRow(props: {
+  line: LogEntry;
+  index: number;
+  showHost: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const host = () => props.line.hostname || props.line.source || "";
+  return (
+    <li
+      class={clsx("border-b border-gray-50 cursor-pointer transition-colors", {
+        "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
+        "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
+        "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
+      })}
+      onClick={props.onToggle}
+    >
+      <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 px-2 py-1.5 sm:py-1">
+        <div class="flex items-center gap-2 shrink-0 sm:contents">
+          <ExpanderCell
+            expanded={props.expanded}
+            onToggle={(ev) => {
+              ev.stopPropagation();
+              props.onToggle();
+            }}
+          />
+          <div class="shrink-0 sm:w-[140px] sm:pr-2 sm:pt-px">
+            <TimeCell ts={props.line.ts} />
+          </div>
+          <Show when={props.showHost}>
+            <div class="min-w-0 max-w-[120px] sm:max-w-none sm:w-[140px] sm:px-2 sm:pt-px">
+              <HostCell value={host()} />
+            </div>
+          </Show>
+          <div class="shrink-0 sm:w-[50px] sm:px-2 sm:pt-px">
+            <LevelCell level={props.line.level} />
+          </div>
+        </div>
+        <div class="min-w-0 flex-1 pl-6 sm:pl-2 sm:pr-4">
+          <MessageCell text={props.line.text} />
+        </div>
+      </div>
+      <Show when={props.expanded}>
+        <div class="border-t border-gray-100 bg-gray-50/80 px-4 py-3">
+          <LogDetailPanel entry={props.line} />
+        </div>
+      </Show>
+    </li>
   );
 }
 
