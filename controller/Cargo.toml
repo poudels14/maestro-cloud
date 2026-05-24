@@ -55,3 +55,6 @@ inquire = "0.9.4"
 regex = "1.12.3"
 tar = "0.4.46"
 ignore = "0.4.25"
+
+[dev-dependencies]
+proptest = "1.11.0"

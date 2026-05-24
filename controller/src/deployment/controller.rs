@@ -10,26 +10,29 @@ use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
 use crate::config::BuilderType;
 use crate::deployment::dns::DnsManager;
-use crate::deployment::provider::{
-    BuildOutput, ContainerDeploymentProvider, ServiceCommandPlanner, ShellDeploymentProvider,
-};
+use crate::deployment::provider::{BuildOutput, ContainerDeploymentProvider};
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     ControllerConfig, Deployment, DeploymentBuildInfo, DeploymentStatus, QueuedDeployment,
-    ServiceDeployment, ServiceProvider,
+    ReplicaState, ServiceDeployment,
 };
+use crate::engine::provider::DeploymentProvider;
+use crate::engine::replica_supervisor::{JobReplicaSupervisor, ReplicaSupervisor};
+use crate::engine::{Engine, LogSink, ReplicaHandle, ReplicaSpec};
+use crate::health::MAX_REPLICA_RESTART_ATTEMPTS;
 use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RuntimeProvider};
 use crate::signal::ShutdownEvent;
 use crate::supervisor::controller::{FinishedJob, JobSupervisor};
-use crate::supervisor::{ContainerRef, ShutdownRequest, SupervisedJobConfig, SupervisedJobStatus};
+use crate::supervisor::{ShutdownRequest, SupervisedJobStatus};
+use crate::utils::clock::{self, Clock};
 
 use super::{ADMIN_IMAGE_TAG, PROBE_IMAGE_TAG, TAILSCALE_IMAGE_TAG};
 
 const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
 const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
 #[cfg(not(test))]
-const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 15_000;
+const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 60_000;
 #[cfg(test)]
 const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 200;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -38,7 +41,7 @@ const IMAGE_PRUNE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 #[cfg(test)]
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
-const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const BUILD_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControllerExitReason {
@@ -50,7 +53,7 @@ struct PendingBuild {
     handle: JoinHandle<Result<BuildOutput>>,
     queued_deployment: QueuedDeployment,
     build_dir: PathBuf,
-    started_at: std::time::Instant,
+    started_at_ms: u64,
 }
 
 fn system_image_build_specs() -> [(&'static str, Option<&'static str>); 3] {
@@ -69,9 +72,8 @@ pub struct DeploymentController {
     store: Arc<dyn ClusterStore>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     supervisor: JobSupervisor,
-    container_provider: ContainerDeploymentProvider,
-    shell_provider: ShellDeploymentProvider,
-    container_engine: Arc<dyn crate::engine::DeploymentEngine>,
+    container_engine: Arc<Engine>,
+    clock: Arc<dyn Clock>,
     deployments: HashMap<String, Deployment>,
     pending_builds: HashMap<String, PendingBuild>,
     shutdown_in_progress: bool,
@@ -98,7 +100,7 @@ impl DeploymentController {
             .as_ref()
             .map(|_| format!("{}.maestro.internal", config.cluster_name));
         let dns_server = if runtime.requires_explicit_dns() {
-            coredns_ip
+            coredns_ip.clone()
         } else {
             None
         };
@@ -113,11 +115,39 @@ impl DeploymentController {
                 .join("secrets"),
             uploads_dir: config.probe_dir().join("data/uploads"),
         };
-        let container_engine: Arc<dyn crate::engine::DeploymentEngine> =
-            Arc::new(crate::engine::container::ContainerEngine::new(
-                container_provider.clone(),
-                config.data_dir.clone(),
-            ));
+        let provider: Arc<dyn DeploymentProvider> = Arc::new(container_provider);
+        let supervisor_handle: Arc<dyn ReplicaSupervisor> = Arc::new(JobReplicaSupervisor::new());
+        let container_engine: Arc<Engine> = Arc::new(Engine::new(
+            provider,
+            supervisor_handle,
+            config.data_dir.clone(),
+        ));
+        Self::with_engine(
+            config,
+            store,
+            supervisor,
+            signal_rx,
+            log_sender,
+            runtime,
+            dns_manager,
+            container_engine,
+            dns_domain,
+            clock::system(),
+        )
+    }
+
+    pub fn with_engine(
+        config: ControllerConfig,
+        store: Arc<dyn ClusterStore>,
+        supervisor: JobSupervisor,
+        signal_rx: broadcast::Receiver<ShutdownEvent>,
+        log_sender: Option<flume::Sender<LogEntry>>,
+        runtime: Arc<dyn RuntimeProvider>,
+        dns_manager: Option<Arc<DnsManager>>,
+        container_engine: Arc<Engine>,
+        dns_domain: Option<String>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         let logger = Logger::new(log_sender.clone());
         let slack = crate::slack::SlackNotifier::new(
             config.slack_webhook_url.clone(),
@@ -133,9 +163,8 @@ impl DeploymentController {
             store,
             signal_rx,
             supervisor,
-            container_provider,
-            shell_provider: ShellDeploymentProvider,
             container_engine,
+            clock,
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
             shutdown_in_progress: false,
@@ -206,7 +235,7 @@ impl DeploymentController {
                     }
                     self.reap_finished_tasks().await;
                     if shutdown_started {
-                        if !self.has_running_services() {
+                        if !self.has_running_services().await {
                             return Ok(exit_reason);
                         }
                     } else if let Err(err) = self.reconcile_deployments().await {
@@ -578,7 +607,8 @@ impl DeploymentController {
     }
 
     pub(crate) async fn reap_finished_tasks(&mut self) {
-        let finished = self.supervisor.reap_finished_jobs().await;
+        let mut finished = self.supervisor.reap_finished_jobs().await;
+        finished.extend(self.container_engine.reap_finished_replicas().await);
         self.update_jobs_status(finished).await;
     }
 
@@ -590,11 +620,31 @@ impl DeploymentController {
         for (_, pending) in self.pending_builds.drain() {
             pending.handle.abort();
         }
+        let _ = self
+            .container_engine
+            .shutdown_all_replicas(request.clone())
+            .await;
         let _ = self.supervisor.shutdown_all(request).await;
     }
 
-    pub(crate) fn has_running_services(&self) -> bool {
-        self.supervisor.has_jobs()
+    pub(crate) async fn has_running_services(&self) -> bool {
+        self.supervisor.has_jobs() || self.container_engine.has_running_replicas().await
+    }
+
+    async fn shutdown_deployment_replica(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+        replica_index: u32,
+        request: ShutdownRequest,
+    ) {
+        let handle = ReplicaHandle {
+            task_id: replica_job_id(deployment_id, replica_index),
+            service_id: service_id.to_string(),
+            deployment_id: deployment_id.to_string(),
+            replica_index,
+        };
+        let _ = self.container_engine.stop_replica(&handle, request).await;
     }
 
     pub(crate) fn into_supervisor(self) -> JobSupervisor {
@@ -756,7 +806,7 @@ impl DeploymentController {
             }
 
             let engine = self.container_engine.clone();
-            let prepare_logs = crate::engine::LogSink::new(
+            let prepare_logs = LogSink::new(
                 self.log_sender.clone(),
                 format!("{}/{}/build", queued_deployment.service_id, deployment_id),
             );
@@ -818,7 +868,7 @@ impl DeploymentController {
                 .unwrap_or_else(|| self.config.data_dir.join("tmp"));
             let engine_for_build = engine.clone();
             let prep_for_build = prep.clone();
-            let build_logs = crate::engine::LogSink::new(
+            let build_logs = LogSink::new(
                 self.log_sender.clone(),
                 format!("{}/{}/build", queued_deployment.service_id, deployment_id),
             );
@@ -827,7 +877,7 @@ impl DeploymentController {
                 engine_for_build
                     .build(&prep_for_build, &build_logs)
                     .await
-                    .map(|artifact| crate::deployment::provider::BuildOutput {
+                    .map(|artifact| BuildOutput {
                         image_tag: artifact.image_tag().unwrap_or("").to_string(),
                     })
             });
@@ -838,7 +888,7 @@ impl DeploymentController {
                     handle,
                     queued_deployment,
                     build_dir,
-                    started_at: std::time::Instant::now(),
+                    started_at_ms: self.clock.now_ms(),
                 },
             );
             return Ok(());
@@ -853,21 +903,20 @@ impl DeploymentController {
         let deployment_ids: Vec<String> = self.pending_builds.keys().cloned().collect();
 
         for deployment_id in deployment_ids {
-            let timed_out = self
-                .pending_builds
-                .get(&deployment_id)
-                .is_some_and(|p| p.started_at.elapsed() > BUILD_TIMEOUT);
+            let timed_out = self.pending_builds.get(&deployment_id).is_some_and(|p| {
+                self.clock.now_ms().saturating_sub(p.started_at_ms) > BUILD_TIMEOUT_MS
+            });
 
             if timed_out {
                 let pending = self.pending_builds.remove(&deployment_id).unwrap();
                 pending.handle.abort();
                 let _ = std::fs::remove_dir_all(&pending.build_dir);
-                let reason = format!("build timed out ({}s limit)", BUILD_TIMEOUT.as_secs());
+                let reason = format!("build timed out ({}s limit)", BUILD_TIMEOUT_MS / 1000);
                 self.logger.emit(
                     "error",
                     &format!(
                         "build timed out for deployment `{deployment_id}` ({}s limit)",
-                        BUILD_TIMEOUT.as_secs()
+                        BUILD_TIMEOUT_MS / 1000
                     ),
                 );
                 let deployment_ref = Deployment {
@@ -973,6 +1022,10 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
+                    let _ = self
+                        .container_engine
+                        .cleanup(&pending.queued_deployment.deployment, None)
+                        .await;
                     self.notify_deployment_crashed_once(&service_id, &deployment_id, &reason);
                     self.prune_service_images(&service_id).await;
                 }
@@ -1070,14 +1123,9 @@ impl DeploymentController {
         let replica_status = initial_replica_status_for_deployment(&queued_deployment.deployment);
 
         for replica_index in 0..replicas {
-            let deploy_output = match queued_deployment.deployment.config.provider {
-                ServiceProvider::Docker => self
-                    .container_provider
-                    .deploy(&queued_deployment.deployment, replica_index),
-                ServiceProvider::Shell => self
-                    .shell_provider
-                    .deploy(&queued_deployment.deployment, replica_index),
-            };
+            let deploy_output = self
+                .container_engine
+                .deploy_command(&queued_deployment.deployment, replica_index);
             let Some(deploy_output) = deploy_output else {
                 self.logger.emit(
                     "error",
@@ -1097,7 +1145,6 @@ impl DeploymentController {
                 continue;
             };
 
-            let replica_job_id = replica_job_id(deployment_id, replica_index);
             let container_hostname = queued_deployment
                 .deployment
                 .hostname_for_replica(replica_index);
@@ -1107,37 +1154,46 @@ impl DeploymentController {
                 .deploy
                 .max_restarts
                 .or(DEFAULT_MAX_RESTARTS);
-            let job = SupervisedJobConfig {
-                id: replica_job_id.clone(),
-                name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
-                command: deploy_output.command,
-                restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-                max_restart_delay_ms: None,
+            let log_config = self.log_sender.clone().map(|sender| {
+                let mut tags = self.config.tags.clone();
+                tags.push(format!("service:{service_id}"));
+                tags.push(format!("hostname:{container_hostname}"));
+                tags.push(format!("deployment_id:{deployment_id}"));
+                tags.push(format!("replica:{replica_index}"));
+                tags.push(format!("cluster:{}", self.config.cluster_name));
+                LogConfig {
+                    sender,
+                    tags,
+                    origin: LogOrigin::Service,
+                }
+            });
+            let spec = ReplicaSpec {
+                deployment: &queued_deployment.deployment,
+                replica_index,
+                deploy_output,
                 max_restarts,
+                restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
                 shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-                container: Some(ContainerRef {
-                    name: container_hostname.clone(),
-                    runtime_cli: self.runtime.cli_name().to_string(),
-                }),
-                secrets_mount: deploy_output.secrets_mount,
-                log_config: self.log_sender.clone().map(|sender| {
-                    let mut tags = self.config.tags.clone();
-                    tags.push(format!("service:{service_id}"));
-                    tags.push(format!("hostname:{container_hostname}"));
-                    tags.push(format!("deployment_id:{deployment_id}"));
-                    tags.push(format!("replica:{replica_index}"));
-                    tags.push(format!("cluster:{}", self.config.cluster_name));
-                    LogConfig {
-                        sender,
-                        tags,
-                        origin: LogOrigin::Service,
-                    }
-                }),
+                container_hostname: container_hostname.clone(),
+                runtime_cli: self.runtime.cli_name().to_string(),
+                log_config,
+            };
+            let started = match self.container_engine.start_replica(spec).await {
+                Ok(handle) => handle,
+                Err(err) => {
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "engine refused to start replica{replica_index} of `{deployment_id}`: {err}"
+                        ),
+                    );
+                    None
+                }
             };
 
-            if let Some(task_id) = self.supervisor.start_job(job) {
+            if let Some(handle) = started {
                 self.deployments.insert(
-                    task_id,
+                    handle.task_id.clone(),
                     Deployment {
                         service_id: service_id.clone(),
                         id: deployment_id.clone(),
@@ -1292,20 +1348,12 @@ impl DeploymentController {
     }
 
     async fn remove_replica_container(&self, deployment: &ServiceDeployment, replica_index: u32) {
-        if deployment.config.provider != ServiceProvider::Docker {
-            return;
-        }
-
         let hostname = deployment.hostname_for_replica(replica_index);
         self.remove_container_by_hostname(&hostname).await;
         deregister_container_dns(&hostname, &self.dns_domain, &self.dns_manager);
     }
 
     async fn remove_deployment_containers(&self, deployment: &ServiceDeployment) {
-        if deployment.config.provider != ServiceProvider::Docker {
-            return;
-        }
-
         for replica_index in 0..deployment.config.deploy.replicas {
             self.remove_replica_container(deployment, replica_index)
                 .await;
@@ -1403,7 +1451,7 @@ impl DeploymentController {
         {
             self.remove_deployment_containers(deployment).await;
             remove_build_dir(deployment, &self.config.data_dir);
-            remove_upload_archive(deployment, &self.container_provider.uploads_dir);
+            remove_upload_archive(deployment, &self.config.probe_dir().join("data/uploads"));
         }
 
         let stale_images = deployments
@@ -1487,10 +1535,24 @@ impl DeploymentController {
         tracked_job_ids: &HashSet<String>,
     ) {
         let replicas = deployment.config.deploy.replicas;
+        let replica_states_snapshot = self
+            .store
+            .list_replica_states(service_id, &deployment.id)
+            .await
+            .unwrap_or_default();
+        let exhausted_indices: HashSet<u32> = replica_states_snapshot
+            .iter()
+            .filter(|state| {
+                state.replica_index < replicas
+                    && state.status == DeploymentStatus::Crashed
+                    && state.restart_attempts >= MAX_REPLICA_RESTART_ATTEMPTS
+            })
+            .map(|state| state.replica_index)
+            .collect();
         let orphaned_replicas = (0..replicas)
             .filter(|replica_index| {
                 let job_id = replica_job_id(&deployment.id, *replica_index);
-                !tracked_job_ids.contains(&job_id)
+                !tracked_job_ids.contains(&job_id) && !exhausted_indices.contains(replica_index)
             })
             .collect::<Vec<_>>();
 
@@ -1525,7 +1587,7 @@ impl DeploymentController {
                 .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                 .await;
             remove_build_dir(deployment, &self.config.data_dir);
-            remove_upload_archive(deployment, &self.container_provider.uploads_dir);
+            remove_upload_archive(deployment, &self.config.probe_dir().join("data/uploads"));
             self.prune_service_images(service_id).await;
             return;
         }
@@ -1639,9 +1701,13 @@ impl DeploymentController {
                             deployment.id, deployment.service_id
                         ),
                     );
-                    let _ = self
-                        .supervisor
-                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    self.shutdown_deployment_replica(
+                        &deployment.service_id,
+                        &deployment.id,
+                        deployment.replica_index,
+                        ShutdownRequest::Graceful,
+                    )
+                    .await;
                     let hostname = deployment_hostname(
                         &deployment.service_id,
                         &deployment.id,
@@ -1674,9 +1740,7 @@ impl DeploymentController {
                     .await;
 
                 let drain_elapsed = store_deployment.drained_at.is_some_and(|drained_at| {
-                    crate::utils::time::current_time_millis()
-                        .map(|now| now.saturating_sub(drained_at) >= INGRESS_DRAIN_GRACE_PERIOD_MS)
-                        .unwrap_or(false)
+                    self.clock.now_ms().saturating_sub(drained_at) >= INGRESS_DRAIN_GRACE_PERIOD_MS
                 });
                 if drain_elapsed {
                     let deployment_ref = Deployment {
@@ -1688,18 +1752,26 @@ impl DeploymentController {
                         .store
                         .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                         .await;
-                    let _ = self
-                        .supervisor
-                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                    self.shutdown_deployment_replica(
+                        &deployment.service_id,
+                        &deployment.id,
+                        deployment.replica_index,
+                        ShutdownRequest::Graceful,
+                    )
+                    .await;
                     self.remove_replica_container(&store_deployment, deployment.replica_index)
                         .await;
                     remove_build_dir(&store_deployment, &self.config.data_dir);
                     self.prune_service_images(&deployment.service_id).await;
                 }
             } else if store_deployment.status == DeploymentStatus::Removed {
-                let _ = self
-                    .supervisor
-                    .shutdown_job(&job_id, ShutdownRequest::Graceful);
+                self.shutdown_deployment_replica(
+                    &deployment.service_id,
+                    &deployment.id,
+                    deployment.replica_index,
+                    ShutdownRequest::Graceful,
+                )
+                .await;
                 self.remove_replica_container(&store_deployment, deployment.replica_index)
                     .await;
                 remove_build_dir(&store_deployment, &self.config.data_dir);
@@ -1804,63 +1876,129 @@ impl DeploymentController {
                 _ => continue,
             };
 
-            let running_indices: Vec<u32> = self
-                .deployments
-                .values()
-                .filter(|d| d.id == *deployment_id)
-                .map(|d| d.replica_index)
-                .collect();
-            let running_count = running_indices.len() as u32;
-
-            if desired != running_count {
-                self.logger.emit(
-                    "info",
-                    &format!(
-                        "reconcile_replicas for `{service_id}/{deployment_id}`: desired={desired}, running={running_count}, running_indices={running_indices:?}"
-                    ),
-                );
-            }
-
-            if desired > running_count {
-                let max_existing = running_indices.iter().copied().max().unwrap_or(0);
-                for replica_index in (max_existing + 1)..=(max_existing + (desired - running_count))
-                {
-                    self.start_replica(
-                        service_id,
-                        deployment_id,
-                        replica_index,
-                        &deployment_record,
-                    )
-                    .await;
-                }
-            } else if desired < running_count {
-                let mut sorted = running_indices.clone();
-                sorted.sort();
-                sorted.reverse();
-                let excess = (running_count - desired) as usize;
-                for &replica_index in sorted.iter().take(excess) {
-                    let job_id = replica_job_id(deployment_id, replica_index);
-                    let _ = self
-                        .supervisor
-                        .shutdown_job(&job_id, ShutdownRequest::Graceful);
-                    let _ = self
-                        .store
-                        .delete_replica_state(service_id, deployment_id, replica_index)
-                        .await;
-                }
-            }
-
             let mut replica_states = self
                 .store
                 .list_replica_states(service_id, deployment_id)
                 .await
                 .unwrap_or_default();
-            let mut repaired_replica_state = false;
-            for replica_index in running_indices
+
+            let exhausted_indices: HashSet<u32> = replica_states
                 .iter()
+                .filter(|state| {
+                    state.replica_index < desired
+                        && state.status == DeploymentStatus::Crashed
+                        && state.restart_attempts >= MAX_REPLICA_RESTART_ATTEMPTS
+                })
+                .map(|state| state.replica_index)
+                .collect();
+
+            let intended_indices: HashSet<u32> = (0..desired)
+                .filter(|index| !exhausted_indices.contains(index))
+                .collect();
+
+            let crashed_to_handle: Vec<(u32, u32)> = replica_states
+                .iter()
+                .filter(|state| {
+                    state.replica_index < desired && state.status == DeploymentStatus::Crashed
+                })
+                .map(|state| (state.replica_index, state.restart_attempts))
+                .collect();
+            for (replica_index, attempts) in crashed_to_handle {
+                let job_id = replica_job_id(deployment_id, replica_index);
+                if !self.deployments.contains_key(&job_id) {
+                    continue;
+                }
+                self.shutdown_deployment_replica(
+                    service_id,
+                    deployment_id,
+                    replica_index,
+                    ShutdownRequest::Graceful,
+                )
+                .await;
+                self.deployments.remove(&job_id);
+                if attempts < MAX_REPLICA_RESTART_ATTEMPTS {
+                    let _ = self
+                        .store
+                        .upsert_replica_state(
+                            service_id,
+                            deployment_id,
+                            ReplicaState {
+                                replica_index,
+                                status: initial_replica_status_for_deployment(&deployment_record),
+                                healthcheck_failures: 0,
+                                restart_attempts: attempts + 1,
+                            },
+                        )
+                        .await;
+                }
+            }
+
+            let running_indices: HashSet<u32> = self
+                .deployments
+                .values()
+                .filter(|deployment| deployment.id == *deployment_id)
+                .map(|deployment| deployment.replica_index)
+                .collect();
+
+            if running_indices != intended_indices {
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "reconcile_replicas for `{service_id}/{deployment_id}`: desired={desired}, running={running_indices:?}, intended={intended_indices:?}, exhausted={exhausted_indices:?}"
+                    ),
+                );
+            }
+
+            let mut missing: Vec<u32> = intended_indices
+                .difference(&running_indices)
                 .copied()
-                .filter(|index| *index < desired)
-            {
+                .collect();
+            missing.sort();
+            for replica_index in missing {
+                self.start_replica(service_id, deployment_id, replica_index, &deployment_record)
+                    .await;
+            }
+
+            let mut excess: Vec<u32> = running_indices
+                .iter()
+                .filter(|index| **index >= desired)
+                .copied()
+                .collect();
+            excess.sort();
+            for replica_index in excess {
+                let job_id = replica_job_id(deployment_id, replica_index);
+                self.shutdown_deployment_replica(
+                    service_id,
+                    deployment_id,
+                    replica_index,
+                    ShutdownRequest::Graceful,
+                )
+                .await;
+                self.deployments.remove(&job_id);
+                let _ = self
+                    .store
+                    .delete_replica_state(service_id, deployment_id, replica_index)
+                    .await;
+            }
+
+            replica_states = self
+                .store
+                .list_replica_states(service_id, deployment_id)
+                .await
+                .unwrap_or_default();
+
+            let running_indices: HashSet<u32> = self
+                .deployments
+                .values()
+                .filter(|deployment| deployment.id == *deployment_id)
+                .map(|deployment| deployment.replica_index)
+                .collect();
+
+            let mut repaired_replica_state = false;
+            for &replica_index in &running_indices {
+                if replica_index >= desired {
+                    continue;
+                }
                 let current_replica_status = replica_states
                     .iter()
                     .find(|state| state.replica_index == replica_index)
@@ -1908,9 +2046,9 @@ impl DeploymentController {
                 }
             }
 
-            let any_ready = replica_states
-                .iter()
-                .any(|s| s.replica_index < desired && s.status == DeploymentStatus::Ready);
+            let any_ready = replica_states.iter().any(|state| {
+                state.replica_index < desired && state.status == DeploymentStatus::Ready
+            });
             if any_ready {
                 let deployment_ref = Deployment {
                     service_id: service_id.clone(),
@@ -1926,6 +2064,30 @@ impl DeploymentController {
                         .notify_deployment_ready(service_id, deployment_id);
                 }
             }
+
+            let all_exhausted = desired > 0
+                && (0..desired).all(|index| {
+                    replica_states.iter().any(|state| {
+                        state.replica_index == index
+                            && state.status == DeploymentStatus::Crashed
+                            && state.restart_attempts >= MAX_REPLICA_RESTART_ATTEMPTS
+                    })
+                });
+            if all_exhausted && is_active(&deployment_record.status) {
+                let deployment_ref = Deployment {
+                    service_id: service_id.clone(),
+                    id: deployment_id.clone(),
+                    replica_index: 0,
+                };
+                let _ = self
+                    .store
+                    .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                    .await;
+                let reason = format!(
+                    "all {desired} replicas exhausted {MAX_REPLICA_RESTART_ATTEMPTS} restart attempts"
+                );
+                self.notify_deployment_crashed_once(service_id, deployment_id, &reason);
+            }
         }
     }
 
@@ -1936,54 +2098,59 @@ impl DeploymentController {
         replica_index: u32,
         deployment_record: &ServiceDeployment,
     ) {
-        let deploy_output = match deployment_record.config.provider {
-            ServiceProvider::Docker => self
-                .container_provider
-                .deploy(deployment_record, replica_index),
-            ServiceProvider::Shell => self.shell_provider.deploy(deployment_record, replica_index),
-        };
+        let deploy_output = self
+            .container_engine
+            .deploy_command(deployment_record, replica_index);
         let Some(deploy_output) = deploy_output else {
             return;
         };
 
-        let job_id = replica_job_id(deployment_id, replica_index);
         let container_hostname = deployment_record.hostname_for_replica(replica_index);
         let max_restarts = deployment_record
             .config
             .deploy
             .max_restarts
             .or(DEFAULT_MAX_RESTARTS);
-        let job = SupervisedJobConfig {
-            id: job_id.clone(),
-            name: format!("{service_id}/{deployment_id}/replica{replica_index}"),
-            command: deploy_output.command,
-            restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
-            max_restart_delay_ms: None,
+        let log_config = self.log_sender.clone().map(|sender| {
+            let mut tags = self.config.tags.clone();
+            tags.push(format!("service:{service_id}"));
+            tags.push(format!("hostname:{container_hostname}"));
+            tags.push(format!("deployment_id:{deployment_id}"));
+            tags.push(format!("replica:{replica_index}"));
+            tags.push(format!("cluster:{}", self.config.cluster_name));
+            LogConfig {
+                sender,
+                tags,
+                origin: LogOrigin::Service,
+            }
+        });
+        let spec = ReplicaSpec {
+            deployment: deployment_record,
+            replica_index,
+            deploy_output,
             max_restarts,
+            restart_delay_ms: DEFAULT_RESTART_DELAY_MS,
             shutdown_grace_period_ms: DEFAULT_SHUTDOWN_GRACE_PERIOD_MS,
-            container: Some(ContainerRef {
-                name: container_hostname.clone(),
-                runtime_cli: self.runtime.cli_name().to_string(),
-            }),
-            secrets_mount: deploy_output.secrets_mount,
-            log_config: self.log_sender.clone().map(|sender| {
-                let mut tags = self.config.tags.clone();
-                tags.push(format!("service:{service_id}"));
-                tags.push(format!("hostname:{container_hostname}"));
-                tags.push(format!("deployment_id:{deployment_id}"));
-                tags.push(format!("replica:{replica_index}"));
-                tags.push(format!("cluster:{}", self.config.cluster_name));
-                LogConfig {
-                    sender,
-                    tags,
-                    origin: LogOrigin::Service,
-                }
-            }),
+            container_hostname: container_hostname.clone(),
+            runtime_cli: self.runtime.cli_name().to_string(),
+            log_config,
+        };
+        let started = match self.container_engine.start_replica(spec).await {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "engine refused to start replica{replica_index} of `{deployment_id}`: {err}"
+                    ),
+                );
+                None
+            }
         };
 
-        if let Some(task_id) = self.supervisor.start_job(job) {
+        if let Some(handle) = started {
             self.deployments.insert(
-                task_id,
+                handle.task_id.clone(),
                 Deployment {
                     service_id: service_id.to_string(),
                     id: deployment_id.to_string(),
@@ -2014,9 +2181,9 @@ impl DeploymentController {
     ) -> DeploymentStatus {
         if current_status == Some(&DeploymentStatus::Ready) {
             DeploymentStatus::Ready
-        } else if deployment.config.provider == ServiceProvider::Docker
-            && !deployment_has_healthcheck(deployment)
-        {
+        } else if current_status == Some(&DeploymentStatus::Crashed) {
+            DeploymentStatus::Crashed
+        } else if !deployment_has_healthcheck(deployment) {
             let hostname = deployment.hostname_for_replica(replica_index);
             if self.runtime.inspect_container_ip(&hostname).await.is_some() {
                 DeploymentStatus::Ready
@@ -2065,19 +2232,15 @@ fn deployment_has_healthcheck(deployment: &ServiceDeployment) -> bool {
 fn initial_replica_status_for_deployment(deployment: &ServiceDeployment) -> DeploymentStatus {
     if deployment_has_healthcheck(deployment) {
         DeploymentStatus::PendingReady
-    } else if deployment.config.provider == ServiceProvider::Docker {
-        DeploymentStatus::Building
     } else {
-        DeploymentStatus::Ready
+        DeploymentStatus::Building
     }
 }
 
 fn recovered_replica_status_for_deployment(deployment: &ServiceDeployment) -> DeploymentStatus {
     if deployment.status == DeploymentStatus::Ready {
         DeploymentStatus::Ready
-    } else if deployment.config.provider == ServiceProvider::Docker
-        && !deployment_has_healthcheck(deployment)
-    {
+    } else if !deployment_has_healthcheck(deployment) {
         DeploymentStatus::Ready
     } else {
         initial_replica_status_for_deployment(deployment)

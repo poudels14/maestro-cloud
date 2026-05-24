@@ -1,18 +1,27 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
-use async_trait::async_trait;
-
+use crate::deployment::provider::DeployOutput;
 use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
-use crate::logs::LogEntry;
+use crate::logs::{LogConfig, LogEntry};
 
-pub mod container;
+pub mod engine;
 #[cfg(test)]
 pub mod in_memory;
+pub mod provider;
+pub mod replica_supervisor;
+
+pub use engine::Engine;
+
+#[cfg(test)]
+#[path = "../tests/lifecycle.rs"]
+mod lifecycle_tests;
 
 #[derive(Debug, Clone)]
 pub enum Artifact {
-    Image { tag: String },
+    Image {
+        tag: String,
+    },
+    #[allow(dead_code)]
     None,
 }
 
@@ -45,19 +54,22 @@ impl LogSink {
     }
 }
 
-#[async_trait]
-pub trait DeploymentEngine: Send + Sync {
-    async fn prepare(
-        &self,
-        deployment: &ServiceDeployment,
-        logs: &LogSink,
-    ) -> Result<PreparedDeployment>;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReplicaHandle {
+    pub task_id: String,
+    pub service_id: String,
+    pub deployment_id: String,
+    pub replica_index: u32,
+}
 
-    async fn build(&self, prep: &PreparedDeployment, logs: &LogSink) -> Result<Artifact>;
-
-    async fn cleanup(
-        &self,
-        deployment: &ServiceDeployment,
-        artifact: Option<&Artifact>,
-    ) -> Result<()>;
+pub struct ReplicaSpec<'a> {
+    pub deployment: &'a ServiceDeployment,
+    pub replica_index: u32,
+    pub deploy_output: DeployOutput,
+    pub max_restarts: Option<u32>,
+    pub restart_delay_ms: u64,
+    pub shutdown_grace_period_ms: u64,
+    pub container_hostname: String,
+    pub runtime_cli: String,
+    pub log_config: Option<LogConfig>,
 }

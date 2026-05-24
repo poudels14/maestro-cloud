@@ -2,9 +2,7 @@ use std::{collections::BTreeMap, io::IsTerminal, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::types::{
-    IngressConfig, ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
-};
+use crate::deployment::types::{IngressConfig, ServiceBuildConfig, ServiceDeployConfig};
 use crate::error::{Error, Result};
 use crate::utils::crypto::SecretString;
 
@@ -19,8 +17,6 @@ pub(super) struct ClusterConfig {
 pub(super) struct ServiceTemplate {
     name: String,
     #[serde(default)]
-    provider: ServiceProvider,
-    #[serde(default)]
     build: Option<ServiceBuildConfig>,
     #[serde(default)]
     image: Option<String>,
@@ -34,7 +30,6 @@ pub(super) struct ServiceTemplate {
 struct PatchServiceRequest {
     id: String,
     name: String,
-    provider: ServiceProvider,
     #[serde(skip_serializing_if = "Option::is_none")]
     build: Option<ServiceBuildConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,7 +325,6 @@ pub(super) fn validate_service_template(
         )));
     }
     crate::validation::validate_service_provider_config(
-        template.provider,
         &template.build,
         &template.image,
         &template.deploy,
@@ -371,7 +365,6 @@ fn service_payload(
         )));
     }
     let (build, image, deploy) = crate::validation::validate_service_provider_config(
-        service_template.provider,
         &service_template.build,
         &service_template.image,
         &service_template.deploy,
@@ -434,7 +427,6 @@ fn service_payload(
     Ok(PatchServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
-        provider: service_template.provider,
         build,
         image,
         deploy,

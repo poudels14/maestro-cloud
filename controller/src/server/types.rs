@@ -1,6 +1,5 @@
 use crate::deployment::types::{
     DeploymentStatus, IngressConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceProvider,
 };
 
 #[derive(Debug, serde::Serialize)]
@@ -35,8 +34,6 @@ pub(crate) struct ServiceListItem {
 pub(crate) struct RolloutServiceRequest {
     pub(crate) id: String,
     pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) provider: ServiceProvider,
     #[serde(default)]
     pub(crate) build: Option<ServiceBuildConfig>,
     #[serde(default)]

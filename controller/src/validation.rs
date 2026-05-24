@@ -1,6 +1,6 @@
 use crate::deployment::types::{
     EnvConfig, IngressConfig, MAX_HEALTHCHECK_INTERVAL_SECS, MIN_HEALTHCHECK_INTERVAL_SECS,
-    ServiceBuildConfig, ServiceDeployConfig, ServiceProvider,
+    ServiceBuildConfig, ServiceDeployConfig,
 };
 
 pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
@@ -76,7 +76,6 @@ pub fn validate_build_config(
 }
 
 pub fn validate_service_provider_config(
-    provider: ServiceProvider,
     build: &Option<ServiceBuildConfig>,
     image: &Option<String>,
     deploy: &ServiceDeployConfig,
@@ -134,27 +133,8 @@ pub fn validate_service_provider_config(
         .healthcheck_interval
         .clamp(MIN_HEALTHCHECK_INTERVAL_SECS, MAX_HEALTHCHECK_INTERVAL_SECS);
 
-    match provider {
-        ServiceProvider::Docker => {
-            let (build, image) = validate_build_config(build, image)?;
-            Ok((build, image, resolved_deploy))
-        }
-        ServiceProvider::Shell => {
-            if build.is_some() || image.is_some() {
-                return Err(
-                    "shell provider does not allow `build` or `image`; set deploy.command instead"
-                        .to_string(),
-                );
-            }
-            let Some(command) = resolved_deploy.command.as_ref() else {
-                return Err("shell provider requires deploy.command".to_string());
-            };
-            if command.command.trim().is_empty() {
-                return Err("shell provider requires non-empty deploy.command.command".to_string());
-            }
-            Ok((None, None, resolved_deploy))
-        }
-    }
+    let (build, image) = validate_build_config(build, image)?;
+    Ok((build, image, resolved_deploy))
 }
 
 pub fn has_writable_volume(deploy: &ServiceDeployConfig) -> bool {

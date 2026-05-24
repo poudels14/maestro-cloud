@@ -814,18 +814,23 @@ impl ClusterStore for EtcdStateStore {
         status: DeploymentStatus,
     ) -> anyhow::Result<()> {
         let key = replica_state_key(service_id, deployment_id, replica_index);
-        let healthcheck_failures = self
+        let existing = self
             .read_replica_states(service_id, deployment_id)
             .await
             .unwrap_or_default()
             .into_iter()
-            .find(|state| state.replica_index == replica_index)
-            .map(|state| state.healthcheck_failures)
-            .unwrap_or(0);
+            .find(|state| state.replica_index == replica_index);
         let state = ReplicaState {
             replica_index,
             status,
-            healthcheck_failures,
+            healthcheck_failures: existing
+                .as_ref()
+                .map(|state| state.healthcheck_failures)
+                .unwrap_or(0),
+            restart_attempts: existing
+                .as_ref()
+                .map(|state| state.restart_attempts)
+                .unwrap_or(0),
         };
         let json = serde_json::to_string(&state)
             .map_err(|err| anyhow!("failed to serialize replica state: {err}"))?;

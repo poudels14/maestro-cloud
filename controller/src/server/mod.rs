@@ -25,7 +25,7 @@ use self::types::{
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment, ServiceProvider,
+    ServiceDeployConfig, ServiceDeployment,
 };
 use crate::logs::store::LogOrigin;
 use crate::signal::ShutdownEvent;
@@ -602,7 +602,6 @@ impl Server {
                     id: id.to_string(),
                     name: name.to_string(),
                     version: String::new(),
-                    provider: ServiceProvider::Docker,
                     build: None,
                     image: Some(image.to_string()),
                     deploy: ServiceDeployConfig {
@@ -1780,7 +1779,6 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     let RolloutServiceRequest {
         id,
         name,
-        provider,
         build,
         image,
         deploy,
@@ -1795,7 +1793,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         return Err("name cannot be empty".to_string());
     }
     let (build, image, deploy) =
-        crate::validation::validate_service_provider_config(provider, &build, &image, &deploy)?;
+        crate::validation::validate_service_provider_config(&build, &image, &deploy)?;
     crate::validation::validate_ingress_config(&ingress)?;
 
     let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
@@ -1803,7 +1801,6 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     let version_payload = json!({
         "id": &service_id,
         "name": &service_name,
-        "provider": &provider,
         "build": &build,
         "image": &image,
         "deploy": {
@@ -1826,7 +1823,6 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         id: service_id,
         name: service_name,
         version,
-        provider,
         build,
         image,
         deploy,
