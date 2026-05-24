@@ -22,7 +22,7 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
   return (
     <div
       onClick={props.onClick}
-      class="bg-white border border-gray-200 rounded-lg p-5 hover:border-indigo-200 hover:shadow-sm transition-all text-left w-full cursor-pointer outline-none group relative"
+      class="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 hover:border-indigo-200 hover:shadow-sm transition-all text-left w-full cursor-pointer outline-none group relative"
     >
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">

@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { useQuery } from "@tanstack/solid-query";
 import { disksQuery } from "../../lib/queries";
 import type { DiskInfo } from "../../lib/types";
+import { formatBytes } from "../../lib/format";
 import { Card, SectionHeader } from "../../lib/ui";
 
 function DisksSection() {
@@ -12,7 +13,7 @@ function DisksSection() {
     <Show when={(disks.data ?? []).length > 0}>
       <div>
         <SectionHeader class="mb-4">Disks</SectionHeader>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <For each={disks.data}>{(disk) => <DiskCard disk={disk} />}</For>
         </div>
       </div>
@@ -53,12 +54,6 @@ function DiskCard(props: { disk: DiskInfo }) {
       <p class="text-xs text-gray-400 mt-1.5">{usedPercent().toFixed(1)}% used</p>
     </Card>
   );
-}
-
-function formatBytes(value: number) {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB`;
-  return `${Math.round(value / 1_000)} KB`;
 }
 
 export { DisksSection };

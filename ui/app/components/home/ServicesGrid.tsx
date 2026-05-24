@@ -56,7 +56,7 @@ function ServicesGrid() {
             </div>
           }
         >
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <For each={userServices()}>
               {(service) => (
                 <ServiceCard
@@ -73,7 +73,7 @@ function ServicesGrid() {
           <div class="flex items-baseline gap-2 mb-4 mt-10">
             <SectionHeader>System</SectionHeader>
           </div>
-          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <For each={systemServices()}>
               {(service) => (
                 <ServiceCard

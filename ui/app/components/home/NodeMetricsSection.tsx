@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
+import { formatBytes, formatPercent } from "../../lib/format";
 import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
 import { TimelineChart } from "../TimelineChart";
 
@@ -32,13 +33,16 @@ function NodeMetricsSection() {
       </Show>
       <div>
         <SectionHeader class="mb-4">Node</SectionHeader>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <MetricCard title="CPU" value={latestNode() ? formatPct(latestNode()!.cpuPercent) : null}>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <MetricCard
+            title="CPU"
+            value={latestNode() ? formatPercent(latestNode()!.cpuPercent) : null}
+          >
             <TimelineChart
               data={(nodeMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
               color="#6366f1"
-              yFormat={formatPct}
+              yFormat={formatPercent}
               height={140}
             />
           </MetricCard>
@@ -62,16 +66,16 @@ function NodeMetricsSection() {
       </div>
       <div>
         <SectionHeader class="mb-4">Cluster</SectionHeader>
-        <div class="grid gap-4 sm:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <MetricCard
             title="CPU"
-            value={latestCluster() ? formatPct(latestCluster()!.cpuPercent) : null}
+            value={latestCluster() ? formatPercent(latestCluster()!.cpuPercent) : null}
           >
             <TimelineChart
               data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
               color="#0ea5e9"
-              yFormat={formatPct}
+              yFormat={formatPercent}
               height={140}
             />
           </MetricCard>
@@ -109,16 +113,6 @@ function MetricCard(props: { title: string; value: string | null; children: any 
       {props.children}
     </Card>
   );
-}
-
-function formatBytes(value: number) {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB`;
-  return `${Math.round(value / 1_000)} KB`;
-}
-
-function formatPct(value: number) {
-  return `${value.toFixed(1)}%`;
 }
 
 export { NodeMetricsSection };

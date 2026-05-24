@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { Monitor } from "lucide-solid";
+import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
 import { StatusDot } from "../../lib/ui";
@@ -9,81 +9,119 @@ function ServiceSidebar(props: {
   selected: Service | null;
   onSelect: (s: Service) => void;
   onBack: () => void;
+  mobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }) {
   const userServices = () => props.services.filter((s) => !s.system);
   const systemServices = () => props.services.filter((s) => s.system === true);
 
   return (
-    <div class="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
-      <button
-        type="button"
-        onClick={props.onBack}
-        class="px-4 h-14 flex items-center gap-2 shrink-0 border-b border-gray-200 hover:bg-gray-50 transition-colors outline-none w-full group"
+    <>
+      <Show when={props.mobileOpen}>
+        <div
+          class="fixed inset-0 bg-black/30 z-30 md:hidden"
+          onClick={() => props.onCloseMobile?.()}
+        />
+      </Show>
+      <aside
+        class={clsx(
+          "fixed md:static z-40 inset-y-0 left-0 w-64 md:w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col h-full transform transition-transform duration-200 md:transform-none",
+          {
+            "translate-x-0": props.mobileOpen,
+            "-translate-x-full md:translate-x-0": !props.mobileOpen
+          }
+        )}
       >
-        <div class="size-7 rounded-lg bg-indigo-500 flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
-          <Monitor class="size-4 text-white" />
+        <div class="px-4 h-14 flex items-center justify-between gap-2 shrink-0 border-b border-gray-200">
+          <button
+            type="button"
+            onClick={props.onBack}
+            class="flex items-center gap-2 hover:opacity-80 transition-opacity outline-none group"
+          >
+            <div class="size-7 rounded-lg bg-indigo-500 flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
+              <Monitor class="size-4 text-white" />
+            </div>
+            <span class="text-sm font-semibold text-gray-900 tracking-tight">Maestro</span>
+          </button>
+          <Show when={props.onCloseMobile}>
+            <button
+              type="button"
+              onClick={() => props.onCloseMobile?.()}
+              class="md:hidden p-1.5 text-gray-400 hover:text-gray-700 rounded hover:bg-gray-100 outline-none"
+              aria-label="Close menu"
+            >
+              <X class="size-4" />
+            </button>
+          </Show>
         </div>
-        <span class="text-sm font-semibold text-gray-900 tracking-tight">Maestro</span>
-      </button>
-      <div class="flex-1 overflow-y-auto">
-        <Show when={userServices().length > 0}>
-          <div class="px-3 pt-4 pb-1.5 flex items-baseline justify-between">
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              Services
-            </span>
-            <span class="text-[10px] font-mono text-gray-300 tabular-nums">
-              {userServices().length}
-            </span>
-          </div>
-          <div class="px-2 space-y-0.5">
-            <For each={userServices()}>
-              {(service) => (
-                <SidebarServiceItem
-                  service={service}
-                  selected={service.id === props.selected?.id}
-                  onClick={() => props.onSelect(service)}
-                />
-              )}
-            </For>
-          </div>
-        </Show>
-        <Show when={systemServices().length > 0}>
-          <div class="px-3 pt-5 pb-1.5 flex items-baseline justify-between">
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              System
-            </span>
-            <span class="text-[10px] font-mono text-gray-300 tabular-nums">
-              {systemServices().length}
-            </span>
-          </div>
-          <div class="px-2 space-y-0.5 pb-3">
-            <For each={systemServices()}>
-              {(service) => (
-                <SidebarSystemItem
-                  service={service}
-                  selected={service.id === props.selected?.id}
-                  onClick={() => props.onSelect(service)}
-                />
-              )}
-            </For>
-          </div>
-        </Show>
+        <div class="flex-1 overflow-y-auto">
+          <Show when={userServices().length > 0}>
+            <SidebarSection title="Services" count={userServices().length}>
+              <For each={userServices()}>
+                {(service) => (
+                  <SidebarServiceItem
+                    service={service}
+                    selected={service.id === props.selected?.id}
+                    onClick={() => props.onSelect(service)}
+                  />
+                )}
+              </For>
+            </SidebarSection>
+          </Show>
+          <Show when={systemServices().length > 0}>
+            <SidebarSection title="System" count={systemServices().length}>
+              <For each={systemServices()}>
+                {(service) => (
+                  <SidebarServiceItem
+                    service={service}
+                    selected={service.id === props.selected?.id}
+                    onClick={() => props.onSelect(service)}
+                    system
+                  />
+                )}
+              </For>
+            </SidebarSection>
+          </Show>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function SidebarSection(props: { title: string; count: number; children: any }) {
+  return (
+    <div class="pb-3">
+      <div class="px-3 pt-4 pb-1.5 flex items-baseline justify-between">
+        <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+          {props.title}
+        </span>
+        <span class="text-[10px] font-mono text-gray-300 tabular-nums">{props.count}</span>
       </div>
+      <div class="px-2 space-y-0.5">{props.children}</div>
     </div>
   );
 }
 
-function SidebarServiceItem(props: { service: Service; selected: boolean; onClick: () => void }) {
-  const status = () => props.service.status ?? "IDLE";
+function SidebarServiceItem(props: {
+  service: Service;
+  selected: boolean;
+  onClick: () => void;
+  system?: boolean;
+}) {
+  const status = () => (props.system ? "SYSTEM" : (props.service.status ?? "IDLE"));
   return (
     <button
       type="button"
       onClick={props.onClick}
       class={clsx(
-        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 text-sm rounded-md transition-colors outline-none",
-        props.selected
-          ? "bg-indigo-50 text-indigo-700 font-medium"
-          : "text-gray-700 hover:bg-gray-50"
+        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md transition-colors outline-none",
+        {
+          "text-sm": !props.system,
+          "text-xs": props.system,
+          "bg-indigo-50 text-indigo-700 font-medium": props.selected,
+          "text-gray-700 hover:bg-gray-50": !props.selected && !props.system,
+          "text-gray-500 hover:bg-gray-50 hover:text-gray-700": !props.selected && props.system
+        }
       )}
     >
       <Show when={props.selected}>
@@ -91,24 +129,6 @@ function SidebarServiceItem(props: { service: Service; selected: boolean; onClic
       </Show>
       <StatusDot status={status()} />
       <span class="truncate flex-1">{props.service.name}</span>
-    </button>
-  );
-}
-
-function SidebarSystemItem(props: { service: Service; selected: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      class={clsx(
-        "w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 text-xs rounded-md transition-colors outline-none",
-        props.selected
-          ? "bg-indigo-50 text-indigo-700 font-medium"
-          : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-      )}
-    >
-      <StatusDot status="SYSTEM" />
-      <span class="truncate">{props.service.name}</span>
     </button>
   );
 }

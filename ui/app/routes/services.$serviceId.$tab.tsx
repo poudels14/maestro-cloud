@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "@tanstack/solid-query";
-import { createEffect, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
+import { Menu } from "lucide-solid";
 import type { Service } from "../lib/types";
 import { servicesQuery } from "../lib/queries";
 import { TabButton } from "../lib/ui";
@@ -21,6 +22,8 @@ function ServiceDetailPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const services = useQuery(() => servicesQuery());
+  const [drawerOpen, setDrawerOpen] = createSignal(false);
+
   const tab = () => {
     const raw = params().tab;
     return VALID_TABS.has(raw) ? (raw as DetailTab) : "overview";
@@ -34,8 +37,10 @@ function ServiceDetailPage() {
       params: { serviceId: params().serviceId, tab: next }
     });
 
-  const navigateService = (service: Service) =>
+  const navigateService = (service: Service) => {
+    setDrawerOpen(false);
     navigate({ to: "/services/$serviceId/$tab", params: { serviceId: service.id, tab: tab() } });
+  };
 
   const loading = () => services.isLoading;
 
@@ -46,6 +51,8 @@ function ServiceDetailPage() {
         selected={selected() ?? null}
         onSelect={navigateService}
         onBack={() => navigate({ to: "/" })}
+        mobileOpen={drawerOpen()}
+        onCloseMobile={() => setDrawerOpen(false)}
       />
       <Show when={loading()}>
         <div class="flex-1 flex items-center justify-center">
@@ -68,7 +75,12 @@ function ServiceDetailPage() {
       </Show>
       <Show when={!loading() && selected()}>
         {(service) => (
-          <ServiceDetailPanel service={service()} tab={tab()} navigateTab={navigateTab} />
+          <ServiceDetailPanel
+            service={service()}
+            tab={tab()}
+            navigateTab={navigateTab}
+            onOpenDrawer={() => setDrawerOpen(true)}
+          />
         )}
       </Show>
     </div>
@@ -79,6 +91,7 @@ function ServiceDetailPanel(props: {
   service: Service;
   tab: DetailTab;
   navigateTab: (t: DetailTab) => void;
+  onOpenDrawer: () => void;
 }) {
   createEffect(() => {
     if (props.service.system && props.tab === "deployments") {
@@ -88,34 +101,47 @@ function ServiceDetailPanel(props: {
 
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
-      <div class="pt-5 pb-0 shrink-0 bg-white border-b border-gray-200">
-        <div class="max-w-4xl mx-auto px-6 flex justify-center gap-4 -mb-px">
-          <TabButton
-            label="Overview"
-            active={props.tab === "overview"}
-            onClick={() => props.navigateTab("overview")}
-          />
-          <TabButton
-            label="Metrics"
-            active={props.tab === "metrics"}
-            onClick={() => props.navigateTab("metrics")}
-          />
-          <Show when={!props.service.system}>
+      <div class="shrink-0 bg-white border-b border-gray-200">
+        <div class="md:hidden h-12 px-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={props.onOpenDrawer}
+            class="p-2 -ml-2 text-gray-500 hover:text-gray-700 rounded-md outline-none"
+            aria-label="Open menu"
+          >
+            <Menu class="size-5" />
+          </button>
+          <span class="text-sm font-semibold text-gray-900 truncate">{props.service.name}</span>
+        </div>
+        <div class="px-3 sm:px-6 pt-3 sm:pt-5 overflow-x-auto">
+          <div class="max-w-4xl mx-auto flex justify-start sm:justify-center gap-4 -mb-px whitespace-nowrap">
             <TabButton
-              label="Deployments"
-              active={props.tab === "deployments"}
-              onClick={() => props.navigateTab("deployments")}
+              label="Overview"
+              active={props.tab === "overview"}
+              onClick={() => props.navigateTab("overview")}
             />
-          </Show>
-          <TabButton
-            label="Logs"
-            active={props.tab === "logs"}
-            onClick={() => props.navigateTab("logs")}
-          />
+            <TabButton
+              label="Metrics"
+              active={props.tab === "metrics"}
+              onClick={() => props.navigateTab("metrics")}
+            />
+            <Show when={!props.service.system}>
+              <TabButton
+                label="Deployments"
+                active={props.tab === "deployments"}
+                onClick={() => props.navigateTab("deployments")}
+              />
+            </Show>
+            <TabButton
+              label="Logs"
+              active={props.tab === "logs"}
+              onClick={() => props.navigateTab("logs")}
+            />
+          </div>
         </div>
       </div>
-      <div class="flex-1 overflow-y-auto py-5 bg-[#fafafa]">
-        <div class="max-w-4xl mx-auto px-6">
+      <div class="flex-1 overflow-y-auto py-4 sm:py-5 bg-[#fafafa]">
+        <div class="max-w-4xl mx-auto px-3 sm:px-6">
           <Show when={props.tab === "overview"}>
             <OverviewTab service={props.service} />
           </Show>
