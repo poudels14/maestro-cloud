@@ -2,6 +2,7 @@ mod builder;
 mod cli;
 mod config;
 mod deployment;
+mod engine;
 mod error;
 mod firewall;
 mod logs;
