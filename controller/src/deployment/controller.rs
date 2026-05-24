@@ -71,6 +71,7 @@ pub struct DeploymentController {
     supervisor: JobSupervisor,
     container_provider: ContainerDeploymentProvider,
     shell_provider: ShellDeploymentProvider,
+    container_engine: Arc<dyn crate::engine::DeploymentEngine>,
     deployments: HashMap<String, Deployment>,
     pending_builds: HashMap<String, PendingBuild>,
     shutdown_in_progress: bool,
@@ -112,6 +113,11 @@ impl DeploymentController {
                 .join("secrets"),
             uploads_dir: config.probe_dir().join("data/uploads"),
         };
+        let container_engine: Arc<dyn crate::engine::DeploymentEngine> =
+            Arc::new(crate::engine::container::ContainerEngine::new(
+                container_provider.clone(),
+                config.data_dir.clone(),
+            ));
         let logger = Logger::new(log_sender.clone());
         let slack = crate::slack::SlackNotifier::new(
             config.slack_webhook_url.clone(),
@@ -129,6 +135,7 @@ impl DeploymentController {
             supervisor,
             container_provider,
             shell_provider: ShellDeploymentProvider,
+            container_engine,
             deployments: HashMap::new(),
             pending_builds: HashMap::new(),
             shutdown_in_progress: false,
@@ -748,27 +755,18 @@ impl DeploymentController {
                 }
             }
 
-            let short_id: String = deployment_id.chars().take(6).collect();
-            let image_tag = format!("{}:{short_id}", queued_deployment.deployment.config.id);
-            let build_dir = self
-                .config
-                .data_dir
-                .join("tmp")
-                .join(&queued_deployment.service_id)
-                .join(&short_id);
-
-            match self
-                .container_provider
-                .setup(
-                    &queued_deployment.deployment,
-                    &build_dir,
-                    self.log_sender.as_ref(),
-                )
+            let engine = self.container_engine.clone();
+            let prepare_logs = crate::engine::LogSink::new(
+                self.log_sender.clone(),
+                format!("{}/{}/build", queued_deployment.service_id, deployment_id),
+            );
+            let prep = match engine
+                .prepare(&queued_deployment.deployment, &prepare_logs)
                 .await
             {
-                Ok(git_commit) => {
-                    if git_commit.is_some() {
-                        queued_deployment.deployment.git_commit = git_commit;
+                Ok(prep) => {
+                    if prep.git_commit.is_some() {
+                        queued_deployment.deployment.git_commit = prep.git_commit.clone();
                         let deployment_ref = Deployment {
                             service_id: queued_deployment.service_id.clone(),
                             id: deployment_id.clone(),
@@ -782,6 +780,7 @@ impl DeploymentController {
                             )
                             .await;
                     }
+                    prep
                 }
                 Err(err) => {
                     let reason = format!("source resolution failed: {err}");
@@ -794,7 +793,7 @@ impl DeploymentController {
                     );
                     let deployment_ref = Deployment {
                         service_id: queued_deployment.service_id.clone(),
-                        id: deployment_id,
+                        id: deployment_id.clone(),
                         replica_index: 0,
                     };
                     let _ = self
@@ -806,22 +805,31 @@ impl DeploymentController {
                         &deployment_ref.id.clone(),
                         &reason,
                     );
-                    let _ = std::fs::remove_dir_all(&build_dir);
+                    let _ = engine.cleanup(&queued_deployment.deployment, None).await;
                     self.prune_service_images(&queued_deployment.service_id)
                         .await;
                     return Ok(());
                 }
-            }
+            };
 
-            let provider = self.container_provider.clone();
-            let deployment = queued_deployment.deployment.clone();
-            let log_sender = self.log_sender.clone();
-            let build_dir_clone = build_dir.clone();
+            let build_dir = prep
+                .build_dir
+                .clone()
+                .unwrap_or_else(|| self.config.data_dir.join("tmp"));
+            let engine_for_build = engine.clone();
+            let prep_for_build = prep.clone();
+            let build_logs = crate::engine::LogSink::new(
+                self.log_sender.clone(),
+                format!("{}/{}/build", queued_deployment.service_id, deployment_id),
+            );
 
             let handle = tokio::spawn(async move {
-                provider
-                    .build(&deployment, &build_dir_clone, &image_tag, log_sender)
+                engine_for_build
+                    .build(&prep_for_build, &build_logs)
                     .await
+                    .map(|artifact| crate::deployment::provider::BuildOutput {
+                        image_tag: artifact.image_tag().unwrap_or("").to_string(),
+                    })
             });
 
             self.pending_builds.insert(
