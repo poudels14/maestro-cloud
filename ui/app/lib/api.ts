@@ -10,12 +10,54 @@ import type {
   TrafficPoint
 } from "./types";
 
+export interface ClusterNode {
+  nodeId: string;
+  hostname: string;
+  role: "controller" | "worker" | "both";
+  tailscaleIp?: string | null;
+  apiPort: number;
+  version: string;
+  startedAtMs: number;
+  labels?: Record<string, string>;
+  unschedulable?: boolean;
+}
+
+export interface ClusterLeader {
+  nodeId: string;
+  electedAtMs: number;
+}
+
 export interface ClusterInfo {
   clusterName: string;
   clusterAlias: string;
   canonicalDomain: string;
   aliasDomain: string;
   upgrading?: boolean;
+  thisNodeId?: string;
+  nodes?: ClusterNode[];
+  leader?: ClusterLeader | null;
+}
+
+export interface ClusterControlMetrics {
+  leaderCampaignsStarted: number;
+  leaderCampaignsWon: number;
+  leaderResigns: number;
+  schedulingTicks: number;
+  schedulingTickFailures: number;
+  schedulingTickAvgDurationMs: number;
+  assignmentsStarted: number;
+  assignmentsStopped: number;
+  assignmentsStartFailures: number;
+  staleAssignmentsSwept: number;
+  currentUnhealthyReplicas: number;
+}
+
+export interface NodeReplicaAssignment {
+  serviceId: string;
+  deploymentId: string;
+  replicaIndex: number;
+  nodeId: string;
+  port: number;
 }
 
 export async function getClusterInfo(): Promise<ClusterInfo> {
@@ -294,5 +336,44 @@ export async function testSlackWebhook(id: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text();
     throw new Error(body || `Test message failed: ${res.statusText}`);
+  }
+}
+
+export async function getClusterControlMetrics(): Promise<Record<string, ClusterControlMetrics>> {
+  const res = await fetch("/api/cluster/metrics");
+  if (!res.ok) {
+    if (res.status === 503) return {};
+    throw new Error(`Failed to fetch cluster metrics: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function drainNode(host: string, apiPort: number, token?: string): Promise<void> {
+  const url = `http://${host}:${apiPort}/api/cluster/drain`;
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { method: "POST", headers });
+  if (!res.ok) throw new Error(`Failed to drain node: ${res.statusText}`);
+}
+
+export async function restoreNode(host: string, apiPort: number, token?: string): Promise<void> {
+  const url = `http://${host}:${apiPort}/api/cluster/restore`;
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { method: "POST", headers });
+  if (!res.ok) throw new Error(`Failed to restore node: ${res.statusText}`);
+}
+
+export async function startClusterUpgrade(targetVersion: string, token?: string): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch("/api/cluster/upgrade", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ targetVersion })
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to start cluster upgrade: ${res.statusText}`);
   }
 }

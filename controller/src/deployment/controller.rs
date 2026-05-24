@@ -114,6 +114,7 @@ impl DeploymentController {
                 .unwrap_or_else(|_| config.data_dir.clone())
                 .join("secrets"),
             uploads_dir: config.probe_dir().join("data/uploads"),
+            shared_registry: config.cluster_bootstrap.shared_registry.clone(),
         };
         let provider: Arc<dyn DeploymentProvider> = Arc::new(container_provider);
         let supervisor_handle: Arc<dyn ReplicaSupervisor> = Arc::new(JobReplicaSupervisor::new());
@@ -174,6 +175,19 @@ impl DeploymentController {
             notified_ready: HashSet::new(),
             notified_crashed: HashSet::new(),
         }
+    }
+
+    pub fn engine(&self) -> Arc<Engine> {
+        Arc::clone(&self.container_engine)
+    }
+
+    #[allow(dead_code)]
+    pub fn log_sender(&self) -> Option<flume::Sender<LogEntry>> {
+        self.log_sender.clone()
+    }
+
+    pub fn runtime(&self) -> Arc<dyn RuntimeProvider> {
+        Arc::clone(&self.runtime)
     }
 
     pub(crate) async fn run(&mut self) -> Result<ControllerExitReason> {
@@ -1121,6 +1135,28 @@ impl DeploymentController {
 
         let replicas = queued_deployment.deployment.config.deploy.replicas;
         let replica_status = initial_replica_status_for_deployment(&queued_deployment.deployment);
+
+        if self.config.cluster_bootstrap.defers_replica_spawn() {
+            self.logger.emit(
+                "info",
+                &format!(
+                    "deferring {replicas} replicas of `{deployment_id}` to cluster reconciler"
+                ),
+            );
+            for replica_index in 0..replicas {
+                let state = ReplicaState {
+                    replica_index,
+                    status: replica_status.clone(),
+                    healthcheck_failures: 0,
+                    restart_attempts: 0,
+                };
+                let _ = self
+                    .store
+                    .upsert_replica_state(service_id, deployment_id, state)
+                    .await;
+            }
+            return;
+        }
 
         for replica_index in 0..replicas {
             let deploy_output = self
@@ -2098,6 +2134,15 @@ impl DeploymentController {
         replica_index: u32,
         deployment_record: &ServiceDeployment,
     ) {
+        if self.config.cluster_bootstrap.defers_replica_spawn() {
+            self.logger.emit(
+                "info",
+                &format!(
+                    "deferring replica{replica_index} of `{deployment_id}` to cluster reconciler"
+                ),
+            );
+            return;
+        }
         let deploy_output = self
             .container_engine
             .deploy_command(deployment_record, replica_index);

@@ -1,5 +1,6 @@
 mod builder;
 mod cli;
+mod cluster;
 mod config;
 mod deployment;
 mod engine;
@@ -26,13 +27,30 @@ use std::{
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, error::ErrorKind};
-use error::Error;
+use error::{Error, Result};
 use signal::spawn_shutdown_signal_bus;
 
-use crate::{
-    deployment::{ControllerConfig, controller::DeploymentController},
-    supervisor::controller::JobSupervisor,
+use crate::cluster::{
+    ClusterMetrics, ClusterService, EtcdLeaderElector, EtcdNodeRegistry, LeaderElector,
+    NodeRegistry, NodeRole,
+    adapters::{
+        ClusterDnsWriter, EtcdPortAllocator, EtcdTraefikSink, StoreDeploymentLookupBuilder,
+        StoreServiceCatalog,
+    },
+    assignment_store::{AssignmentReconciler, AssignmentStore},
+    engine_executor::{DeploymentLookup, EngineReplicaExecutorBuilder},
+    etcd_assignment_store::EtcdAssignmentStore,
+    leader_loop::{LeaderLoop, PlanObserver},
+    node_id,
+    scheduler::DefaultScheduler,
+    service::node_info_from,
 };
+use crate::deployment::{
+    ControllerConfig,
+    controller::DeploymentController,
+    types::{ClusterBootstrapBuilder, ClusterBootstrapMode, ClusterPeer},
+};
+use crate::supervisor::controller::JobSupervisor;
 
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
 const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
@@ -325,6 +343,41 @@ struct StartArgs {
     disable_etcd_cert: bool,
     #[arg(long = "project-dir", help = "Path to the maestro project directory")]
     project_dir: PathBuf,
+    #[arg(
+        long = "node-role",
+        help = "Role for this node: controller, worker, or both (default: both)"
+    )]
+    node_role: Option<NodeRole>,
+    #[arg(
+        long = "cluster-bootstrap",
+        help = "Cluster bootstrap mode: single or new-cluster. Auto-inferred from local data dir + peer probe if omitted (join-existing is always auto-detected)."
+    )]
+    cluster_bootstrap: Option<String>,
+    #[arg(
+        long = "cluster-peer",
+        help = "Peer host (or host:port to override --etcd-peer-port). Can be repeated."
+    )]
+    cluster_peers: Vec<String>,
+    #[arg(
+        long = "etcd-peer-port",
+        help = "Peer port for inter-etcd communication (default 2380; can also be set via cluster.etcd-peer-port in the config file)"
+    )]
+    etcd_peer_port: Option<u16>,
+    #[arg(
+        long = "advertise-host",
+        help = "Hostname/IP other nodes use to reach this node's etcd peer port. Auto-detected from local NICs if --cluster-peer entries are IPs."
+    )]
+    advertise_host: Option<String>,
+    #[arg(
+        long = "enable-cluster-scheduling",
+        help = "Enable cluster-aware replica scheduling (workloads spread across nodes)"
+    )]
+    enable_cluster_scheduling: bool,
+    #[arg(
+        long = "shared-registry",
+        help = "Container registry shared by all nodes (e.g. registry.internal:5000). Required for multi-node deployments."
+    )]
+    shared_registry: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -373,6 +426,11 @@ struct ProbeArgs {
 enum UpgradeTarget {
     /// Upgrade the host operating system
     System,
+    /// Rolling-upgrade the entire cluster (workers first, leader last)
+    Cluster {
+        #[arg(long = "version", help = "Target version (defaults to 'latest')")]
+        version: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -437,6 +495,13 @@ async fn run() -> crate::error::Result<bool> {
                     force,
                     disable_etcd_cert,
                     project_dir,
+                    node_role,
+                    cluster_bootstrap,
+                    cluster_peers,
+                    etcd_peer_port,
+                    advertise_host,
+                    enable_cluster_scheduling,
+                    shared_registry,
                 }),
         }) => {
             let explicit_datadog_site = dd_site
@@ -456,6 +521,13 @@ async fn run() -> crate::error::Result<bool> {
                     cluster: config::ClusterConfig {
                         name: cluster_name
                             .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
+                        peers: Vec::new(),
+                        bootstrap: None,
+                        etcd_peer_port: None,
+                        advertise_host: None,
+                        scheduling_enabled: false,
+                        shared_registry: None,
+                        node_role: None,
                     },
                     ingress: config::IngressConfig {
                         port: None,
@@ -688,9 +760,135 @@ async fn run() -> crate::error::Result<bool> {
                 }
             }
 
+            let node_id = node_id::load_or_create(&data_dir).map_err(|err| {
+                Error::internal(format!("failed to load or create node-id: {err}"))
+            })?;
+
+            // CLI flags override config-file values; config provides defaults.
+            // Fields here all live under `cluster.*` in the config (so the
+            // operator can set them via --config aws-secret://...).
+            let effective_peer_specs: Vec<String> = if cluster_peers.is_empty() {
+                cfg.cluster.peers.clone()
+            } else {
+                cluster_peers.clone()
+            };
+            let effective_cluster_bootstrap = cluster_bootstrap
+                .clone()
+                .or_else(|| cfg.cluster.bootstrap.clone());
+            let effective_etcd_peer_port = etcd_peer_port
+                .or(cfg.cluster.etcd_peer_port)
+                .unwrap_or(2380);
+            let effective_advertise_host = advertise_host
+                .clone()
+                .or_else(|| cfg.cluster.advertise_host.clone());
+            let effective_scheduling_enabled =
+                enable_cluster_scheduling || cfg.cluster.scheduling_enabled;
+            let effective_shared_registry = shared_registry
+                .clone()
+                .or_else(|| cfg.cluster.shared_registry.clone());
+            let effective_node_role = match node_role {
+                Some(role) => role,
+                None => match cfg.cluster.node_role.as_deref() {
+                    Some(raw) => raw.parse::<NodeRole>().map_err(|err| {
+                        Error::invalid_input(format!("invalid cluster.node-role in config: {err}"))
+                    })?,
+                    None => NodeRole::default(),
+                },
+            };
+            logger.emit(
+                "info",
+                &format!("node-id {node_id} role {effective_node_role}"),
+            );
+
+            let bootstrap_peers: Vec<ClusterPeer> = effective_peer_specs
+                .iter()
+                .map(|spec| {
+                    ClusterPeer::parse(spec).ok_or_else(|| {
+                        Error::invalid_input(format!(
+                            "invalid --cluster-peer `{spec}` (expected host or host:port)"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let resolved_advertise_host =
+                resolve_advertise_host(&bootstrap_peers, effective_advertise_host.as_deref())?;
+            if let Some(host) = resolved_advertise_host.as_deref() {
+                logger.emit("info", &format!("advertise-host resolved to {host}"));
+            }
+            let bootstrap_mode = match effective_cluster_bootstrap.as_deref() {
+                Some("single") => ClusterBootstrapMode::Single,
+                Some("new-cluster") => ClusterBootstrapMode::NewCluster,
+                Some(other) => {
+                    return Err(Error::invalid_input(format!(
+                        "invalid cluster bootstrap value `{other}` (expected single or new-cluster; join-existing is auto-inferred)"
+                    )));
+                }
+                None => {
+                    let action = determine_bootstrap_action(
+                        &data_dir,
+                        &bootstrap_peers,
+                        resolved_advertise_host.as_deref(),
+                        effective_etcd_peer_port,
+                    )?;
+                    logger.emit("info", &format!("bootstrap action: {action:?}"));
+                    match action {
+                        BootstrapAction::Restart => ClusterBootstrapMode::JoinExisting,
+                        BootstrapAction::SingleNode => ClusterBootstrapMode::Single,
+                        BootstrapAction::BecomePrimary => ClusterBootstrapMode::NewCluster,
+                        BootstrapAction::JoinAsSecondary { primary_address } => {
+                            logger.emit(
+                                "info",
+                                &format!(
+                                    "waiting for bootstrap primary at {primary_address} (timeout: {}s)",
+                                    WAIT_FOR_PRIMARY_TIMEOUT.as_secs()
+                                ),
+                            );
+                            wait_for_primary(&primary_address).await?;
+                            logger.emit(
+                                "info",
+                                &format!("bootstrap primary {primary_address} is up; joining"),
+                            );
+                            ClusterBootstrapMode::JoinExisting
+                        }
+                    }
+                }
+            };
+            let multi_node = bootstrap_mode != ClusterBootstrapMode::Single;
+            if multi_node && bootstrap_peers.is_empty() {
+                return Err(Error::invalid_input(
+                    "multi-node bootstrap requires at least one --cluster-peer",
+                ));
+            }
+            if multi_node && cfg.disable_etcd_cert {
+                eprintln!(
+                    "[maestro]: WARNING: --disable-etcd-cert was set but multi-node clusters \
+                     require etcd mTLS for safety; enabling certs anyway"
+                );
+                cfg.disable_etcd_cert = false;
+            }
+            // Shadow the CLI-derived flag so downstream etcd-scheme + TLS
+            // logic uses the (possibly overridden) effective value.
+            let disable_etcd_cert = cfg.disable_etcd_cert;
+            if multi_node && effective_scheduling_enabled && effective_shared_registry.is_none() {
+                return Err(Error::invalid_input(
+                    "multi-node cluster scheduling requires shared-registry (CLI --shared-registry or cluster.shared-registry in config)",
+                ));
+            }
+            let cluster_bootstrap_config = ClusterBootstrapBuilder::default()
+                .mode(bootstrap_mode)
+                .peers(bootstrap_peers)
+                .etcd_peer_port(effective_etcd_peer_port)
+                .scheduling_enabled(effective_scheduling_enabled)
+                .advertise_host(resolved_advertise_host)
+                .shared_registry(effective_shared_registry)
+                .build()
+                .expect("ClusterBootstrap builder defaults are complete");
+
             let mut deployment_config = ControllerConfig {
                 cluster_alias,
                 cluster_name,
+                node_id,
+                node_role: effective_node_role,
                 data_dir,
                 etcd_port,
                 probe_port: None,
@@ -728,6 +926,7 @@ async fn run() -> crate::error::Result<bool> {
                     .max(1),
                 cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
                 slack_webhook_url: cfg.slack.map(|sl| sl.webhook_url),
+                cluster_bootstrap: cluster_bootstrap_config,
             };
 
             let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
@@ -791,9 +990,90 @@ async fn run() -> crate::error::Result<bool> {
                 )
             };
             let store: Arc<dyn deployment::store::ClusterStore> = Arc::new(
-                deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key, etcd_tls)
-                    .await?,
+                deployment::etcd::EtcdStateStore::new(
+                    &etcd_endpoint,
+                    derived_key,
+                    etcd_tls.clone(),
+                )
+                .await?,
             );
+
+            let cluster_client = {
+                let connect_options =
+                    etcd_tls.map(|tls| etcd_client::ConnectOptions::new().with_tls(tls));
+                let raw = etcd_client::Client::connect([&etcd_endpoint], connect_options)
+                    .await
+                    .map_err(|err| {
+                        Error::external(format!("failed to connect to etcd for cluster: {err}"))
+                    })?;
+                Arc::new(tokio::sync::Mutex::new(raw))
+            };
+            let hostname = std::env::var("HOSTNAME")
+                .or_else(|_| std::env::var("MAESTRO_HOSTNAME"))
+                .unwrap_or_else(|_| "maestro-node".to_string());
+            let node_info = node_info_from(
+                deployment_config.node_id.clone(),
+                hostname,
+                deployment_config.node_role,
+                probe_host_port,
+                None,
+                env!("CARGO_PKG_VERSION").to_string(),
+                utils::time::current_time_millis().unwrap_or(0),
+            );
+            let cluster_registry: Arc<dyn NodeRegistry> = Arc::new(EtcdNodeRegistry::new(
+                cluster_client.clone(),
+                deployment_config.node_id.clone(),
+            ));
+            let cluster_elector_inner = Arc::new(EtcdLeaderElector::new(
+                cluster_client.clone(),
+                deployment_config.node_id.clone(),
+            ));
+            cluster_elector_inner.spawn_observer().await;
+            let cluster_elector: Arc<dyn LeaderElector> = cluster_elector_inner.clone();
+            let cluster_service =
+                ClusterService::new(node_info, cluster_registry.clone(), cluster_elector.clone());
+            let cluster_lifecycle_handles = cluster_service.clone().spawn(signal_tx.subscribe());
+
+            let cluster_metrics = ClusterMetrics::new();
+            let metrics_publisher_handle = cluster_metrics.spawn_publisher(
+                cluster_client.clone(),
+                deployment_config.node_id.clone(),
+                std::time::Duration::from_secs(15),
+                signal_tx.subscribe(),
+            );
+            background_handles.push(metrics_publisher_handle);
+            let disk_publisher_handle = cluster::disk_snapshot::spawn_publisher(
+                cluster_client.clone(),
+                deployment_config.node_id.clone(),
+                std::time::Duration::from_secs(30),
+                signal_tx.subscribe(),
+            );
+            background_handles.push(disk_publisher_handle);
+            let mut leader_loop_handle: Option<tokio::task::JoinHandle<()>> = None;
+            let mut reconciler_handle: Option<tokio::task::JoinHandle<()>> = None;
+            if deployment_config.cluster_bootstrap.scheduling_enabled {
+                let dns_writer = Arc::new(ClusterDnsWriter::new(
+                    system_info.dns_manager.clone(),
+                    format!("{}.maestro.internal", deployment_config.cluster_name),
+                ));
+                let leader_loop = LeaderLoop {
+                    catalog: Arc::new(StoreServiceCatalog::new(store.clone())),
+                    registry: cluster_registry.clone(),
+                    assignments: Arc::new(EtcdAssignmentStore::new(cluster_client.clone())),
+                    port_allocator: Arc::new(EtcdPortAllocator::new(cluster_client.clone())),
+                    scheduler: Arc::new(DefaultScheduler::new()),
+                    traefik_sink: Arc::new(EtcdTraefikSink::new(cluster_client.clone())),
+                    elector: cluster_elector.clone(),
+                    tick_interval: std::time::Duration::from_secs(5),
+                    default_entry_point: "web".to_string(),
+                    on_plan_applied: Some(dns_writer as Arc<dyn PlanObserver>),
+                    metrics: Some(cluster_metrics.clone()),
+                };
+                leader_loop_handle = Some(tokio::spawn(async move {
+                    leader_loop.run_while_leader().await;
+                }));
+            }
+
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
             let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
             let sink_worker = logs::SinkWorker::new(
@@ -825,9 +1105,17 @@ async fn run() -> crate::error::Result<bool> {
             );
             let metrics_handle = tokio::spawn(metrics_collector.run());
 
+            let scheduling_enabled = deployment_config.cluster_bootstrap.scheduling_enabled;
+            let lookup_params = ReconcilerLookupParams {
+                node_id: deployment_config.node_id.clone(),
+                cluster_name: deployment_config.cluster_name.clone(),
+                tags: deployment_config.tags.clone(),
+                runtime_cli: runtime.cli_name().to_string(),
+            };
+
             let mut controller = DeploymentController::new(
                 deployment_config,
-                store,
+                store.clone(),
                 supervisor,
                 deployment_signal_rx,
                 Some(log_sender.clone()),
@@ -835,6 +1123,67 @@ async fn run() -> crate::error::Result<bool> {
                 Some(system_info.dns_manager),
                 system_info.nameserver_ip,
             );
+
+            if scheduling_enabled {
+                let assignment_store_concrete =
+                    Arc::new(EtcdAssignmentStore::new(cluster_client.clone()));
+                let watch_rx = assignment_store_concrete
+                    .watch_for_node(&lookup_params.node_id)
+                    .await;
+                let assignment_store: Arc<dyn AssignmentStore> = assignment_store_concrete;
+                let engine = controller.engine();
+                let lookup = Arc::new(
+                    StoreDeploymentLookupBuilder::default()
+                        .store(store.clone())
+                        .engine(engine.clone())
+                        .runtime_cli(lookup_params.runtime_cli)
+                        .cluster_name(lookup_params.cluster_name)
+                        .log_sender(Some(log_sender.clone()))
+                        .config_tags(lookup_params.tags)
+                        .build()
+                        .expect("StoreDeploymentLookup required fields satisfied"),
+                ) as Arc<dyn DeploymentLookup>;
+                let executor = Arc::new(
+                    EngineReplicaExecutorBuilder::default()
+                        .engine(engine)
+                        .lookup(lookup)
+                        .store(Some(store.clone()))
+                        .runtime(Some(controller.runtime()))
+                        .build()
+                        .expect("EngineReplicaExecutor required fields satisfied"),
+                );
+                let reconciler = AssignmentReconciler {
+                    node_id: lookup_params.node_id,
+                    store: assignment_store,
+                    executor,
+                    poll_interval: std::time::Duration::from_secs(5),
+                };
+                let mut reconciler_shutdown = signal_tx.subscribe();
+                let mut watch_rx = watch_rx;
+                reconciler_handle = Some(tokio::spawn(async move {
+                    let mut last_seen = Vec::new();
+                    let mut ticker = tokio::time::interval(reconciler.poll_interval);
+                    loop {
+                        tokio::select! {
+                            _ = reconciler_shutdown.recv() => break,
+                            _ = ticker.tick() => {
+                                if let Err(err) = reconciler.reconcile_once(&mut last_seen).await {
+                                    eprintln!("[maestro]: reconciler error: {err}");
+                                }
+                            }
+                            Some(_) = watch_rx.recv() => {
+                                if let Err(err) = reconciler.reconcile_once(&mut last_seen).await {
+                                    eprintln!("[maestro]: reconciler (watch) error: {err}");
+                                }
+                            }
+                        }
+                    }
+                }));
+                eprintln!(
+                    "[maestro]: reconciler spawned (engine-backed) — replica lifecycle owned by cluster scheduler"
+                );
+            }
+
             let deployment_shutdown_tx = signal_tx.clone();
 
             let result = async move {
@@ -846,6 +1195,13 @@ async fn run() -> crate::error::Result<bool> {
 
             watcher_handle.abort();
             metrics_handle.abort();
+            cluster_lifecycle_handles.abort();
+            if let Some(handle) = leader_loop_handle.take() {
+                handle.abort();
+            }
+            if let Some(handle) = reconciler_handle.take() {
+                handle.abort();
+            }
             for handle in &background_handles {
                 handle.abort();
             }
@@ -929,12 +1285,16 @@ async fn run() -> crate::error::Result<bool> {
                 ClusterCommand::Restart { yes } => {
                     cli::restart::run_restart(&host, yes).await.map(|()| false)
                 }
-                ClusterCommand::Upgrade {
-                    target: UpgradeTarget::System,
-                    yes,
-                } => cli::upgrade::run_upgrade_system(&host, yes)
-                    .await
-                    .map(|()| false),
+                ClusterCommand::Upgrade { target, yes } => match target {
+                    UpgradeTarget::System => cli::upgrade::run_upgrade_system(&host, yes)
+                        .await
+                        .map(|()| false),
+                    UpgradeTarget::Cluster { version } => {
+                        cli::upgrade::run_upgrade_cluster(&host, yes, version)
+                            .await
+                            .map(|()| false)
+                    }
+                },
             }
         }
         Some(CliCommand::Logs(args)) => {
@@ -1205,6 +1565,136 @@ fn parse_tags(tags: Vec<String>) -> crate::error::Result<Vec<String>> {
     Ok(tags)
 }
 
+/// Bootstrap coordination plan. The lowest-sorted peer is designated as the
+/// bootstrap primary — its only job is to come up first so secondaries have
+/// something to wait for. Once etcd is up the "primary" designation is
+/// meaningless: etcd's Raft elects its own leader, maestro's [`LeaderElector`]
+/// elects the scheduler leader, both independently of bootstrap order.
+#[derive(Debug)]
+enum BootstrapAction {
+    /// Local etcd data dir already has cluster state. Etcd recovers from
+    /// disk; the `--initial-cluster-state` flag is informational at that point.
+    Restart,
+    /// No peers configured — standalone node.
+    SingleNode,
+    /// We're the lowest-sorted peer. Start the cluster with the full
+    /// declared member list; secondaries will join as they come up.
+    BecomePrimary,
+    /// We're not the primary. Wait for the primary's etcd peer port to be
+    /// reachable, then start ourselves with `--initial-cluster-state=existing`.
+    /// As long as we were in the primary's original `--initial-cluster`
+    /// declaration, etcd accepts us without a separate `member add`.
+    JoinAsSecondary { primary_address: String },
+}
+
+const WAIT_FOR_PRIMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+const WAIT_FOR_PRIMARY_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+const WAIT_FOR_PRIMARY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Resolve the advertise_host: explicit operator value wins; otherwise
+/// enumerate local NIC IPs and match against peer-list entries. Returns
+/// `None` only when there are no peers (single-node).
+fn resolve_advertise_host(peers: &[ClusterPeer], explicit: Option<&str>) -> Result<Option<String>> {
+    if peers.is_empty() {
+        return Ok(None);
+    }
+    if let Some(host) = explicit {
+        return Ok(Some(host.to_string()));
+    }
+    detect_advertise_host(peers).map(Some).ok_or_else(|| {
+        Error::invalid_input(
+            "could not auto-detect advertise_host. Set --advertise-host \
+                 (or cluster.advertise-host in config), or list this node's IP \
+                 in --cluster-peer so auto-detection can match against a local NIC.",
+        )
+    })
+}
+
+fn determine_bootstrap_action(
+    data_dir: &Path,
+    peers: &[ClusterPeer],
+    advertise_host: Option<&str>,
+    default_peer_port: u16,
+) -> Result<BootstrapAction> {
+    let etcd_data_dir = data_dir.join("system/etcd/data");
+    let has_etcd_state = std::fs::read_dir(&etcd_data_dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if has_etcd_state {
+        return Ok(BootstrapAction::Restart);
+    }
+    if peers.is_empty() {
+        return Ok(BootstrapAction::SingleNode);
+    }
+    let self_host = advertise_host.ok_or_else(|| {
+        Error::invalid_input(
+            "internal: advertise_host must be resolved before determine_bootstrap_action",
+        )
+    })?;
+    let mut sorted = peers.to_vec();
+    sorted.sort_by(|left, right| left.host.cmp(&right.host));
+    let primary = &sorted[0];
+    if self_host == primary.host {
+        Ok(BootstrapAction::BecomePrimary)
+    } else {
+        let primary_address = format!(
+            "{}:{}",
+            primary.host,
+            primary.effective_peer_port(default_peer_port)
+        );
+        Ok(BootstrapAction::JoinAsSecondary { primary_address })
+    }
+}
+
+/// Enumerate local NIC IPs and find the one that appears in the peer list.
+/// Returns the matching peer host string (so the comparison stays
+/// string-based downstream — no normalization issues).
+fn detect_advertise_host(peers: &[ClusterPeer]) -> Option<String> {
+    use std::net::IpAddr;
+    let local_ips: Vec<IpAddr> = if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .map(|iface| iface.ip())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .collect();
+    for peer in peers {
+        let peer_ip: IpAddr = match peer.host.parse() {
+            Ok(ip) => ip,
+            Err(_) => continue, // hostname — can't reliably match by IP enumeration
+        };
+        if local_ips.contains(&peer_ip) {
+            return Some(peer.host.clone());
+        }
+    }
+    None
+}
+
+async fn wait_for_primary(address: &str) -> Result<()> {
+    use tokio::net::TcpStream;
+    let deadline = tokio::time::Instant::now() + WAIT_FOR_PRIMARY_TIMEOUT;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::external(format!(
+                "primary {address} did not become reachable within {}s",
+                WAIT_FOR_PRIMARY_TIMEOUT.as_secs()
+            )));
+        }
+        let connect =
+            tokio::time::timeout(WAIT_FOR_PRIMARY_PROBE_TIMEOUT, TcpStream::connect(address)).await;
+        if matches!(connect, Ok(Ok(_))) {
+            return Ok(());
+        }
+        tokio::time::sleep(WAIT_FOR_PRIMARY_PROBE_INTERVAL).await;
+    }
+}
+
+struct ReconcilerLookupParams {
+    node_id: String,
+    cluster_name: String,
+    tags: Vec<String>,
+    runtime_cli: String,
+}
+
 fn restart_self() -> ! {
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().expect("failed to get current executable path");
@@ -1213,4 +1703,130 @@ fn restart_self() -> ! {
     let err = std::process::Command::new(&exe).args(&args).exec();
     eprintln!("[maestro]: exec failed: {err}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod bootstrap_inference_tests {
+    use super::*;
+    use crate::utils::nanoid::unique_id;
+
+    fn tmp_data_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("maestro-bootstrap-{label}-{}", unique_id(8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn peer(host: &str) -> ClusterPeer {
+        ClusterPeer {
+            host: host.to_string(),
+            peer_port: None,
+        }
+    }
+
+    #[test]
+    fn empty_data_dir_with_no_peers_is_single() {
+        let dir = tmp_data_dir("single");
+        assert!(matches!(
+            determine_bootstrap_action(&dir, &[], None, 2380).unwrap(),
+            BootstrapAction::SingleNode
+        ));
+    }
+
+    #[test]
+    fn populated_data_dir_is_restart() {
+        let dir = tmp_data_dir("restart");
+        let etcd_data = dir.join("system/etcd/data");
+        std::fs::create_dir_all(etcd_data.join("member/wal")).unwrap();
+        std::fs::write(etcd_data.join("member/wal/0.wal"), b"fake wal").unwrap();
+        assert!(matches!(
+            determine_bootstrap_action(&dir, &[peer("10.0.0.1")], None, 2380).unwrap(),
+            BootstrapAction::Restart
+        ));
+    }
+
+    #[test]
+    fn lowest_sorted_peer_becomes_primary() {
+        let dir = tmp_data_dir("primary");
+        let peers = vec![peer("10.0.0.3"), peer("10.0.0.1"), peer("10.0.0.2")];
+        let action = determine_bootstrap_action(&dir, &peers, Some("10.0.0.1"), 2380).unwrap();
+        assert!(matches!(action, BootstrapAction::BecomePrimary));
+    }
+
+    #[test]
+    fn non_primary_peer_joins_as_secondary() {
+        let dir = tmp_data_dir("secondary");
+        let peers = vec![peer("10.0.0.3"), peer("10.0.0.1"), peer("10.0.0.2")];
+        let action = determine_bootstrap_action(&dir, &peers, Some("10.0.0.2"), 2380).unwrap();
+        match action {
+            BootstrapAction::JoinAsSecondary { primary_address } => {
+                assert_eq!(primary_address, "10.0.0.1:2380");
+            }
+            other => panic!("expected JoinAsSecondary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn secondary_respects_per_peer_port_override() {
+        let dir = tmp_data_dir("port");
+        let peers = vec![
+            ClusterPeer {
+                host: "10.0.0.1".to_string(),
+                peer_port: Some(2390),
+            },
+            peer("10.0.0.2"),
+        ];
+        let action = determine_bootstrap_action(&dir, &peers, Some("10.0.0.2"), 2380).unwrap();
+        match action {
+            BootstrapAction::JoinAsSecondary { primary_address } => {
+                assert_eq!(primary_address, "10.0.0.1:2390");
+            }
+            other => panic!("expected JoinAsSecondary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peers_without_advertise_host_and_no_matching_local_ip_is_rejected() {
+        // Pick two unroutable IPs that won't match any NIC on this machine.
+        let dir = tmp_data_dir("noadvertise");
+        let peers = vec![peer("169.254.99.10"), peer("169.254.99.11")];
+        let result = determine_bootstrap_action(&dir, &peers, None, 2380);
+        assert!(
+            result.is_err(),
+            "should refuse when no advertise_host and no NIC matches the peer list"
+        );
+    }
+
+    #[test]
+    fn resolve_advertise_host_finds_matching_local_nic() {
+        let local_ips: Vec<String> = if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|iface| iface.ip())
+            .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+            .map(|ip| ip.to_string())
+            .collect();
+        if local_ips.is_empty() {
+            eprintln!("skipping: no non-loopback NIC on this machine");
+            return;
+        }
+        let chosen = local_ips[0].clone();
+        let peers = vec![peer("169.254.99.10"), peer(&chosen)];
+        let resolved = resolve_advertise_host(&peers, None)
+            .unwrap()
+            .expect("should find a local NIC matching a peer");
+        assert_eq!(resolved, chosen);
+    }
+
+    #[test]
+    fn resolve_advertise_host_passes_through_explicit() {
+        let peers = vec![peer("10.0.0.1"), peer("10.0.0.2")];
+        let resolved = resolve_advertise_host(&peers, Some("10.0.0.2")).unwrap();
+        assert_eq!(resolved.as_deref(), Some("10.0.0.2"));
+    }
+
+    #[test]
+    fn resolve_advertise_host_returns_none_for_single_node() {
+        let resolved = resolve_advertise_host(&[], None).unwrap();
+        assert!(resolved.is_none());
+    }
 }

@@ -1,13 +1,14 @@
-import { createFileRoute } from "@tanstack/solid-router";
+import { createFileRoute, Link } from "@tanstack/solid-router";
 import { useQuery } from "@tanstack/solid-query";
 import { Show } from "solid-js";
-import { Monitor } from "lucide-solid";
+import { Crown, Monitor, Network } from "lucide-solid";
 import { clusterInfoQuery } from "../lib/queries";
 import { ClientOnly } from "../components/ClientOnly";
 import { SlackWebhooks } from "../components/SlackWebhooks";
 import { NodeMetricsSection } from "../components/home/NodeMetricsSection";
 import { DisksSection } from "../components/home/DisksSection";
 import { ServicesGrid } from "../components/home/ServicesGrid";
+import { ClusterHealthBanner } from "../components/cluster/ClusterHealthBanner";
 
 export const Route = createFileRoute("/")({
   component: HomePage
@@ -19,6 +20,9 @@ function HomePage() {
       <HomeHeader />
       <main class="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <ClientOnly fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}>
+          <div class="mb-6">
+            <ClusterHealthBanner />
+          </div>
           <div class="mb-10 space-y-6">
             <NodeMetricsSection />
             <DisksSection />
@@ -46,6 +50,27 @@ function HomeHeader() {
           {(info) => (
             <div class="flex flex-wrap items-center gap-x-3 sm:gap-x-4 gap-y-0.5 text-xs font-mono min-w-0 overflow-hidden">
               <span class="text-gray-400 truncate">{info().clusterName}</span>
+              <Show when={info().nodes && info().nodes!.length > 0}>
+                <Link
+                  to="/cluster"
+                  class="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 no-underline whitespace-nowrap"
+                  title="Cluster nodes"
+                >
+                  <Network class="size-3" />
+                  {info().nodes!.length} node{info().nodes!.length === 1 ? "" : "s"}
+                </Link>
+              </Show>
+              <Show when={info().leader}>
+                {(leader) => (
+                  <span
+                    class="inline-flex items-center gap-1 text-amber-700 whitespace-nowrap"
+                    title="Scheduling leader"
+                  >
+                    <Crown class="size-3" />
+                    {leader().nodeId}
+                  </span>
+                )}
+              </Show>
               <a
                 href={`http://${info().canonicalDomain}`}
                 title="Canonical domain"

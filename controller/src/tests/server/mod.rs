@@ -31,6 +31,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             secrets: None,
             volumes: vec![],
             healthcheck_interval: 60,
+            node_affinity: None,
         },
         ingress: None,
     }
@@ -56,6 +57,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             secrets: None,
             volumes: vec![],
             healthcheck_interval: 60,
+            node_affinity: None,
         },
         ingress: None,
     }

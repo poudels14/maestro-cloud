@@ -1,3 +1,4 @@
+use crate::cluster::NodeRole;
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::ContainerDeploymentProvider;
@@ -51,6 +52,7 @@ fn deployment_with_source(
                 secrets: None,
                 volumes: vec![],
                 healthcheck_interval: 60,
+                node_affinity: None,
             },
             ingress: None,
         },
@@ -79,6 +81,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
         uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+        shared_registry: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -120,6 +123,7 @@ fn command_planner_disables_pull_for_prepared_images() {
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
         uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+        shared_registry: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -159,6 +163,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
         uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+        shared_registry: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
@@ -216,13 +221,16 @@ fn secrets_mount_content_quotes_values() {
         dns_server: None,
         secrets_dir: std::env::temp_dir().join("maestro-test-secrets-quote"),
         uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+        shared_registry: None,
     };
     let deploy = planner
         .deploy(&deployment, 0)
         .expect("should produce deploy output");
     let content = deploy
-        .secrets_mount
-        .expect("should have secrets mount")
+        .secrets_mounts
+        .into_iter()
+        .next()
+        .expect("should have at least one secrets mount")
         .content;
 
     let parsed: HashMap<String, String> = dotenvy::from_read_iter(content.as_bytes())
@@ -325,6 +333,7 @@ impl InMemoryStore {
                 secrets: None,
                 volumes: vec![],
                 healthcheck_interval: 60,
+                node_affinity: None,
             },
             ingress: None,
         };
@@ -374,6 +383,7 @@ impl InMemoryStore {
                 secrets: None,
                 volumes: vec![],
                 healthcheck_interval: 60,
+                node_affinity: None,
             },
             ingress: None,
         };
@@ -527,6 +537,9 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         etcd_port: 0,
         cluster_alias: "test".to_string(),
         cluster_name: "test".to_string(),
+        node_id: "test-node".to_string(),
+        node_role: NodeRole::Both,
+        cluster_bootstrap: Default::default(),
         probe_port: None,
         admin_port: None,
         ingress_ports: vec![],

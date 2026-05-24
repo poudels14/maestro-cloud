@@ -16,12 +16,14 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
+use crate::cluster::NodeRole;
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
-    CancelDeploymentOutcome, ControllerConfig, Deployment, DeploymentStatus, ForceQueueOutcome,
-    IngressConfig, QueuedDeployment, ReplicaState, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, ServiceInfo,
+    CancelDeploymentOutcome, ClusterBootstrap, ClusterBootstrapBuilder, ClusterBootstrapMode,
+    ControllerConfig, Deployment, DeploymentStatus, ForceQueueOutcome, IngressConfig,
+    QueuedDeployment, ReplicaState, ServiceConfig, ServiceDeployConfig, ServiceDeployment,
+    ServiceInfo,
 };
 use crate::engine::in_memory::InMemoryProvider;
 use crate::engine::provider::DeploymentProvider;
@@ -649,6 +651,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_bootstrap(ClusterBootstrap::default())
+    }
+
+    fn with_bootstrap(bootstrap: ClusterBootstrap) -> Self {
         let temp = std::env::temp_dir().join(format!(
             "maestro-lifecycle-{}",
             crate::utils::nanoid::unique_id(8)
@@ -670,6 +676,9 @@ impl Harness {
                 etcd_port: 0,
                 cluster_alias: "test".to_string(),
                 cluster_name: "test-cluster".to_string(),
+                node_id: "test-node".to_string(),
+                node_role: NodeRole::Both,
+                cluster_bootstrap: bootstrap,
                 probe_port: None,
                 admin_port: None,
                 ingress_ports: vec![],
@@ -826,6 +835,7 @@ fn docker_service(id: &str, replicas: u32) -> ServiceConfig {
             env: Default::default(),
             secrets: None,
             volumes: vec![],
+            node_affinity: None,
         },
         ingress: None,
     }
@@ -844,6 +854,55 @@ fn docker_service_with_ingress(id: &str, replicas: u32, host: &str) -> ServiceCo
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cluster_managed_mode_skips_local_replica_spawn() {
+    let bootstrap = ClusterBootstrapBuilder::default()
+        .mode(ClusterBootstrapMode::NewCluster)
+        .scheduling_enabled(true)
+        .build()
+        .expect("bootstrap defaults");
+    let mut harness = Harness::with_bootstrap(bootstrap);
+    let deployment = harness
+        .store
+        .queue_new_deployment(docker_service("svc-cluster", 2));
+
+    let built = harness
+        .run_until(Duration::from_secs(2), |harness_ref| {
+            harness_ref
+                .provider
+                .built_image_tag(&deployment.id)
+                .is_some()
+        })
+        .await;
+    assert!(built, "build did not complete in cluster mode");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        harness.supervisor.running_count(),
+        0,
+        "cluster mode should defer replica spawn to the reconciler"
+    );
+}
+
+#[tokio::test]
+async fn single_node_mode_still_spawns_replicas_locally() {
+    let mut harness = Harness::new();
+    let deployment = harness
+        .store
+        .queue_new_deployment(docker_service("svc-single", 1));
+    let started = harness
+        .run_until(Duration::from_secs(2), |harness_ref| {
+            harness_ref.supervisor.running_count() > 0
+        })
+        .await;
+    assert!(
+        started,
+        "single-node mode must spawn replicas locally; running_count={}",
+        harness.supervisor.running_count()
+    );
+    let _ = deployment;
+}
 
 #[tokio::test]
 async fn happy_path_queued_to_ready_for_docker_service() {

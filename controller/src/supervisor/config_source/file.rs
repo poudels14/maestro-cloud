@@ -50,7 +50,7 @@ impl FileServiceConfigSource {
                     max_restarts: self.max_restarts,
                     shutdown_grace_period_ms: self.shutdown_grace_period_ms,
                     container: None,
-                    secrets_mount: None,
+                    secrets_mounts: Vec::new(),
                     log_config: None,
                 }
             }

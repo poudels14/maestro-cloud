@@ -24,6 +24,7 @@
 - Dont use early return if it's possible to use if/else statements instead.
 - Also, prefer to use `if(condition) {...}` over `if(!condition) return; ...`. Only use early return if it's absolutely necessary.
 - In Rust specifically, avoid guard-clause early returns in helper functions unless they are absolutely required for correctness.
+- Don't use fully-qualified paths like `crate::foo::bar::Baz` or `super::quux::Thing` inline in code — add a `use` statement at the top of the file and reference the short name (`Baz`, `Thing`). The only exception is when two names from different modules would collide and disambiguation is genuinely needed.
 
 # Typescript coding style
 
@@ -50,4 +51,3 @@
 - Always use Tailwind CSS classes.
 - For conditional styling, use clsx. Instead of `clsx(collapsed ? "..." :"...")`, you should always set conditional classes like this: `clsx("...", { "...": collapsed, "...": !collapsed })`.
 - You should never use variables inside className attribute using template literals. Always use clsx or cn to set conditional classes.
-

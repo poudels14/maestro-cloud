@@ -189,7 +189,7 @@ impl DeploymentProvider for InMemoryProvider {
     fn deploy(&self, deployment: &ServiceDeployment, _replica_index: u32) -> Option<DeployOutput> {
         Some(DeployOutput {
             command: JobCommand::Shell(format!("inmem-noop:{}", deployment.id)),
-            secrets_mount: None,
+            secrets_mounts: Vec::new(),
         })
     }
 

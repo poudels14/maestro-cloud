@@ -144,6 +144,20 @@ impl std::str::FromStr for SystemType {
 #[serde(rename_all = "kebab-case")]
 pub struct ClusterConfig {
     pub name: String,
+    #[serde(default)]
+    pub peers: Vec<String>,
+    #[serde(default)]
+    pub bootstrap: Option<String>,
+    #[serde(default)]
+    pub etcd_peer_port: Option<u16>,
+    #[serde(default)]
+    pub advertise_host: Option<String>,
+    #[serde(default)]
+    pub scheduling_enabled: bool,
+    #[serde(default)]
+    pub shared_registry: Option<String>,
+    #[serde(default)]
+    pub node_role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +236,20 @@ pub struct MaskedConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ClusterView {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etcd_peer_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertise_host: Option<String>,
+    #[serde(default)]
+    pub scheduling_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_registry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +321,13 @@ impl StartConfig {
         MaskedConfig {
             cluster: ClusterView {
                 name: self.cluster.name.clone(),
+                peers: self.cluster.peers.clone(),
+                bootstrap: self.cluster.bootstrap.clone(),
+                etcd_peer_port: self.cluster.etcd_peer_port,
+                advertise_host: self.cluster.advertise_host.clone(),
+                scheduling_enabled: self.cluster.scheduling_enabled,
+                shared_registry: self.cluster.shared_registry.clone(),
+                node_role: self.cluster.node_role.clone(),
             },
             ingress: IngressView {
                 ports: self.ingress.resolved_ports(),

@@ -106,7 +106,7 @@ impl Engine {
                 name: spec.container_hostname,
                 runtime_cli: spec.runtime_cli,
             }),
-            secrets_mount: spec.deploy_output.secrets_mount,
+            secrets_mounts: spec.deploy_output.secrets_mounts,
             log_config: spec.log_config,
         };
         Ok(self

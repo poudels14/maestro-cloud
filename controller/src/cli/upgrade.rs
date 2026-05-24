@@ -73,3 +73,45 @@ fn upgrade_system_endpoint(host: &str) -> Result<String> {
     let base = normalize_base_url(host)?;
     Ok(format!("{base}/api/system/upgrade"))
 }
+
+pub async fn run_upgrade_cluster(
+    host: &str,
+    yes: bool,
+    target_version: Option<String>,
+) -> Result<()> {
+    let confirmed = crate::cli::confirm::confirm_action(
+        host,
+        "About to perform a rolling cluster upgrade",
+        &[],
+        yes,
+    )
+    .await?;
+    if !confirmed {
+        println!("[maestro]: aborted");
+        return Ok(());
+    }
+
+    let endpoint = format!("{}/api/cluster/upgrade", normalize_base_url(host)?);
+    let body = serde_json::json!({
+        "targetVersion": target_version.unwrap_or_else(|| "latest".to_string()),
+    });
+    let response = contexts::build_http_client()?
+        .post(&endpoint)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| {
+            Error::external(format!("failed to call cluster upgrade endpoint: {err}"))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::external(format!(
+            "cluster upgrade failed with status {status}: {body}"
+        )));
+    }
+
+    println!("[maestro]: cluster upgrade started");
+    Ok(())
+}

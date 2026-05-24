@@ -155,3 +155,15 @@ pub(crate) struct UpdateSlackWebhookRequest {
     #[serde(default)]
     pub(crate) enabled: Option<bool>,
 }
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskInfo {
+    pub name: String,
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub file_system: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}

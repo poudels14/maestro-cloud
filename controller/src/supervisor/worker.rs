@@ -42,7 +42,7 @@ pub struct SupervisedJobConfig {
 
     pub shutdown_grace_period_ms: u64,
     pub container: Option<ContainerRef>,
-    pub secrets_mount: Option<SecretsMount>,
+    pub secrets_mounts: Vec<SecretsMount>,
     pub log_config: Option<LogConfig>,
 }
 
@@ -437,7 +437,7 @@ impl SupervisedJobRunner {
                 break;
             }
 
-            if let Some(secrets) = &config.secrets_mount {
+            for secrets in &config.secrets_mounts {
                 if let Err(err) = secrets.write() {
                     eprintln!("[maestro]: failed to write secrets for '{name}': {err}");
                 }
@@ -529,7 +529,7 @@ impl SupervisedJobRunner {
             }
         }
 
-        if let Some(secrets) = &config.secrets_mount {
+        for secrets in &config.secrets_mounts {
             secrets.cleanup();
         }
         job.delete().await;

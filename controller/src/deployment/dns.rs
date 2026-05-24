@@ -72,7 +72,16 @@ impl DnsManager {
 
     pub fn write_corefile(dns_dir: &std::path::Path) {
         let corefile_path = dns_dir.join("Corefile");
-        let corefile_content = r#".:5353 {
+        std::fs::write(&corefile_path, COREFILE_TEMPLATE).expect("failed to write Corefile");
+    }
+}
+
+/// Mounted into the CoreDNS container at `/etc/coredns/Corefile`. The
+/// `reload 5s` directive on the `hosts` plugin is load-bearing: the cluster
+/// `DnsManager.flush()` rewrites the hosts file when service A-records change,
+/// and CoreDNS picks those up on the next reload tick. Without this, A-records
+/// stay stale until CoreDNS is restarted and inter-service DNS goes 502.
+const COREFILE_TEMPLATE: &str = r#".:5353 {
     hosts /data/dns/hosts {
         reload 5s
         no_reverse
@@ -83,6 +92,24 @@ impl DnsManager {
     errors
 }
 "#;
-        std::fs::write(&corefile_path, corefile_content).expect("failed to write Corefile");
+
+#[cfg(test)]
+mod corefile_tests {
+    use super::COREFILE_TEMPLATE;
+
+    #[test]
+    fn corefile_keeps_reload_directive() {
+        assert!(
+            COREFILE_TEMPLATE.contains("reload 5s"),
+            "Corefile must include `reload 5s` so DnsManager updates propagate; otherwise A-records go stale and inter-service DNS breaks"
+        );
+    }
+
+    #[test]
+    fn corefile_keeps_hosts_plugin() {
+        assert!(
+            COREFILE_TEMPLATE.contains("hosts /data/dns/hosts"),
+            "CoreDNS must read the hosts file managed by DnsManager"
+        );
     }
 }

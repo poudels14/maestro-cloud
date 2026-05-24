@@ -17,7 +17,7 @@ use crate::supervisor::JobCommand;
 #[derive(Debug)]
 pub struct DeployOutput {
     pub command: JobCommand,
-    pub secrets_mount: Option<SecretsMount>,
+    pub secrets_mounts: Vec<SecretsMount>,
 }
 
 pub struct BuildOutput {
@@ -33,6 +33,10 @@ pub struct ContainerDeploymentProvider {
     pub dns_server: Option<String>,
     pub secrets_dir: std::path::PathBuf,
     pub uploads_dir: std::path::PathBuf,
+    /// Cluster-wide shared registry. Used as a fallback when the service's
+    /// build config doesn't set its own `registry`. Multi-node deployments
+    /// require this so workers can pull images the leader built.
+    pub shared_registry: Option<String>,
 }
 
 impl ContainerDeploymentProvider {
@@ -103,8 +107,12 @@ impl ContainerDeploymentProvider {
             BuilderType::Default
         };
 
-        let (build_tag, depot_pushed) = if use_depot && build_config.registry.is_some() {
-            let registry = build_config.registry.as_ref().unwrap();
+        let effective_registry = build_config
+            .registry
+            .clone()
+            .or_else(|| self.shared_registry.clone());
+        let (build_tag, depot_pushed) = if use_depot && effective_registry.is_some() {
+            let registry = effective_registry.as_ref().unwrap();
             let registry_tag = format!(
                 "{}/{}:{}",
                 registry.trim_end_matches('/'),
@@ -147,7 +155,7 @@ impl ContainerDeploymentProvider {
 
         let final_tag = if depot_pushed {
             build_tag
-        } else if let Some(registry) = &build_config.registry {
+        } else if let Some(registry) = effective_registry.as_ref() {
             let registry_tag = format!(
                 "{}/{}:{}",
                 registry.trim_end_matches('/'),
@@ -254,13 +262,15 @@ impl ContainerDeploymentProvider {
                     extra_flags,
                     image_and_args,
                 }),
-                secrets_mount: secrets_info.map(|(host_path, container_path, content)| {
-                    SecretsMount {
-                        host_path,
-                        container_path,
-                        content,
-                    }
-                }),
+                secrets_mounts: secrets_info
+                    .map(|(host_path, container_path, content)| {
+                        vec![SecretsMount {
+                            host_path,
+                            container_path,
+                            content,
+                        }]
+                    })
+                    .unwrap_or_default(),
             })
         } else {
             None

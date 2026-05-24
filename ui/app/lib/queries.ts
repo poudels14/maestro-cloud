@@ -1,5 +1,6 @@
-import type { ClusterInfo } from "./api";
+import type { ClusterControlMetrics, ClusterInfo } from "./api";
 import {
+  getClusterControlMetrics,
   getClusterInfo,
   getClusterMetrics,
   getContainerMetrics,
@@ -21,6 +22,7 @@ function ssrSafe<T>(realFn: () => Promise<T>, ssrFallback: T): () => Promise<T> 
 
 const queryKeys = {
   cluster: ["cluster"] as const,
+  clusterControlMetrics: ["cluster", "control-metrics"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
   ingress: ["ingress"] as const,
@@ -36,14 +38,25 @@ const queryKeys = {
   slackWebhooks: ["webhooks", "slack"] as const
 };
 
-const clusterInfoQuery = (opts?: { pollWhenUpgrading?: boolean }) => ({
+const clusterInfoQuery = (opts?: { pollWhenUpgrading?: boolean; live?: boolean }) => ({
   queryKey: queryKeys.cluster,
   queryFn: ssrSafe(getClusterInfo, null as ClusterInfo | null) as () => Promise<ClusterInfo>,
-  staleTime: 60_000,
-  refetchInterval: opts?.pollWhenUpgrading
-    ? (query: { state: { data?: ClusterInfo } }) =>
-        query.state.data?.upgrading ? 5_000 : (false as const)
-    : (false as const)
+  staleTime: opts?.live ? 0 : 60_000,
+  refetchInterval: opts?.live
+    ? (10_000 as const)
+    : opts?.pollWhenUpgrading
+      ? (query: { state: { data?: ClusterInfo } }) =>
+          query.state.data?.upgrading ? 5_000 : (false as const)
+      : (false as const)
+});
+
+const clusterControlMetricsQuery = () => ({
+  queryKey: queryKeys.clusterControlMetrics,
+  queryFn: ssrSafe(
+    getClusterControlMetrics,
+    {} as Record<string, ClusterControlMetrics>
+  ) as () => Promise<Record<string, ClusterControlMetrics>>,
+  refetchInterval: 10_000
 });
 
 const servicesQuery = () => ({
@@ -123,6 +136,7 @@ const slackWebhooksQuery = () => ({
 export {
   queryKeys,
   clusterInfoQuery,
+  clusterControlMetricsQuery,
   servicesQuery,
   deploymentsQuery,
   ingressRoutesQuery,

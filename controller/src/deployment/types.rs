@@ -13,6 +13,8 @@ use crate::utils::secrets::SecretProvider;
 pub struct ControllerConfig {
     pub cluster_alias: String,
     pub cluster_name: String,
+    pub node_id: String,
+    pub node_role: crate::cluster::NodeRole,
     pub data_dir: PathBuf,
     pub etcd_port: u16,
     pub probe_port: Option<u16>,
@@ -34,6 +36,189 @@ pub struct ControllerConfig {
     pub cloudflare_tunnel_token: Option<SecretString>,
     pub cloudflare_tunnel_replicas: u32,
     pub slack_webhook_url: Option<SecretString>,
+    pub cluster_bootstrap: ClusterBootstrap,
+}
+
+#[derive(Debug, Clone, derive_builder::Builder)]
+#[builder(pattern = "owned", default)]
+pub struct ClusterBootstrap {
+    pub mode: ClusterBootstrapMode,
+    /// Peer entries in the form `node-id=https://host:peer-port`. Required for
+    /// the initial cluster bootstrap (--initial-cluster) and to find peer URLs
+    /// when joining an existing cluster.
+    pub peers: Vec<ClusterPeer>,
+    /// Port other etcd peers should reach this node on.
+    pub etcd_peer_port: u16,
+    /// Address this node advertises to peers. Defaults to its hostname.
+    pub advertise_host: Option<String>,
+    /// Whether scheduler/leader-loop integration should be active. Single-node
+    /// installs leave this false so the existing single-node path is unchanged.
+    pub scheduling_enabled: bool,
+    /// Shared container registry that all nodes push/pull built images through.
+    /// Required for multi-node deployments where the build node and run node
+    /// differ. Format: `host:port` or `host:port/namespace`.
+    pub shared_registry: Option<String>,
+}
+
+impl ClusterBootstrap {
+    /// When true, the DeploymentController defers replica lifecycle to the
+    /// cluster AssignmentReconciler (which writes per-node assignments into
+    /// etcd) rather than spawning containers itself. Builds + deployment
+    /// status transitions still run; only the engine.start_replica calls are
+    /// skipped.
+    pub fn defers_replica_spawn(&self) -> bool {
+        self.scheduling_enabled
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterBootstrapMode {
+    /// Single-node cluster (one etcd member). Default; preserves legacy behavior.
+    Single,
+    /// Bootstrap a brand-new multi-node etcd cluster from this node + peers.
+    NewCluster,
+    /// Join an existing etcd cluster as a new member.
+    JoinExisting,
+}
+
+impl Default for ClusterBootstrapMode {
+    fn default() -> Self {
+        ClusterBootstrapMode::Single
+    }
+}
+
+impl Default for ClusterBootstrap {
+    fn default() -> Self {
+        Self {
+            mode: ClusterBootstrapMode::Single,
+            peers: Vec::new(),
+            etcd_peer_port: 2380,
+            advertise_host: None,
+            scheduling_enabled: false,
+            shared_registry: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClusterPeer {
+    /// Reachable address of the peer node — used both as the etcd peer URL
+    /// host and (sanitized) as the etcd member name. Two nodes only agree on
+    /// the cluster if they reference each other by the same host string.
+    pub host: String,
+    pub peer_port: Option<u16>,
+}
+
+impl ClusterPeer {
+    /// Accepts `host`, `host:port`, or `http(s)://host:port`. The port falls
+    /// through to `--etcd-peer-port` when omitted.
+    pub fn parse(spec: &str) -> Option<Self> {
+        let trimmed = spec
+            .trim()
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        if trimmed.is_empty() {
+            return None;
+        }
+        match trimmed.split_once(':') {
+            Some((host, port_str)) => {
+                let port = port_str.parse::<u16>().ok()?;
+                Some(Self {
+                    host: host.to_string(),
+                    peer_port: Some(port),
+                })
+            }
+            None => Some(Self {
+                host: trimmed.to_string(),
+                peer_port: None,
+            }),
+        }
+    }
+
+    pub fn effective_peer_port(&self, default: u16) -> u16 {
+        self.peer_port.unwrap_or(default)
+    }
+
+    pub fn peer_url(&self, scheme: &str, default_port: u16) -> String {
+        format!(
+            "{scheme}://{}:{}",
+            self.host,
+            self.effective_peer_port(default_port)
+        )
+    }
+
+    /// Etcd member name derived from the host. Etcd requires alphanumeric +
+    /// hyphen/underscore; we sanitize to that subset so an IP-as-host like
+    /// `10.0.0.1` becomes `10-0-0-1`.
+    pub fn etcd_member_name(&self) -> String {
+        sanitize_member_name(&self.host)
+    }
+}
+
+pub fn sanitize_member_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod cluster_peer_tests {
+    use super::*;
+
+    #[test]
+    fn host_only_uses_default_port() {
+        let peer = ClusterPeer::parse("node-a").unwrap();
+        assert_eq!(peer.host, "node-a");
+        assert_eq!(peer.peer_port, None);
+        assert_eq!(peer.effective_peer_port(2380), 2380);
+        assert_eq!(peer.peer_url("http", 2380), "http://node-a:2380");
+    }
+
+    #[test]
+    fn host_port_overrides_default() {
+        let peer = ClusterPeer::parse("10.0.0.5:2381").unwrap();
+        assert_eq!(peer.host, "10.0.0.5");
+        assert_eq!(peer.peer_port, Some(2381));
+        assert_eq!(peer.effective_peer_port(2380), 2381);
+    }
+
+    #[test]
+    fn http_scheme_is_stripped() {
+        let peer = ClusterPeer::parse("http://host-x:2380").unwrap();
+        assert_eq!(peer.host, "host-x");
+        assert_eq!(peer.peer_port, Some(2380));
+    }
+
+    #[test]
+    fn https_scheme_is_stripped() {
+        let peer = ClusterPeer::parse("https://host-y").unwrap();
+        assert_eq!(peer.host, "host-y");
+    }
+
+    #[test]
+    fn empty_input_is_rejected() {
+        assert!(ClusterPeer::parse("").is_none());
+        assert!(ClusterPeer::parse("   ").is_none());
+    }
+
+    #[test]
+    fn ip_address_is_sanitized_into_member_name() {
+        let peer = ClusterPeer::parse("10.0.0.1").unwrap();
+        assert_eq!(peer.etcd_member_name(), "10-0-0-1");
+    }
+
+    #[test]
+    fn dns_name_keeps_dashes() {
+        let peer = ClusterPeer::parse("node-a-prod").unwrap();
+        assert_eq!(peer.etcd_member_name(), "node-a-prod");
+    }
 }
 
 impl ControllerConfig {
@@ -230,6 +415,42 @@ pub struct ServiceDeployConfig {
     pub secrets: Option<SecretsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeMount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_affinity: Option<NodeAffinity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeAffinity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub labels: std::collections::BTreeMap<String, String>,
+}
+
+impl NodeAffinity {
+    pub fn matches(
+        &self,
+        node_id: &str,
+        node_labels: &std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        if let Some(required_id) = &self.node_id {
+            if required_id != node_id {
+                return false;
+            }
+        }
+        for (key, value) in &self.labels {
+            match node_labels.get(key) {
+                Some(actual) if actual == value => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.node_id.is_some()
+    }
 }
 
 pub const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc};
+use std::{collections::HashSet, io::Read, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -10,7 +10,6 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -30,7 +29,7 @@ use crate::deployment::types::{
 use crate::logs::store::LogOrigin;
 use crate::signal::ShutdownEvent;
 
-mod types;
+pub mod types;
 
 const DEFAULT_LOG_LIMIT: usize = 1000;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
@@ -60,15 +59,7 @@ const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DiskInfo {
-    name: String,
-    mount_point: String,
-    total_bytes: u64,
-    available_bytes: u64,
-    file_system: String,
-}
+pub use self::types::DiskInfo;
 
 #[derive(Clone)]
 struct AppState {
@@ -82,43 +73,65 @@ struct AppState {
     slack: crate::slack::SlackNotifier,
     allow_cli_deployment: bool,
     upload_dir: std::path::PathBuf,
+    cluster_registry: Option<Arc<dyn crate::cluster::NodeRegistry>>,
+    cluster_elector: Option<Arc<dyn crate::cluster::LeaderElector>>,
+    cluster_assignment_store: Option<Arc<dyn crate::cluster::assignment_store::AssignmentStore>>,
+    cluster_metrics: Option<Arc<crate::cluster::ClusterMetrics>>,
+    cluster_etcd_client: Option<Arc<tokio::sync::Mutex<etcd_client::Client>>>,
+    this_node_id: Option<String>,
 }
 
 pub(crate) struct Server {
     state: AppState,
 }
 
+pub(crate) struct ServerOptions {
+    pub store: Arc<dyn ClusterStore>,
+    pub log_store: Option<Arc<crate::logs::LogStore>>,
+    pub jwt_secret_key: Option<String>,
+    pub system_type: Option<String>,
+    pub cluster_name: String,
+    pub cluster_alias: String,
+    pub masked_config: Option<Arc<crate::config::MaskedConfig>>,
+    pub slack: crate::slack::SlackNotifier,
+    pub allow_cli_deployment: bool,
+    pub upload_dir: std::path::PathBuf,
+    pub cluster_registry: Option<Arc<dyn crate::cluster::NodeRegistry>>,
+    pub cluster_elector: Option<Arc<dyn crate::cluster::LeaderElector>>,
+    pub cluster_assignment_store:
+        Option<Arc<dyn crate::cluster::assignment_store::AssignmentStore>>,
+    pub cluster_metrics: Option<Arc<crate::cluster::ClusterMetrics>>,
+    pub cluster_etcd_client: Option<Arc<tokio::sync::Mutex<etcd_client::Client>>>,
+    pub this_node_id: Option<String>,
+}
+
 impl Server {
-    pub(crate) fn new(
-        store: Arc<dyn ClusterStore>,
-        log_store: Option<Arc<crate::logs::LogStore>>,
-        jwt_secret_key: Option<String>,
-        system_type: Option<String>,
-        cluster_name: String,
-        cluster_alias: String,
-        masked_config: Option<Arc<crate::config::MaskedConfig>>,
-        slack: crate::slack::SlackNotifier,
-        allow_cli_deployment: bool,
-        upload_dir: std::path::PathBuf,
-    ) -> Self {
+    pub(crate) fn new(options: ServerOptions) -> Self {
         Self {
             state: AppState {
-                store,
-                log_store,
-                jwt_secret_key,
-                system_type,
-                cluster_name,
-                cluster_alias,
-                masked_config,
-                slack,
-                allow_cli_deployment,
-                upload_dir,
+                store: options.store,
+                log_store: options.log_store,
+                jwt_secret_key: options.jwt_secret_key,
+                system_type: options.system_type,
+                cluster_name: options.cluster_name,
+                cluster_alias: options.cluster_alias,
+                masked_config: options.masked_config,
+                slack: options.slack,
+                allow_cli_deployment: options.allow_cli_deployment,
+                upload_dir: options.upload_dir,
+                cluster_registry: options.cluster_registry,
+                cluster_elector: options.cluster_elector,
+                cluster_assignment_store: options.cluster_assignment_store,
+                cluster_metrics: options.cluster_metrics,
+                cluster_etcd_client: options.cluster_etcd_client,
+                this_node_id: options.this_node_id,
             },
         }
     }
 
     fn app(&self) -> Router {
         let auth = middleware::from_fn_with_state(self.state.clone(), require_jwt);
+        let leader = middleware::from_fn_with_state(self.state.clone(), require_leader);
         let protected = Router::new()
             .route("/api/services/rollout", post(Self::rollout_service))
             .route(
@@ -127,11 +140,24 @@ impl Server {
             )
             .route("/api/system/upgrade", post(Self::upgrade_system))
             .route("/api/system/restart", post(Self::restart_system))
+            .route("/api/cluster/upgrade", post(Self::upgrade_cluster))
+            .route_layer(leader)
             .route_layer(auth);
+        let node_local = Router::new()
+            .route("/api/cluster/drain", post(Self::drain_self))
+            .route("/api/cluster/restore", post(Self::restore_self))
+            .route_layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                require_jwt,
+            ));
 
         let public = Router::new()
             .route("/_healthy", get(Self::healthy))
             .route("/api/cluster", get(Self::get_cluster_info))
+            .route(
+                "/api/cluster/metrics",
+                get(Self::get_cluster_metrics_internal),
+            )
             .route("/api/config", get(Self::get_config))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
@@ -208,7 +234,10 @@ impl Server {
                 get(Self::get_container_metrics),
             );
 
-        public.merge(protected).with_state(self.state.clone())
+        public
+            .merge(protected)
+            .merge(node_local)
+            .with_state(self.state.clone())
     }
 
     pub(crate) async fn serve(
@@ -264,12 +293,23 @@ impl Server {
             .ok()
             .flatten()
             .is_some();
+        let nodes = match &state.cluster_registry {
+            Some(registry) => registry.list_nodes().await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let leader = state
+            .cluster_elector
+            .as_ref()
+            .and_then(|elector| elector.state().leader().cloned());
         Json(serde_json::json!({
             "clusterName": state.cluster_name,
             "clusterAlias": state.cluster_alias,
             "canonicalDomain": canonical_domain,
             "aliasDomain": alias_domain,
             "upgrading": upgrading,
+            "thisNodeId": state.this_node_id,
+            "nodes": nodes,
+            "leader": leader,
         }))
     }
 
@@ -616,6 +656,7 @@ impl Server {
                         env: Default::default(),
                         secrets: None,
                         volumes: vec![],
+                        node_affinity: None,
                     },
                     ingress: None,
                 },
@@ -1516,6 +1557,139 @@ impl Server {
         })))
     }
 
+    async fn get_cluster_metrics_internal(
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        if let Some(client) = state.cluster_etcd_client.as_ref() {
+            let entries = crate::cluster::metrics::read_all_snapshots(client)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let by_node: serde_json::Map<String, serde_json::Value> = entries
+                .into_iter()
+                .map(|(node, snapshot)| {
+                    (
+                        node,
+                        serde_json::to_value(snapshot).unwrap_or(serde_json::Value::Null),
+                    )
+                })
+                .collect();
+            return Ok(Json(serde_json::Value::Object(by_node)));
+        }
+        match &state.cluster_metrics {
+            Some(metrics) => Ok(Json(
+                serde_json::to_value(metrics.snapshot())
+                    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?,
+            )),
+            None => Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cluster metrics not initialized (single-node mode)".to_string(),
+            )),
+        }
+    }
+
+    async fn drain_self(
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let registry = state.cluster_registry.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster not initialized".to_string(),
+        ))?;
+        registry
+            .set_unschedulable(true)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(json!({ "drained": true })))
+    }
+
+    async fn restore_self(
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let registry = state.cluster_registry.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster not initialized".to_string(),
+        ))?;
+        registry
+            .set_unschedulable(false)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(Json(json!({ "restored": true })))
+    }
+
+    async fn upgrade_cluster(
+        State(state): State<AppState>,
+        body: Bytes,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct UpgradeRequest {
+            #[serde(default)]
+            target_version: Option<String>,
+        }
+        let request: UpgradeRequest = if body.is_empty() {
+            UpgradeRequest {
+                target_version: None,
+            }
+        } else {
+            serde_json::from_slice(&body)
+                .map_err(|err| (StatusCode::BAD_REQUEST, format!("invalid body: {err}")))?
+        };
+        let target = request
+            .target_version
+            .unwrap_or_else(|| "latest".to_string());
+        let elector = state.cluster_elector.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster not initialized".to_string(),
+        ))?;
+        let registry = state.cluster_registry.clone().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster not initialized".to_string(),
+        ))?;
+        let assignment_store = state.cluster_assignment_store.clone();
+        tokio::spawn(async move {
+            use crate::cluster::http_upgrader::HttpNodeUpgrader;
+            use crate::cluster::upgrade::{ClusterUpgradeOrchestrator, FreezeGate};
+            use anyhow::Result as AnyResult;
+            use async_trait::async_trait;
+            struct NoopFreeze;
+            #[async_trait]
+            impl FreezeGate for NoopFreeze {
+                async fn freeze(&self) -> AnyResult<()> {
+                    Ok(())
+                }
+                async fn unfreeze(&self) -> AnyResult<()> {
+                    Ok(())
+                }
+            }
+            let http_client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    eprintln!("cluster upgrade: failed to build http client: {err}");
+                    return;
+                }
+            };
+            let mut upgrader = HttpNodeUpgrader::new(registry.clone(), http_client);
+            if let Some(store) = assignment_store {
+                upgrader = upgrader.with_assignment_store(store);
+            }
+            let orchestrator = ClusterUpgradeOrchestrator::new(
+                target,
+                std::sync::Arc::new(upgrader),
+                std::sync::Arc::new(NoopFreeze),
+                registry,
+                elector,
+            );
+            if let Err(err) = orchestrator.run().await {
+                eprintln!("cluster upgrade failed: {err}");
+            } else {
+                eprintln!("cluster upgrade completed");
+            }
+        });
+        Ok(Json(json!({ "accepted": true })))
+    }
+
     async fn restart_system(
         State(state): State<AppState>,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -1529,31 +1703,29 @@ impl Server {
         Ok(Json(json!({ "accepted": true })))
     }
 
-    async fn get_disks() -> Json<Vec<DiskInfo>> {
-        let disks = sysinfo::Disks::new_with_refreshed_list();
-        let host_root = std::env::var("MAESTRO_HOST_ROOT")
-            .ok()
-            .filter(|path| !path.trim().is_empty());
-        let mut candidates = Vec::new();
-
-        if let Some(host_root) = host_root.as_deref() {
-            if let Some(info) = disk_info_for_path(FsPath::new(host_root), "/", &disks) {
-                candidates.push(info);
+    async fn get_disks(State(state): State<AppState>) -> Json<Vec<DiskInfo>> {
+        // The probe container no longer mounts the host root, so it has no
+        // direct view of host filesystems. The daemon (which runs on the host
+        // with the appropriate visibility) publishes a periodic snapshot to
+        // etcd at `system/disks/{node-id}`; we read it from there. Fallback to
+        // container-local sysinfo for single-node / pre-2.0 setups.
+        if let Some(client) = state.cluster_etcd_client.as_ref() {
+            if let Ok(disks) = crate::cluster::disk_snapshot::read_all(client).await {
+                if !disks.is_empty() {
+                    return Json(disks);
+                }
             }
         }
 
-        candidates.extend(disks.iter().filter_map(|disk| {
-            let mount = disk.mount_point().to_string_lossy().to_string();
-            if host_root.as_deref().is_some_and(|host_root| {
-                mount == host_root || mount.starts_with(&format!("{host_root}/"))
-            }) {
-                return None;
-            }
-            if !is_relevant_disk(disk) {
-                return None;
-            }
-            Some(disk_info_from_sysinfo(disk, mount))
-        }));
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let mut candidates: Vec<DiskInfo> = disks
+            .iter()
+            .filter(|disk| is_relevant_disk(disk))
+            .map(|disk| {
+                let mount = disk.mount_point().to_string_lossy().to_string();
+                disk_info_from_sysinfo(disk, mount)
+            })
+            .collect();
 
         candidates.sort_by(|a, b| {
             disk_mount_priority(&a.mount_point)
@@ -1596,57 +1768,8 @@ fn disk_info_from_sysinfo(disk: &sysinfo::Disk, mount_point: String) -> DiskInfo
         total_bytes: disk.total_space(),
         available_bytes: disk.available_space(),
         file_system: String::from_utf8_lossy(disk.file_system().as_encoded_bytes()).to_string(),
+        node_id: None,
     }
-}
-
-fn disk_info_for_path(
-    path: &FsPath,
-    display_mount_point: &str,
-    disks: &sysinfo::Disks,
-) -> Option<DiskInfo> {
-    let (total_bytes, available_bytes) = statvfs_space(path)?;
-    let disk = best_disk_for_path(path, disks);
-    Some(DiskInfo {
-        name: disk
-            .map(|disk| disk.name().to_string_lossy().to_string())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| path.display().to_string()),
-        mount_point: display_mount_point.to_string(),
-        total_bytes,
-        available_bytes,
-        file_system: disk
-            .map(|disk| String::from_utf8_lossy(disk.file_system().as_encoded_bytes()).to_string())
-            .unwrap_or_default(),
-    })
-}
-
-fn best_disk_for_path<'a>(path: &FsPath, disks: &'a sysinfo::Disks) -> Option<&'a sysinfo::Disk> {
-    disks
-        .iter()
-        .filter(|disk| path.starts_with(disk.mount_point()))
-        .max_by_key(|disk| disk.mount_point().components().count())
-}
-
-#[cfg(unix)]
-fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
-    use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
-
-    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
-    if unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) } != 0 {
-        return None;
-    }
-    let stat = unsafe { stat.assume_init() };
-    let block_size = u64::from(stat.f_frsize.max(1));
-    Some((
-        u64::from(stat.f_blocks).saturating_mul(block_size),
-        u64::from(stat.f_bavail).saturating_mul(block_size),
-    ))
-}
-
-#[cfg(not(unix))]
-fn statvfs_space(_path: &FsPath) -> Option<(u64, u64)> {
-    None
 }
 
 fn disk_mount_priority(mount: &str) -> usize {
@@ -1705,6 +1828,37 @@ fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, St
         Some(other) => Err((
             StatusCode::BAD_REQUEST,
             format!("invalid phase '{other}', expected one of: build, deploy, system"),
+        )),
+    }
+}
+
+async fn require_leader(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let elector = match state.cluster_elector.as_ref() {
+        Some(elector) => elector,
+        None => return Ok(next.run(request).await),
+    };
+    let leadership = elector.state();
+    use crate::cluster::types::LeadershipState;
+    match leadership {
+        LeadershipState::Leading(_) => Ok(next.run(request).await),
+        LeadershipState::Unknown => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster leader unknown; retry shortly".to_string(),
+        )),
+        LeadershipState::Following(Some(info)) => Err((
+            StatusCode::MISDIRECTED_REQUEST,
+            format!(
+                "this node is not the cluster leader; current leader is {}",
+                info.node_id
+            ),
+        )),
+        LeadershipState::Following(None) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no cluster leader elected yet; retry shortly".to_string(),
         )),
     }
 }

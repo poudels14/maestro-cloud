@@ -11,6 +11,32 @@ struct ClusterInfo {
     alias_domain: String,
     #[serde(default)]
     upgrading: bool,
+    #[serde(default)]
+    this_node_id: Option<String>,
+    #[serde(default)]
+    nodes: Vec<ClusterNodeView>,
+    #[serde(default)]
+    leader: Option<ClusterLeaderView>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterNodeView {
+    node_id: String,
+    #[serde(default)]
+    hostname: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    api_port: u16,
+    #[serde(default)]
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLeaderView {
+    node_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +175,43 @@ pub async fn run_info(host: &str) -> Result<()> {
     println!("  alias domain      {}", cluster.alias_domain);
     if cluster.upgrading {
         println!("  upgrade           in progress");
+    }
+    if let Some(node_id) = &cluster.this_node_id {
+        println!("  this node         {node_id}");
+    }
+    if let Some(leader) = &cluster.leader {
+        let is_self = cluster
+            .this_node_id
+            .as_deref()
+            .map(|nid| nid == leader.node_id)
+            .unwrap_or(false);
+        let suffix = if is_self { " (self)" } else { "" };
+        println!("  leader            {}{suffix}", leader.node_id);
+    } else {
+        println!("  leader            (none)");
+    }
+    if !cluster.nodes.is_empty() {
+        println!("\nNodes ({})", cluster.nodes.len());
+        for node in &cluster.nodes {
+            let is_leader = cluster
+                .leader
+                .as_ref()
+                .map(|leader| leader.node_id == node.node_id)
+                .unwrap_or(false);
+            let role = if node.role.is_empty() {
+                "both".to_string()
+            } else {
+                node.role.clone()
+            };
+            let leader_marker = if is_leader { " [leader]" } else { "" };
+            println!(
+                "  {:<14} role={role:<10} api-port={:<6} version={}{leader_marker}",
+                node.node_id, node.api_port, node.version
+            );
+            if !node.hostname.is_empty() {
+                println!("    hostname        {}", node.hostname);
+            }
+        }
     }
 
     if let Some(metric) = node_metric.as_ref() {

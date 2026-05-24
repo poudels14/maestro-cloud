@@ -276,6 +276,30 @@ async fn init_etcd(
         "-v".into(),
         format!("{}:/data", etcd_data_path.display()),
     ];
+    let cluster_bootstrap = &config.cluster_bootstrap;
+    if cluster_bootstrap.mode != crate::deployment::types::ClusterBootstrapMode::Single {
+        let port = cluster_bootstrap.etcd_peer_port;
+        // Bind ONLY to the advertise address + loopback. Avoids accidental
+        // exposure on other interfaces (e.g., public IPs on a multi-NIC host).
+        // If no advertise host is known we fall back to 0.0.0.0 with a warning;
+        // resolve_advertise_host in main.rs makes this rare.
+        match cluster_bootstrap.advertise_host.as_deref() {
+            Some(host) => {
+                extra_flags.extend([
+                    "-p".into(),
+                    format!("{host}:{port}:{port}"),
+                    "-p".into(),
+                    format!("127.0.0.1:{port}:{port}"),
+                ]);
+            }
+            None => {
+                eprintln!(
+                    "[maestro]: WARNING: no advertise_host resolved; binding etcd peer port to 0.0.0.0"
+                );
+                extra_flags.extend(["-p".into(), format!("0.0.0.0:{port}:{port}")]);
+            }
+        }
+    }
     if etcd_certs.is_some() {
         let certs_abs =
             std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
@@ -288,13 +312,17 @@ async fn init_etcd(
     } else {
         "http"
     };
+    let etcd_name = format!("maestro-{}", config.node_id);
     let mut image_and_args = vec![
         ETCD_IMAGE_TAG.into(),
         "etcd".into(),
-        format!("--name=maestro-{}", config.cluster_name),
+        format!("--name={etcd_name}"),
         "--data-dir=/data".into(),
         format!("--listen-client-urls={scheme}://0.0.0.0:2379"),
         format!("--advertise-client-urls={scheme}://127.0.0.1:6479"),
+        "--auto-compaction-mode=periodic".into(),
+        "--auto-compaction-retention=1h".into(),
+        "--quota-backend-bytes=8589934592".into(),
     ];
     if etcd_certs.is_some() {
         image_and_args.extend([
@@ -304,6 +332,7 @@ async fn init_etcd(
             "--client-cert-auth=true".into(),
         ]);
     }
+    apply_cluster_flags(&mut image_and_args, config, etcd_certs.is_some());
 
     let etcd_job_config = SupervisedJobConfig {
         id: "maestro-etcd".to_string(),
@@ -324,7 +353,7 @@ async fn init_etcd(
             name: container_name.to_string(),
             runtime_cli: runtime.cli_name().to_string(),
         }),
-        secrets_mount: None,
+        secrets_mounts: Vec::new(),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
@@ -426,7 +455,7 @@ async fn init_ingress(
             name: container_name.to_string(),
             runtime_cli: runtime.cli_name().to_string(),
         }),
-        secrets_mount: None,
+        secrets_mounts: Vec::new(),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
@@ -505,7 +534,7 @@ async fn init_admin(
             name: container_name.to_string(),
             runtime_cli: runtime.cli_name().to_string(),
         }),
-        secrets_mount: None,
+        secrets_mounts: Vec::new(),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
@@ -578,6 +607,34 @@ async fn init_probe(
     } else {
         "http"
     };
+    let probe_dir_abs =
+        std::fs::canonicalize(&probe_dir).expect("failed to canonicalize probe dir");
+    let jwt_secret_path = probe_dir.join("jwt-secret");
+    let jwt_secret_abs = probe_dir_abs.join("jwt-secret");
+    let slack_webhook_path = probe_dir.join("slack-webhook");
+    let slack_webhook_abs = probe_dir_abs.join("slack-webhook");
+
+    let mut secrets_mounts: Vec<crate::supervisor::SecretsMount> =
+        vec![crate::supervisor::SecretsMount {
+            host_path: encryption_key_path,
+            container_path: "/run/secrets/encryption-key".to_string(),
+            content: config.encryption_key.as_str().to_string(),
+        }];
+    if let Some(secret) = &config.jwt_secret_key {
+        secrets_mounts.push(crate::supervisor::SecretsMount {
+            host_path: jwt_secret_path.clone(),
+            container_path: "/run/secrets/jwt-secret".to_string(),
+            content: secret.clone(),
+        });
+    }
+    if let Some(slack_url) = &config.slack_webhook_url {
+        secrets_mounts.push(crate::supervisor::SecretsMount {
+            host_path: slack_webhook_path.clone(),
+            container_path: "/run/secrets/slack-webhook".to_string(),
+            content: slack_url.as_str().to_string(),
+        });
+    }
+
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: {
@@ -587,16 +644,12 @@ async fn init_probe(
                 "-v".into(),
                 format!("{}:/data", probe_data_abs.display()),
                 "-v".into(),
-                "/:/host/root:ro".into(),
-                "-v".into(),
                 format!(
                     "{}:/run/secrets/encryption-key:ro",
                     encryption_key_abs.display()
                 ),
                 "-e".into(),
                 format!("ETCD_ENDPOINT={etcd_scheme}://maestro-etcd:2379"),
-                "-e".into(),
-                "MAESTRO_HOST_ROOT=/host/root".into(),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
@@ -607,6 +660,8 @@ async fn init_probe(
                 format!("MAESTRO_CLUSTER_NAME={}", config.cluster_name),
                 "-e".into(),
                 format!("MAESTRO_CLUSTER_ALIAS={}", config.cluster_alias),
+                "-e".into(),
+                format!("MAESTRO_NODE_ID={}", config.node_id),
                 "-e".into(),
                 format!(
                     "MAESTRO_CONFIG={}",
@@ -627,16 +682,26 @@ async fn init_probe(
                     "ETCD_KEY_FILE=/certs/client-key.pem".into(),
                 ]);
             }
-            if let Some(secret) = &config.jwt_secret_key {
-                probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET_KEY={secret}")]);
+            if config.jwt_secret_key.is_some() {
+                probe_flags.extend([
+                    "-v".into(),
+                    format!("{}:/run/secrets/jwt-secret:ro", jwt_secret_abs.display()),
+                    "-e".into(),
+                    "MAESTRO_JWT_SECRET_KEY_FILE=/run/secrets/jwt-secret".into(),
+                ]);
             }
             if let Some(system_type) = &config.system_type {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
             }
-            if let Some(slack_url) = &config.slack_webhook_url {
+            if config.slack_webhook_url.is_some() {
                 probe_flags.extend([
+                    "-v".into(),
+                    format!(
+                        "{}:/run/secrets/slack-webhook:ro",
+                        slack_webhook_abs.display()
+                    ),
                     "-e".into(),
-                    format!("MAESTRO_SLACK_WEBHOOK_URL={}", slack_url.as_str()),
+                    "MAESTRO_SLACK_WEBHOOK_URL_FILE=/run/secrets/slack-webhook".into(),
                 ]);
             }
             probe_flags.extend_from_slice(dns_flag);
@@ -659,11 +724,7 @@ async fn init_probe(
             name: container_name.to_string(),
             runtime_cli: runtime.cli_name().to_string(),
         }),
-        secrets_mount: Some(crate::supervisor::SecretsMount {
-            host_path: encryption_key_path,
-            container_path: "/run/secrets/encryption-key".to_string(),
-            content: config.encryption_key.as_str().to_string(),
-        }),
+        secrets_mounts,
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: Default::default(),
@@ -778,11 +839,11 @@ async fn init_tailnet(
                 name: container_name.to_string(),
                 runtime_cli: runtime.cli_name().to_string(),
             }),
-            secrets_mount: Some(crate::supervisor::SecretsMount {
+            secrets_mounts: vec![crate::supervisor::SecretsMount {
                 host_path: ts_authkey_path,
                 container_path: "/run/secrets/ts-authkey".to_string(),
                 content: authkey.clone(),
-            }),
+            }],
             log_config: Some(LogConfig {
                 sender: log_sender.clone(),
                 tags: Default::default(),
@@ -878,7 +939,7 @@ async fn init_cloudflared(
                     name: container_name,
                     runtime_cli: runtime.cli_name().to_string(),
                 }),
-                secrets_mount: None,
+                secrets_mounts: Vec::new(),
                 log_config: Some(LogConfig {
                     sender: log_sender.clone(),
                     tags: Default::default(),
@@ -956,6 +1017,72 @@ pub fn build_etcd_tls_from_files(
             .ca_certificate(ca)
             .identity(identity),
     )
+}
+
+fn apply_cluster_flags(args: &mut Vec<String>, config: &ControllerConfig, secure: bool) {
+    use crate::deployment::types::{ClusterBootstrapMode, sanitize_member_name};
+
+    let bootstrap = &config.cluster_bootstrap;
+    if bootstrap.mode == ClusterBootstrapMode::Single {
+        return;
+    }
+    let peer_scheme = if secure { "https" } else { "http" };
+    let listen_peer = format!("{peer_scheme}://0.0.0.0:{}", bootstrap.etcd_peer_port);
+    let advertise_host = bootstrap
+        .advertise_host
+        .clone()
+        .unwrap_or_else(|| format!("maestro-{}", config.node_id));
+    let advertise_peer = format!(
+        "{peer_scheme}://{advertise_host}:{}",
+        bootstrap.etcd_peer_port
+    );
+    let local_member_name = sanitize_member_name(&advertise_host);
+    // Replace the earlier `--name=maestro-{node_id}` entry so the local etcd
+    // member name matches what peers reference us by (our advertise host).
+    if let Some(name_arg) = args.iter_mut().find(|arg| arg.starts_with("--name=")) {
+        *name_arg = format!("--name={local_member_name}");
+    }
+    args.push(format!("--listen-peer-urls={listen_peer}"));
+    args.push(format!("--initial-advertise-peer-urls={advertise_peer}"));
+
+    let mut initial_cluster: Vec<String> = bootstrap
+        .peers
+        .iter()
+        .map(|peer| {
+            format!(
+                "{}={}",
+                peer.etcd_member_name(),
+                peer.peer_url(peer_scheme, bootstrap.etcd_peer_port)
+            )
+        })
+        .collect();
+    let self_entry = format!("{local_member_name}={advertise_peer}");
+    if !initial_cluster
+        .iter()
+        .any(|entry| entry.starts_with(&format!("{local_member_name}=")))
+    {
+        initial_cluster.push(self_entry);
+    }
+    initial_cluster.sort();
+    args.push(format!("--initial-cluster={}", initial_cluster.join(",")));
+    let state = match bootstrap.mode {
+        ClusterBootstrapMode::NewCluster => "new",
+        ClusterBootstrapMode::JoinExisting => "existing",
+        ClusterBootstrapMode::Single => "new",
+    };
+    args.push(format!("--initial-cluster-state={state}"));
+    args.push(format!(
+        "--initial-cluster-token=maestro-{}",
+        config.cluster_name
+    ));
+    if secure {
+        args.extend([
+            "--peer-cert-file=/certs/server.pem".into(),
+            "--peer-key-file=/certs/server-key.pem".into(),
+            "--peer-trusted-ca-file=/certs/ca.pem".into(),
+            "--peer-client-cert-auth=true".into(),
+        ]);
+    }
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {

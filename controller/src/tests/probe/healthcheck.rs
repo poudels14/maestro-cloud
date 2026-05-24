@@ -166,6 +166,7 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 secrets: None,
                 volumes: vec![],
                 healthcheck_interval: 60,
+                node_affinity: None,
             },
             ingress: ingress_port.map(|port| crate::deployment::types::IngressConfig {
                 host: Some("svc.local".to_string()),
