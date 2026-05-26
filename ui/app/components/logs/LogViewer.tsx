@@ -4,9 +4,26 @@ import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import { getLogs, getServiceLogs, getSystemLogs } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { logLevelColors } from "../../lib/logFormat";
-import { TimeCell, ExpanderCell, HostCell, LevelCell, MessageCell } from "./cells";
+import { logLevelColors, httpFields } from "../../lib/logFormat";
+import {
+  TimeCell,
+  ExpanderCell,
+  HostCell,
+  LevelCell,
+  MessageCell,
+  MethodCell,
+  StatusCell,
+  PathCell
+} from "./cells";
 import { LogDetailPanel } from "./LogDetailPanel";
+
+const COL = {
+  time: "sm:w-[118px]",
+  host: "sm:w-[112px]",
+  level: "sm:w-[52px]",
+  method: "sm:w-[60px]",
+  status: "sm:w-[56px]"
+};
 
 const DEFAULT_LOG_TAIL = 1000;
 const LOAD_MORE_STEP = 5000;
@@ -58,6 +75,14 @@ function LogViewer(props: {
       const host = line.hostname || line.source || "";
       if (host) seen.add(host);
       if (seen.size > 1) return true;
+    }
+    return false;
+  };
+
+  const showHttp = () => {
+    for (const line of phaseLines()) {
+      const { method, status, path } = httpFields(line.attrs);
+      if (method || status || path) return true;
     }
     return false;
   };
@@ -140,12 +165,20 @@ function LogViewer(props: {
   const loadMore = async () => {
     if (loadingMore()) return;
     setLoadingMore(true);
+    const prevHeight = scrollRef?.scrollHeight ?? 0;
+    const prevTop = scrollRef?.scrollTop ?? 0;
     try {
       const newTail = tail() + LOAD_MORE_STEP;
       setTail(newTail);
       const fetched = await fetchTail(newTail);
       setHasMore(fetched.length >= newTail);
+      wasAtBottom = false;
       setLines(fetched);
+      requestAnimationFrame(() => {
+        if (!scrollRef) return;
+        scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
+        updateScrollFlags();
+      });
     } finally {
       setLoadingMore(false);
     }
@@ -156,7 +189,7 @@ function LogViewer(props: {
       () => props.deploymentId,
       () => {
         setLines([]);
-        setExpanded(new Set());
+        setExpanded(new Set<number>());
         setLoading(true);
         setTail(DEFAULT_LOG_TAIL);
         fetchInitialLogs();
@@ -169,21 +202,28 @@ function LogViewer(props: {
 
   let scrollRef: HTMLDivElement | undefined;
   let wasAtBottom = true;
+  const [nearTop, setNearTop] = createSignal(false);
+
+  const updateScrollFlags = () => {
+    if (!scrollRef) return;
+    wasAtBottom = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight < 50;
+    setNearTop(scrollRef.scrollTop < 80);
+  };
 
   createEffect(
     on(filteredLines, () => {
       if (wasAtBottom && scrollRef) {
         requestAnimationFrame(() => {
           scrollRef!.scrollTop = scrollRef!.scrollHeight;
+          updateScrollFlags();
         });
+      } else {
+        updateScrollFlags();
       }
     })
   );
 
-  const onScroll = () => {
-    if (!scrollRef) return;
-    wasAtBottom = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight < 50;
-  };
+  const onScroll = () => updateScrollFlags();
 
   createEffect(() => {
     if (props.phase !== "build") return;
@@ -280,14 +320,14 @@ function LogViewer(props: {
             <div class="text-gray-400 text-center py-8 font-mono text-xs">No logs available.</div>
           </Match>
           <Match when={filteredLines().length > 0}>
-            <Show when={hasMore()}>
-              <div class="flex justify-center py-2">
+            <Show when={hasMore() && nearTop()}>
+              <div class="sticky top-0 z-20 h-0 flex items-start justify-center pointer-events-none">
                 <button
                   type="button"
                   onClick={loadMore}
                   disabled={loadingMore()}
                   class={clsx(
-                    "inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border bg-white shadow-sm outline-none transition-colors",
+                    "pointer-events-auto shrink-0 whitespace-nowrap mt-9 sm:mt-12 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border bg-white shadow-md outline-none transition-colors",
                     loadingMore()
                       ? "text-gray-400 border-gray-200 cursor-wait"
                       : "text-gray-600 border-gray-200 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50"
@@ -302,12 +342,36 @@ function LogViewer(props: {
               </div>
             </Show>
             <ul class="font-mono text-xs">
+              <li class="hidden sm:flex items-stretch px-2 py-1.5 border-b border-gray-200 bg-gray-100 text-[10px] font-sans font-semibold uppercase tracking-normal text-gray-500 sticky top-0 z-10">
+                <span class="w-[18px] shrink-0" />
+                <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
+                <Show when={showHost()}>
+                  <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                    Host
+                  </span>
+                </Show>
+                <span class={clsx(COL.level, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                  Level
+                </span>
+                <Show when={showHttp()}>
+                  <span class={clsx(COL.method, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                    Method
+                  </span>
+                  <span class={clsx(COL.status, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                    Status
+                  </span>
+                </Show>
+                <span class="flex-1 pl-2 truncate border-l border-gray-300">
+                  {showHttp() ? "Path" : "Message"}
+                </span>
+              </li>
               <For each={filteredLines()}>
                 {(line, index) => (
                   <LogRow
                     line={line}
                     index={index()}
                     showHost={showHost()}
+                    showHttp={showHttp()}
                     expanded={expanded().has(line.seq)}
                     onToggle={() => toggleExpanded(line.seq)}
                   />
@@ -325,10 +389,12 @@ function LogRow(props: {
   line: LogEntry;
   index: number;
   showHost: boolean;
+  showHttp: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
   const host = () => props.line.hostname || props.line.source || "";
+  const http = () => httpFields(props.line.attrs);
   return (
     <li
       class={clsx("border-b border-gray-50 cursor-pointer transition-colors", {
@@ -339,7 +405,7 @@ function LogRow(props: {
       onClick={props.onToggle}
     >
       <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 px-2 py-1.5 sm:py-1">
-        <div class="flex items-center gap-2 shrink-0 sm:contents">
+        <div class="flex items-center flex-wrap gap-x-2 gap-y-1 shrink-0 sm:contents">
           <ExpanderCell
             expanded={props.expanded}
             onToggle={(ev) => {
@@ -347,20 +413,30 @@ function LogRow(props: {
               props.onToggle();
             }}
           />
-          <div class="shrink-0 sm:w-[140px] sm:pr-2 sm:pt-px">
+          <div class={clsx("shrink-0 sm:pr-2 sm:pt-px", COL.time)}>
             <TimeCell ts={props.line.ts} />
           </div>
           <Show when={props.showHost}>
-            <div class="min-w-0 max-w-[120px] sm:max-w-none sm:w-[140px] sm:px-2 sm:pt-px">
+            <div class={clsx("min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px", COL.host)}>
               <HostCell value={host()} />
             </div>
           </Show>
-          <div class="shrink-0 sm:w-[50px] sm:px-2 sm:pt-px">
+          <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.level)}>
             <LevelCell level={props.line.level} />
           </div>
+          <Show when={props.showHttp}>
+            <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.method)}>
+              <MethodCell method={http().method} />
+            </div>
+            <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.status)}>
+              <StatusCell status={http().status} />
+            </div>
+          </Show>
         </div>
-        <div class="min-w-0 flex-1 pl-6 sm:pl-2 sm:pr-4">
-          <MessageCell text={props.line.text} />
+        <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
+          <Show when={http().path} fallback={<MessageCell text={props.line.text} />}>
+            <PathCell path={http().path!} durationLabel={http().durationLabel} />
+          </Show>
         </div>
       </div>
       <Show when={props.expanded}>
