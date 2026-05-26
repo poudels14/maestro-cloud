@@ -50,4 +50,3 @@
 - Always use Tailwind CSS classes.
 - For conditional styling, use clsx. Instead of `clsx(collapsed ? "..." :"...")`, you should always set conditional classes like this: `clsx("...", { "...": collapsed, "...": !collapsed })`.
 - You should never use variables inside className attribute using template literals. Always use clsx or cn to set conditional classes.
-

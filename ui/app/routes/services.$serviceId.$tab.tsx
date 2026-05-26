@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "@tanstack/solid-query";
 import { createEffect, createSignal, Show } from "solid-js";
 import { Menu } from "lucide-solid";
+import clsx from "clsx";
 import type { Service } from "../lib/types";
 import { servicesQuery } from "../lib/queries";
 import { TabButton } from "../lib/ui";
@@ -99,6 +100,9 @@ function ServiceDetailPanel(props: {
     }
   });
 
+  const contentMaxWidth = () =>
+    props.tab === "logs" || props.tab === "metrics" ? "max-w-6xl" : "max-w-4xl";
+
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
       <div class="shrink-0 bg-white border-b border-gray-200">
@@ -114,7 +118,12 @@ function ServiceDetailPanel(props: {
           <span class="text-sm font-semibold text-gray-900 truncate">{props.service.name}</span>
         </div>
         <div class="px-3 sm:px-6 pt-3 sm:pt-5 overflow-x-auto">
-          <div class="max-w-4xl mx-auto flex justify-start sm:justify-center gap-4 -mb-px whitespace-nowrap">
+          <div
+            class={clsx(
+              "mx-auto flex justify-start sm:justify-center gap-4 -mb-px whitespace-nowrap",
+              contentMaxWidth()
+            )}
+          >
             <TabButton
               label="Overview"
               active={props.tab === "overview"}
@@ -141,7 +150,7 @@ function ServiceDetailPanel(props: {
         </div>
       </div>
       <div class="flex-1 overflow-y-auto py-4 sm:py-5 bg-[#fafafa]">
-        <div class="max-w-4xl mx-auto px-3 sm:px-6">
+        <div class={clsx("mx-auto px-3 sm:px-6", contentMaxWidth())}>
           <Show when={props.tab === "overview"}>
             <OverviewTab service={props.service} />
           </Show>

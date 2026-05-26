@@ -1,6 +1,14 @@
+import { Show } from "solid-js";
 import { ChevronRight } from "lucide-solid";
 import clsx from "clsx";
-import { tsFormatter, timeFormatter, dateFormatter, logLevelPill } from "../../lib/logFormat";
+import {
+  tsFormatter,
+  timeFormatter,
+  dateFormatter,
+  logLevelPill,
+  httpMethodColor,
+  httpStatusPill
+} from "../../lib/logFormat";
 
 function TimeCell(props: { ts: number }) {
   const d = () => new Date(props.ts);
@@ -53,4 +61,49 @@ function MessageCell(props: { text: string }) {
   return <span class="block text-gray-700 whitespace-pre-wrap break-words">{props.text}</span>;
 }
 
-export { TimeCell, ExpanderCell, HostCell, LevelCell, MessageCell };
+function MethodCell(props: { method?: string }) {
+  return (
+    <Show when={props.method} fallback={<span class="text-gray-300">·</span>}>
+      <span class={clsx("uppercase", httpMethodColor(props.method!))}>{props.method}</span>
+    </Show>
+  );
+}
+
+function StatusCell(props: { status?: string }) {
+  return (
+    <Show when={props.status} fallback={<span class="text-gray-300">·</span>}>
+      <span
+        class={clsx(
+          "inline-block rounded px-1 tabular-nums font-medium",
+          httpStatusPill(props.status!)
+        )}
+      >
+        {props.status}
+      </span>
+    </Show>
+  );
+}
+
+function PathCell(props: { path: string; durationLabel?: string }) {
+  return (
+    <span class="flex items-baseline gap-2 min-w-0">
+      <span class="text-gray-700 truncate" title={props.path}>
+        {props.path}
+      </span>
+      <Show when={props.durationLabel}>
+        <span class="text-gray-400 tabular-nums shrink-0">{props.durationLabel}</span>
+      </Show>
+    </span>
+  );
+}
+
+export {
+  TimeCell,
+  ExpanderCell,
+  HostCell,
+  LevelCell,
+  MessageCell,
+  MethodCell,
+  StatusCell,
+  PathCell
+};
