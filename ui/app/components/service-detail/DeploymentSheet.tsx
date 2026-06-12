@@ -27,7 +27,7 @@ function DeploymentSheet(props: {
     >
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 bg-black/20 z-40 backdrop-blur-[1px]" />
-        <Dialog.Content class="fixed top-0 right-0 bottom-0 w-full max-w-3xl bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col outline-none">
+        <Dialog.Content class="fixed top-0 right-0 bottom-0 w-full max-w-5xl bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col outline-none">
           <Show when={props.deployment}>
             {(deployment) => {
               const d = deployment();
