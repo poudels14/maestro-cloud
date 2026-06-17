@@ -258,6 +258,12 @@ struct StartArgs {
     )]
     egress_deny: Vec<String>,
     #[arg(
+        long = "egress-allow",
+        value_name = "CIDR",
+        help = "Allow container egress to an IP/CIDR even if covered by an egress-deny range (can be repeated)"
+    )]
+    egress_allow: Vec<String>,
+    #[arg(
         long = "enable-tailscale",
         help = "Enable Tailscale subnet routing and DNS"
     )]
@@ -429,6 +435,7 @@ async fn run() -> crate::error::Result<bool> {
                     network,
                     subnet,
                     egress_deny,
+                    egress_allow,
                     enable_tailscale,
                     tailscale_authkey,
                     tailscale_advertise_routes,
@@ -543,6 +550,9 @@ async fn run() -> crate::error::Result<bool> {
             if !egress_deny.is_empty() {
                 cfg.egress.deny.extend(egress_deny.clone());
             }
+            if !egress_allow.is_empty() {
+                cfg.egress.allow.extend(egress_allow.clone());
+            }
             if let Some(runtime) = runtime_flag {
                 cfg.runtime = runtime;
             }
@@ -571,7 +581,8 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             validate_subnet_cidr(&subnet)?;
             cfg.subnet = Some(subnet);
-            let egress_deny = firewall::normalize_denies(&cfg.egress.deny)?;
+            let egress_deny = firewall::normalize_cidrs(&cfg.egress.deny, "deny")?;
+            let egress_allow = firewall::normalize_cidrs(&cfg.egress.allow, "allow")?;
 
             let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
                 Error::internal(format!("failed to serialize masked config: {err}"))
@@ -763,6 +774,7 @@ async fn run() -> crate::error::Result<bool> {
             let firewall_config = firewall::FirewallConfig {
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
+                allow: egress_allow,
             };
             firewall::apply(&firewall_config).await.map_err(|err| {
                 Error::external(format!("failed to apply egress firewall: {err}"))
