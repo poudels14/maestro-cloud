@@ -152,3 +152,15 @@ export interface LogEntry {
   tags?: string[];
   attrs?: [string, string][];
 }
+
+export type MaskedConfig = {
+  cluster: { name: string };
+  ingress?: { ports?: number[] };
+  subnet?: string;
+  egress?: { deny?: string[]; allow?: string[] };
+  tailscale?: { "advertise-routes"?: string[] };
+  tags?: string[];
+  datadog?: { site?: string };
+  runtime: string;
+  depot?: { token: string | null };
+};

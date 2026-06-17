@@ -3,6 +3,7 @@ import type {
   DiskInfo,
   IngressRouting,
   LogEntry,
+  MaskedConfig,
   MetricPoint,
   Service,
   SlackCategory,
@@ -21,6 +22,12 @@ export interface ClusterInfo {
 export async function getClusterInfo(): Promise<ClusterInfo> {
   const res = await fetch("/api/cluster");
   if (!res.ok) throw new Error(`Failed to fetch cluster info: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getClusterConfig(): Promise<MaskedConfig> {
+  const res = await fetch("/api/config");
+  if (!res.ok) throw new Error(`Failed to fetch cluster config: ${res.statusText}`);
   return res.json();
 }
 
