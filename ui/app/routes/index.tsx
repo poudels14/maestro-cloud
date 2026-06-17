@@ -8,6 +8,7 @@ import { SlackWebhooks } from "../components/SlackWebhooks";
 import { NodeMetricsSection } from "../components/home/NodeMetricsSection";
 import { DisksSection } from "../components/home/DisksSection";
 import { ServicesGrid } from "../components/home/ServicesGrid";
+import { ClusterConfigSection } from "../components/home/ClusterConfigSection";
 
 export const Route = createFileRoute("/")({
   component: HomePage
@@ -24,6 +25,7 @@ function HomePage() {
             <DisksSection />
           </div>
           <ServicesGrid />
+          <ClusterConfigSection />
           <SlackWebhooks />
         </ClientOnly>
       </main>

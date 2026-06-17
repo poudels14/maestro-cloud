@@ -1,5 +1,7 @@
 import type { ClusterInfo } from "./api";
+import type { MaskedConfig } from "./types";
 import {
+  getClusterConfig,
   getClusterInfo,
   getClusterMetrics,
   getContainerMetrics,
@@ -21,6 +23,7 @@ function ssrSafe<T>(realFn: () => Promise<T>, ssrFallback: T): () => Promise<T> 
 
 const queryKeys = {
   cluster: ["cluster"] as const,
+  config: ["config"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
   ingress: ["ingress"] as const,
@@ -44,6 +47,12 @@ const clusterInfoQuery = (opts?: { pollWhenUpgrading?: boolean }) => ({
     ? (query: { state: { data?: ClusterInfo } }) =>
         query.state.data?.upgrading ? 5_000 : (false as const)
     : (false as const)
+});
+
+const clusterConfigQuery = () => ({
+  queryKey: queryKeys.config,
+  queryFn: ssrSafe(getClusterConfig, null as MaskedConfig | null) as () => Promise<MaskedConfig>,
+  staleTime: 60_000
 });
 
 const servicesQuery = () => ({
@@ -123,6 +132,7 @@ const slackWebhooksQuery = () => ({
 export {
   queryKeys,
   clusterInfoQuery,
+  clusterConfigQuery,
   servicesQuery,
   deploymentsQuery,
   ingressRoutesQuery,
