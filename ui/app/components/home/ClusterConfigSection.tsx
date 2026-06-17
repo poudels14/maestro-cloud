@@ -11,7 +11,7 @@ function ClusterConfigSection() {
     <Show when={config.data}>
       {(data) => (
         <div>
-          <SectionHeader class="mb-4 mt-10">Cluster config</SectionHeader>
+          <SectionHeader class="mb-4">Cluster config</SectionHeader>
           <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
             <For each={configRows(data())}>
               {(item) => (

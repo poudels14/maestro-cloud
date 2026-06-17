@@ -43,9 +43,8 @@ function ServicesGrid() {
         when={services.data}
         fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
       >
-        <div class="flex items-baseline gap-2 mb-6">
-          <h1 class="text-xl font-semibold text-gray-900">Services</h1>
-          <span class="text-sm text-gray-400">{userServices().length}</span>
+        <div class="mb-4">
+          <SectionHeader>Services</SectionHeader>
         </div>
         <Show
           when={userServices().length > 0}
@@ -56,7 +55,7 @@ function ServicesGrid() {
             </div>
           }
         >
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <For each={userServices()}>
               {(service) => (
                 <ServiceCard
@@ -73,7 +72,7 @@ function ServicesGrid() {
           <div class="flex items-baseline gap-2 mb-4 mt-10">
             <SectionHeader>System</SectionHeader>
           </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <For each={systemServices()}>
               {(service) => (
                 <ServiceCard

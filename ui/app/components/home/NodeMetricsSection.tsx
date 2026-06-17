@@ -1,15 +1,23 @@
-import { Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
+import type { JSX } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
+import clsx from "clsx";
 import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
 import { formatBytes, formatPercent } from "../../lib/format";
 import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
 import { TimelineChart } from "../TimelineChart";
 
-const RANGE_MS = 3_600_000;
+const TIME_RANGES = [
+  { label: "1h", ms: 3_600_000 },
+  { label: "6h", ms: 21_600_000 },
+  { label: "24h", ms: 86_400_000 },
+  { label: "7d", ms: 604_800_000 }
+];
 
 function NodeMetricsSection() {
-  const nodeMetrics = useQuery(() => nodeMetricsQuery(RANGE_MS));
-  const clusterMetrics = useQuery(() => clusterMetricsQuery(RANGE_MS));
+  const [rangeMs, setRangeMs] = createSignal(3_600_000);
+  const nodeMetrics = useQuery(() => nodeMetricsQuery(rangeMs()));
+  const clusterMetrics = useQuery(() => clusterMetricsQuery(rangeMs()));
 
   const latestNode = () => {
     const data = nodeMetrics.data ?? [];
@@ -19,6 +27,9 @@ function NodeMetricsSection() {
     const data = clusterMetrics.data ?? [];
     return data.length > 0 ? data[data.length - 1] : null;
   };
+
+  const xMax = () => Date.now();
+  const xMin = () => xMax() - rangeMs();
 
   return (
     <div class="space-y-6">
@@ -31,9 +42,27 @@ function NodeMetricsSection() {
           }}
         />
       </Show>
+      <div class="flex justify-end">
+        <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
+          <For each={TIME_RANGES}>
+            {(range) => (
+              <button
+                type="button"
+                onClick={() => setRangeMs(range.ms)}
+                class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
+                  "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
+                  "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
+                })}
+              >
+                {range.label}
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
       <div>
         <SectionHeader class="mb-4">Node</SectionHeader>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4">
           <MetricCard
             title="CPU"
             value={latestNode() ? formatPercent(latestNode()!.cpuPercent) : null}
@@ -43,7 +72,8 @@ function NodeMetricsSection() {
               label="CPU"
               color="#6366f1"
               yFormat={formatPercent}
-              height={140}
+              xMin={xMin()}
+              xMax={xMax()}
             />
           </MetricCard>
           <MetricCard
@@ -59,14 +89,15 @@ function NodeMetricsSection() {
               label="Memory"
               color="#8b5cf6"
               yFormat={formatBytes}
-              height={140}
+              xMin={xMin()}
+              xMax={xMax()}
             />
           </MetricCard>
         </div>
       </div>
       <div>
         <SectionHeader class="mb-4">Cluster</SectionHeader>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4">
           <MetricCard
             title="CPU"
             value={latestCluster() ? formatPercent(latestCluster()!.cpuPercent) : null}
@@ -76,7 +107,8 @@ function NodeMetricsSection() {
               label="CPU"
               color="#0ea5e9"
               yFormat={formatPercent}
-              height={140}
+              xMin={xMin()}
+              xMax={xMax()}
             />
           </MetricCard>
           <MetricCard
@@ -92,7 +124,8 @@ function NodeMetricsSection() {
               label="Memory"
               color="#14b8a6"
               yFormat={formatBytes}
-              height={140}
+              xMin={xMin()}
+              xMax={xMax()}
             />
           </MetricCard>
         </div>
@@ -101,7 +134,7 @@ function NodeMetricsSection() {
   );
 }
 
-function MetricCard(props: { title: string; value: string | null; children: any }) {
+function MetricCard(props: { title: string; value: string | null; children: JSX.Element }) {
   return (
     <Card class="p-4">
       <div class="flex items-baseline justify-between mb-3">

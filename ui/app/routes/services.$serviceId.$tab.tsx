@@ -7,6 +7,7 @@ import type { Service } from "../lib/types";
 import { servicesQuery } from "../lib/queries";
 import { TabButton } from "../lib/ui";
 import { ServiceSidebar } from "../components/service-detail/Sidebar";
+import { NodeNavSection } from "../components/home/NodeNavSection";
 import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
 import { MetricsTab } from "../components/service-detail/MetricsTab";
@@ -52,6 +53,7 @@ function ServiceDetailPage() {
         selected={selected() ?? null}
         onSelect={navigateService}
         onBack={() => navigate({ to: "/" })}
+        topSection={<NodeNavSection onNavigate={() => setDrawerOpen(false)} />}
         mobileOpen={drawerOpen()}
         onCloseMobile={() => setDrawerOpen(false)}
       />
