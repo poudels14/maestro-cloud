@@ -27,6 +27,7 @@ use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment,
 };
+use crate::logs::LogEntry;
 use crate::logs::store::LogOrigin;
 use crate::signal::ShutdownEvent;
 
@@ -1251,7 +1252,7 @@ impl Server {
         Path((service_id, deployment_id)): Path<(String, String)>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
         let service_id = service_id.trim();
         let deployment_id = deployment_id.trim();
         crate::validation::validate_service_id(service_id, "serviceId")
@@ -1278,11 +1279,7 @@ impl Server {
                     .await
             }
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-            let values: Vec<serde_json::Value> = entries
-                .into_iter()
-                .map(|e| serde_json::to_value(e).unwrap_or_default())
-                .collect();
-            return Ok(Json(values));
+            return Ok(Json(entries));
         }
 
         Ok(Json(Vec::new()))
@@ -1292,7 +1289,7 @@ impl Server {
         Path(service_id): Path<String>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
         let service_id = service_id.trim();
         crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1312,11 +1309,7 @@ impl Server {
                     .await
             }
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-            let values: Vec<serde_json::Value> = entries
-                .into_iter()
-                .map(|e| serde_json::to_value(e).unwrap_or_default())
-                .collect();
-            return Ok(Json(values));
+            return Ok(Json(entries));
         }
 
         Ok(Json(Vec::new()))
@@ -1326,7 +1319,7 @@ impl Server {
         Path(name): Path<String>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
         let name = name.trim();
         crate::validation::validate_service_id(name, "name")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1353,11 +1346,7 @@ impl Server {
             }
         }
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        let values: Vec<serde_json::Value> = entries
-            .into_iter()
-            .filter_map(|e| serde_json::to_value(e).ok())
-            .collect();
-        Ok(Json(values))
+        Ok(Json(entries))
     }
 
     async fn ingest_logs(
@@ -1365,7 +1354,7 @@ impl Server {
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<&'static str, (StatusCode, String)> {
-        let entries: Vec<crate::logs::LogEntry> = parse_json_body(&headers, body)?;
+        let entries: Vec<LogEntry> = parse_json_body(&headers, body)?;
         let Some(log_store) = &state.log_store else {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
