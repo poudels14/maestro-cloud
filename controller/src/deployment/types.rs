@@ -22,6 +22,7 @@ pub struct ControllerConfig {
     pub network: String,
     pub subnet: Option<String>,
     pub tailscale_authkey: Option<String>,
+    pub tailscale_advertise_routes: Vec<String>,
     pub encryption_key: SecretString,
     pub jwt_secret_key: Option<String>,
     pub build_command_env: HashMap<String, SecretString>,

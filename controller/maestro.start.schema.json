@@ -63,6 +63,13 @@
       "properties": {
         "auth-key": {
           "type": "string"
+        },
+        "advertise-routes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       }
     },

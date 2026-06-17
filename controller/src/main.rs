@@ -269,6 +269,13 @@ struct StartArgs {
     )]
     tailscale_authkey: Option<String>,
     #[arg(
+        long = "tailscale-advertise-routes",
+        value_name = "CIDR",
+        value_delimiter = ',',
+        help = "Subnet routes to advertise via Tailscale (comma-separated or repeated)"
+    )]
+    tailscale_advertise_routes: Vec<String>,
+    #[arg(
         long = "encryption-key",
         env = "MAESTRO_ENCRYPTION_KEY",
         help = "Master key for encrypting secrets"
@@ -424,6 +431,7 @@ async fn run() -> crate::error::Result<bool> {
                     egress_deny,
                     enable_tailscale,
                     tailscale_authkey,
+                    tailscale_advertise_routes,
                     encryption_key,
                     jwt_secret_key,
                     tags,
@@ -490,7 +498,15 @@ async fn run() -> crate::error::Result<bool> {
                 cfg.jwt_secret_key = Some(secret);
             }
             if let Some(authkey) = tailscale_authkey {
-                cfg.tailscale = Some(config::TailscaleConfig { auth_key: authkey });
+                cfg.tailscale = Some(config::TailscaleConfig {
+                    auth_key: authkey,
+                    advertise_routes: Vec::new(),
+                });
+            }
+            if !tailscale_advertise_routes.is_empty() {
+                if let Some(ts) = cfg.tailscale.as_mut() {
+                    ts.advertise_routes.extend(tailscale_advertise_routes);
+                }
             }
             if let Some(api_key) = dd_api_key {
                 let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
@@ -591,10 +607,13 @@ async fn run() -> crate::error::Result<bool> {
                     .expect("failed to get current dir")
                     .join(&project_dir)
             });
-            let tailscale_authkey = if enable_tailscale {
-                cfg.tailscale.map(|t| t.auth_key)
+            let (tailscale_authkey, tailscale_advertise_routes) = if enable_tailscale {
+                match cfg.tailscale {
+                    Some(ts) => (Some(ts.auth_key), ts.advertise_routes),
+                    None => (None, Vec::new()),
+                }
             } else {
-                None
+                (None, Vec::new())
             };
             let runtime_type = cfg.runtime;
             let runtime = runtime::create_provider(runtime_type);
@@ -711,6 +730,7 @@ async fn run() -> crate::error::Result<bool> {
                 network,
                 subnet: cfg.subnet,
                 tailscale_authkey,
+                tailscale_advertise_routes,
                 encryption_key: SecretString::new(cfg.encryption_key),
                 jwt_secret_key: cfg.jwt_secret_key,
                 build_command_env,
