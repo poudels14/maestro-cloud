@@ -34,6 +34,7 @@ use crate::signal::ShutdownEvent;
 mod types;
 
 const DEFAULT_LOG_LIMIT: usize = 1000;
+const MAX_LOG_LIMIT: usize = 2000;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
@@ -1264,12 +1265,16 @@ impl Server {
             ));
         }
 
-        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT);
         let origin = parse_phase(query.phase.as_deref())?;
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/{deployment_id}/");
-            let entries = if let Some(after) = query.after {
+            let entries = if let Some(before) = query.before {
+                log_store
+                    .read_before_by_prefix_origin(&prefix, origin, before, tail)
+                    .await
+            } else if let Some(after) = query.after {
                 log_store
                     .read_after_by_prefix_origin(&prefix, origin, after, tail)
                     .await
@@ -1294,12 +1299,16 @@ impl Server {
         crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
 
-        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT);
         let origin = parse_phase(query.phase.as_deref())?;
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/");
-            let entries = if let Some(after) = query.after {
+            let entries = if let Some(before) = query.before {
+                log_store
+                    .read_before_by_prefix_origin(&prefix, origin, before, tail)
+                    .await
+            } else if let Some(after) = query.after {
                 log_store
                     .read_after_by_prefix_origin(&prefix, origin, after, tail)
                     .await
@@ -1323,13 +1332,17 @@ impl Server {
         let name = name.trim();
         crate::validation::validate_service_id(name, "name")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
-        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT);
+        let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT);
 
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
         let entries = if name == "maestro-probe" {
-            if let Some(after) = query.after {
+            if let Some(before) = query.before {
+                log_store
+                    .read_before_sources(&["maestro-probe", "maestro-controller"], before, tail)
+                    .await
+            } else if let Some(after) = query.after {
                 log_store
                     .read_after_sources(&["maestro-probe", "maestro-controller"], after, tail)
                     .await
@@ -1339,7 +1352,9 @@ impl Server {
                     .await
             }
         } else {
-            if let Some(after) = query.after {
+            if let Some(before) = query.before {
+                log_store.read_before_for_source(name, before, tail).await
+            } else if let Some(after) = query.after {
                 log_store.read_after_for_source(name, after, tail).await
             } else {
                 log_store.read_tail(name, tail).await
@@ -1677,6 +1692,7 @@ fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
 struct LogsQuery {
     tail: Option<usize>,
     after: Option<i64>,
+    before: Option<i64>,
     phase: Option<String>,
 }
 

@@ -25,8 +25,7 @@ const COL = {
   status: "sm:w-[56px]"
 };
 
-const DEFAULT_LOG_TAIL = 1000;
-const LOAD_MORE_STEP = 5000;
+const PAGE_SIZE = 2000;
 const POLL_INTERVAL_MS = 5000;
 const ALWAYS_SHOW_LEVELS = ["error", "warn", "info"];
 const OPTIONAL_LEVELS = ["debug", "trace"];
@@ -43,7 +42,6 @@ function LogViewer(props: {
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [hasMore, setHasMore] = createSignal(false);
-  const [tail, setTail] = createSignal(DEFAULT_LOG_TAIL);
   const [search, setSearch] = createSignal("");
   const [levelFilter, setLevelFilter] = createSignal<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = createSignal(false);
@@ -123,25 +121,45 @@ function LogViewer(props: {
     setExpanded(next);
   };
 
-  const fetchTail = async (tailSize: number) => {
-    if (props.isSystem) return getSystemLogs(props.serviceId, tailSize);
+  const fetchTail = async () => {
+    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE);
     if (props.deploymentId)
-      return getLogs(props.serviceId, props.deploymentId, tailSize, undefined, props.phase);
-    return getServiceLogs(props.serviceId, tailSize, undefined, props.phase);
+      return getLogs(
+        props.serviceId,
+        props.deploymentId,
+        PAGE_SIZE,
+        undefined,
+        undefined,
+        props.phase
+      );
+    return getServiceLogs(props.serviceId, PAGE_SIZE, undefined, undefined, props.phase);
   };
 
-  const fetchAfter = async (tailSize: number, after: number) => {
-    if (props.isSystem) return getSystemLogs(props.serviceId, tailSize, after);
+  const fetchAfter = async (after: number) => {
+    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE, after);
     if (props.deploymentId)
-      return getLogs(props.serviceId, props.deploymentId, tailSize, after, props.phase);
-    return getServiceLogs(props.serviceId, tailSize, after, props.phase);
+      return getLogs(props.serviceId, props.deploymentId, PAGE_SIZE, after, undefined, props.phase);
+    return getServiceLogs(props.serviceId, PAGE_SIZE, after, undefined, props.phase);
+  };
+
+  const fetchBefore = async (before: number) => {
+    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE, undefined, before);
+    if (props.deploymentId)
+      return getLogs(
+        props.serviceId,
+        props.deploymentId,
+        PAGE_SIZE,
+        undefined,
+        before,
+        props.phase
+      );
+    return getServiceLogs(props.serviceId, PAGE_SIZE, undefined, before, props.phase);
   };
 
   const fetchInitialLogs = async () => {
     try {
-      const t = tail();
-      const fetched = await fetchTail(t);
-      setHasMore(fetched.length >= t);
+      const fetched = await fetchTail();
+      setHasMore(fetched.length >= PAGE_SIZE);
       setLines(fetched);
       setError(null);
     } catch (err) {
@@ -153,7 +171,7 @@ function LogViewer(props: {
 
   const pollLogs = async () => {
     try {
-      const fetched = await fetchAfter(DEFAULT_LOG_TAIL, lastSeq());
+      const fetched = await fetchAfter(lastSeq());
       if (fetched.length === 0) return;
       setLines((prev) => [...prev, ...fetched]);
       setError(null);
@@ -164,23 +182,24 @@ function LogViewer(props: {
 
   const loadMore = async () => {
     if (loadingMore()) return;
-    setLoadingMore(true);
-    const prevHeight = scrollRef?.scrollHeight ?? 0;
-    const prevTop = scrollRef?.scrollTop ?? 0;
-    try {
-      const newTail = tail() + LOAD_MORE_STEP;
-      setTail(newTail);
-      const fetched = await fetchTail(newTail);
-      setHasMore(fetched.length >= newTail);
-      wasAtBottom = false;
-      setLines(fetched);
-      requestAnimationFrame(() => {
-        if (!scrollRef) return;
-        scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
-        updateScrollFlags();
-      });
-    } finally {
-      setLoadingMore(false);
+    const oldestSeq = lines()[0]?.seq;
+    if (oldestSeq != null) {
+      setLoadingMore(true);
+      const prevHeight = scrollRef?.scrollHeight ?? 0;
+      const prevTop = scrollRef?.scrollTop ?? 0;
+      try {
+        const fetched = await fetchBefore(oldestSeq);
+        setHasMore(fetched.length >= PAGE_SIZE);
+        wasAtBottom = false;
+        setLines((prev) => [...fetched, ...prev]);
+        requestAnimationFrame(() => {
+          if (!scrollRef) return;
+          scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
+          updateScrollFlags();
+        });
+      } finally {
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -191,7 +210,6 @@ function LogViewer(props: {
         setLines([]);
         setExpanded(new Set<number>());
         setLoading(true);
-        setTail(DEFAULT_LOG_TAIL);
         fetchInitialLogs();
       }
     )
@@ -252,26 +270,18 @@ function LogViewer(props: {
             value={search()}
             onInput={(ev) => setSearch(ev.currentTarget.value)}
             placeholder="Search logs…"
-            class="w-full text-sm pl-8 pr-16 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
+            class="w-full text-sm pl-8 pr-8 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
           />
-          <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-            <Show when={search().length > 0}>
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                title="Clear"
-                class="p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
-              >
-                <X class="size-3" />
-              </button>
-            </Show>
-            <span class="text-[10px] font-mono text-gray-400 tabular-nums px-1">
-              {filteredLines().length}
-              <Show when={filteredLines().length !== phaseLines().length}>
-                <span class="text-gray-300"> / {phaseLines().length}</span>
-              </Show>
-            </span>
-          </div>
+          <Show when={search().length > 0}>
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              title="Clear"
+              class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
+            >
+              <X class="size-3" />
+            </button>
+          </Show>
         </div>
         <Show when={availableLevels().length > 0}>
           <div class="flex items-center gap-1.5 flex-wrap">
@@ -294,7 +304,6 @@ function LogViewer(props: {
                   >
                     <span class={clsx("size-1.5 rounded-full shrink-0", colors.dot)} />
                     <span class="uppercase tracking-wide">{level}</span>
-                    <span class="font-mono tabular-nums text-gray-400">{count()}</span>
                   </button>
                 );
               }}
@@ -337,7 +346,7 @@ function LogViewer(props: {
                     <Loader2 class="size-3 animate-spin" />
                   </Show>
                   Load earlier
-                  <span class="text-gray-400 font-mono">+{LOAD_MORE_STEP.toLocaleString()}</span>
+                  <span class="text-gray-400 font-mono">+{PAGE_SIZE.toLocaleString()}</span>
                 </button>
               </div>
             </Show>
