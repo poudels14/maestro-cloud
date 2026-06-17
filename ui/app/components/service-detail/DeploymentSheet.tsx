@@ -4,7 +4,8 @@ import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
 import type { Deployment } from "../../lib/types";
 import { type ClusterInfo } from "../../lib/api";
-import { StatusBadge, timeAgo } from "../../lib/ui";
+import { StatusBadge } from "../../lib/ui";
+import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
 
 type SheetTabId = "logs" | "build" | "details";
@@ -51,11 +52,11 @@ function DeploymentSheet(props: {
                           <span class="font-mono text-gray-400">{shortId}</span>
                           <span class="text-gray-300">·</span>
                           <span
-                            class="flex items-center gap-1 text-gray-400"
+                            class="flex items-center gap-1 text-gray-400 tabular-nums"
                             title={new Date(d.createdAt).toLocaleString()}
                           >
                             <Clock class="size-3" />
-                            {timeAgo(d.createdAt)}
+                            {formatDateTime(d.createdAt, true)}
                           </span>
                         </div>
                       </div>

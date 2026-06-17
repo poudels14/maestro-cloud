@@ -24,13 +24,17 @@ function formatMs(value: number): string {
   return `${Math.round(value)}ms`;
 }
 
-function formatDateTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
+function formatDateTime(ms: number, withYear = false): string {
+  const options: Intl.DateTimeFormatOptions = {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit"
-  });
+  };
+  if (withYear) {
+    options.year = "numeric";
+  }
+  return new Date(ms).toLocaleString(undefined, options);
 }
 
 export { formatBytes, formatBytesRate, formatPercent, formatRate, formatMs, formatDateTime };
