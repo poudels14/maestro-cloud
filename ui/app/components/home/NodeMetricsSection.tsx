@@ -32,7 +32,7 @@ function NodeMetricsSection() {
   const xMin = () => xMax() - rangeMs();
 
   return (
-    <div class="space-y-6">
+    <div class="space-y-8">
       <Show when={nodeMetrics.isError || clusterMetrics.isError}>
         <ErrorBanner
           message="Failed to load metrics"
@@ -49,10 +49,13 @@ function NodeMetricsSection() {
               <button
                 type="button"
                 onClick={() => setRangeMs(range.ms)}
-                class={clsx("text-xs px-3 py-1 rounded outline-none transition-colors", {
-                  "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
-                  "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
-                })}
+                class={clsx(
+                  "text-xs px-3 py-1 rounded outline-none tabular-nums transition-[transform,color,background-color,box-shadow] duration-150 ease-out-strong active:scale-[0.96]",
+                  {
+                    "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
+                    "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
+                  }
+                )}
               >
                 {range.label}
               </button>
@@ -138,9 +141,9 @@ function MetricCard(props: { title: string; value: string | null; children: JSX.
   return (
     <Card class="p-4">
       <div class="flex items-baseline justify-between mb-3">
-        <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider">{props.title}</h3>
+        <h3 class="text-xs font-medium text-gray-500">{props.title}</h3>
         <Show when={props.value}>
-          <span class="text-xs text-gray-400">{props.value}</span>
+          <span class="text-xs text-gray-400 tabular-nums">{props.value}</span>
         </Show>
       </div>
       {props.children}

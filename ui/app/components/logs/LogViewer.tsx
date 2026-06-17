@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, Show, Switch, Match, on, onCleanup } from "solid-js";
-import { ChevronUp, Search, X, Loader2 } from "lucide-solid";
+import { ChevronUp, ListFilter, Search, X, Loader2 } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import { getLogs, getServiceLogs, getSystemLogs } from "../../lib/api";
@@ -262,8 +262,8 @@ function LogViewer(props: {
           <ErrorBanner message={error()!} onRetry={fetchInitialLogs} />
         </div>
       </Show>
-      <div class="px-3 py-2 border-b border-gray-100 space-y-2">
-        <div class="relative">
+      <div class="px-3 py-2 border-b border-gray-100 flex items-center gap-3">
+        <div class="relative flex-1 min-w-0">
           <Search class="size-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
@@ -284,7 +284,8 @@ function LogViewer(props: {
           </Show>
         </div>
         <Show when={availableLevels().length > 0}>
-          <div class="flex items-center gap-1.5 flex-wrap">
+          <div class="flex items-center gap-1.5 shrink-0">
+            <ListFilter class="size-3.5 text-gray-400 mr-0.5 shrink-0" />
             <For each={availableLevels()}>
               {(level) => {
                 const active = () => levelFilter().has(level);
@@ -295,15 +296,17 @@ function LogViewer(props: {
                   <button
                     type="button"
                     onClick={() => toggleLevel(level)}
+                    aria-pressed={active()}
                     class={clsx(
-                      "inline-flex items-center gap-1.5 text-[11px] px-1.5 py-0.5 rounded transition-colors outline-none",
+                      "inline-flex items-center gap-1.5 text-[11px] pl-1.5 pr-2 py-0.5 rounded-md border transition-[background-color,border-color,color,transform] duration-150 ease-out-strong active:scale-[0.96] outline-none",
                       active() && `${colors.pillActive} font-medium`,
-                      !active() && "text-gray-500 hover:bg-gray-100 hover:text-gray-700",
+                      !active() &&
+                        "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800",
                       !active() && empty() && "opacity-40"
                     )}
                   >
                     <span class={clsx("size-1.5 rounded-full shrink-0", colors.dot)} />
-                    <span class="uppercase tracking-wide">{level}</span>
+                    <span class="capitalize">{level}</span>
                   </button>
                 );
               }}
@@ -312,9 +315,9 @@ function LogViewer(props: {
               <button
                 type="button"
                 onClick={() => setLevelFilter(new Set())}
-                class="text-[10px] text-gray-400 hover:text-gray-600 ml-1 outline-none uppercase tracking-wider"
+                class="text-[11px] text-gray-400 hover:text-gray-600 ml-0.5 outline-none"
               >
-                clear
+                Clear
               </button>
             </Show>
           </div>

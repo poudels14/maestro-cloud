@@ -37,7 +37,7 @@ function ExpanderCell(props: { expanded: boolean; onToggle: (ev: MouseEvent) => 
 
 function HostCell(props: { value: string }) {
   return (
-    <span class="text-violet-400 truncate" title={props.value}>
+    <span class="block truncate text-violet-400" title={props.value}>
       {props.value}
     </span>
   );

@@ -29,10 +29,10 @@ function DiskCard(props: { disk: DiskInfo }) {
   return (
     <Card class="p-4">
       <div class="flex items-baseline justify-between mb-1">
-        <h3 class="text-xs font-medium text-gray-500 tracking-wider truncate">
+        <h3 class="text-xs font-medium text-gray-500 truncate font-mono">
           {props.disk.mountPoint}
         </h3>
-        <span class="text-xs text-gray-400 shrink-0 ml-2">
+        <span class="text-xs text-gray-400 shrink-0 ml-2 tabular-nums">
           {formatBytes(usedBytes())} / {formatBytes(props.disk.totalBytes)}
         </span>
       </div>
@@ -43,15 +43,18 @@ function DiskCard(props: { disk: DiskInfo }) {
       </Show>
       <div class="w-full bg-gray-100 rounded-full h-2">
         <div
-          class={clsx("h-2 rounded-full", {
-            "bg-red-500": usedPercent() > 90,
-            "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
-            "bg-indigo-500": usedPercent() <= 70
-          })}
+          class={clsx(
+            "h-2 rounded-full transition-[width,background-color] duration-500 ease-out-strong",
+            {
+              "bg-red-500": usedPercent() > 90,
+              "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
+              "bg-indigo-500": usedPercent() <= 70
+            }
+          )}
           style={{ width: `${Math.min(usedPercent(), 100)}%` }}
         />
       </div>
-      <p class="text-xs text-gray-400 mt-1.5">{usedPercent().toFixed(1)}% used</p>
+      <p class="text-xs text-gray-400 mt-1.5 tabular-nums">{usedPercent().toFixed(1)}% used</p>
     </Card>
   );
 }

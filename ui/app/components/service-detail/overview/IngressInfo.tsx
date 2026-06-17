@@ -22,7 +22,7 @@ function IngressInfo(props: { service: Service }) {
       <Show when={ingress()}>
         {(value) => (
           <div>
-            <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Ingress</h4>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Ingress</h4>
             <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
                 <span class="text-xs text-gray-500 shrink-0">
@@ -59,7 +59,7 @@ function IngressInfo(props: { service: Service }) {
       </Show>
       <Show when={isIngressService() && (routes.data?.length ?? 0) > 0}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Routes</h4>
+          <h4 class="text-xs font-medium text-gray-400 mb-2">Routes</h4>
           <div class="space-y-3">
             <For each={routes.data}>
               {(route) => (

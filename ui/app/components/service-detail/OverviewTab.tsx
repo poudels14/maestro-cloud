@@ -63,7 +63,7 @@ function OverviewTab(props: { service: Service }) {
 
       <Show when={buildEnvItems().length > 0 || buildEnvSource()}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+          <h4 class="text-xs font-medium text-gray-400 mb-2">
             Build Environment
             <Show when={buildEnvSource()}>
               <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildEnvSource()}</span>
@@ -77,7 +77,7 @@ function OverviewTab(props: { service: Service }) {
 
       <Show when={buildSecretKeys().length > 0 || buildSecretSource()}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+          <h4 class="text-xs font-medium text-gray-400 mb-2">
             Build Secrets
             <Show when={buildSecretSource()}>
               <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildSecretSource()}</span>
@@ -99,7 +99,7 @@ function OverviewTab(props: { service: Service }) {
 
       <Show when={envItems().length > 0 || envSource()}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+          <h4 class="text-xs font-medium text-gray-400 mb-2">
             Deploy Environment
             <Show when={envSource()}>
               <span class="ml-1.5 text-gray-300 normal-case font-mono">{envSource()}</span>
@@ -113,7 +113,7 @@ function OverviewTab(props: { service: Service }) {
 
       <Show when={secretKeys().length > 0 || secretSource()}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+          <h4 class="text-xs font-medium text-gray-400 mb-2">
             Deploy Secrets
             <Show when={secretMountPath()}>
               <span class="ml-1.5 text-gray-300 normal-case">(mounted at {secretMountPath()})</span>

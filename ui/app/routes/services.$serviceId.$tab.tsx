@@ -102,8 +102,7 @@ function ServiceDetailPanel(props: {
     }
   });
 
-  const contentMaxWidth = () =>
-    props.tab === "logs" || props.tab === "metrics" ? "max-w-6xl" : "max-w-4xl";
+  const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
 
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">

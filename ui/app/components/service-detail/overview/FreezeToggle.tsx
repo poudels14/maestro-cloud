@@ -13,7 +13,7 @@ function FreezeToggle(props: { service: Service }) {
 
   return (
     <div>
-      <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Deploy freeze</h4>
+      <h4 class="text-xs font-medium text-gray-400 mb-2">Deploy freeze</h4>
       <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex items-center justify-between">
         <div>
           <p class="text-sm text-gray-700">

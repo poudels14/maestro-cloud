@@ -17,7 +17,7 @@ function ClusterConfigSection() {
               {(item) => (
                 <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
                   <span class="text-xs text-gray-500 shrink-0">{item.label}</span>
-                  <span class="text-sm font-mono text-gray-800 text-right break-words min-w-0">
+                  <span class="text-sm font-mono text-gray-800 text-right break-words min-w-0 tabular-nums">
                     {item.value}
                   </span>
                 </div>

@@ -3,7 +3,8 @@ import clsx from "clsx";
 import { Clock, ExternalLink, GitCommitHorizontal } from "lucide-solid";
 import type { ClusterInfo } from "../../lib/api";
 import type { Deployment } from "../../lib/types";
-import { DeploymentMenu, StatusBadge, StatusDot, timeAgo } from "../../lib/ui";
+import { DeploymentMenu, StatusBadge, StatusDot } from "../../lib/ui";
+import { formatDateTime } from "../../lib/format";
 
 type Props = {
   deployment: Deployment;
@@ -59,11 +60,11 @@ function DeploymentRow(props: Props) {
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
             <span
-              class="flex items-center gap-1 text-xs text-gray-400"
+              class="flex items-center gap-1 text-xs text-gray-400 tabular-nums"
               title={new Date(props.deployment.createdAt).toLocaleString()}
             >
               <Clock class="size-3" />
-              {timeAgo(props.deployment.createdAt)}
+              {formatDateTime(props.deployment.createdAt)}
             </span>
             <div onClick={(e) => e.stopPropagation()}>
               <DeploymentMenu

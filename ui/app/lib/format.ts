@@ -24,4 +24,13 @@ function formatMs(value: number): string {
   return `${Math.round(value)}ms`;
 }
 
-export { formatBytes, formatBytesRate, formatPercent, formatRate, formatMs };
+function formatDateTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+export { formatBytes, formatBytesRate, formatPercent, formatRate, formatMs, formatDateTime };
