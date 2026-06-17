@@ -63,6 +63,8 @@ struct IngressView {
 struct EgressView {
     #[serde(default)]
     deny: Vec<String>,
+    #[serde(default)]
+    allow: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +186,9 @@ pub async fn run_info(host: &str) -> Result<()> {
     );
     if !config.egress.deny.is_empty() {
         println!("  egress deny       {}", config.egress.deny.join(", "));
+    }
+    if !config.egress.allow.is_empty() {
+        println!("  egress allow      {}", config.egress.allow.join(", "));
     }
 
     println!("\nRuntime");

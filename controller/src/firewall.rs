@@ -18,6 +18,7 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 pub struct FirewallConfig {
     pub subnet: Option<String>,
     pub deny: Vec<String>,
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,14 +27,14 @@ enum AddressFamily {
     V6,
 }
 
-pub fn normalize_denies(values: &[String]) -> crate::error::Result<Vec<String>> {
+pub fn normalize_cidrs(values: &[String], kind: &str) -> crate::error::Result<Vec<String>> {
     let mut normalized = Vec::new();
     for value in values {
         let value = value.trim();
         if value.is_empty() {
             continue;
         }
-        normalized.push(normalize_cidr(value)?);
+        normalized.push(normalize_cidr(value, kind)?);
     }
     normalized.sort();
     normalized.dedup();
@@ -50,7 +51,7 @@ pub async fn apply(config: &FirewallConfig) -> Result<()> {
         .subnet
         .as_deref()
         .ok_or_else(|| anyhow!("egress deny requires a container subnet"))?;
-    let script = render_nft_rules(subnet, &config.deny)?;
+    let script = render_nft_rules(subnet, &config.deny, &config.allow)?;
     delete_table().await?;
     apply_script(&script).await
 }
@@ -76,8 +77,8 @@ pub fn spawn_reconciler(
     })
 }
 
-fn normalize_cidr(value: &str) -> crate::error::Result<String> {
-    let invalid = || Error::invalid_input(format!("invalid egress deny CIDR `{value}`"));
+fn normalize_cidr(value: &str, kind: &str) -> crate::error::Result<String> {
+    let invalid = || Error::invalid_input(format!("invalid egress {kind} CIDR `{value}`"));
     if let Some((addr, prefix)) = value.split_once('/') {
         let addr = addr.parse::<IpAddr>().map_err(|_| invalid())?;
         let prefix = prefix.parse::<u8>().map_err(|_| invalid())?;
@@ -101,19 +102,35 @@ fn address_family(value: &str) -> crate::error::Result<AddressFamily> {
         Ok(IpAddr::V4(_)) => Ok(AddressFamily::V4),
         Ok(IpAddr::V6(_)) => Ok(AddressFamily::V6),
         Err(_) => Err(Error::invalid_input(format!(
-            "invalid egress deny CIDR `{value}`"
+            "invalid egress CIDR `{value}`"
         ))),
     }
 }
 
-fn render_nft_rules(subnet: &str, deny: &[String]) -> Result<String> {
-    let ipv4_denies = deny_for_family(deny, AddressFamily::V4)?;
-    let ipv6_denies = deny_for_family(deny, AddressFamily::V6)?;
+fn render_nft_rules(subnet: &str, deny: &[String], allow: &[String]) -> Result<String> {
+    let ipv4_allows = cidrs_for_family(allow, AddressFamily::V4)?;
+    let ipv6_allows = cidrs_for_family(allow, AddressFamily::V6)?;
+    let ipv4_denies = cidrs_for_family(deny, AddressFamily::V4)?;
+    let ipv6_denies = cidrs_for_family(deny, AddressFamily::V6)?;
 
     let mut script = format!(
         "add table inet {TABLE_NAME}\n\
          add chain inet {TABLE_NAME} forward {{ type filter hook forward priority -50; policy accept; }}\n"
     );
+
+    if !ipv4_allows.is_empty() {
+        script.push_str(&format!(
+            "add rule inet {TABLE_NAME} forward ip saddr {subnet} ip daddr {{ {} }} accept\n",
+            ipv4_allows.join(", ")
+        ));
+    }
+
+    if !ipv6_allows.is_empty() {
+        script.push_str(&format!(
+            "add rule inet {TABLE_NAME} forward ip6 daddr {{ {} }} accept\n",
+            ipv6_allows.join(", ")
+        ));
+    }
 
     if !ipv4_denies.is_empty() {
         script.push_str(&format!(
@@ -132,8 +149,9 @@ fn render_nft_rules(subnet: &str, deny: &[String]) -> Result<String> {
     Ok(script)
 }
 
-fn deny_for_family(deny: &[String], family: AddressFamily) -> crate::error::Result<Vec<String>> {
-    deny.iter()
+fn cidrs_for_family(cidrs: &[String], family: AddressFamily) -> crate::error::Result<Vec<String>> {
+    cidrs
+        .iter()
         .filter_map(|cidr| match address_family(cidr) {
             Ok(found) if found == family => Some(Ok(cidr.clone())),
             Ok(_) => None,
@@ -186,7 +204,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_denies_trims_deduplicates_and_validates() {
+    fn normalize_cidrs_trims_deduplicates_and_validates() {
         let values = vec![
             " 169.254.169.254 ".to_string(),
             "10.0.0.0/8".to_string(),
@@ -195,10 +213,10 @@ mod tests {
         ];
 
         assert_eq!(
-            normalize_denies(&values).unwrap(),
+            normalize_cidrs(&values, "deny").unwrap(),
             vec!["10.0.0.0/8", "169.254.169.254", "fd00:ec2::254/128"]
         );
-        assert!(normalize_denies(&["10.0.0.0/99".to_string()]).is_err());
+        assert!(normalize_cidrs(&["10.0.0.0/99".to_string()], "deny").is_err());
     }
 
     #[test]
@@ -209,6 +227,7 @@ mod tests {
                 "169.254.169.254".to_string(),
                 "fd00:ec2::254/128".to_string(),
             ],
+            &[],
         )
         .unwrap();
 
@@ -216,5 +235,19 @@ mod tests {
         assert!(script.contains("ip saddr 172.22.0.0/16"));
         assert!(script.contains("ip daddr { 169.254.169.254 }"));
         assert!(script.contains("ip6 daddr { fd00:ec2::254/128 }"));
+    }
+
+    #[test]
+    fn render_nft_rules_emits_allow_before_deny() {
+        let script = render_nft_rules(
+            "172.22.0.0/16",
+            &["10.0.0.0/8".to_string()],
+            &["10.1.2.3".to_string()],
+        )
+        .unwrap();
+
+        let allow_pos = script.find("ip daddr { 10.1.2.3 } accept").unwrap();
+        let deny_pos = script.find("ip daddr { 10.0.0.0/8 } reject").unwrap();
+        assert!(allow_pos < deny_pos);
     }
 }

@@ -85,6 +85,8 @@ pub struct StartConfig {
 pub struct EgressConfig {
     #[serde(default)]
     pub deny: Vec<String>,
+    #[serde(default)]
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,6 +238,7 @@ pub struct IngressView {
 #[serde(rename_all = "kebab-case")]
 pub struct EgressView {
     pub deny: Vec<String>,
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +306,7 @@ impl StartConfig {
             subnet: self.subnet.clone(),
             egress: EgressView {
                 deny: self.egress.deny.clone(),
+                allow: self.egress.allow.clone(),
             },
             encryption_key: mask(&self.encryption_key),
             tailscale: self.tailscale.as_ref().map(|ts| TailscaleView {
