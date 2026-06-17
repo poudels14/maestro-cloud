@@ -1,5 +1,6 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { JSX } from "solid-js";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { EllipsisVertical, Ban, RotateCw, RefreshCw, Square, AlertTriangle } from "lucide-solid";
 import clsx from "clsx";
 
@@ -141,91 +142,53 @@ export function DeploymentMenu(props: {
   onRedeploy: () => void;
   onRestart: () => void;
 }) {
-  const [open, setOpen] = createSignal(false);
-  let menuRef: HTMLDivElement | undefined;
-
-  createEffect(() => {
-    if (open()) {
-      const handleClickOutside = (e: MouseEvent) => {
-        if (menuRef && !menuRef.contains(e.target as Node)) {
-          setOpen(false);
-        }
-      };
-      document.addEventListener("click", handleClickOutside);
-      onCleanup(() => document.removeEventListener("click", handleClickOutside));
-    }
-  });
-
   const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
   const canStop = () => STOPPABLE_STATUSES.has(props.status);
 
   return (
-    <div class="relative" ref={menuRef}>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(!open());
-        }}
-        class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-colors outline-none"
-      >
+    <DropdownMenu placement="bottom-end">
+      <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-colors outline-none">
         <EllipsisVertical class="size-4" />
-      </button>
-      <Show when={open()}>
-        <div class="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1.5">
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1.5 w-48">
           <Show when={canCancel()}>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                props.onCancel();
-              }}
-              class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 outline-none"
+            <DropdownMenu.Item
+              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+              onSelect={() => props.onCancel()}
             >
               <Ban class="size-3" />
               Cancel deployment
-            </button>
+            </DropdownMenu.Item>
           </Show>
           <Show when={canStop()}>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                props.onStop();
-              }}
-              class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 outline-none"
+            <DropdownMenu.Item
+              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+              onSelect={() => props.onStop()}
             >
               <Square class="size-3" />
               Stop deployment
-            </button>
+            </DropdownMenu.Item>
           </Show>
           <Show when={!canCancel()}>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                props.onRedeploy();
-              }}
-              class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 outline-none"
+            <DropdownMenu.Item
+              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer outline-none"
+              onSelect={() => props.onRedeploy()}
             >
               <RotateCw class="size-3" />
               Redeploy
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                props.onRestart();
-              }}
-              class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5 outline-none"
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer outline-none"
+              onSelect={() => props.onRestart()}
             >
               <RefreshCw class="size-3" />
               Restart
-            </button>
+            </DropdownMenu.Item>
           </Show>
-        </div>
-      </Show>
-    </div>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu>
   );
 }
 
