@@ -2,8 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use rusqlite::Connection;
-use tokio::sync::{Mutex, Notify};
+use r2d2_sqlite::SqliteConnectionManager;
+use tokio::sync::Notify;
+use tokio::task;
+
+type ConnPool = r2d2::Pool<SqliteConnectionManager>;
 
 fn arc_value_is_null(v: &Arc<serde_json::Value>) -> bool {
     v.is_null()
@@ -106,7 +109,7 @@ fn default_null_arc() -> Arc<serde_json::Value> {
 pub struct LogStore {
     #[allow(dead_code)]
     path: PathBuf,
-    conn: Mutex<Connection>,
+    pool: ConnPool,
     notify: Arc<Notify>,
 }
 
@@ -115,8 +118,14 @@ impl LogStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+            )
+        });
+        let pool = ConnPool::builder().max_size(8).build(manager)?;
+
+        let conn = pool.get()?;
 
         let has_origin = conn.prepare("SELECT origin FROM logs LIMIT 0").is_ok();
         if !has_origin {
@@ -183,9 +192,11 @@ impl LogStore {
             )?;
         }
 
+        drop(conn);
+
         Ok(Self {
             path: path.to_path_buf(),
-            conn: Mutex::new(conn),
+            pool,
             notify: Arc::new(Notify::new()),
         })
     }
@@ -194,55 +205,68 @@ impl LogStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO logs (ts, level, stream, text, source, origin, tags, attributes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )?;
-        for entry in entries {
-            let tags_json = serde_json::to_string(&entry.tags).unwrap_or_default();
-            let attrs_json = serde_json::to_string(&entry.attrs).unwrap_or_else(|_| "[]".into());
-            stmt.execute(rusqlite::params![
-                entry.ts,
-                entry.level,
-                entry.stream,
-                entry.text,
-                entry.source,
-                entry.origin.as_str(),
-                tags_json,
-                attrs_json,
-            ])?;
-        }
-        drop(stmt);
-        drop(conn);
+        let pool = self.pool.clone();
+        let entries = entries.to_vec();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO logs (ts, level, stream, text, source, origin, tags, attributes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for entry in &entries {
+                let tags_json = serde_json::to_string(&entry.tags).unwrap_or_default();
+                let attrs_json =
+                    serde_json::to_string(&entry.attrs).unwrap_or_else(|_| "[]".into());
+                stmt.execute(rusqlite::params![
+                    entry.ts,
+                    entry.level,
+                    entry.stream,
+                    entry.text,
+                    entry.source,
+                    entry.origin.as_str(),
+                    tags_json,
+                    attrs_json,
+                ])?;
+            }
+            Ok(())
+        })
+        .await??;
         self.notify.notify_waiters();
         Ok(())
     }
 
     pub async fn read_tail_all(&self, limit: usize) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs ORDER BY seq DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
-        let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
-        entries.reverse();
-        Ok(entries)
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs ORDER BY seq DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+                Self::row_to_entry(row)
+            })?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
     }
 
     pub async fn read_after_all(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
+                Self::row_to_entry(row)
+            })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn read_tail_by_prefix_origin(
@@ -251,23 +275,27 @@ impl LogStore {
         origin: Option<LogOrigin>,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
+        let pool = self.pool.clone();
         let pattern = format!("{prefix}%");
         let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE source LIKE ?1
-               AND (?2 IS NULL OR origin = ?2)
-             ORDER BY seq DESC
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![pattern, origin_filter, limit as i64],
-            |row| Self::row_to_entry(row),
-        )?;
-        let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
-        entries.reverse();
-        Ok(entries)
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE source LIKE ?1
+                   AND (?2 IS NULL OR origin = ?2)
+                 ORDER BY seq DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(
+                rusqlite::params![pattern, origin_filter, limit as i64],
+                |row| Self::row_to_entry(row),
+            )?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
     }
 
     pub async fn read_after_by_prefix_origin(
@@ -277,77 +305,95 @@ impl LogStore {
         after_seq: i64,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
+        let pool = self.pool.clone();
         let pattern = format!("{prefix}%");
         let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs
-             WHERE source LIKE ?1 AND seq > ?2
-               AND (?3 IS NULL OR origin = ?3)
-             ORDER BY seq ASC
-             LIMIT ?4",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![pattern, after_seq, origin_filter, limit as i64],
-            |row| Self::row_to_entry(row),
-        )?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs
+                 WHERE source LIKE ?1 AND seq > ?2
+                   AND (?3 IS NULL OR origin = ?3)
+                 ORDER BY seq ASC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                rusqlite::params![pattern, after_seq, origin_filter, limit as i64],
+                |row| Self::row_to_entry(row),
+            )?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE source = ?1
-             ORDER BY seq DESC
-             LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![source, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
-        let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
-        entries.reverse();
-        Ok(entries)
+        let pool = self.pool.clone();
+        let source = source.to_string();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE source = ?1
+                 ORDER BY seq DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![source, limit as i64], |row| {
+                Self::row_to_entry(row)
+            })?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
     }
 
     pub async fn read_tail_sources(&self, sources: &[&str], limit: usize) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
-        let query = format!(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE source IN ({})
-             ORDER BY seq DESC
-             LIMIT ?{}",
-            placeholders.join(", "),
-            sources.len() + 1
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
-            .iter()
-            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        params.push(Box::new(limit as i64));
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
-        let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
-        entries.reverse();
-        Ok(entries)
+        let pool = self.pool.clone();
+        let sources: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
+            let query = format!(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE source IN ({})
+                 ORDER BY seq DESC
+                 LIMIT ?{}",
+                placeholders.join(", "),
+                sources.len() + 1
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
+                .iter()
+                .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            params.push(Box::new(limit as i64));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
     }
 
     pub async fn read_after(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE seq > ?1
-             ORDER BY seq ASC
-             LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE seq > ?1
+                 ORDER BY seq ASC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
+                Self::row_to_entry(row)
+            })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn read_after_for_source(
@@ -356,17 +402,23 @@ impl LogStore {
         after_seq: i64,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs WHERE source = ?1 AND seq > ?2
-             ORDER BY seq ASC
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![source, after_seq, limit as i64], |row| {
-            Self::row_to_entry(row)
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        let source = source.to_string();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE source = ?1 AND seq > ?2
+                 ORDER BY seq ASC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![source, after_seq, limit as i64], |row| {
+                    Self::row_to_entry(row)
+                })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn read_after_sources(
@@ -375,65 +427,89 @@ impl LogStore {
         after_seq: i64,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
-        let conn = self.conn.lock().await;
-        let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
-        let query = format!(
-            "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-             FROM logs
-             WHERE source IN ({}) AND seq > ?{}
-             ORDER BY seq ASC
-             LIMIT ?{}",
-            placeholders.join(", "),
-            sources.len() + 1,
-            sources.len() + 2
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
-            .iter()
-            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        params.push(Box::new(after_seq));
-        params.push(Box::new(limit as i64));
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        let sources: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
+            let query = format!(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs
+                 WHERE source IN ({}) AND seq > ?{}
+                 ORDER BY seq ASC
+                 LIMIT ?{}",
+                placeholders.join(", "),
+                sources.len() + 1,
+                sources.len() + 2
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
+                .iter()
+                .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            params.push(Box::new(after_seq));
+            params.push(Box::new(limit as i64));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn get_sink_cursor(&self, sink_id: &str) -> Result<i64> {
-        let conn = self.conn.lock().await;
-        let cursor = conn
-            .query_row(
-                "SELECT last_seq FROM sink_cursors WHERE sink_id = ?1",
-                rusqlite::params![sink_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(0i64);
-        Ok(cursor)
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<i64> {
+            let conn = pool.get()?;
+            let cursor = conn
+                .query_row(
+                    "SELECT last_seq FROM sink_cursors WHERE sink_id = ?1",
+                    rusqlite::params![sink_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0i64);
+            Ok(cursor)
+        })
+        .await?
     }
 
     pub async fn set_sink_cursor(&self, sink_id: &str, seq: i64) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT INTO sink_cursors (sink_id, last_seq) VALUES (?1, ?2)
-             ON CONFLICT(sink_id) DO UPDATE SET last_seq = ?2",
-            rusqlite::params![sink_id, seq],
-        )?;
-        Ok(())
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO sink_cursors (sink_id, last_seq) VALUES (?1, ?2)
+                 ON CONFLICT(sink_id) DO UPDATE SET last_seq = ?2",
+                rusqlite::params![sink_id, seq],
+            )?;
+            Ok(())
+        })
+        .await?
     }
 
     pub async fn min_sink_cursor(&self) -> Result<Option<i64>> {
-        let conn = self.conn.lock().await;
-        let result = conn.query_row("SELECT MIN(last_seq) FROM sink_cursors", [], |row| {
-            row.get::<_, Option<i64>>(0)
-        })?;
-        Ok(result)
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<Option<i64>> {
+            let conn = pool.get()?;
+            let result = conn.query_row("SELECT MIN(last_seq) FROM sink_cursors", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?;
+            Ok(result)
+        })
+        .await?
     }
 
     pub async fn delete_before(&self, seq: i64) -> Result<usize> {
-        let conn = self.conn.lock().await;
-        let deleted = conn.execute("DELETE FROM logs WHERE seq <= ?1", rusqlite::params![seq])?;
-        Ok(deleted)
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            let deleted =
+                conn.execute("DELETE FROM logs WHERE seq <= ?1", rusqlite::params![seq])?;
+            Ok(deleted)
+        })
+        .await?
     }
 
     pub fn notifier(&self) -> Arc<Notify> {
@@ -444,23 +520,28 @@ impl LogStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO metrics (ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )?;
-        for entry in entries {
-            stmt.execute(rusqlite::params![
-                entry.ts,
-                entry.source,
-                entry.cpu_percent,
-                entry.memory_bytes,
-                entry.memory_limit_bytes,
-                entry.net_rx_bytes,
-                entry.net_tx_bytes,
-            ])?;
-        }
-        Ok(())
+        let pool = self.pool.clone();
+        let entries = entries.to_vec();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO metrics (ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for entry in &entries {
+                stmt.execute(rusqlite::params![
+                    entry.ts,
+                    entry.source,
+                    entry.cpu_percent,
+                    entry.memory_bytes,
+                    entry.memory_limit_bytes,
+                    entry.net_rx_bytes,
+                    entry.net_tx_bytes,
+                ])?;
+            }
+            Ok(())
+        })
+        .await?
     }
 
     pub async fn read_metrics(
@@ -469,24 +550,29 @@ impl LogStore {
         from: i64,
         to: i64,
     ) -> Result<Vec<crate::metrics::MetricPoint>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
-             FROM metrics WHERE source = ?1 AND ts >= ?2 AND ts <= ?3
-             ORDER BY ts ASC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![source, from, to], |row| {
-            Ok(crate::metrics::MetricPoint {
-                ts: row.get(0)?,
-                source: row.get(1)?,
-                cpu_percent: row.get(2)?,
-                memory_bytes: row.get(3)?,
-                memory_limit_bytes: row.get(4)?,
-                net_rx_bytes: row.get(5)?,
-                net_tx_bytes: row.get(6)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        let source = source.to_string();
+        task::spawn_blocking(move || -> Result<Vec<crate::metrics::MetricPoint>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
+                 FROM metrics WHERE source = ?1 AND ts >= ?2 AND ts <= ?3
+                 ORDER BY ts ASC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![source, from, to], |row| {
+                Ok(crate::metrics::MetricPoint {
+                    ts: row.get(0)?,
+                    source: row.get(1)?,
+                    cpu_percent: row.get(2)?,
+                    memory_bytes: row.get(3)?,
+                    memory_limit_bytes: row.get(4)?,
+                    net_rx_bytes: row.get(5)?,
+                    net_tx_bytes: row.get(6)?,
+                })
+            })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn read_metrics_by_prefix(
@@ -495,43 +581,51 @@ impl LogStore {
         from: i64,
         to: i64,
     ) -> Result<Vec<crate::metrics::MetricPoint>> {
-        let conn = self.conn.lock().await;
+        let pool = self.pool.clone();
         let pattern = format!("{prefix}%");
-        let mut stmt = conn.prepare_cached(
-            "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
-             FROM metrics WHERE source LIKE ?1 AND ts >= ?2 AND ts <= ?3
-             ORDER BY ts ASC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![pattern, from, to], |row| {
-            Ok(crate::metrics::MetricPoint {
-                ts: row.get(0)?,
-                source: row.get(1)?,
-                cpu_percent: row.get(2)?,
-                memory_bytes: row.get(3)?,
-                memory_limit_bytes: row.get(4)?,
-                net_rx_bytes: row.get(5)?,
-                net_tx_bytes: row.get(6)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        task::spawn_blocking(move || -> Result<Vec<crate::metrics::MetricPoint>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
+                 FROM metrics WHERE source LIKE ?1 AND ts >= ?2 AND ts <= ?3
+                 ORDER BY ts ASC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![pattern, from, to], |row| {
+                Ok(crate::metrics::MetricPoint {
+                    ts: row.get(0)?,
+                    source: row.get(1)?,
+                    cpu_percent: row.get(2)?,
+                    memory_bytes: row.get(3)?,
+                    memory_limit_bytes: row.get(4)?,
+                    net_rx_bytes: row.get(5)?,
+                    net_tx_bytes: row.get(6)?,
+                })
+            })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     pub async fn cleanup_old_metrics(&self, max_age_ms: i64) -> Result<usize> {
-        let conn = self.conn.lock().await;
+        let pool = self.pool.clone();
         let cutoff = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64
             - max_age_ms;
-        let mut deleted = conn.execute(
-            "DELETE FROM metrics WHERE ts < ?1",
-            rusqlite::params![cutoff],
-        )?;
-        deleted += conn.execute(
-            "DELETE FROM traffic_metrics WHERE ts < ?1",
-            rusqlite::params![cutoff],
-        )?;
-        Ok(deleted)
+        task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            let mut deleted = conn.execute(
+                "DELETE FROM metrics WHERE ts < ?1",
+                rusqlite::params![cutoff],
+            )?;
+            deleted += conn.execute(
+                "DELETE FROM traffic_metrics WHERE ts < ?1",
+                rusqlite::params![cutoff],
+            )?;
+            Ok(deleted)
+        })
+        .await?
     }
 
     pub async fn append_traffic_metrics(
@@ -541,30 +635,35 @@ impl LogStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO traffic_metrics (ts, service_id, deployment_id, status_code, method,
-                                          requests, bytes_in, bytes_out,
-                                          lat_le_1s, lat_le_5s, lat_le_10s, lat_total)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        )?;
-        for entry in entries {
-            stmt.execute(rusqlite::params![
-                entry.ts,
-                entry.service_id,
-                entry.deployment_id,
-                entry.status_code as i64,
-                entry.method,
-                entry.requests,
-                entry.bytes_in,
-                entry.bytes_out,
-                entry.lat_le_1s,
-                entry.lat_le_5s,
-                entry.lat_le_10s,
-                entry.lat_total,
-            ])?;
-        }
-        Ok(())
+        let pool = self.pool.clone();
+        let entries = entries.to_vec();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO traffic_metrics (ts, service_id, deployment_id, status_code, method,
+                                              requests, bytes_in, bytes_out,
+                                              lat_le_1s, lat_le_5s, lat_le_10s, lat_total)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+            for entry in &entries {
+                stmt.execute(rusqlite::params![
+                    entry.ts,
+                    entry.service_id,
+                    entry.deployment_id,
+                    entry.status_code as i64,
+                    entry.method,
+                    entry.requests,
+                    entry.bytes_in,
+                    entry.bytes_out,
+                    entry.lat_le_1s,
+                    entry.lat_le_5s,
+                    entry.lat_le_10s,
+                    entry.lat_total,
+                ])?;
+            }
+            Ok(())
+        })
+        .await?
     }
 
     pub async fn read_traffic_metrics(
@@ -573,31 +672,36 @@ impl LogStore {
         from: i64,
         to: i64,
     ) -> Result<Vec<crate::metrics::TrafficPoint>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare_cached(
-            "SELECT ts, service_id, deployment_id, status_code, method,
-                    requests, bytes_in, bytes_out,
-                    lat_le_1s, lat_le_5s, lat_le_10s, lat_total
-             FROM traffic_metrics WHERE service_id = ?1 AND ts >= ?2 AND ts <= ?3
-             ORDER BY ts ASC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![service_id, from, to], |row| {
-            Ok(crate::metrics::TrafficPoint {
-                ts: row.get(0)?,
-                service_id: row.get(1)?,
-                deployment_id: row.get(2)?,
-                status_code: row.get::<_, i64>(3)? as u16,
-                method: row.get(4)?,
-                requests: row.get(5)?,
-                bytes_in: row.get(6)?,
-                bytes_out: row.get(7)?,
-                lat_le_1s: row.get(8)?,
-                lat_le_5s: row.get(9)?,
-                lat_le_10s: row.get(10)?,
-                lat_total: row.get(11)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let pool = self.pool.clone();
+        let service_id = service_id.to_string();
+        task::spawn_blocking(move || -> Result<Vec<crate::metrics::TrafficPoint>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT ts, service_id, deployment_id, status_code, method,
+                        requests, bytes_in, bytes_out,
+                        lat_le_1s, lat_le_5s, lat_le_10s, lat_total
+                 FROM traffic_metrics WHERE service_id = ?1 AND ts >= ?2 AND ts <= ?3
+                 ORDER BY ts ASC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![service_id, from, to], |row| {
+                Ok(crate::metrics::TrafficPoint {
+                    ts: row.get(0)?,
+                    service_id: row.get(1)?,
+                    deployment_id: row.get(2)?,
+                    status_code: row.get::<_, i64>(3)? as u16,
+                    method: row.get(4)?,
+                    requests: row.get(5)?,
+                    bytes_in: row.get(6)?,
+                    bytes_out: row.get(7)?,
+                    lat_le_1s: row.get(8)?,
+                    lat_le_5s: row.get(9)?,
+                    lat_le_10s: row.get(10)?,
+                    lat_total: row.get(11)?,
+                })
+            })?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
     }
 
     fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
