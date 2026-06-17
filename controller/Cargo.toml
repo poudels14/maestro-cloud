@@ -59,6 +59,8 @@ inquire = "0.9.4"
 regex = "1.12.3"
 tar = "0.4.46"
 ignore = "0.4.25"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.34.0"
 
 [dev-dependencies]
 proptest = "1.11.0"
