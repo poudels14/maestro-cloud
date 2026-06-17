@@ -13,7 +13,7 @@ function DisksSection() {
     <Show when={(disks.data ?? []).length > 0}>
       <div>
         <SectionHeader class="mb-4">Disks</SectionHeader>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <For each={disks.data}>{(disk) => <DiskCard disk={disk} />}</For>
         </div>
       </div>
@@ -29,7 +29,7 @@ function DiskCard(props: { disk: DiskInfo }) {
   return (
     <Card class="p-4">
       <div class="flex items-baseline justify-between mb-1">
-        <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider truncate">
+        <h3 class="text-xs font-medium text-gray-500 tracking-wider truncate">
           {props.disk.mountPoint}
         </h3>
         <span class="text-xs text-gray-400 shrink-0 ml-2">

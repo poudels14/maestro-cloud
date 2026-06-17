@@ -1,4 +1,6 @@
 import { For, Show } from "solid-js";
+import type { Component, JSX } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
@@ -9,6 +11,7 @@ function ServiceSidebar(props: {
   selected: Service | null;
   onSelect: (s: Service) => void;
   onBack: () => void;
+  topSection?: JSX.Element;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
@@ -55,6 +58,7 @@ function ServiceSidebar(props: {
           </Show>
         </div>
         <div class="flex-1 overflow-y-auto">
+          {props.topSection}
           <Show when={userServices().length > 0}>
             <SidebarSection title="Services" count={userServices().length}>
               <For each={userServices()}>
@@ -88,17 +92,46 @@ function ServiceSidebar(props: {
   );
 }
 
-function SidebarSection(props: { title: string; count: number; children: any }) {
+function SidebarSection(props: { title: string; count?: number; children: JSX.Element }) {
   return (
     <div class="pb-3">
       <div class="px-3 pt-4 pb-1.5 flex items-baseline justify-between">
         <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
           {props.title}
         </span>
-        <span class="text-[10px] font-mono text-gray-300 tabular-nums">{props.count}</span>
+        <Show when={props.count !== undefined}>
+          <span class="text-[10px] font-mono text-gray-300 tabular-nums">{props.count}</span>
+        </Show>
       </div>
       <div class="px-2 space-y-0.5">{props.children}</div>
     </div>
+  );
+}
+
+function SidebarNavItem(props: {
+  label: string;
+  icon: Component<{ class?: string }>;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class={clsx(
+        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-colors outline-none",
+        {
+          "bg-indigo-50 text-indigo-700 font-medium": props.selected,
+          "text-gray-700 hover:bg-gray-50": !props.selected
+        }
+      )}
+    >
+      <Show when={props.selected}>
+        <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-indigo-500" />
+      </Show>
+      <Dynamic component={props.icon} class="size-3.5 shrink-0 opacity-70" />
+      <span class="truncate flex-1">{props.label}</span>
+    </button>
   );
 }
 
@@ -114,23 +147,22 @@ function SidebarServiceItem(props: {
       type="button"
       onClick={props.onClick}
       class={clsx(
-        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md transition-colors outline-none",
+        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-colors outline-none",
         {
-          "text-sm": !props.system,
-          "text-xs": props.system,
           "bg-indigo-50 text-indigo-700 font-medium": props.selected,
-          "text-gray-700 hover:bg-gray-50": !props.selected && !props.system,
-          "text-gray-500 hover:bg-gray-50 hover:text-gray-700": !props.selected && props.system
+          "text-gray-700 hover:bg-gray-50": !props.selected
         }
       )}
     >
       <Show when={props.selected}>
         <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-indigo-500" />
       </Show>
-      <StatusDot status={status()} />
+      <span class="size-3.5 flex items-center justify-center shrink-0">
+        <StatusDot status={status()} />
+      </span>
       <span class="truncate flex-1">{props.service.name}</span>
     </button>
   );
 }
 
-export { ServiceSidebar };
+export { ServiceSidebar, SidebarSection, SidebarNavItem };

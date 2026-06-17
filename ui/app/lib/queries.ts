@@ -1,3 +1,4 @@
+import { keepPreviousData } from "@tanstack/solid-query";
 import type { ClusterInfo } from "./api";
 import type { MaskedConfig } from "./types";
 import {
@@ -85,6 +86,7 @@ const nodeMetricsQuery = (rangeMs: number) => ({
     const now = Date.now();
     return getNodeMetrics(now - rangeMs, now);
   }, []),
+  placeholderData: keepPreviousData,
   refetchInterval: 10_000
 });
 
@@ -94,6 +96,7 @@ const clusterMetricsQuery = (rangeMs: number) => ({
     const now = Date.now();
     return getClusterMetrics(now - rangeMs, now);
   }, []),
+  placeholderData: keepPreviousData,
   refetchInterval: 10_000
 });
 
@@ -103,6 +106,7 @@ const serviceMetricsQuery = (serviceId: string, rangeMs: number) => ({
     const now = Date.now();
     return getServiceMetrics(serviceId, now - rangeMs, now);
   }, []),
+  placeholderData: keepPreviousData,
   refetchInterval: 10_000
 });
 
@@ -112,6 +116,7 @@ const serviceTrafficQuery = (serviceId: string, rangeMs: number) => ({
     const now = Date.now();
     return getServiceTraffic(serviceId, now - rangeMs, now);
   }, []),
+  placeholderData: keepPreviousData,
   refetchInterval: 10_000
 });
 
@@ -121,6 +126,7 @@ const containerMetricsQuery = (serviceId: string, rangeMs: number) => ({
     const now = Date.now();
     return getContainerMetrics(serviceId, now - rangeMs, now);
   }, []),
+  placeholderData: keepPreviousData,
   refetchInterval: 10_000
 });
 
