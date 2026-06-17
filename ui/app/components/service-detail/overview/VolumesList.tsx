@@ -7,7 +7,7 @@ function VolumesList(props: { service: Service }) {
   return (
     <Show when={volumes().length > 0}>
       <div>
-        <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Volumes</h4>
+        <h4 class="text-xs font-medium text-gray-400 mb-2">Volumes</h4>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           <For each={volumes()}>
             {(volume) => (

@@ -172,9 +172,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
   return (
     <div class="p-4 sm:p-5 space-y-4 sm:space-y-5">
       <div>
-        <h4 class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-2">
-          Deployment
-        </h4>
+        <h4 class="text-[10px] font-medium text-gray-400 mb-2">Deployment</h4>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           <DetailRow label="ID" value={d.id} mono />
           <DetailRow label="Config version" value={d.config.version} mono />
@@ -211,7 +209,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
       </Show>
       <Show when={secretEntries().length > 0 || secretSource()}>
         <div>
-          <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-2">
+          <div class="text-[10px] font-medium text-gray-400 mb-2">
             Deploy Secrets
             <span class="normal-case text-gray-300 ml-1">
               ({d.config.deploy.secrets?.mountPath})
@@ -267,7 +265,7 @@ function SecretsList(props: {
   return (
     <div>
       <div class="flex items-center justify-between mb-2">
-        <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+        <div class="text-[10px] font-medium text-gray-400">
           {props.title}
           <Show when={props.source}>
             <span class="normal-case ml-1.5 text-gray-300 font-mono">{props.source}</span>

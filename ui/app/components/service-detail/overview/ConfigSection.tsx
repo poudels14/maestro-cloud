@@ -13,7 +13,7 @@ function ConfigSection(props: {
     <div>
       <Show when={props.title}>
         <div class="flex items-center justify-between mb-2">
-          <h4 class="text-xs font-medium text-gray-400 uppercase tracking-wider">{props.title}</h4>
+          <h4 class="text-xs font-medium text-gray-400">{props.title}</h4>
           <Show when={props.maskValues}>
             <button
               type="button"

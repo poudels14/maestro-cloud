@@ -96,9 +96,7 @@ function SidebarSection(props: { title: string; count?: number; children: JSX.El
   return (
     <div class="pb-3">
       <div class="px-3 pt-4 pb-1.5 flex items-baseline justify-between">
-        <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-          {props.title}
-        </span>
+        <span class="text-xs font-medium text-gray-400">{props.title}</span>
         <Show when={props.count !== undefined}>
           <span class="text-[10px] font-mono text-gray-300 tabular-nums">{props.count}</span>
         </Show>
@@ -119,7 +117,7 @@ function SidebarNavItem(props: {
       type="button"
       onClick={props.onClick}
       class={clsx(
-        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-colors outline-none",
+        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-[transform,background-color,color] duration-150 ease-out-strong active:scale-[0.98] outline-none",
         {
           "bg-indigo-50 text-indigo-700 font-medium": props.selected,
           "text-gray-700 hover:bg-gray-50": !props.selected
@@ -147,7 +145,7 @@ function SidebarServiceItem(props: {
       type="button"
       onClick={props.onClick}
       class={clsx(
-        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-colors outline-none",
+        "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-[transform,background-color,color] duration-150 ease-out-strong active:scale-[0.98] outline-none",
         {
           "bg-indigo-50 text-indigo-700 font-medium": props.selected,
           "text-gray-700 hover:bg-gray-50": !props.selected

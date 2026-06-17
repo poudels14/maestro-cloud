@@ -65,12 +65,14 @@ function HomeShell(props: { tab: HomeTab }) {
             >
               <Switch>
                 <Match when={props.tab === "info"}>
-                  <ClusterHero />
-                  <ClusterConfigSection />
-                  <SlackWebhooks />
+                  <div class="space-y-8">
+                    <ClusterHero />
+                    <ClusterConfigSection />
+                    <SlackWebhooks />
+                  </div>
                 </Match>
                 <Match when={props.tab === "metrics"}>
-                  <div class="space-y-6">
+                  <div class="space-y-8">
                     <DisksSection />
                     <NodeMetricsSection />
                   </div>
@@ -93,7 +95,7 @@ function ClusterHero() {
   return (
     <Show when={cluster.data}>
       {(info) => (
-        <div class="mb-8">
+        <div>
           <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
             {info().clusterName}
           </h1>

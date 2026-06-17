@@ -112,10 +112,13 @@ export function TabButton(props: {
     <button
       type="button"
       onClick={props.onClick}
-      class={clsx("px-1 pb-2.5 text-sm font-medium border-b-2 transition-colors outline-none", {
-        "border-indigo-500 text-indigo-600": props.active,
-        "border-transparent text-gray-400 hover:text-gray-600": !props.active
-      })}
+      class={clsx(
+        "px-1 pb-2.5 text-sm font-medium border-b-2 transition-[color,border-color] duration-150 ease-out-strong outline-none",
+        {
+          "border-indigo-500 text-indigo-600": props.active,
+          "border-transparent text-gray-400 hover:text-gray-600": !props.active
+        }
+      )}
     >
       {props.label}
       <Show when={props.count !== undefined}>
@@ -147,7 +150,7 @@ export function DeploymentMenu(props: {
 
   return (
     <DropdownMenu placement="bottom-end">
-      <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-colors outline-none">
+      <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-[color,background-color,transform] duration-150 ease-out-strong active:scale-[0.96] outline-none">
         <EllipsisVertical class="size-4" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -212,16 +215,17 @@ export function ErrorBanner(props: { message: string; onRetry?: () => void }) {
 
 export function Card(props: { class?: string; children: JSX.Element }) {
   return (
-    <div class={clsx("bg-white rounded-lg border border-gray-200", props.class)}>
+    <div
+      class={clsx(
+        "bg-white rounded-lg border border-gray-200 shadow-[0_1px_2px_rgb(0_0_0/0.04)]",
+        props.class
+      )}
+    >
       {props.children}
     </div>
   );
 }
 
 export function SectionHeader(props: { class?: string; children: JSX.Element }) {
-  return (
-    <h2 class={clsx("text-sm font-medium text-gray-400 uppercase tracking-wider", props.class)}>
-      {props.children}
-    </h2>
-  );
+  return <h2 class={clsx("text-sm font-semibold text-gray-700", props.class)}>{props.children}</h2>;
 }

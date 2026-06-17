@@ -38,7 +38,7 @@ function SlackWebhooks() {
 
   return (
     <div>
-      <div class="mb-4 mt-10">
+      <div class="mb-4">
         <SectionHeader>Slack webhooks</SectionHeader>
       </div>
       <Show when={actionError()}>
@@ -140,22 +140,17 @@ function WebhookRow(props: {
           <For each={props.webhook.categories}>
             {(category) => (
               <span
-                class={clsx(
-                  "text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded",
-                  {
-                    "bg-sky-50 text-sky-700 border border-sky-200": category === "info",
-                    "bg-red-50 text-red-700 border border-red-200": category === "error"
-                  }
-                )}
+                class={clsx("text-[11px] font-medium px-1.5 py-0.5 rounded", {
+                  "bg-sky-50 text-sky-700 border border-sky-200": category === "info",
+                  "bg-red-50 text-red-700 border border-red-200": category === "error"
+                })}
               >
                 {category}
               </span>
             )}
           </For>
           <Show when={!props.webhook.enabled}>
-            <span class="text-[10px] font-medium uppercase tracking-wider text-gray-400">
-              disabled
-            </span>
+            <span class="text-[11px] font-medium text-gray-400">disabled</span>
           </Show>
         </div>
         <p class="text-xs font-mono text-gray-400 truncate mt-0.5">{props.webhook.url}</p>
