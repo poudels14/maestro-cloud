@@ -677,6 +677,7 @@ impl Harness {
                 network: "test-net".to_string(),
                 subnet: None,
                 tailscale_authkey: None,
+                tailscale_advertise_routes: Vec::new(),
                 encryption_key: SecretString::new("test".to_string()),
                 jwt_secret_key: None,
                 build_command_env: Default::default(),

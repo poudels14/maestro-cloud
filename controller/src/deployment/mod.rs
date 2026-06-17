@@ -696,6 +696,13 @@ async fn init_tailnet(
             return;
         }
     };
+    let mut routes = vec![network_cidr.clone()];
+    for route in &config.tailscale_advertise_routes {
+        if !routes.contains(route) {
+            routes.push(route.clone());
+        }
+    }
+    let advertise_routes = routes.join(",");
 
     runtime
         .build_image(
@@ -741,7 +748,7 @@ async fn init_tailnet(
                     "-v".to_string(),
                     format!("{}:/data/dns", dns_dir_abs.display()),
                     "-e".to_string(),
-                    format!("TS_ROUTES={network_cidr}"),
+                    format!("TS_ROUTES={advertise_routes}"),
                     "-e".to_string(),
                     "TS_USERSPACE=true".to_string(),
                     "-e".to_string(),
@@ -792,14 +799,14 @@ async fn init_tailnet(
     )
     .await;
 
-    let routes_arg = format!("--advertise-routes={network_cidr}");
+    let routes_arg = format!("--advertise-routes={advertise_routes}");
     let _ = runtime
         .exec_in_container(container_name, &["tailscale", "set", &routes_arg])
         .await;
 
     logger.emit(
         "info",
-        &format!("tailscale subnet router started, advertising route {network_cidr}"),
+        &format!("tailscale subnet router started, advertising routes {advertise_routes}"),
     );
     let resolved_ip = static_ip
         .map(String::from)

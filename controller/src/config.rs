@@ -169,6 +169,8 @@ impl IngressConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TailscaleConfig {
     pub auth_key: String,
+    #[serde(default)]
+    pub advertise_routes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,6 +242,7 @@ pub struct EgressView {
 #[serde(rename_all = "kebab-case")]
 pub struct TailscaleView {
     pub auth_key: Option<String>,
+    pub advertise_routes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +307,7 @@ impl StartConfig {
             encryption_key: mask(&self.encryption_key),
             tailscale: self.tailscale.as_ref().map(|ts| TailscaleView {
                 auth_key: mask(&ts.auth_key),
+                advertise_routes: ts.advertise_routes.clone(),
             }),
             jwt_secret_key: self.jwt_secret_key.as_deref().and_then(mask),
             tags: self.tags.clone(),
