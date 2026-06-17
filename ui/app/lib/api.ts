@@ -103,6 +103,7 @@ export async function getLogs(
   deploymentId: string,
   tail?: number,
   afterSeq?: number,
+  beforeSeq?: number,
   phase?: "build" | "deploy"
 ): Promise<LogEntry[]> {
   const url = new URL(
@@ -111,6 +112,7 @@ export async function getLogs(
   );
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
+  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
@@ -122,11 +124,13 @@ export async function getServiceLogs(
   serviceId: string,
   tail?: number,
   afterSeq?: number,
+  beforeSeq?: number,
   phase?: "build" | "deploy"
 ): Promise<LogEntry[]> {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
+  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch service logs: ${res.statusText}`);
@@ -137,11 +141,13 @@ export async function getServiceLogs(
 export async function getSystemLogs(
   name: string,
   tail?: number,
-  afterSeq?: number
+  afterSeq?: number,
+  beforeSeq?: number
 ): Promise<LogEntry[]> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
+  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
   const raw = await res.json();

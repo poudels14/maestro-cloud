@@ -327,6 +327,37 @@ impl LogStore {
         .await?
     }
 
+    pub async fn read_before_by_prefix_origin(
+        &self,
+        prefix: &str,
+        origin: Option<LogOrigin>,
+        before_seq: i64,
+        limit: usize,
+    ) -> Result<Vec<LogEntry>> {
+        let pool = self.pool.clone();
+        let pattern = format!("{prefix}%");
+        let origin_filter: Option<&'static str> = origin.map(|o| o.as_str());
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs
+                 WHERE source LIKE ?1 AND seq < ?2
+                   AND (?3 IS NULL OR origin = ?3)
+                 ORDER BY seq DESC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                rusqlite::params![pattern, before_seq, origin_filter, limit as i64],
+                |row| Self::row_to_entry(row),
+            )?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
+    }
+
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
         let pool = self.pool.clone();
         let source = source.to_string();
@@ -421,6 +452,33 @@ impl LogStore {
         .await?
     }
 
+    pub async fn read_before_for_source(
+        &self,
+        source: &str,
+        before_seq: i64,
+        limit: usize,
+    ) -> Result<Vec<LogEntry>> {
+        let pool = self.pool.clone();
+        let source = source.to_string();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs WHERE source = ?1 AND seq < ?2
+                 ORDER BY seq DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![source, before_seq, limit as i64], |row| {
+                    Self::row_to_entry(row)
+                })?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
+        })
+        .await?
+    }
+
     pub async fn read_after_sources(
         &self,
         sources: &[&str],
@@ -453,6 +511,44 @@ impl LogStore {
                 params.iter().map(|p| p.as_ref()).collect();
             let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
             Ok(rows.filter_map(|r| r.ok()).collect())
+        })
+        .await?
+    }
+
+    pub async fn read_before_sources(
+        &self,
+        sources: &[&str],
+        before_seq: i64,
+        limit: usize,
+    ) -> Result<Vec<LogEntry>> {
+        let pool = self.pool.clone();
+        let sources: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
+            let conn = pool.get()?;
+            let placeholders: Vec<String> = (1..=sources.len()).map(|i| format!("?{i}")).collect();
+            let query = format!(
+                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
+                 FROM logs
+                 WHERE source IN ({}) AND seq < ?{}
+                 ORDER BY seq DESC
+                 LIMIT ?{}",
+                placeholders.join(", "),
+                sources.len() + 1,
+                sources.len() + 2
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = sources
+                .iter()
+                .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            params.push(Box::new(before_seq));
+            params.push(Box::new(limit as i64));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
+            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            entries.reverse();
+            Ok(entries)
         })
         .await?
     }
