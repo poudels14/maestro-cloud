@@ -32,6 +32,12 @@ pub struct SystemStartupInfo {
     pub nameserver_ip: Option<String>,
 }
 
+fn system_log_tags(config: &ControllerConfig) -> Vec<String> {
+    let mut tags = config.tags.clone();
+    tags.push(format!("cluster:{}", config.cluster_name));
+    tags
+}
+
 pub async fn start_system_jobs(
     config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
@@ -327,7 +333,7 @@ async fn init_etcd(
         secrets_mount: None,
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
-            tags: Default::default(),
+            tags: system_log_tags(config),
             origin: LogOrigin::System,
         }),
     };
@@ -429,7 +435,7 @@ async fn init_ingress(
         secrets_mount: None,
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
-            tags: Default::default(),
+            tags: system_log_tags(config),
             origin: LogOrigin::System,
         }),
     };
@@ -508,7 +514,7 @@ async fn init_admin(
         secrets_mount: None,
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
-            tags: Default::default(),
+            tags: system_log_tags(config),
             origin: LogOrigin::System,
         }),
     };
@@ -666,7 +672,7 @@ async fn init_probe(
         }),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
-            tags: Default::default(),
+            tags: system_log_tags(config),
             origin: LogOrigin::System,
         }),
     };
@@ -792,7 +798,7 @@ async fn init_tailnet(
             }),
             log_config: Some(LogConfig {
                 sender: log_sender.clone(),
-                tags: Default::default(),
+                tags: system_log_tags(config),
                 origin: LogOrigin::System,
             }),
         },
@@ -888,7 +894,7 @@ async fn init_cloudflared(
                 secrets_mount: None,
                 log_config: Some(LogConfig {
                     sender: log_sender.clone(),
-                    tags: Default::default(),
+                    tags: system_log_tags(config),
                     origin: LogOrigin::System,
                 }),
             },
