@@ -17,6 +17,9 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 #[async_trait]
 pub trait LogSink: Send + Sync {
     fn id(&self) -> &str;
+    fn advance_cursor_on_retry_exhaustion(&self) -> bool {
+        false
+    }
     async fn send(&self, entries: &[LogEntry]) -> Result<()>;
 }
 
@@ -82,18 +85,27 @@ impl SinkWorker {
                     eprintln!(
                         "[maestro]: log sink `{sink_id}` failed after {MAX_RETRIES} retries: {err}"
                     );
-                    break;
+                    if !self.sink.advance_cursor_on_retry_exhaustion() {
+                        break;
+                    }
+                    eprintln!(
+                        "[maestro]: log sink `{sink_id}` dropping batch through seq {last_seq} after retry exhaustion"
+                    );
                 }
 
-                cursor = last_seq;
-                if let Err(err) = self.store.set_sink_cursor(&sink_id, cursor).await {
-                    eprintln!("[maestro]: log sink `{sink_id}` cursor update error: {err}");
-                }
+                self.advance_cursor(&sink_id, &mut cursor, last_seq).await;
 
                 if entries.len() < BATCH_SIZE {
                     break;
                 }
             }
+        }
+    }
+
+    async fn advance_cursor(&self, sink_id: &str, cursor: &mut i64, seq: i64) {
+        *cursor = seq;
+        if let Err(err) = self.store.set_sink_cursor(sink_id, *cursor).await {
+            eprintln!("[maestro]: log sink `{sink_id}` cursor update error: {err}");
         }
     }
 

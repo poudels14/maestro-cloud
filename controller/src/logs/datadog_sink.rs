@@ -72,6 +72,10 @@ impl LogSink for DatadogSink {
         "datadog"
     }
 
+    fn advance_cursor_on_retry_exhaustion(&self) -> bool {
+        true
+    }
+
     async fn send(&self, entries: &[LogEntry]) -> Result<()> {
         let dd_entries: Vec<DatadogLogEntry> = entries
             .iter()
@@ -94,6 +98,10 @@ impl LogSink for DatadogSink {
                 }
             })
             .collect();
+        if dd_entries.is_empty() {
+            return Ok(());
+        }
+
         let compressed_body = gzip_json(&dd_entries)?;
 
         let response = self
@@ -109,10 +117,22 @@ impl LogSink for DatadogSink {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("datadog log sink POST failed with {status}: {body}");
+            return handle_response_failure(status, body);
         }
         Ok(())
     }
+}
+
+fn handle_response_failure(status: reqwest::StatusCode, body: String) -> Result<()> {
+    let is_retryable_client_status = matches!(status.as_u16(), 408 | 409 | 425 | 429);
+    let is_non_retryable_status = status.is_client_error() && !is_retryable_client_status;
+    if is_non_retryable_status {
+        eprintln!(
+            "[maestro]: dropping datadog log batch after non-retryable response {status}: {body}"
+        );
+        return Ok(());
+    }
+    anyhow::bail!("datadog log sink POST failed with {status}: {body}");
 }
 
 fn gzip_json<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>> {
@@ -171,4 +191,54 @@ fn dd_status(level: &str) -> String {
         _ => "info",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn system_log(source: &str) -> LogEntry {
+        LogEntry {
+            seq: 1,
+            ts: 1_700_000_000_000,
+            level: Arc::from("info"),
+            stream: Arc::from("stderr"),
+            text: "controller startup".to_string(),
+            source: Arc::from(source),
+            origin: LogOrigin::System,
+            tags: Arc::new(serde_json::json!([])),
+            attrs: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn send_skips_http_request_when_all_entries_are_filtered_out() {
+        let sink = DatadogSink::new("test-api-key".to_string(), "invalid.invalid", false, false);
+        assert!(sink.advance_cursor_on_retry_exhaustion());
+
+        sink.send(&[system_log("maestro-controller")])
+            .await
+            .expect("filtered batch should be treated as delivered");
+    }
+
+    #[test]
+    fn non_retryable_datadog_response_is_treated_as_delivered() {
+        handle_response_failure(reqwest::StatusCode::BAD_REQUEST, "bad payload".to_string())
+            .expect("non-retryable datadog response should not pin the cursor");
+    }
+
+    #[test]
+    fn retryable_datadog_response_is_returned_as_error() {
+        let err = handle_response_failure(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "slow down".to_string(),
+        )
+        .expect_err("retryable datadog response should remain an error");
+        assert!(
+            err.to_string().contains("429"),
+            "error should include retryable status: {err}"
+        );
+    }
 }
