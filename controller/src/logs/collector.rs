@@ -5,6 +5,7 @@ use super::store::{LogEntry, LogOrigin, LogStore};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+const APPEND_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct LogConfig {
@@ -55,13 +56,12 @@ impl LogCollector {
                         Ok(entry) => {
                             batch.push(entry);
                             if batch.len() >= 256 {
-                                let _ = self.store.append(&batch).await;
-                                batch.clear();
+                                self.flush(&mut batch).await;
                             }
                         }
                         Err(_) => {
                             if !batch.is_empty() {
-                                let _ = self.store.append(&batch).await;
+                                self.flush(&mut batch).await;
                             }
                             break;
                         }
@@ -69,12 +69,26 @@ impl LogCollector {
                 }
                 _ = flush_interval.tick() => {
                     if !batch.is_empty() {
-                        let _ = self.store.append(&batch).await;
-                        batch.clear();
+                        self.flush(&mut batch).await;
                     }
                 }
                 _ = cleanup_interval.tick() => {
                     self.cleanup_flushed_logs().await;
+                }
+            }
+        }
+    }
+
+    async fn flush(&self, batch: &mut Vec<LogEntry>) {
+        while !batch.is_empty() {
+            match self.store.append(batch).await {
+                Ok(()) => {
+                    batch.clear();
+                    return;
+                }
+                Err(err) => {
+                    eprintln!("[maestro]: log append error (retrying): {err}");
+                    tokio::time::sleep(APPEND_RETRY_INTERVAL).await;
                 }
             }
         }

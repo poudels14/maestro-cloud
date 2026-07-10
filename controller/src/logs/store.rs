@@ -208,8 +208,9 @@ impl LogStore {
         let pool = self.pool.clone();
         let entries = entries.to_vec();
         task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
-            let mut stmt = conn.prepare_cached(
+            let mut conn = pool.get()?;
+            let tx = conn.transaction()?;
+            let mut stmt = tx.prepare_cached(
                 "INSERT INTO logs (ts, level, stream, text, source, origin, tags, attributes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
@@ -228,6 +229,8 @@ impl LogStore {
                     attrs_json,
                 ])?;
             }
+            drop(stmt);
+            tx.commit()?;
             Ok(())
         })
         .await??;
