@@ -13,7 +13,7 @@ function OverviewTab(props: { service: Service }) {
       return [{ label: "Image", value: props.service.image ?? "(not set)" }];
     }
     return [
-      { label: "Git repository", value: build.repo },
+      { label: "Git repository", value: build.repo ?? "uploaded context" },
       ...(build.branch ? [{ label: "Branch", value: build.branch }] : []),
       { label: "Dockerfile", value: build.dockerfile },
       ...(build.registry ? [{ label: "Registry", value: build.registry }] : []),
@@ -39,7 +39,9 @@ function OverviewTab(props: { service: Service }) {
         value: `${command.command} ${command.args.join(" ")}`.trim()
       });
     }
-    items.push({ label: "Healthcheck path", value: props.service.deploy.healthcheckPath });
+    if (props.service.deploy.healthcheckPath) {
+      items.push({ label: "Healthcheck path", value: props.service.deploy.healthcheckPath });
+    }
     items.push({
       label: "Healthcheck interval",
       value: `${props.service.deploy.healthcheckInterval}s`

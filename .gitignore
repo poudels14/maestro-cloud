@@ -1,5 +1,6 @@
 target
 node_modules
+.pnpm-store
 .vite
 .nitro
 routeTree.gen.ts
@@ -8,4 +9,3 @@ __pycache__
 
 .env
 .envrc
-

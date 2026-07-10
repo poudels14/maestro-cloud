@@ -8,7 +8,7 @@ use crate::logs::Logger;
 use crate::utils::crypto::SecretString;
 use crate::utils::secrets::SecretProvider;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeType {
     #[default]
@@ -16,7 +16,7 @@ pub enum RuntimeType {
     Nerdctl,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuilderType {
     #[default]
@@ -46,7 +46,7 @@ impl std::str::FromStr for RuntimeType {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct StartConfig {
     pub cluster: ClusterConfig,
@@ -80,7 +80,7 @@ pub struct StartConfig {
     pub allow_cli_deployment: bool,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct EgressConfig {
     #[serde(default)]
@@ -89,20 +89,20 @@ pub struct EgressConfig {
     pub allow: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DepotConfig {
     #[serde(default)]
     pub token: Option<SecretString>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CloudflareConfig {
     pub tunnel: CloudflareTunnelConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CloudflareTunnelConfig {
     pub token: SecretString,
@@ -110,13 +110,13 @@ pub struct CloudflareTunnelConfig {
     pub replicas: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SlackConfig {
     pub webhook_url: SecretString,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SystemType {
     Nixos,
@@ -142,13 +142,13 @@ impl std::str::FromStr for SystemType {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ClusterConfig {
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct IngressConfig {
     #[serde(default)]
@@ -167,7 +167,7 @@ impl IngressConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct TailscaleConfig {
     pub auth_key: String,
@@ -175,7 +175,7 @@ pub struct TailscaleConfig {
     pub advertise_routes: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DatadogConfig {
     pub api_key: String,
