@@ -9,13 +9,14 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
   const status = () => (isSystem() ? "SYSTEM" : (props.service.status ?? "IDLE"));
   const sourceName = () => {
     const build = props.service.build;
-    if (build) {
+    if (build?.repo) {
       return build.repo
         .replace(/\.git$/, "")
         .split("/")
         .slice(-2)
         .join("/");
     }
+    if (build) return "uploaded context";
     return props.service.image ?? "(no source)";
   };
 

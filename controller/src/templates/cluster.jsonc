@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/poudels14/maestro-cloud/release/controller/maestro.schema.json",
   "services": {
     "service-1": {
       "name": "Service 1",

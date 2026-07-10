@@ -89,7 +89,7 @@
         },
         "secrets": {
           "$ref": "#/$defs/envConfig",
-          "description": "Build secrets passed via --secret (not baked into image layers). GH_TOKEN here is used for private repo access."
+          "description": "Sensitive values made available to source fetch and build commands. GH_TOKEN here is used for private repo access."
         }
       }
     },
@@ -227,11 +227,16 @@
     },
     "ingress": {
       "type": "object",
-      "required": ["host"],
       "additionalProperties": false,
+      "anyOf": [{ "required": ["host"] }, { "required": ["hosts"] }],
       "properties": {
         "host": {
           "type": "string"
+        },
+        "hosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
         },
         "port": {
           "type": "integer",

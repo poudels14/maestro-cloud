@@ -16,30 +16,37 @@ cargo build --release
 
 ## Quick start
 
-### 1. Create a config file
+### 1. Create the config files
 
 ```bash
-maestro init
+maestro config init   # choose "cluster" to create maestro.jsonc
+maestro config init   # choose "services" to create maestro.cluster.jsonc
 ```
 
-This generates a `maestro.jsonc` file in your working directory with a sample service configuration.
+Set a strong `encryption-key` in `maestro.jsonc`, then edit `maestro.cluster.jsonc` with the services you want to deploy.
 
 ### 2. Start the cluster
 
 ```bash
-maestro daemon start --cluster-name my-cluster --ingress-port 8888 --data-dir ./data --project-dir .
+maestro daemon start \
+  --config maestro.jsonc \
+  --admin-port 3001 \
+  --data-dir ./data \
+  --project-dir .
 ```
 
 Flags:
 
 - `--runtime docker|nerdctl` — container runtime (default: docker)
+- `--admin-port` — localhost port for the admin UI and API proxy
 - `--ingress-port` — host port(s) mapped to the ingress (can be repeated for multiple ports)
 - `--subnet` — container network subnet CIDR, e.g. `172.22.0.0/16` (required)
 - `--force` — recreate the container network if it already exists or conflicts
 - `--encryption-key` — master key for encrypting secrets
 - `--datadog-api-key` — Datadog API key for log forwarding (or `DATADOG_API_KEY` env var)
 - `--datadog-site` — Datadog site (e.g. `datadoghq.com`, `us3.datadoghq.com`)
-- `--datadog-include-system-logs` — include maestro system logs in Datadog
+- `--datadog-no-ingress-logs` — exclude Traefik ingress logs from Datadog
+- `--datadog-no-tailscale-logs` — exclude Tailscale logs from Datadog
 
 ### 3. Deploy services
 
@@ -51,7 +58,8 @@ maestro contexts use local
 ```
 
 ```bash
-maestro services rollout
+maestro services rollout          # preview the diff
+maestro services rollout --apply  # apply it
 ```
 
 ### 4. Redeploy a service
@@ -83,8 +91,11 @@ The config file (`maestro.jsonc`) supports:
   "datadog": {
     "api-key": "your-dd-api-key",
     "site": "datadoghq.com",
-    "include-system-logs": false
-  }
+    "include-ingress-logs": true,
+    "include-tailscale-logs": true,
+    "include-metrics": false
+  },
+  "allow-cli-deployment": false
 }
 ```
 
@@ -174,6 +185,7 @@ Tailscale enables remote access to your containers from any device on your tailn
 
 ```bash
 export TS_AUTHKEY=tskey-auth-...
+export MAESTRO_ENCRYPTION_KEY=replace-with-a-strong-secret
 maestro daemon start \
   --cluster-name my-cluster \
   --ingress-port 80 --ingress-port 443 \
@@ -233,11 +245,14 @@ curl http://web.other-cluster.maestro.internal:8888/
 Each cluster needs its own subnet to avoid IP conflicts:
 
 ```bash
+export TS_AUTHKEY=tskey-auth-...
+export MAESTRO_ENCRYPTION_KEY=replace-with-a-strong-secret
+
 # Cluster 1
-maestro daemon start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale
+maestro daemon start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale --project-dir .
 
 # Cluster 2
-maestro daemon start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale
+maestro daemon start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale --project-dir .
 ```
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
@@ -246,7 +261,7 @@ Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.ma
 
 ### Step 1: Generate and store the cluster config
 
-Run `maestro init` to generate a `maestro.jsonc` config, then update it for your environment and store it in AWS Secrets Manager:
+Run `maestro config init` and choose `cluster` to generate a `maestro.jsonc` config, then update it for your environment and store it in AWS Secrets Manager:
 
 ```bash
 aws secretsmanager create-secret \
@@ -282,6 +297,7 @@ cat > /etc/maestro/flake.nix << 'EOF'
             enable = true;
             config = "aws-secret://<your-secret-id>";
             runtime = "nerdctl";  # or "docker"
+            extraArgs = [ "--admin-port" "3001" ];
           };
           services.amazon-ssm-agent.enable = true;
           networking.firewall.allowedTCPPorts = [ 80 443 22 ];
@@ -298,7 +314,7 @@ nixos-rebuild switch --flake /etc/maestro#default
 
 Replace `<your-secret-id>` with the secret name from step 1.
 
-Configure a context for the remote Maestro API, then trigger updates remotely:
+Forward local port 3001 to the instance with SSH or Session Manager, configure a context for it, then trigger updates remotely:
 
 ```bash
 maestro contexts set prod http://127.0.0.1:3001

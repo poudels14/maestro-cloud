@@ -9,19 +9,20 @@ export interface EnvConfig {
 }
 
 export interface Build {
-  repo: string;
+  repo?: string | null;
   branch?: string | null;
   dockerfile: string;
   watch?: boolean;
   registry?: string | null;
+  depot?: { project: string } | null;
   env?: EnvConfig;
   secrets?: EnvConfig;
 }
 
 export interface Ingress {
-  host: string;
+  host?: string | null;
   hosts?: string[];
-  port?: number;
+  port?: number | null;
 }
 
 export interface IngressRouting {
@@ -32,20 +33,25 @@ export interface IngressRouting {
 }
 
 export interface SecretKeyMeta {
-  changed?: boolean;
+  hash: string;
+  changed: boolean;
 }
 
 export interface SecretsConfig {
   mountPath: string;
   source?: string | null;
-  keys: Record<string, SecretKeyMeta>;
+  items?: Record<string, string>;
+  keys?: Record<string, SecretKeyMeta>;
 }
 
 export interface Deploy {
-  command?: BuildCommand | null;
-  healthcheckPath: string;
+  flags?: string[];
+  exposePorts?: number[];
+  command: BuildCommand | null;
+  healthcheckPath?: string | null;
   healthcheckInterval: number;
-  replicas?: number;
+  replicas: number;
+  maxRestarts?: number | null;
   env?: EnvConfig;
   secrets?: SecretsConfig | null;
   volumes?: VolumeMount[];
@@ -90,6 +96,8 @@ export interface Service {
 export interface ReplicaState {
   replicaIndex: number;
   status: string;
+  healthcheckFailures: number;
+  restartAttempts: number;
 }
 
 export interface GitCommitInfo {
@@ -100,11 +108,18 @@ export interface GitCommitInfo {
 export interface Deployment {
   id: string;
   createdAt: number;
+  deployedAt?: number | null;
+  drainedAt?: number | null;
   status: string;
   replicas?: ReplicaState[];
   config: Service;
   gitCommit: GitCommitInfo | null;
-  build: unknown | null;
+  build: DeploymentBuildInfo | null;
+  uploadArchive?: string | null;
+}
+
+export interface DeploymentBuildInfo {
+  dockerImageId: string;
 }
 
 export interface MetricPoint {
@@ -155,12 +170,27 @@ export interface LogEntry {
 
 export type MaskedConfig = {
   cluster: { name: string };
-  ingress?: { ports?: number[] };
-  subnet?: string;
-  egress?: { deny?: string[]; allow?: string[] };
-  tailscale?: { "advertise-routes"?: string[] };
-  tags?: string[];
-  datadog?: { site?: string };
+  ingress: { ports: number[] };
+  subnet?: string | null;
+  egress: { deny: string[]; allow: string[] };
+  "encryption-key": string | null;
+  tailscale?: { "auth-key": string | null; "advertise-routes": string[] } | null;
+  "jwt-secret-key": string | null;
+  tags: string[];
+  datadog?: {
+    "api-key": string | null;
+    site?: string | null;
+    "include-ingress-logs": boolean;
+    "include-tailscale-logs": boolean;
+    "include-metrics": boolean;
+  } | null;
+  system?: string | null;
   runtime: string;
-  depot?: { token: string | null };
+  depot?: { token: string | null } | null;
+  cloudflare?: {
+    tunnel: { token: string | null; replicas?: number | null };
+  } | null;
+  slack?: { "webhook-url": string | null } | null;
+  "disable-etcd-cert": boolean;
+  "allow-cli-deployment": boolean;
 };

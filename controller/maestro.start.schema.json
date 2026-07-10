@@ -108,6 +108,10 @@
         "include-tailscale-logs": {
           "type": "boolean",
           "default": true
+        },
+        "include-metrics": {
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -129,7 +133,42 @@
         }
       }
     },
+    "cloudflare": {
+      "type": "object",
+      "required": ["tunnel"],
+      "additionalProperties": false,
+      "properties": {
+        "tunnel": {
+          "type": "object",
+          "required": ["token"],
+          "additionalProperties": false,
+          "properties": {
+            "token": {
+              "type": "string"
+            },
+            "replicas": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "slack": {
+      "type": "object",
+      "required": ["webhook-url"],
+      "additionalProperties": false,
+      "properties": {
+        "webhook-url": {
+          "type": "string"
+        }
+      }
+    },
     "disable-etcd-cert": {
+      "type": "boolean",
+      "default": false
+    },
+    "allow-cli-deployment": {
       "type": "boolean",
       "default": false
     }

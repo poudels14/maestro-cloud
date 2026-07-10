@@ -1,5 +1,5 @@
 {
-  "$schema": "./maestro.start.schema.json",
+  "$schema": "https://raw.githubusercontent.com/poudels14/maestro-cloud/release/controller/maestro.start.schema.json",
   "cluster": {
     "name": "my-cluster"
   },
@@ -11,19 +11,7 @@
     "deny": []
   },
   "encryption-key": "$CHANGE_ME",
-  "runtime": "nerdctl",
-  "depot": {
-    "token": ""
-  },
-  "jwt-secret-key": "",
-  "tailscale": {
-    "auth-key": ""
-  },
+  "runtime": "docker",
   "tags": [],
-  "datadog": {
-    "api-key": "$API_KEY",
-    "site": "datadoghq.com",
-    "include-ingress-logs": true,
-    "include-tailscale-logs": true
-  }
+  "allow-cli-deployment": false
 }
