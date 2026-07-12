@@ -26,6 +26,13 @@ pub struct MetricPoint {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "kebab-case")]
+pub enum TypedMetricBatch {
+    Resource(Vec<MetricPoint>),
+    ControllerStats(crate::cluster_stats::ControllerStatsSnapshot),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskPoint {
     pub ts: i64,
@@ -184,7 +191,7 @@ impl MetricsCollector {
 
         self.client
             .post(&self.endpoint)
-            .json(&points)
+            .json(&TypedMetricBatch::Resource(points.clone()))
             .send()
             .await
             .map_err(|err| anyhow!("failed to send metrics: {err}"))?;
@@ -387,6 +394,30 @@ fn parse_net_io(s: &str) -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_metric() -> MetricPoint {
+        MetricPoint {
+            ts: 1,
+            source: "node".to_string(),
+            cpu_percent: 2.0,
+            memory_bytes: 3,
+            memory_limit_bytes: 4,
+            net_rx_bytes: 5,
+            net_tx_bytes: 6,
+        }
+    }
+
+    #[test]
+    fn metrics_ingest_uses_typed_batches() {
+        let typed = TypedMetricBatch::Resource(vec![sample_metric()]);
+        let json = serde_json::to_value(&typed).expect("typed JSON");
+        assert_eq!(json["type"], "resource");
+        let parsed: TypedMetricBatch = serde_json::from_value(json).expect("typed metrics payload");
+        assert!(matches!(
+            parsed,
+            TypedMetricBatch::Resource(points) if points.len() == 1
+        ));
+    }
 
     #[test]
     fn parse_percent_values() {

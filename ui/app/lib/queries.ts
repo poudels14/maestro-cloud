@@ -1,6 +1,6 @@
 import { keepPreviousData } from "@tanstack/solid-query";
 import type { ClusterInfo } from "./api";
-import type { MaskedConfig } from "./types";
+import type { ClusterStats, MaskedConfig } from "./types";
 import {
   getClusterConfig,
   getClusterInfo,
@@ -10,6 +10,7 @@ import {
   getDisks,
   getIngressRoutes,
   getNodeMetrics,
+  getClusterStats,
   getServiceMetrics,
   getServiceTraffic,
   getServices,
@@ -24,6 +25,7 @@ function ssrSafe<T>(realFn: () => Promise<T>, ssrFallback: T): () => Promise<T> 
 
 const queryKeys = {
   cluster: ["cluster"] as const,
+  clusterStats: ["cluster", "stats"] as const,
   config: ["config"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
@@ -54,6 +56,12 @@ const clusterConfigQuery = () => ({
   queryKey: queryKeys.config,
   queryFn: ssrSafe(getClusterConfig, null as MaskedConfig | null) as () => Promise<MaskedConfig>,
   staleTime: 60_000
+});
+
+const clusterStatsQuery = () => ({
+  queryKey: queryKeys.clusterStats,
+  queryFn: ssrSafe(getClusterStats, null as ClusterStats | null) as () => Promise<ClusterStats>,
+  refetchInterval: 10_000
 });
 
 const servicesQuery = () => ({
@@ -139,6 +147,7 @@ export {
   queryKeys,
   clusterInfoQuery,
   clusterConfigQuery,
+  clusterStatsQuery,
   servicesQuery,
   deploymentsQuery,
   ingressRoutesQuery,

@@ -54,8 +54,17 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let log_backup = masked_config
         .as_ref()
         .and_then(|config| config.log_backup.clone());
-
     let use_duckdb = env_bool("MAESTRO_DUCKDB", true);
+    let controller_stats: crate::cluster_stats::SharedControllerStats =
+        Arc::new(std::sync::RwLock::new(None));
+    let backup_stats: crate::cluster_stats::SharedBackupStats = Arc::new(std::sync::RwLock::new(
+        crate::cluster_stats::BackupStatsSnapshot {
+            configured: log_backup.is_some() && use_duckdb,
+            ..crate::cluster_stats::BackupStatsSnapshot::default()
+        },
+    ));
+
+    let storage_mode = if use_duckdb { "duckdb" } else { "sqlite" }.to_string();
     let data_root = std::env::var_os("MAESTRO_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/data"));
@@ -64,6 +73,14 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             crate::logs::DuckLogStore::open(&data_root)
                 .expect("failed to open probe DuckDB stores"),
         );
+        match duck.load_backup_stats().await {
+            Ok(Some(mut saved)) => {
+                saved.configured = log_backup.is_some();
+                *backup_stats.write().unwrap_or_else(|err| err.into_inner()) = saved;
+            }
+            Ok(None) => {}
+            Err(err) => eprintln!("failed to restore backup stats: {err:#}"),
+        }
         // This is the retired probe archive. Active controller spools are shipped
         // through /api/logs and must never be scanned by the SQLite migrator.
         for source in [data_root.join("logs.db")] {
@@ -132,7 +149,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         });
         if let Some(settings) = log_backup.as_ref() {
             let config = backup::BackupConfig::from_config(&data_root, &cluster_name, settings)?;
-            tokio::spawn(backup::run(duck.clone(), config));
+            tokio::spawn(backup::run(duck.clone(), config, backup_stats.clone()));
         }
         crate::logs::TelemetryStore::duck(duck)
     } else {
@@ -192,6 +209,11 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         slack_notifier,
         allow_cli_deployment,
         upload_dir,
+        server::ServerStatsState {
+            controller_stats,
+            backup_stats,
+            storage_mode,
+        },
     );
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();

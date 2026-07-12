@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc};
+use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
@@ -82,10 +82,20 @@ struct AppState {
     slack: crate::slack::SlackNotifier,
     allow_cli_deployment: bool,
     upload_dir: std::path::PathBuf,
+    controller_stats: crate::cluster_stats::SharedControllerStats,
+    backup_stats: crate::cluster_stats::SharedBackupStats,
+    probe_started_at: Instant,
+    storage_mode: String,
 }
 
 pub(crate) struct Server {
     state: AppState,
+}
+
+pub(crate) struct ServerStatsState {
+    pub controller_stats: crate::cluster_stats::SharedControllerStats,
+    pub backup_stats: crate::cluster_stats::SharedBackupStats,
+    pub storage_mode: String,
 }
 
 impl Server {
@@ -100,6 +110,7 @@ impl Server {
         slack: crate::slack::SlackNotifier,
         allow_cli_deployment: bool,
         upload_dir: std::path::PathBuf,
+        stats: ServerStatsState,
     ) -> Self {
         Self {
             state: AppState {
@@ -113,6 +124,10 @@ impl Server {
                 slack,
                 allow_cli_deployment,
                 upload_dir,
+                controller_stats: stats.controller_stats,
+                backup_stats: stats.backup_stats,
+                probe_started_at: Instant::now(),
+                storage_mode: stats.storage_mode,
             },
         }
     }
@@ -132,6 +147,7 @@ impl Server {
         let public = Router::new()
             .route("/_healthy", get(Self::healthy))
             .route("/api/cluster", get(Self::get_cluster_info))
+            .route("/api/cluster/stats", get(Self::get_cluster_stats))
             .route("/api/config", get(Self::get_config))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
@@ -193,6 +209,7 @@ impl Server {
             .route("/api/metrics", post(Self::ingest_metrics))
             .route("/api/metrics/node", get(Self::get_node_metrics))
             .route("/api/metrics/cluster", get(Self::get_cluster_metrics))
+            .route("/api/metrics/stats", get(Self::get_stats_metrics))
             .route(
                 "/api/services/{serviceId}/metrics",
                 get(Self::get_service_metrics),
@@ -272,6 +289,50 @@ impl Server {
             "version": MAESTRO_VERSION,
             "upgrading": upgrading,
         }))
+    }
+
+    async fn get_cluster_stats(
+        State(state): State<AppState>,
+    ) -> Json<crate::cluster_stats::ClusterStatsResponse> {
+        let now = crate::cluster_stats::now_ms();
+        let controller = state
+            .controller_stats
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        let backup = state
+            .backup_stats
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        let controller_heartbeat_age_ms = controller.as_ref().map(|snapshot| {
+            u64::try_from(now.saturating_sub(snapshot.reported_at_ms)).unwrap_or_default()
+        });
+        let warnings = stats_warnings(
+            state.masked_config.as_deref(),
+            controller.as_ref(),
+            &backup,
+            controller_heartbeat_age_ms,
+            now,
+        );
+
+        Json(crate::cluster_stats::ClusterStatsResponse {
+            generated_at_ms: now,
+            probe: crate::cluster_stats::ProbeStatsSnapshot {
+                version: MAESTRO_VERSION.to_string(),
+                uptime_ms: state
+                    .probe_started_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+                storage_mode: state.storage_mode.clone(),
+            },
+            controller,
+            controller_heartbeat_age_ms,
+            backup,
+            warnings,
+        })
     }
 
     async fn rollout_service(
@@ -1387,18 +1448,53 @@ impl Server {
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<&'static str, (StatusCode, String)> {
-        let entries: Vec<crate::metrics::MetricPoint> = parse_json_body(&headers, body)?;
+        let payload: crate::metrics::TypedMetricBatch = parse_json_body(&headers, body)?;
+        match payload {
+            crate::metrics::TypedMetricBatch::Resource(entries) => {
+                let Some(log_store) = &state.log_store else {
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "log store not configured".to_string(),
+                    ));
+                };
+                log_store
+                    .append_metrics(&entries)
+                    .await
+                    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            }
+            crate::metrics::TypedMetricBatch::ControllerStats(snapshot) => {
+                let Some(log_store) = &state.log_store else {
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "log store not configured".to_string(),
+                    ));
+                };
+                log_store
+                    .append_stats_metrics(&snapshot.metric_points())
+                    .await
+                    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+                *state
+                    .controller_stats
+                    .write()
+                    .unwrap_or_else(|err| err.into_inner()) = Some(snapshot);
+            }
+        }
+        Ok("ok")
+    }
+
+    async fn get_stats_metrics(
+        Query(query): Query<StatsMetricsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::cluster_stats::StatsMetricPoint>>, (StatusCode, String)> {
         let Some(log_store) = &state.log_store else {
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "log store not configured".to_string(),
-            ));
+            return Ok(Json(Vec::new()));
         };
-        log_store
-            .append_metrics(&entries)
+        let (from, to) = metrics_time_range(&query.range);
+        let entries = log_store
+            .read_stats_metrics(query.name.as_deref(), from, to)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        Ok("ok")
+        Ok(Json(entries))
     }
 
     async fn get_node_metrics(
@@ -1667,10 +1763,10 @@ fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
         return None;
     }
     let stat = unsafe { stat.assume_init() };
-    let block_size = (stat.f_frsize as u64).max(1);
+    let block_size = stat.f_frsize.max(1);
     Some((
-        (stat.f_blocks as u64).saturating_mul(block_size),
-        (stat.f_bavail as u64).saturating_mul(block_size),
+        stat.f_blocks.saturating_mul(block_size),
+        stat.f_bavail.saturating_mul(block_size),
     ))
 }
 
@@ -1687,6 +1783,147 @@ fn disk_mount_priority(mount: &str) -> usize {
     }
 }
 
+fn stats_warnings(
+    config: Option<&crate::config::MaskedConfig>,
+    controller: Option<&crate::cluster_stats::ControllerStatsSnapshot>,
+    backup: &crate::cluster_stats::BackupStatsSnapshot,
+    heartbeat_age_ms: Option<u64>,
+    now_ms: i64,
+) -> Vec<crate::cluster_stats::StatsWarning> {
+    use crate::cluster_stats::StatsWarning;
+
+    let mut warnings = Vec::new();
+    let mut push = |code: &str, severity: &str, message: String| {
+        warnings.push(StatsWarning {
+            code: code.to_string(),
+            severity: severity.to_string(),
+            message,
+        });
+    };
+
+    match heartbeat_age_ms {
+        None => push(
+            "controller-heartbeat-missing",
+            "error",
+            "No stats report has been received from the controller".to_string(),
+        ),
+        Some(age) if age > 30_000 => push(
+            "controller-heartbeat-stale",
+            "error",
+            format!("Controller stats report is {}s old", age / 1_000),
+        ),
+        _ => {}
+    }
+
+    if let Some(controller) = controller {
+        if controller.version != MAESTRO_VERSION {
+            push(
+                "component-version-mismatch",
+                "warning",
+                format!(
+                    "Controller {} and probe {} are running different versions",
+                    controller.version, MAESTRO_VERSION
+                ),
+            );
+        }
+        for sink in &controller.sinks {
+            if sink.consecutive_failures > 0 {
+                push(
+                    &format!("sink-{}-failing", sink.id),
+                    "error",
+                    format!(
+                        "{} log sink has failed {} consecutive time(s)",
+                        sink.id, sink.consecutive_failures
+                    ),
+                );
+            } else if let Some(oldest) = sink.oldest_pending_at_ms {
+                let age = now_ms.saturating_sub(oldest);
+                let progressing = sink
+                    .last_cursor_advance_at_ms
+                    .is_some_and(|last| now_ms.saturating_sub(last) <= 30_000);
+                if sink.pending_entries > 0 && age > 60_000 && !progressing {
+                    push(
+                        &format!("sink-{}-behind", sink.id),
+                        "warning",
+                        format!(
+                            "{} log sink is {}s behind with {} pending entries",
+                            sink.id,
+                            age / 1_000,
+                            sink.pending_entries
+                        ),
+                    );
+                }
+            }
+        }
+        if controller.dead_letters.count > 0 {
+            let severity = if controller.dead_letters.count.saturating_mul(10)
+                >= controller.dead_letters.capacity.saturating_mul(9)
+            {
+                "error"
+            } else {
+                "warning"
+            };
+            push(
+                "datadog-dead-letters",
+                severity,
+                format!(
+                    "Datadog has {} quarantined log entries",
+                    controller.dead_letters.count
+                ),
+            );
+        }
+    }
+
+    if backup.configured {
+        if backup.last_error_at_ms > backup.last_success_at_ms {
+            push(
+                "log-backup-failing",
+                "error",
+                "The latest S3 log-backup attempt failed".to_string(),
+            );
+        }
+    } else {
+        push(
+            "log-backup-disabled",
+            "warning",
+            "S3 log backup is not configured".to_string(),
+        );
+    }
+
+    if let Some(config) = config {
+        if config.disable_etcd_cert {
+            push(
+                "etcd-mtls-disabled",
+                "warning",
+                "etcd mTLS is disabled".to_string(),
+            );
+        }
+        if config.encryption_key.is_none() {
+            push(
+                "encryption-key-missing",
+                "error",
+                "The cluster encryption key is missing or empty".to_string(),
+            );
+        }
+        if config.datadog.as_ref().is_some_and(|datadog| {
+            datadog
+                .site
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+        }) {
+            push(
+                "datadog-site-missing",
+                "error",
+                "Datadog is configured without a site".to_string(),
+            );
+        }
+    }
+
+    warnings
+}
+
 #[cfg(test)]
 mod disk_tests {
     use super::*;
@@ -1698,10 +1935,71 @@ mod disk_tests {
     }
 }
 
+#[cfg(test)]
+mod cluster_stats_tests {
+    use super::*;
+
+    #[test]
+    fn warnings_surface_sink_failure_dead_letters_and_disabled_backup() {
+        let controller = crate::cluster_stats::ControllerStatsSnapshot {
+            reported_at_ms: 1_000_000,
+            version: MAESTRO_VERSION.to_string(),
+            uptime_ms: 10_000,
+            spool: crate::cluster_stats::SpoolStatsSnapshot {
+                row_count: 10,
+                high_watermark: 10,
+                oldest_entry_at_ms: Some(900_000),
+                database_bytes: 4_096,
+            },
+            sinks: vec![crate::cluster_stats::SinkStatsSnapshot {
+                id: "datadog".to_string(),
+                cursor: 5,
+                pending_entries: 5,
+                oldest_pending_at_ms: Some(900_000),
+                last_success_at_ms: None,
+                last_error_at_ms: Some(999_000),
+                last_error: Some("HTTP 403".to_string()),
+                consecutive_failures: 2,
+                last_cursor_advance_at_ms: None,
+            }],
+            dead_letters: crate::cluster_stats::DeadLetterStatsSnapshot {
+                count: 1,
+                capacity: 100_000,
+                payload_bytes: 100,
+                latest_at_ms: Some(999_000),
+                latest_status: Some(413),
+                latest_error: Some("too large".to_string()),
+            },
+        };
+        let warnings = stats_warnings(
+            None,
+            Some(&controller),
+            &crate::cluster_stats::BackupStatsSnapshot::default(),
+            Some(1_000),
+            1_000_000,
+        );
+        let codes = warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect::<HashSet<_>>();
+
+        assert!(codes.contains("sink-datadog-failing"));
+        assert!(codes.contains("datadog-dead-letters"));
+        assert!(codes.contains("log-backup-disabled"));
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct MetricsQuery {
     from: Option<i64>,
     to: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct StatsMetricsQuery {
+    name: Option<String>,
+    #[serde(flatten)]
+    range: MetricsQuery,
 }
 
 fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {

@@ -126,6 +126,19 @@ CREATE TABLE IF NOT EXISTS traffic_metrics (
     lat_total BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS traffic_service_ts ON traffic_metrics(service_id, ts);
+CREATE TABLE IF NOT EXISTS stats_metrics (
+    ts BIGINT NOT NULL,
+    name VARCHAR NOT NULL,
+    value DOUBLE NOT NULL,
+    labels_json VARCHAR NOT NULL,
+    PRIMARY KEY (ts, name, labels_json)
+);
+CREATE INDEX IF NOT EXISTS stats_metrics_name_ts ON stats_metrics(name, ts);
+CREATE TABLE IF NOT EXISTS probe_state (
+    key VARCHAR PRIMARY KEY,
+    value_json VARCHAR NOT NULL,
+    updated_at_ms BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS migration_progress (
     source_path VARCHAR NOT NULL,
     table_name VARCHAR NOT NULL,
@@ -461,6 +474,131 @@ impl DuckLogStore {
         .await?
     }
 
+    pub async fn append_stats_metrics(
+        &self,
+        entries: &[crate::cluster_stats::StatsMetricPoint],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let db = self.metrics.clone();
+        let entries = entries.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = db.writer()?;
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO stats_metrics (ts, name, value, labels_json)
+                     VALUES (?, ?, ?, ?)",
+                )?;
+                for entry in entries {
+                    stmt.execute(params![
+                        entry.ts,
+                        entry.name,
+                        entry.value,
+                        serde_json::to_string(&entry.labels)?,
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn read_stats_metrics(
+        &self,
+        name: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<crate::cluster_stats::StatsMetricPoint>> {
+        let db = self.metrics.clone();
+        let name = name.map(ToString::to_string);
+        tokio::task::spawn_blocking(move || {
+            let conn = db.reader()?;
+            let (sql, values): (&str, Vec<Value>) = if let Some(name) = name {
+                (
+                    "SELECT ts, name, value, labels_json
+                     FROM stats_metrics
+                     WHERE name = ? AND ts >= ? AND ts <= ?
+                     ORDER BY ts, name, labels_json",
+                    vec![Value::Text(name), Value::BigInt(from), Value::BigInt(to)],
+                )
+            } else {
+                (
+                    "SELECT ts, name, value, labels_json
+                     FROM stats_metrics
+                     WHERE ts >= ? AND ts <= ?
+                     ORDER BY ts, name, labels_json",
+                    vec![Value::BigInt(from), Value::BigInt(to)],
+                )
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt
+                .query_map(params_from_iter(values), |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            rows.into_iter()
+                .map(|(ts, name, value, labels_json)| {
+                    Ok(crate::cluster_stats::StatsMetricPoint {
+                        ts,
+                        name,
+                        value,
+                        labels: serde_json::from_str(&labels_json)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .await?
+    }
+
+    pub async fn save_backup_stats(
+        &self,
+        stats: &crate::cluster_stats::BackupStatsSnapshot,
+    ) -> Result<()> {
+        let db = self.metrics.clone();
+        let value_json = serde_json::to_string(stats)?;
+        tokio::task::spawn_blocking(move || {
+            let conn = db.writer()?;
+            conn.execute(
+                "INSERT INTO probe_state (key, value_json, updated_at_ms)
+                 VALUES ('backup-stats', ?, ?)
+                 ON CONFLICT (key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![value_json, now_ms()],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn load_backup_stats(
+        &self,
+    ) -> Result<Option<crate::cluster_stats::BackupStatsSnapshot>> {
+        let db = self.metrics.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.reader()?;
+            let value = match conn.query_row(
+                "SELECT value_json FROM probe_state WHERE key = 'backup-stats'",
+                [],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(value) => value,
+                Err(duckdb::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(err) => return Err(err.into()),
+            };
+            Ok(Some(serde_json::from_str(&value)?))
+        })
+        .await?
+    }
+
     pub async fn read_metrics(
         &self,
         source: &str,
@@ -630,12 +768,14 @@ impl DuckLogStore {
                     SELECT
                         (SELECT count(*) FROM metrics WHERE ts < ?)
                         + (SELECT count(*) FROM traffic_metrics WHERE ts < ?)
+                        + (SELECT count(*) FROM stats_metrics WHERE ts < ?)
                 "#,
-                params![cutoff, cutoff],
+                params![cutoff, cutoff, cutoff],
                 |r| r.get(0),
             )?;
             conn.execute("DELETE FROM metrics WHERE ts < ?", params![cutoff])?;
             conn.execute("DELETE FROM traffic_metrics WHERE ts < ?", params![cutoff])?;
+            conn.execute("DELETE FROM stats_metrics WHERE ts < ?", params![cutoff])?;
             conn.execute_batch("CHECKPOINT")?;
             Ok(count as usize)
         })

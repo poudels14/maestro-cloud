@@ -62,6 +62,57 @@ fn missing_offsets_default_to_zero_but_other_database_errors_propagate() {
 }
 
 #[tokio::test]
+async fn stats_metrics_and_backup_state_survive_reopen() {
+    let root = temp_root("stats-persistence");
+    let store = DuckLogStore::open(&root).expect("open");
+    let point = crate::cluster_stats::StatsMetricPoint {
+        ts: 1_700_000_000_000,
+        name: "logs.spool.bytes".to_string(),
+        value: 42.0,
+        labels: std::collections::BTreeMap::new(),
+    };
+    store
+        .append_stats_metrics(std::slice::from_ref(&point))
+        .await
+        .expect("append stats metric");
+    let backup = crate::cluster_stats::BackupStatsSnapshot {
+        configured: true,
+        last_success_at_ms: Some(1_700_000_000_000),
+        pending_partitions: 3,
+        pending_bytes: 99,
+        ..crate::cluster_stats::BackupStatsSnapshot::default()
+    };
+    store
+        .save_backup_stats(&backup)
+        .await
+        .expect("save backup stats");
+    drop(store);
+
+    let reopened = DuckLogStore::open(&root).expect("reopen");
+    let points = reopened
+        .read_stats_metrics(
+            Some("logs.spool.bytes"),
+            1_699_999_999_999,
+            1_700_000_000_001,
+        )
+        .await
+        .expect("read stats metrics");
+    assert_eq!(points, vec![point]);
+    let restored = reopened
+        .load_backup_stats()
+        .await
+        .expect("load backup stats")
+        .expect("saved backup stats");
+    assert!(restored.configured);
+    assert_eq!(restored.last_success_at_ms, Some(1_700_000_000_000));
+    assert_eq!(restored.pending_partitions, 3);
+    assert_eq!(restored.pending_bytes, 99);
+
+    drop(reopened);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn slow_query_locks_do_not_block_ingest() {
     let root = temp_root("connection-pool");
     let store = DuckLogStore::open(&root).expect("open");
