@@ -1,4 +1,4 @@
-use super::build_health_url_for_replica;
+use super::{build_health_url_for_replica, healthy_check_stagger, replica_needs_healthy_update};
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     Deployment, DeploymentStatus, QueuedDeployment, ReplicaState, ServiceConfig,
@@ -7,7 +7,7 @@ use crate::deployment::types::{
 use crate::health::{DEFAULT_MAX_HEALTHCHECK_FAILURES, DefaultHealthMonitor};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, sync::Mutex, time::Duration};
 
 #[derive(Default)]
 struct ProbeTestStore {
@@ -215,6 +215,42 @@ fn health_url_uses_fqdn_when_dns_domain_is_provided() {
         url,
         "http://svc-abc123.cluster-1.maestro.internal:8080/health"
     );
+}
+
+#[test]
+fn ready_replica_without_failures_skips_redundant_store_update() {
+    let ready = ReplicaState {
+        replica_index: 0,
+        status: DeploymentStatus::Ready,
+        healthcheck_failures: 0,
+        restart_attempts: 0,
+    };
+    assert!(!replica_needs_healthy_update(&ready));
+
+    let mut recovering = ready.clone();
+    recovering.healthcheck_failures = 1;
+    assert!(replica_needs_healthy_update(&recovering));
+
+    let mut pending = ready;
+    pending.status = DeploymentStatus::PendingReady;
+    assert!(replica_needs_healthy_update(&pending));
+}
+
+#[test]
+fn healthy_check_stagger_is_stable_and_spreads_replicas_across_interval() {
+    let interval = Duration::from_secs(60);
+    let offsets: std::collections::HashSet<_> = (0..12)
+        .map(|replica| {
+            let key = format!("deployment-replica{replica}");
+            let offset = healthy_check_stagger(&key, interval);
+            assert_eq!(offset, healthy_check_stagger(&key, interval));
+            assert!(offset >= super::super::POLL_TICK_INTERVAL);
+            assert!(offset <= interval);
+            offset
+        })
+        .collect();
+
+    assert!(offsets.len() > 1);
 }
 
 #[tokio::test]
