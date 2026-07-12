@@ -1763,10 +1763,10 @@ fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
         return None;
     }
     let stat = unsafe { stat.assume_init() };
-    let block_size = stat.f_frsize.max(1);
+    let block_size = (stat.f_frsize as u64).max(1);
     Some((
-        stat.f_blocks.saturating_mul(block_size),
-        stat.f_bavail.saturating_mul(block_size),
+        (stat.f_blocks as u64).saturating_mul(block_size),
+        (stat.f_bavail as u64).saturating_mul(block_size),
     ))
 }
 
