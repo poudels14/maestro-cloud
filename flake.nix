@@ -11,14 +11,25 @@
   }: let
     supportedSystems = ["aarch64-darwin" "x86_64-linux" "aarch64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-    pkgsFor = system: import nixpkgs {inherit system;};
+    rustOverlay = builtins.getFlake "github:oxalica/rust-overlay/a286e5b998e852297a403786f063fb2c9fe7f57a";
+    pkgsFor = system:
+      import nixpkgs {
+        inherit system;
+        overlays = [rustOverlay.overlays.default];
+      };
+    rustToolchainFor = pkgs: pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
     maestroVersion = (builtins.fromTOML (builtins.readFile ./controller/Cargo.toml)).package.version;
   in {
     packages = forAllSystems (
       system: let
         pkgs = pkgsFor system;
+        rustToolchain = rustToolchainFor pkgs;
+        rustPlatform = pkgs.makeRustPlatform {
+          cargo = rustToolchain;
+          rustc = rustToolchain;
+        };
       in {
-        default = pkgs.rustPlatform.buildRustPackage {
+        default = rustPlatform.buildRustPackage {
           pname = "maestro";
           version = maestroVersion;
           src = ./.;
@@ -50,14 +61,13 @@
     devShells = forAllSystems (
       system: let
         pkgs = pkgsFor system;
+        rustToolchain = rustToolchainFor pkgs;
       in {
         default = pkgs.mkShell {
           inputsFrom = [self.packages.${system}.default];
           packages = with pkgs; [
-            cargo
-            rustc
+            rustToolchain
             rust-analyzer
-            clippy
           ];
         };
       }
