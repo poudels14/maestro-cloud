@@ -60,31 +60,6 @@ fn validate_upgrade_version(
     Ok((current, target))
 }
 
-const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
-    ("maestro-etcd", "etcd", crate::deployment::ETCD_IMAGE_TAG),
-    (
-        "maestro-ingress",
-        "ingress",
-        crate::deployment::INGRESS_IMAGE_TAG,
-    ),
-    (
-        "maestro-probe",
-        "controller",
-        crate::deployment::PROBE_IMAGE_TAG,
-    ),
-    ("maestro-admin", "admin", crate::deployment::ADMIN_IMAGE_TAG),
-    (
-        "maestro-tailscale",
-        "tailscale",
-        crate::deployment::TAILSCALE_IMAGE_TAG,
-    ),
-    (
-        "maestro-cloudflared",
-        "cloudflared",
-        crate::deployment::CLOUDFLARED_IMAGE_TAG,
-    ),
-];
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiskInfo {
@@ -616,18 +591,18 @@ impl Server {
             .unwrap_or(2)
             .max(1);
 
-        for (id, name, image) in SYSTEM_SERVICES {
-            let replicas = match *id {
+        for system_service in crate::deployment::SYSTEM_SERVICES {
+            let replicas = match system_service.id {
                 "maestro-cloudflared" => cloudflared_replicas,
                 _ => 1,
             };
             items.push(ServiceListItem {
                 service: ServiceConfig {
-                    id: id.to_string(),
-                    name: name.to_string(),
+                    id: system_service.id.to_string(),
+                    name: system_service.name.to_string(),
                     version: String::new(),
                     build: None,
-                    image: Some(image.to_string()),
+                    image: Some(system_service.image.to_string()),
                     deploy: ServiceDeployConfig {
                         flags: vec![],
                         expose_ports: vec![],
