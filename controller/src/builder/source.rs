@@ -156,10 +156,10 @@ impl GitSource {
 }
 
 fn to_https_url(url: &str) -> String {
-    if let Some(rest) = url.strip_prefix("git@") {
-        if let Some((host, path)) = rest.split_once(':') {
-            return format!("https://{host}/{path}");
-        }
+    if let Some(rest) = url.strip_prefix("git@")
+        && let Some((host, path)) = rest.split_once(':')
+    {
+        return format!("https://{host}/{path}");
     }
     url.to_string()
 }

@@ -75,24 +75,90 @@ struct TargetEntries {
 pub async fn run_logs(host: &str, args: RemoteLogsArgs) -> Result<()> {
     let base = normalize_base_url(host)?;
     let client = reqwest::Client::new();
-    let mut targets = discover_targets(&client, &base, &args).await?;
+    let targets = discover_targets(&client, &base, &args).await?;
+    run_targets(&client, &base, targets, args.tail, !args.no_follow, None).await
+}
 
+pub async fn run_daemon_logs(
+    host: &str,
+    source: Option<String>,
+    tail: usize,
+    follow: bool,
+) -> Result<()> {
+    let base = normalize_base_url(host)?;
+    let client = reqwest::Client::new();
+    let targets = if let Some(source) = source.as_deref() {
+        vec![LogCursor {
+            target: local_source_target(source)?,
+            after: 0,
+        }]
+    } else {
+        discover_targets(
+            &client,
+            &base,
+            &RemoteLogsArgs {
+                service: None,
+                deployment: None,
+                tail,
+                no_follow: !follow,
+                include_system: true,
+                system: None,
+            },
+        )
+        .await?
+    };
+    run_targets(&client, &base, targets, tail, follow, source.as_deref()).await
+}
+
+async fn run_targets(
+    client: &reqwest::Client,
+    base: &str,
+    mut targets: Vec<LogCursor>,
+    tail: usize,
+    follow: bool,
+    source_filter: Option<&str>,
+) -> Result<()> {
     if targets.is_empty() {
         println!("[maestro]: no log targets found");
         return Ok(());
     }
 
-    let initial_entries = fetch_all_targets(&client, &base, &mut targets, args.tail).await?;
+    let initial_entries =
+        fetch_all_targets(client, base, &mut targets, tail, source_filter).await?;
     print_entries(initial_entries);
 
-    if args.no_follow {
+    if !follow {
         return Ok(());
     }
 
     loop {
         tokio::time::sleep(Duration::from_millis(DEFAULT_POLL_INTERVAL_MS)).await;
-        let entries = fetch_all_targets(&client, &base, &mut targets, 500).await?;
+        let entries = fetch_all_targets(client, base, &mut targets, 500, source_filter).await?;
         print_entries(entries);
+    }
+}
+
+fn local_source_target(source: &str) -> Result<LogTarget> {
+    let parts = source.split('/').collect::<Vec<_>>();
+    if let [service_id, deployment_id, unit] = parts.as_slice()
+        && !service_id.is_empty()
+        && !deployment_id.is_empty()
+        && !unit.is_empty()
+    {
+        Ok(LogTarget::Deployment {
+            service_id: (*service_id).to_string(),
+            deployment_id: (*deployment_id).to_string(),
+        })
+    } else if let [name] = parts.as_slice()
+        && !name.is_empty()
+    {
+        Ok(LogTarget::System {
+            name: source.to_string(),
+        })
+    } else {
+        Err(Error::invalid_input(format!(
+            "invalid log source `{source}`; expected a system source name or service/deployment/unit"
+        )))
     }
 }
 
@@ -114,10 +180,10 @@ async fn discover_targets(
     let mut targets = Vec::new();
 
     for item in services {
-        if let Some(service_id) = args.service.as_deref() {
-            if item.service.id != service_id {
-                continue;
-            }
+        if let Some(service_id) = args.service.as_deref()
+            && item.service.id != service_id
+        {
+            continue;
         }
 
         if item.system {
@@ -207,11 +273,12 @@ async fn fetch_all_targets(
     base: &str,
     targets: &mut [LogCursor],
     tail: usize,
+    source_filter: Option<&str>,
 ) -> Result<Vec<RemoteLogEntry>> {
     let mut all_entries = Vec::new();
 
-    for index in 0..targets.len() {
-        let entries = fetch_target_logs(client, base, &targets[index], tail).await?;
+    for (index, target) in targets.iter().enumerate() {
+        let entries = fetch_target_logs(client, base, target, tail).await?;
         all_entries.push(TargetEntries { index, entries });
     }
 
@@ -219,7 +286,9 @@ async fn fetch_all_targets(
     for TargetEntries { index, entries } in all_entries {
         for entry in entries {
             targets[index].after = targets[index].after.max(entry.seq);
-            merged.push(entry);
+            if source_filter.is_none_or(|source| entry.source == source) {
+                merged.push(entry);
+            }
         }
     }
     merged.sort_by(|a, b| a.seq.cmp(&b.seq).then_with(|| a.ts.cmp(&b.ts)));
@@ -338,5 +407,22 @@ mod tests {
             log_endpoint("http://host", &target, 0, 10),
             "http://host/api/system/maestro-admin/logs?tail=10"
         );
+    }
+
+    #[test]
+    fn local_source_routes_packed_service_identity_to_deployment_api() {
+        assert!(matches!(
+            local_source_target("api/dep/replica0").expect("service source"),
+            LogTarget::Deployment {
+                service_id,
+                deployment_id
+            } if service_id == "api" && deployment_id == "dep"
+        ));
+        assert!(matches!(
+            local_source_target("maestro-probe").expect("system source"),
+            LogTarget::System { name } if name == "maestro-probe"
+        ));
+        assert!(local_source_target("api/dep").is_err());
+        assert!(local_source_target("api/dep/replica0/extra").is_err());
     }
 }

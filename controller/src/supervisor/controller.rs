@@ -80,7 +80,7 @@ impl JobSupervisor {
 
     pub async fn shutdown_all(&mut self, request: ShutdownRequest) -> Vec<FinishedJob> {
         for job in self.jobs.values() {
-            let _ = job.shutdown(request);
+            job.shutdown(request);
         }
 
         if request != ShutdownRequest::Force {

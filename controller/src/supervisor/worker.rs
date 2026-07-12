@@ -322,7 +322,7 @@ impl SupervisedJobRunner {
         let program = match &config.command {
             JobCommand::Exec { program, args } => Program::Exec {
                 prog: program.clone().into(),
-                args: args.iter().map(|a| a.clone().into()).collect(),
+                args: args.to_vec(),
             },
             JobCommand::Shell(cmd) => Program::Shell {
                 shell: Shell::new("sh"),
@@ -437,10 +437,10 @@ impl SupervisedJobRunner {
                 break;
             }
 
-            if let Some(secrets) = &config.secrets_mount {
-                if let Err(err) = secrets.write() {
-                    eprintln!("[maestro]: failed to write secrets for '{name}': {err}");
-                }
+            if let Some(secrets) = &config.secrets_mount
+                && let Err(err) = secrets.write()
+            {
+                eprintln!("[maestro]: failed to write secrets for '{name}': {err}");
             }
             job.start().await;
             job.log_process_ids(&name, config.log_config.as_ref()).await;
@@ -467,14 +467,14 @@ impl SupervisedJobRunner {
                     }
                 }
                 WorkerOutcome::Exited(Some(status)) if !matches!(status, ProcessEnd::Success) => {
-                    if let Some(max) = config.max_restarts {
-                        if restart_count >= max {
-                            eprintln!(
-                                "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={max} (stopping)"
-                            );
-                            exit_status = SupervisedJobStatus::Crashed;
-                            break;
-                        }
+                    if let Some(max) = config.max_restarts
+                        && restart_count >= max
+                    {
+                        eprintln!(
+                            "[maestro]: service '{name}' failed with {status:?} and hit maxRestarts={max} (stopping)"
+                        );
+                        exit_status = SupervisedJobStatus::Crashed;
+                        break;
                     }
 
                     restart_count += 1;
@@ -495,8 +495,8 @@ impl SupervisedJobRunner {
                         _ = sleep(delay) => WorkerOutcome::DelayElapsed,
                     };
 
-                    if let WorkerOutcome::Shutdown(request) = delay_outcome {
-                        if job
+                    if let WorkerOutcome::Shutdown(request) = delay_outcome
+                        && job
                             .handle_shutdown(
                                 request,
                                 shutdown_grace,
@@ -504,10 +504,9 @@ impl SupervisedJobRunner {
                                 config.container.as_ref(),
                             )
                             .await
-                        {
-                            exit_status = SupervisedJobStatus::Stopped;
-                            break;
-                        }
+                    {
+                        exit_status = SupervisedJobStatus::Stopped;
+                        break;
                     }
                 }
                 WorkerOutcome::Exited(Some(_)) if config.max_restarts.is_none() => {
@@ -558,13 +557,11 @@ async fn cleanup_system_container(
         .as_ref()
         .map(|cfg| cfg.origin == LogOrigin::System)
         .unwrap_or(false);
-    if is_system_service {
-        if let Some(container_ref) = container {
-            let runtime_type = RuntimeType::from_str(&container_ref.runtime_cli);
-            if let Ok(runtime_type) = runtime_type {
-                let provider = runtime::create_provider(runtime_type);
-                let _ = provider.remove_container(&container_ref.name).await;
-            }
+    if is_system_service && let Some(container_ref) = container {
+        let runtime_type = RuntimeType::from_str(&container_ref.runtime_cli);
+        if let Ok(runtime_type) = runtime_type {
+            let provider = runtime::create_provider(runtime_type);
+            let _ = provider.remove_container(&container_ref.name).await;
         }
     }
 }

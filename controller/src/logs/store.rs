@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 use tokio::task;
 
 type ConnPool = r2d2::Pool<SqliteConnectionManager>;
+const MAX_SINK_DEAD_LETTERS: i64 = 100_000;
 
 fn arc_value_is_null(v: &Arc<serde_json::Value>) -> bool {
     v.is_null()
@@ -113,6 +114,23 @@ pub struct LogStore {
     notify: Arc<Notify>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SinkDeadLetterMetadata {
+    pub sink_id: String,
+    pub seq: i64,
+    pub status: u16,
+    pub error: String,
+    pub payload_sha256: String,
+    pub payload_bytes: u64,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SinkDeadLetterStats {
+    pub count: u64,
+    pub payload_bytes: u64,
+}
+
 impl LogStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -120,7 +138,11 @@ impl LogStore {
         }
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.execute_batch(
-                "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+                r#"
+                    PRAGMA journal_mode = WAL;
+                    PRAGMA synchronous = NORMAL;
+                    PRAGMA busy_timeout = 5000;
+                "#,
             )
         });
         let pool = ConnPool::builder().max_size(8).build(manager)?;
@@ -149,6 +171,17 @@ impl LogStore {
             CREATE TABLE IF NOT EXISTS sink_cursors (
                 sink_id TEXT PRIMARY KEY,
                 last_seq INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS sink_dead_letters (
+                sink_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                status INTEGER NOT NULL,
+                error TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (sink_id, seq)
             );
 
             CREATE INDEX IF NOT EXISTS idx_logs_source_seq ON logs (source, seq);
@@ -238,6 +271,7 @@ impl LogStore {
         Ok(())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn read_tail_all(&self, limit: usize) -> Result<Vec<LogEntry>> {
         let pool = self.pool.clone();
         task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
@@ -249,25 +283,9 @@ impl LogStore {
             let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
                 Self::row_to_entry(row)
             })?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
-        })
-        .await?
-    }
-
-    pub async fn read_after_all(&self, after_seq: i64, limit: usize) -> Result<Vec<LogEntry>> {
-        let pool = self.pool.clone();
-        task::spawn_blocking(move || -> Result<Vec<LogEntry>> {
-            let conn = pool.get()?;
-            let mut stmt = conn.prepare_cached(
-                "SELECT seq, ts, level, stream, text, source, origin, tags, attributes
-                 FROM logs WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
-            )?;
-            let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
-                Self::row_to_entry(row)
-            })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
         })
         .await?
     }
@@ -292,9 +310,9 @@ impl LogStore {
             )?;
             let rows = stmt.query_map(
                 rusqlite::params![pattern, origin_filter, limit as i64],
-                |row| Self::row_to_entry(row),
+                Self::row_to_entry,
             )?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -323,9 +341,9 @@ impl LogStore {
             )?;
             let rows = stmt.query_map(
                 rusqlite::params![pattern, after_seq, origin_filter, limit as i64],
-                |row| Self::row_to_entry(row),
+                Self::row_to_entry,
             )?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -352,9 +370,9 @@ impl LogStore {
             )?;
             let rows = stmt.query_map(
                 rusqlite::params![pattern, before_seq, origin_filter, limit as i64],
-                |row| Self::row_to_entry(row),
+                Self::row_to_entry,
             )?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -375,7 +393,7 @@ impl LogStore {
             let rows = stmt.query_map(rusqlite::params![source, limit as i64], |row| {
                 Self::row_to_entry(row)
             })?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -404,8 +422,8 @@ impl LogStore {
             params.push(Box::new(limit as i64));
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let rows = stmt.query_map(&*param_refs, Self::row_to_entry)?;
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -425,7 +443,7 @@ impl LogStore {
             let rows = stmt.query_map(rusqlite::params![after_seq, limit as i64], |row| {
                 Self::row_to_entry(row)
             })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -450,7 +468,7 @@ impl LogStore {
                 .query_map(rusqlite::params![source, after_seq, limit as i64], |row| {
                     Self::row_to_entry(row)
                 })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -475,7 +493,7 @@ impl LogStore {
                 .query_map(rusqlite::params![source, before_seq, limit as i64], |row| {
                     Self::row_to_entry(row)
                 })?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -512,8 +530,8 @@ impl LogStore {
             params.push(Box::new(limit as i64));
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            let rows = stmt.query_map(&*param_refs, Self::row_to_entry)?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -548,8 +566,8 @@ impl LogStore {
             params.push(Box::new(limit as i64));
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(&*param_refs, |row| Self::row_to_entry(row))?;
-            let mut entries: Vec<LogEntry> = rows.filter_map(|r| r.ok()).collect();
+            let rows = stmt.query_map(&*param_refs, Self::row_to_entry)?;
+            let mut entries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             entries.reverse();
             Ok(entries)
         })
@@ -560,6 +578,8 @@ impl LogStore {
         let pool = self.pool.clone();
         let sink_id = sink_id.to_string();
         task::spawn_blocking(move || -> Result<i64> {
+            use rusqlite::OptionalExtension;
+
             let conn = pool.get()?;
             let cursor = conn
                 .query_row(
@@ -567,8 +587,233 @@ impl LogStore {
                     rusqlite::params![sink_id],
                     |row| row.get(0),
                 )
-                .unwrap_or(0i64);
-            Ok(cursor)
+                .optional()?;
+            Ok(cursor.unwrap_or(0))
+        })
+        .await?
+    }
+
+    pub async fn register_sink(&self, sink_id: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT OR IGNORE INTO sink_cursors (sink_id, last_seq) VALUES (?1, 0)",
+                rusqlite::params![sink_id],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn unregister_sink(&self, sink_id: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "DELETE FROM sink_cursors WHERE sink_id = ?1",
+                rusqlite::params![sink_id],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn record_sink_dead_letter(
+        &self,
+        sink_id: &str,
+        seq: i64,
+        status: u16,
+        error: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        use sha2::{Digest, Sha256};
+
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        let error = error.to_string();
+        let payload = payload.to_vec();
+        let payload_sha256 = format!("{:x}", Sha256::digest(&payload));
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        task::spawn_blocking(move || -> Result<()> {
+            use rusqlite::{OptionalExtension, TransactionBehavior};
+
+            let mut conn = pool.get()?;
+            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let current_count: i64 =
+                transaction.query_row("SELECT count(*) FROM sink_dead_letters", [], |row| {
+                    row.get(0)
+                })?;
+            let already_exists = transaction
+                .query_row(
+                    "SELECT 1 FROM sink_dead_letters WHERE sink_id=?1 AND seq=?2",
+                    rusqlite::params![sink_id, seq],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !already_exists && current_count >= MAX_SINK_DEAD_LETTERS {
+                anyhow::bail!(
+                    "sink dead-letter storage limit of {} rows has been reached",
+                    MAX_SINK_DEAD_LETTERS
+                );
+            }
+
+            transaction.execute(
+                "INSERT INTO sink_dead_letters
+                    (sink_id, seq, status, error, payload, payload_sha256, created_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(sink_id, seq) DO UPDATE SET
+                    status=excluded.status,
+                    error=excluded.error,
+                    payload=excluded.payload,
+                    payload_sha256=excluded.payload_sha256,
+                    created_at_ms=excluded.created_at_ms",
+                rusqlite::params![
+                    sink_id,
+                    seq,
+                    i64::from(status),
+                    error,
+                    payload,
+                    payload_sha256,
+                    created_at_ms,
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn sink_dead_letter_stats(&self, sink_id: &str) -> Result<SinkDeadLetterStats> {
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<SinkDeadLetterStats> {
+            let conn = pool.get()?;
+            let (count, payload_bytes): (i64, i64) = conn.query_row(
+                "SELECT count(*), COALESCE(SUM(length(payload)), 0)
+                 FROM sink_dead_letters WHERE sink_id=?1",
+                rusqlite::params![sink_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok(SinkDeadLetterStats {
+                count: u64::try_from(count).unwrap_or_default(),
+                payload_bytes: u64::try_from(payload_bytes).unwrap_or_default(),
+            })
+        })
+        .await?
+    }
+
+    #[cfg(test)]
+    pub async fn sink_dead_letter_count(&self, sink_id: &str) -> Result<i64> {
+        Ok(i64::try_from(self.sink_dead_letter_stats(sink_id).await?.count).unwrap_or(i64::MAX))
+    }
+
+    pub async fn list_sink_dead_letters(
+        &self,
+        sink_id: &str,
+        limit: usize,
+    ) -> Result<Vec<SinkDeadLetterMetadata>> {
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<Vec<SinkDeadLetterMetadata>> {
+            let conn = pool.get()?;
+            let mut statement = conn.prepare(
+                "SELECT sink_id,seq,status,error,payload_sha256,length(payload),created_at_ms
+                 FROM sink_dead_letters WHERE sink_id=?1 ORDER BY seq LIMIT ?2",
+            )?;
+            let rows = statement.query_map(
+                rusqlite::params![sink_id, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |row| {
+                    let status: i64 = row.get(2)?;
+                    let payload_bytes: i64 = row.get(5)?;
+                    Ok(SinkDeadLetterMetadata {
+                        sink_id: row.get(0)?,
+                        seq: row.get(1)?,
+                        status: u16::try_from(status).unwrap_or_default(),
+                        error: row.get(3)?,
+                        payload_sha256: row.get(4)?,
+                        payload_bytes: u64::try_from(payload_bytes).unwrap_or_default(),
+                        created_at_ms: row.get(6)?,
+                    })
+                },
+            )?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await?
+    }
+
+    pub async fn export_sink_dead_letters(&self, sink_id: &str, path: &Path) -> Result<u64> {
+        if let (Ok(output_path), Ok(database_path)) = (
+            std::fs::canonicalize(path),
+            std::fs::canonicalize(&self.path),
+        ) && output_path == database_path
+        {
+            anyhow::bail!("dead-letter export path must not overwrite the log spool database");
+        }
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        let path = path.to_path_buf();
+        task::spawn_blocking(move || -> Result<u64> {
+            use std::io::{BufWriter, Write};
+
+            let conn = pool.get()?;
+            let mut statement = conn.prepare(
+                "SELECT sink_id,seq,status,error,payload_sha256,created_at_ms,payload
+                 FROM sink_dead_letters WHERE sink_id=?1 ORDER BY seq",
+            )?;
+            let mut rows = statement.query(rusqlite::params![sink_id])?;
+            let file = std::fs::File::create(&path)?;
+            let mut writer = BufWriter::new(file);
+            let mut exported = 0u64;
+            while let Some(row) = rows.next()? {
+                let payload: Vec<u8> = row.get(6)?;
+                let payload: serde_json::Value = serde_json::from_slice(&payload)?;
+                let record = serde_json::json!({
+                    "sinkId": row.get::<_, String>(0)?,
+                    "seq": row.get::<_, i64>(1)?,
+                    "status": row.get::<_, i64>(2)?,
+                    "error": row.get::<_, String>(3)?,
+                    "payloadSha256": row.get::<_, String>(4)?,
+                    "createdAtMs": row.get::<_, i64>(5)?,
+                    "payload": payload,
+                });
+                serde_json::to_writer(&mut writer, &record)?;
+                writer.write_all(b"\n")?;
+                exported += 1;
+            }
+            writer.flush()?;
+            Ok(exported)
+        })
+        .await?
+    }
+
+    pub async fn purge_sink_dead_letters(
+        &self,
+        sink_id: &str,
+        through_seq: Option<i64>,
+    ) -> Result<u64> {
+        let pool = self.pool.clone();
+        let sink_id = sink_id.to_string();
+        task::spawn_blocking(move || -> Result<u64> {
+            let conn = pool.get()?;
+            let deleted = if let Some(seq) = through_seq {
+                conn.execute(
+                    "DELETE FROM sink_dead_letters WHERE sink_id=?1 AND seq<=?2",
+                    rusqlite::params![sink_id, seq],
+                )?
+            } else {
+                conn.execute(
+                    "DELETE FROM sink_dead_letters WHERE sink_id=?1",
+                    rusqlite::params![sink_id],
+                )?
+            };
+            Ok(u64::try_from(deleted).unwrap_or_default())
         })
         .await?
     }
@@ -624,8 +869,18 @@ impl LogStore {
         task::spawn_blocking(move || -> Result<()> {
             let conn = pool.get()?;
             let mut stmt = conn.prepare_cached(
-                "INSERT INTO metrics (ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                r#"
+                    INSERT INTO metrics (
+                        ts,
+                        source,
+                        cpu_percent,
+                        memory_bytes,
+                        memory_limit_bytes,
+                        net_rx_bytes,
+                        net_tx_bytes
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
             )?;
             for entry in &entries {
                 stmt.execute(rusqlite::params![
@@ -654,9 +909,21 @@ impl LogStore {
         task::spawn_blocking(move || -> Result<Vec<crate::metrics::MetricPoint>> {
             let conn = pool.get()?;
             let mut stmt = conn.prepare_cached(
-                "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
-                 FROM metrics WHERE source = ?1 AND ts >= ?2 AND ts <= ?3
-                 ORDER BY ts ASC",
+                r#"
+                    SELECT
+                        ts,
+                        source,
+                        cpu_percent,
+                        memory_bytes,
+                        memory_limit_bytes,
+                        net_rx_bytes,
+                        net_tx_bytes
+                    FROM metrics
+                    WHERE source = ?1
+                      AND ts >= ?2
+                      AND ts <= ?3
+                    ORDER BY ts ASC
+                "#,
             )?;
             let rows = stmt.query_map(rusqlite::params![source, from, to], |row| {
                 Ok(crate::metrics::MetricPoint {
@@ -669,7 +936,7 @@ impl LogStore {
                     net_tx_bytes: row.get(6)?,
                 })
             })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -685,9 +952,21 @@ impl LogStore {
         task::spawn_blocking(move || -> Result<Vec<crate::metrics::MetricPoint>> {
             let conn = pool.get()?;
             let mut stmt = conn.prepare_cached(
-                "SELECT ts, source, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes
-                 FROM metrics WHERE source LIKE ?1 AND ts >= ?2 AND ts <= ?3
-                 ORDER BY ts ASC",
+                r#"
+                    SELECT
+                        ts,
+                        source,
+                        cpu_percent,
+                        memory_bytes,
+                        memory_limit_bytes,
+                        net_rx_bytes,
+                        net_tx_bytes
+                    FROM metrics
+                    WHERE source LIKE ?1
+                      AND ts >= ?2
+                      AND ts <= ?3
+                    ORDER BY ts ASC
+                "#,
             )?;
             let rows = stmt.query_map(rusqlite::params![pattern, from, to], |row| {
                 Ok(crate::metrics::MetricPoint {
@@ -700,7 +979,7 @@ impl LogStore {
                     net_tx_bytes: row.get(6)?,
                 })
             })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -798,7 +1077,7 @@ impl LogStore {
                     lat_total: row.get(11)?,
                 })
             })?;
-            Ok(rows.filter_map(|r| r.ok()).collect())
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }

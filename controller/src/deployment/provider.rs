@@ -103,18 +103,18 @@ impl ContainerDeploymentProvider {
             BuilderType::Default
         };
 
-        let (build_tag, depot_pushed) = if use_depot && build_config.registry.is_some() {
-            let registry = build_config.registry.as_ref().unwrap();
-            let registry_tag = format!(
-                "{}/{}:{}",
-                registry.trim_end_matches('/'),
-                deployment.config.id,
-                deployment.id
-            );
-            (registry_tag, true)
-        } else {
-            (image_tag.to_string(), false)
-        };
+        let (build_tag, depot_pushed) =
+            if let (true, Some(registry)) = (use_depot, build_config.registry.as_ref()) {
+                let registry_tag = format!(
+                    "{}/{}:{}",
+                    registry.trim_end_matches('/'),
+                    deployment.config.id,
+                    deployment.id
+                );
+                (registry_tag, true)
+            } else {
+                (image_tag.to_string(), false)
+            };
 
         let mut labels = std::collections::HashMap::new();
         let mut command_env = self.build_command_env.clone();

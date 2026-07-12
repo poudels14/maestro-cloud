@@ -1,6 +1,6 @@
 //! In-memory [`DeploymentProvider`] for tests — no docker, no subprocesses.
 //! Pair this with [`super::replica_supervisor::fake::InMemoryReplicaSupervisor`]
-//! to drive [`super::engine::Engine`] entirely in memory.
+//! to drive [`super::core::Engine`] entirely in memory.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

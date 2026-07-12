@@ -61,6 +61,8 @@ tar = "0.4.46"
 ignore = "0.4.25"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.34.0"
+duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
+aws-sdk-s3 = "1.138.0"
 
 [dev-dependencies]
 proptest = "1.11.0"

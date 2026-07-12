@@ -88,13 +88,14 @@ pub fn validate_service_provider_config(
     String,
 > {
     validate_env_config(&deploy.env, "deploy.env")?;
-    if let Some(secrets) = &deploy.secrets {
-        if secrets.source.is_some() && !secrets.items.is_empty() {
-            return Err(
-                "deploy.secrets cannot have both `source` and `items`; use one or the other"
-                    .to_string(),
-            );
-        }
+    if let Some(secrets) = &deploy.secrets
+        && secrets.source.is_some()
+        && !secrets.items.is_empty()
+    {
+        return Err(
+            "deploy.secrets cannot have both `source` and `items`; use one or the other"
+                .to_string(),
+        );
     }
     for (index, volume) in deploy.volumes.iter().enumerate() {
         if volume.host_path.trim().is_empty() {
@@ -145,10 +146,10 @@ pub fn validate_ingress_config(ingress: &Option<IngressConfig>) -> Result<(), St
     let Some(ingress) = ingress else {
         return Ok(());
     };
-    if let Some(port) = ingress.port {
-        if port == 0 {
-            return Err("ingress.port cannot be 0".to_string());
-        }
+    if let Some(port) = ingress.port
+        && port == 0
+    {
+        return Err("ingress.port cannot be 0".to_string());
     }
     for (index, host) in ingress.hosts().iter().enumerate() {
         validate_ingress_host(host, index)?;

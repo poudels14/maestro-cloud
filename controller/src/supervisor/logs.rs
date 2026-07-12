@@ -135,51 +135,55 @@ pub fn parse_log_line(line: &str) -> ParsedLine {
 
     // Try "2026-03-15T20:28:36Z ERR message..." format.
     // If the token after the timestamp is not a known level, keep it in the message.
-    if line.len() > 20 && line.as_bytes()[4] == b'-' && line.as_bytes()[10] == b'T' {
-        if let Some(space_idx) = line[..35.min(line.len())].find(' ') {
-            let ts_str = &line[..space_idx];
-            if let Some(ts) = parse_iso_timestamp(ts_str) {
-                let rest = line[space_idx + 1..].trim_start();
-                if let Some(msg_start) = rest.find(' ') {
-                    let level_str = &rest[..msg_start];
-                    if let Some(level) = normalize_known_level(level_str) {
-                        let text = rest[msg_start + 1..].trim_start();
-                        return ParsedLine {
-                            ts: Some(ts),
-                            level: Some(level),
-                            text: text.to_string(),
-                            attrs: vec![],
-                        };
-                    }
+    if line.len() > 20
+        && line.as_bytes()[4] == b'-'
+        && line.as_bytes()[10] == b'T'
+        && let Some(space_idx) = line[..35.min(line.len())].find(' ')
+    {
+        let ts_str = &line[..space_idx];
+        if let Some(ts) = parse_iso_timestamp(ts_str) {
+            let rest = line[space_idx + 1..].trim_start();
+            if let Some(msg_start) = rest.find(' ') {
+                let level_str = &rest[..msg_start];
+                if let Some(level) = normalize_known_level(level_str) {
+                    let text = rest[msg_start + 1..].trim_start();
+                    return ParsedLine {
+                        ts: Some(ts),
+                        level: Some(level),
+                        text: text.to_string(),
+                        attrs: vec![],
+                    };
                 }
-                return ParsedLine {
-                    ts: Some(ts),
-                    level: None,
-                    text: rest.to_string(),
-                    attrs: vec![],
-                };
             }
+            return ParsedLine {
+                ts: Some(ts),
+                level: None,
+                text: rest.to_string(),
+                attrs: vec![],
+            };
         }
     }
 
     // Try logrus format: time="2026-03-20T05:35:46Z" level=fatal msg="..."
-    if line.starts_with("time=\"") {
-        if let Some(parsed) = parse_logrus_line(line) {
-            return parsed;
-        }
+    if line.starts_with("time=\"")
+        && let Some(parsed) = parse_logrus_line(line)
+    {
+        return parsed;
     }
 
     // Try "2026/03/18 08:39:04 message..." format
-    if line.len() > 19 && line.as_bytes()[4] == b'/' && line.as_bytes()[7] == b'/' {
-        if let Some(ts) = parse_slash_timestamp(&line[..19]) {
-            let text = line[19..].trim_start().to_string();
-            return ParsedLine {
-                ts: Some(ts),
-                level: None,
-                text,
-                attrs: vec![],
-            };
-        }
+    if line.len() > 19
+        && line.as_bytes()[4] == b'/'
+        && line.as_bytes()[7] == b'/'
+        && let Some(ts) = parse_slash_timestamp(&line[..19])
+    {
+        let text = line[19..].trim_start().to_string();
+        return ParsedLine {
+            ts: Some(ts),
+            level: None,
+            text,
+            attrs: vec![],
+        };
     }
 
     ParsedLine {

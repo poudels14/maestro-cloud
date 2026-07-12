@@ -63,7 +63,12 @@ pub fn deployment_deploy_secrets_key(service_id: &str, deployment_id: &str) -> S
 
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
 pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
+pub const SYSTEM_LOG_MIGRATION_ROOT: &str = "/maetro/system/log-migration";
 pub const SLACK_WEBHOOKS_KEY: &str = "/maetro/cluster/config/webhooks/slack";
+
+pub fn log_migration_key(archive_hash: &str) -> String {
+    format!("{SYSTEM_LOG_MIGRATION_ROOT}/{archive_hash}")
+}
 
 pub fn service_id_from_info_key(key: &str) -> Option<String> {
     let remainder = key.strip_prefix(&format!("{SERVICES_ROOT}/"))?;

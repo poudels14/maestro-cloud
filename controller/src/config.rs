@@ -75,6 +75,8 @@ pub struct StartConfig {
     #[serde(default)]
     pub slack: Option<SlackConfig>,
     #[serde(default)]
+    pub log_backup: Option<LogBackupConfig>,
+    #[serde(default)]
     pub disable_etcd_cert: bool,
     #[serde(default)]
     pub allow_cli_deployment: bool,
@@ -114,6 +116,19 @@ pub struct CloudflareTunnelConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct SlackConfig {
     pub webhook_url: SecretString,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogBackupConfig {
+    pub bucket: String,
+    pub kms_key_id: String,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub retention_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,7 +190,7 @@ pub struct TailscaleConfig {
     pub advertise_routes: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DatadogConfig {
     pub api_key: String,
@@ -217,6 +232,8 @@ pub struct MaskedConfig {
     pub cloudflare: Option<CloudflareView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slack: Option<SlackView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_backup: Option<LogBackupConfig>,
     pub disable_etcd_cert: bool,
     #[serde(default)]
     pub allow_cli_deployment: bool,
@@ -336,6 +353,7 @@ impl StartConfig {
             slack: self.slack.as_ref().map(|sl| SlackView {
                 webhook_url: mask(sl.webhook_url.as_str()),
             }),
+            log_backup: self.log_backup.clone(),
             disable_etcd_cert: self.disable_etcd_cert,
             allow_cli_deployment: self.allow_cli_deployment,
         }

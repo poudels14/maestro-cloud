@@ -75,7 +75,7 @@ struct DiskInfo {
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
-    log_store: Option<Arc<crate::logs::LogStore>>,
+    log_store: Option<Arc<crate::logs::TelemetryStore>>,
     jwt_secret_key: Option<String>,
     system_type: Option<String>,
     cluster_name: String,
@@ -93,7 +93,7 @@ pub(crate) struct Server {
 impl Server {
     pub(crate) fn new(
         store: Arc<dyn ClusterStore>,
-        log_store: Option<Arc<crate::logs::LogStore>>,
+        log_store: Option<Arc<crate::logs::TelemetryStore>>,
         jwt_secret_key: Option<String>,
         system_type: Option<String>,
         cluster_name: String,
@@ -288,19 +288,18 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
-        if let Some(build) = service_config.build.as_ref() {
-            if build
+        if let Some(build) = service_config.build.as_ref()
+            && build
                 .repo
                 .as_deref()
                 .map(str::trim)
                 .unwrap_or("")
                 .is_empty()
-            {
-                return Err((
+        {
+            return Err((
                     StatusCode::BAD_REQUEST,
                     "build.repo is required for rollout; use the `maestro services up` command to upload a local context".to_string(),
                 ));
-            }
         }
         eprintln!(
             "rollout request service_id={} version={} force={}",
@@ -316,16 +315,16 @@ impl Server {
                 .await
                 .ok()
                 .flatten();
-            if let Some(info) = info {
-                if info.deploy_frozen {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        format!(
-                            "deploy is frozen for service `{}`; use ?force=true to override",
-                            service_config.id
-                        ),
-                    ));
-                }
+            if let Some(info) = info
+                && info.deploy_frozen
+            {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "deploy is frozen for service `{}`; use ?force=true to override",
+                        service_config.id
+                    ),
+                ));
             }
         }
 
@@ -398,19 +397,18 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
-        if let Some(build) = service_config.build.as_ref() {
-            if build
+        if let Some(build) = service_config.build.as_ref()
+            && build
                 .repo
                 .as_deref()
                 .map(str::trim)
                 .unwrap_or("")
                 .is_empty()
-            {
-                return Err((
+        {
+            return Err((
                     StatusCode::BAD_REQUEST,
                     "build.repo is required for rollout; use the `maestro services up` command to upload a local context".to_string(),
                 ));
-            }
         }
 
         let diff = compute_rollout_diff(state.store.as_ref(), &service_config)
@@ -1031,15 +1029,15 @@ impl Server {
             .list_service_deployments(&service_id)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        if let Some(prev) = deployments.first() {
-            if let Some(secrets) = &mut config.deploy.secrets {
-                let items = state
-                    .store
-                    .read_deployment_secrets(&service_id, &prev.id)
-                    .await
-                    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-                secrets.items = items;
-            }
+        if let Some(prev) = deployments.first()
+            && let Some(secrets) = &mut config.deploy.secrets
+        {
+            let items = state
+                .store
+                .read_deployment_secrets(&service_id, &prev.id)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            secrets.items = items;
         }
 
         let deployment = ServiceDeployment::new(config)
@@ -1369,7 +1367,9 @@ impl Server {
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<&'static str, (StatusCode, String)> {
-        let entries: Vec<LogEntry> = parse_json_body(&headers, body)?;
+        // New shippers include idempotency metadata; both fields are optional
+        // so old controllers can continue shipping during a rolling upgrade.
+        let entries: Vec<crate::logs::IngestLogEntry> = parse_json_body(&headers, body)?;
         let Some(log_store) = &state.log_store else {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1377,7 +1377,7 @@ impl Server {
             ));
         };
         log_store
-            .append(&entries)
+            .append_ingest(&entries)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok("ok")
@@ -1399,7 +1399,6 @@ impl Server {
             .append_metrics(&entries)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        let _ = log_store.cleanup_old_metrics(7 * 24 * 60 * 60 * 1000).await;
         Ok("ok")
     }
 
@@ -1540,10 +1539,10 @@ impl Server {
             .filter(|path| !path.trim().is_empty());
         let mut candidates = Vec::new();
 
-        if let Some(host_root) = host_root.as_deref() {
-            if let Some(info) = disk_info_for_path(FsPath::new(host_root), "/", &disks) {
-                candidates.push(info);
-            }
+        if let Some(host_root) = host_root.as_deref()
+            && let Some(info) = disk_info_for_path(FsPath::new(host_root), "/", &disks)
+        {
+            candidates.push(info);
         }
 
         candidates.extend(disks.iter().filter_map(|disk| {
@@ -1641,10 +1640,10 @@ fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
         return None;
     }
     let stat = unsafe { stat.assume_init() };
-    let block_size = u64::from(stat.f_frsize.max(1));
+    let block_size = stat.f_frsize.max(1);
     Some((
-        u64::from(stat.f_blocks).saturating_mul(block_size),
-        u64::from(stat.f_bavail).saturating_mul(block_size),
+        stat.f_blocks.saturating_mul(block_size),
+        stat.f_bavail.saturating_mul(block_size),
     ))
 }
 

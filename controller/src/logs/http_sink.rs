@@ -7,19 +7,22 @@ use flate2::{Compression, write::GzEncoder};
 use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use serde::Serialize;
 
+use super::IngestLogEntry;
 use super::sink::LogSink;
 use super::store::LogEntry;
 
 pub struct HttpSink {
     id: String,
+    node_id: String,
     endpoint: String,
     client: reqwest::Client,
 }
 
 impl HttpSink {
-    pub fn new(id: &str, endpoint: &str) -> Self {
+    pub fn new(id: &str, node_id: String, endpoint: &str) -> Self {
         Self {
             id: id.to_string(),
+            node_id,
             endpoint: endpoint.to_string(),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -36,7 +39,18 @@ impl LogSink for HttpSink {
     }
 
     async fn send(&self, entries: &[LogEntry]) -> Result<()> {
-        let compressed_body = gzip_json(entries)?;
+        // The controller's SQLite sequence is the durable spool offset. Sending
+        // it with a stable node id makes retries exact no-ops at the probe.
+        let entries = entries
+            .iter()
+            .cloned()
+            .map(|entry| IngestLogEntry {
+                origin_seq: Some(entry.seq),
+                node_id: Some(self.node_id.clone()),
+                entry,
+            })
+            .collect::<Vec<_>>();
+        let compressed_body = gzip_json(&entries)?;
         let response = self
             .client
             .post(&self.endpoint)

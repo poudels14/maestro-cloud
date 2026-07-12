@@ -73,7 +73,24 @@ impl LogCollector {
                     }
                 }
                 _ = cleanup_interval.tick() => {
-                    self.cleanup_flushed_logs().await;
+                    // The controller SQLite spool fans out to every configured
+                    // sink. Reclaim only the prefix acknowledged by the slowest
+                    // registered sink (probe, Datadog, and future consumers).
+                    match self.store.min_sink_cursor().await {
+                        Ok(Some(cursor)) if cursor > 0 => {
+                            if let Err(err) = self.store.delete_before(cursor).await {
+                                eprintln!(
+                                    "[maestro]: log spool retention delete error (retrying): {err}"
+                                );
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            eprintln!(
+                                "[maestro]: log spool retention cursor error (retrying): {err}"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -90,18 +107,6 @@ impl LogCollector {
                     eprintln!("[maestro]: log append error (retrying): {err}");
                     tokio::time::sleep(APPEND_RETRY_INTERVAL).await;
                 }
-            }
-        }
-    }
-
-    async fn cleanup_flushed_logs(&self) {
-        let min_cursor = match self.store.min_sink_cursor().await {
-            Ok(Some(seq)) => seq,
-            _ => return,
-        };
-        if min_cursor > 0 {
-            if let Err(err) = self.store.delete_before(min_cursor).await {
-                eprintln!("[maestro]: log cleanup error: {err}");
             }
         }
     }

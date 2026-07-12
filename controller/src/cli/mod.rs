@@ -3,6 +3,7 @@ pub mod cancel;
 pub mod config;
 pub mod confirm;
 pub mod contexts;
+pub mod dead_letters;
 pub mod info;
 pub mod logs;
 pub mod redeploy;

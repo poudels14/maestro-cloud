@@ -49,6 +49,7 @@ fn cluster_template_does_not_enable_optional_integrations() {
     assert!(config.depot.is_none());
     assert!(config.cloudflare.is_none());
     assert!(config.slack.is_none());
+    assert!(config.log_backup.is_none());
 }
 
 #[test]
@@ -84,6 +85,31 @@ fn quick_start_command_matches_the_cli() {
         ".",
     ]);
     assert!(parsed.is_ok(), "quick-start command must remain parseable");
+}
+
+#[test]
+fn dead_letter_admin_commands_match_the_cli() {
+    for action in ["list", "export", "purge"] {
+        let mut args = vec![
+            "maestro",
+            "daemon",
+            "dead-letters",
+            "--data-dir",
+            "./data",
+            "--cluster-name",
+            "test",
+            action,
+        ];
+        if action == "export" {
+            args.extend(["--output", "dead-letters.jsonl"]);
+        } else if action == "purge" {
+            args.push("--all");
+        }
+        assert!(
+            crate::Cli::try_parse_from(args).is_ok(),
+            "dead-letter {action} command must remain parseable"
+        );
+    }
 }
 
 #[test]
@@ -133,6 +159,13 @@ fn start_schema_matches_serialized_config_fields() {
                 "https://hooks.slack.test".to_string(),
             ),
         }),
+        log_backup: Some(crate::config::LogBackupConfig {
+            bucket: "maestro-logs".to_string(),
+            kms_key_id: "arn:aws:kms:us-west-2:123456789012:key/test".to_string(),
+            region: Some("us-west-2".to_string()),
+            prefix: Some("clusters/test".to_string()),
+            retention_days: Some(30),
+        }),
         disable_etcd_cert: true,
         allow_cli_deployment: true,
     };
@@ -179,6 +212,12 @@ fn start_schema_matches_serialized_config_fields() {
         &[],
     );
     assert_object_keys(&model["slack"], &schema["properties"]["slack"], &[], &[]);
+    assert_object_keys(
+        &model["log-backup"],
+        &schema["properties"]["log-backup"],
+        &[],
+        &[],
+    );
 }
 
 #[test]

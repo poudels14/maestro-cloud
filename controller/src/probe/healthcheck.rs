@@ -118,10 +118,10 @@ async fn check_replicas(
         } else {
             unhealthy_interval
         };
-        if let Some(last) = last_polled.get(&key) {
-            if now.saturating_duration_since(*last) < due_after {
-                continue;
-            }
+        if let Some(last) = last_polled.get(&key)
+            && now.saturating_duration_since(*last) < due_after
+        {
+            continue;
         }
         last_polled.insert(key.clone(), now);
 
