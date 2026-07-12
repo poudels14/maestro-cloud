@@ -8,7 +8,7 @@ use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 use serde::Serialize;
 
 use super::IngestLogEntry;
-use super::sink::LogSink;
+use super::sink::{LogSink, SinkSendOutcome};
 use super::store::LogEntry;
 
 pub struct HttpSink {
@@ -38,7 +38,7 @@ impl LogSink for HttpSink {
         &self.id
     }
 
-    async fn send(&self, entries: &[LogEntry]) -> Result<()> {
+    async fn send(&self, entries: &[LogEntry]) -> Result<SinkSendOutcome> {
         // The controller's SQLite sequence is the durable spool offset. Sending
         // it with a stable node id makes retries exact no-ops at the probe.
         let entries = entries
@@ -64,7 +64,7 @@ impl LogSink for HttpSink {
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!("log sink POST failed with {status}: {body}");
         }
-        Ok(())
+        Ok(SinkSendOutcome::default())
     }
 }
 

@@ -1156,6 +1156,17 @@ impl DeploymentController {
                 tags.push(format!("deployment_id:{deployment_id}"));
                 tags.push(format!("replica:{replica_index}"));
                 tags.push(format!("cluster:{}", self.config.cluster_name));
+                if let Some(path) = queued_deployment
+                    .deployment
+                    .config
+                    .deploy
+                    .healthcheck_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                {
+                    tags.push(crate::logs::healthcheck_path_tag(path));
+                }
                 LogConfig {
                     sender,
                     tags,
@@ -2110,6 +2121,16 @@ impl DeploymentController {
             tags.push(format!("deployment_id:{deployment_id}"));
             tags.push(format!("replica:{replica_index}"));
             tags.push(format!("cluster:{}", self.config.cluster_name));
+            if let Some(path) = deployment_record
+                .config
+                .deploy
+                .healthcheck_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+            {
+                tags.push(crate::logs::healthcheck_path_tag(path));
+            }
             LogConfig {
                 sender,
                 tags,

@@ -51,6 +51,12 @@ function configRows(config: MaskedConfig) {
   if (config.datadog?.site) {
     items.push({ label: "Datadog site", value: config.datadog.site });
   }
+  if (config.datadog) {
+    items.push({
+      label: "Datadog health-check logs",
+      value: config.datadog.logs["include-healthcheck"] ? "included" : "excluded on success"
+    });
+  }
   return items;
 }
 

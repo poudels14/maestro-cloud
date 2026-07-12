@@ -23,7 +23,10 @@ function LogDetailPanel(props: { entry: LogEntry }) {
     return attrs;
   };
 
-  const tags = () => props.entry.tags?.filter((tag) => !tag.startsWith("hostname:")) ?? [];
+  const tags = () =>
+    props.entry.tags?.filter(
+      (tag) => !tag.startsWith("hostname:") && !tag.startsWith("maestro.internal.")
+    ) ?? [];
 
   return (
     <div class="flex flex-col gap-2.5">

@@ -135,7 +135,7 @@ function SinkRow(props: {
           const pending = () => `${sink().pendingEntries.toLocaleString()} pending`;
           const oldest = () =>
             sink().oldestPendingAtMs ? ` · oldest ${timeAgo(sink().oldestPendingAtMs!)}` : "";
-          const detail = () =>
+          const deliveryDetail = () =>
             sink().consecutiveFailures > 0
               ? `${sink().consecutiveFailures} consecutive failures${sink().lastError ? ` · ${sink().lastError}` : ""}`
               : sink().lastSuccessAtMs
@@ -143,6 +143,10 @@ function SinkRow(props: {
                 : sink().pendingEntries === 0
                   ? "No delivery required yet"
                   : "Waiting for first delivery";
+          const detail = () =>
+            sink().filteredEntries > 0
+              ? `${deliveryDetail()} · ${sink().filteredEntries.toLocaleString()} filtered since restart`
+              : deliveryDetail();
           return (
             <HealthRow
               label={props.label}

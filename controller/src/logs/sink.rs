@@ -17,7 +17,12 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 #[async_trait]
 pub trait LogSink: Send + Sync {
     fn id(&self) -> &str;
-    async fn send(&self, entries: &[LogEntry]) -> Result<()>;
+    async fn send(&self, entries: &[LogEntry]) -> Result<SinkSendOutcome>;
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SinkSendOutcome {
+    pub filtered_entries: u64,
 }
 
 #[async_trait]
@@ -118,18 +123,22 @@ impl SinkWorker {
 
                 let last_seq = entries.last().unwrap().seq;
 
-                if let Err(err) = self.send_with_retry(&entries).await {
-                    eprintln!(
-                        "[maestro]: log sink `{sink_id}` failed after {MAX_RETRIES} retries: {err}"
-                    );
-                    self.record_failure(&sink_id, &err.to_string());
-                    break;
-                }
+                let outcome = match self.send_with_retry(&entries).await {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        eprintln!(
+                            "[maestro]: log sink `{sink_id}` failed after {MAX_RETRIES} retries: {err}"
+                        );
+                        self.record_failure(&sink_id, &err.to_string());
+                        break;
+                    }
+                };
 
                 if !self.advance_cursor(&sink_id, &mut cursor, last_seq).await {
                     break;
                 }
                 if let Some(runtime_stats) = &self.runtime_stats {
+                    runtime_stats.record_filtered(&sink_id, outcome.filtered_entries);
                     runtime_stats.record_success(&sink_id);
                 }
 
@@ -190,11 +199,11 @@ impl SinkWorker {
         }
     }
 
-    async fn send_with_retry(&self, entries: &[LogEntry]) -> Result<()> {
+    async fn send_with_retry(&self, entries: &[LogEntry]) -> Result<SinkSendOutcome> {
         let mut delay = INITIAL_RETRY_DELAY;
         for attempt in 0..MAX_RETRIES {
             match self.sink.send(entries).await {
-                Ok(()) => return Ok(()),
+                Ok(outcome) => return Ok(outcome),
                 Err(err) => {
                     if attempt + 1 < MAX_RETRIES {
                         sleep(delay).await;
@@ -264,8 +273,8 @@ mod tests {
             "mock"
         }
 
-        async fn send(&self, _entries: &[LogEntry]) -> Result<()> {
-            Ok(())
+        async fn send(&self, _entries: &[LogEntry]) -> Result<SinkSendOutcome> {
+            Ok(SinkSendOutcome::default())
         }
     }
 

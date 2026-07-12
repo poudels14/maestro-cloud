@@ -53,6 +53,21 @@ fn cluster_template_does_not_enable_optional_integrations() {
 }
 
 #[test]
+fn datadog_healthcheck_filter_is_opt_in() {
+    let existing: crate::config::DatadogConfig =
+        serde_json::from_value(serde_json::json!({ "api-key": "test" }))
+            .expect("existing Datadog config should remain valid");
+    assert!(existing.logs.include_healthcheck);
+
+    let filtered: crate::config::DatadogConfig = serde_json::from_value(serde_json::json!({
+        "api-key": "test",
+        "logs": { "include-healthcheck": false }
+    }))
+    .expect("nested Datadog log config should parse");
+    assert!(!filtered.logs.include_healthcheck);
+}
+
+#[test]
 fn services_template_validates_as_services_config() {
     let path = temp_path("validate-services", "jsonc");
     write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect("write");
@@ -139,6 +154,9 @@ fn start_schema_matches_serialized_config_fields() {
             site: Some("datadoghq.com".to_string()),
             include_ingress_logs: true,
             include_tailscale_logs: true,
+            logs: crate::config::DatadogLogsConfig {
+                include_healthcheck: false,
+            },
             include_metrics: true,
         }),
         system: Some(crate::config::SystemType::Nixos),
@@ -195,6 +213,12 @@ fn start_schema_matches_serialized_config_fields() {
     assert_object_keys(
         &model["datadog"],
         &schema["properties"]["datadog"],
+        &[],
+        &[],
+    );
+    assert_object_keys(
+        &model["datadog"]["logs"],
+        &schema["properties"]["datadog"]["properties"]["logs"],
         &[],
         &[],
     );

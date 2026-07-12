@@ -88,7 +88,28 @@ struct DatadogView {
     #[serde(default)]
     include_tailscale_logs: bool,
     #[serde(default)]
+    logs: DatadogLogsView,
+    #[serde(default)]
     include_metrics: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct DatadogLogsView {
+    #[serde(default = "default_true")]
+    include_healthcheck: bool,
+}
+
+impl Default for DatadogLogsView {
+    fn default() -> Self {
+        Self {
+            include_healthcheck: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,11 +286,12 @@ fn format_cloudflare(view: &CloudflareView) -> String {
 
 fn format_datadog(view: &DatadogView) -> String {
     format!(
-        "api-key: {}, site: {}, ingress-logs: {}, tailscale-logs: {}, metrics: {}",
+        "api-key: {}, site: {}, ingress-logs: {}, tailscale-logs: {}, include-healthcheck: {}, metrics: {}",
         view.api_key.as_deref().unwrap_or("(unset)"),
         view.site.as_deref().unwrap_or("(default)"),
         view.include_ingress_logs,
         view.include_tailscale_logs,
+        view.logs.include_healthcheck,
         view.include_metrics,
     )
 }

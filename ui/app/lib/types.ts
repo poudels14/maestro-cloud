@@ -199,6 +199,7 @@ export interface SinkStats {
   lastError: string | null;
   consecutiveFailures: number;
   lastCursorAdvanceAtMs: number | null;
+  filteredEntries: number;
 }
 
 export interface BackupStats {
@@ -255,6 +256,7 @@ export type MaskedConfig = {
     site?: string | null;
     "include-ingress-logs": boolean;
     "include-tailscale-logs": boolean;
+    logs: { "include-healthcheck": boolean };
     "include-metrics": boolean;
   } | null;
   system?: string | null;
