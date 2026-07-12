@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use flate2::{Compression, write::GzEncoder};
 use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
 
-use super::sink::LogSink;
+use super::filter::{LogFilterSet, is_internal_tag};
+use super::sink::{LogSink, SinkSendOutcome};
 use super::store::{LogEntry, LogOrigin, LogStore};
 
 const MAX_DATADOG_UNCOMPRESSED_BYTES: usize = 4_500_000;
@@ -19,6 +20,7 @@ pub struct DatadogSink {
     endpoint: String,
     include_ingress_logs: bool,
     include_tailscale_logs: bool,
+    filters: LogFilterSet,
     dead_letter_store: Arc<LogStore>,
     client: reqwest::Client,
 }
@@ -29,6 +31,7 @@ impl DatadogSink {
         site: &str,
         include_ingress_logs: bool,
         include_tailscale_logs: bool,
+        filter_healthcheck: bool,
         dead_letter_store: Arc<LogStore>,
     ) -> Self {
         let endpoint = format!("https://http-intake.logs.{site}/api/v2/logs");
@@ -37,6 +40,7 @@ impl DatadogSink {
             endpoint,
             include_ingress_logs,
             include_tailscale_logs,
+            filter_healthcheck,
             dead_letter_store,
         )
     }
@@ -46,13 +50,20 @@ impl DatadogSink {
         endpoint: String,
         include_ingress_logs: bool,
         include_tailscale_logs: bool,
+        filter_healthcheck: bool,
         dead_letter_store: Arc<LogStore>,
     ) -> Self {
+        let filters = if filter_healthcheck {
+            LogFilterSet::excluding_successful_healthchecks()
+        } else {
+            LogFilterSet::default()
+        };
         Self {
             api_key,
             endpoint,
             include_ingress_logs,
             include_tailscale_logs,
+            filters,
             dead_letter_store,
             client: reqwest::Client::builder()
                 .http1_only()
@@ -63,14 +74,15 @@ impl DatadogSink {
     }
 
     fn should_send(&self, entry: &LogEntry) -> bool {
-        match entry.origin {
+        let included_origin = match entry.origin {
             LogOrigin::Service => true,
             LogOrigin::Build => false,
             LogOrigin::System => {
                 (self.include_ingress_logs && entry.source.as_ref() == "maestro-ingress")
                     || (self.include_tailscale_logs && entry.source.as_ref() == "maestro-tailscale")
             }
-        }
+        };
+        included_origin && !self.filters.excludes(entry)
     }
 
     fn prepare(&self, entry: &LogEntry) -> PreparedDatadogEntry {
@@ -162,14 +174,20 @@ impl LogSink for DatadogSink {
         "datadog"
     }
 
-    async fn send(&self, entries: &[LogEntry]) -> Result<()> {
+    async fn send(&self, entries: &[LogEntry]) -> Result<SinkSendOutcome> {
+        let filtered_entries = entries
+            .iter()
+            .filter(|entry| self.filters.excludes(entry))
+            .count()
+            .try_into()
+            .unwrap_or(u64::MAX);
         let dd_entries: Vec<PreparedDatadogEntry> = entries
             .iter()
             .filter(|entry| self.should_send(entry))
             .map(|entry| self.prepare(entry))
             .collect();
         if dd_entries.is_empty() {
-            return Ok(());
+            return Ok(SinkSendOutcome { filtered_entries });
         }
 
         let mut sizing = VecDeque::from([(0, dd_entries.len())]);
@@ -220,7 +238,7 @@ impl LogSink for DatadogSink {
                 .await?;
             }
         }
-        Ok(())
+        Ok(SinkSendOutcome { filtered_entries })
     }
 }
 
@@ -262,7 +280,7 @@ fn build_dd_tags(
                     service = Some(svc.to_string());
                 } else if let Some(h) = tag.strip_prefix("hostname:") {
                     hostname = Some(h.to_string());
-                } else {
+                } else if !is_internal_tag(tag) {
                     tag_parts.push(tag.as_str());
                 }
             }
@@ -341,6 +359,20 @@ mod tests {
         }
     }
 
+    fn successful_healthcheck_log(seq: i64) -> LogEntry {
+        let mut entry = service_log(seq, "request".into());
+        entry.tags = Arc::new(serde_json::json!([
+            "service:api",
+            crate::logs::healthcheck_path_tag("/health")
+        ]));
+        entry.attrs = vec![
+            ("http.method".into(), "GET".into()),
+            ("http.status_code".into(), "200".into()),
+            ("http.url_details.path".into(), "/health".into()),
+        ];
+        entry
+    }
+
     async fn test_endpoint<F>(response: F) -> (String, Arc<AtomicUsize>)
     where
         F: Fn(usize) -> StatusCode + Clone + Send + Sync + 'static,
@@ -366,7 +398,7 @@ mod tests {
     }
 
     fn sink(store: Arc<LogStore>, endpoint: String) -> DatadogSink {
-        DatadogSink::with_endpoint("test-api-key".into(), endpoint, false, false, store)
+        DatadogSink::with_endpoint("test-api-key".into(), endpoint, false, false, false, store)
     }
 
     #[tokio::test]
@@ -376,6 +408,33 @@ mod tests {
         sink.send(&[system_log("maestro-controller")])
             .await
             .expect("filtered batch should be treated as delivered");
+        drop(sink);
+        std::fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn configured_healthcheck_filter_skips_only_successful_healthchecks() {
+        let (store, path) = temp_store("healthcheck-filter");
+        let (endpoint, calls) = test_endpoint(|_| StatusCode::ACCEPTED).await;
+        let sink =
+            DatadogSink::with_endpoint("test-api-key".into(), endpoint, false, false, true, store);
+
+        let outcome = sink
+            .send(&[successful_healthcheck_log(1)])
+            .await
+            .expect("successful healthcheck should be filtered");
+        assert_eq!(outcome.filtered_entries, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let mut failed = successful_healthcheck_log(2);
+        failed.attrs[1].1 = "503".into();
+        let outcome = sink
+            .send(&[failed])
+            .await
+            .expect("failed healthcheck should be sent");
+        assert_eq!(outcome.filtered_entries, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
         drop(sink);
         std::fs::remove_file(path).ok();
     }

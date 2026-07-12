@@ -1961,6 +1961,7 @@ mod cluster_stats_tests {
                 last_error: Some("HTTP 403".to_string()),
                 consecutive_failures: 2,
                 last_cursor_advance_at_ms: None,
+                filtered_entries: 0,
             }],
             dead_letters: crate::cluster_stats::DeadLetterStatsSnapshot {
                 count: 1,

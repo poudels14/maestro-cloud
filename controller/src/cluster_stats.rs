@@ -19,6 +19,7 @@ struct SinkRuntimeState {
     last_error: Option<String>,
     consecutive_failures: u64,
     last_cursor_advance_at_ms: Option<i64>,
+    filtered_entries: u64,
 }
 
 #[derive(Clone, Default)]
@@ -50,6 +51,12 @@ impl SinkRuntimeRegistry {
             .entry(sink_id.to_string())
             .or_default()
             .consecutive_failures = 0;
+    }
+
+    pub fn record_filtered(&self, sink_id: &str, count: u64) {
+        let mut states = self.inner.write().unwrap_or_else(|err| err.into_inner());
+        let state = states.entry(sink_id.to_string()).or_default();
+        state.filtered_entries = state.filtered_entries.saturating_add(count);
     }
 
     fn snapshot(&self, sink_id: &str) -> SinkRuntimeState {
@@ -94,6 +101,8 @@ pub struct SinkStatsSnapshot {
     pub last_error: Option<String>,
     pub consecutive_failures: u64,
     pub last_cursor_advance_at_ms: Option<i64>,
+    #[serde(default)]
+    pub filtered_entries: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +222,12 @@ impl ControllerStatsSnapshot {
                 sink.consecutive_failures as f64,
                 labels.clone(),
             ));
+            points.push(metric_point_with_labels(
+                self.reported_at_ms,
+                "logs.sink.filtered_entries",
+                sink.filtered_entries as f64,
+                labels.clone(),
+            ));
             if let Some(oldest) = sink.oldest_pending_at_ms {
                 points.push(metric_point_with_labels(
                     self.reported_at_ms,
@@ -329,6 +344,7 @@ impl ClusterStatsReporter {
                     last_error: runtime.last_error,
                     consecutive_failures: runtime.consecutive_failures,
                     last_cursor_advance_at_ms: runtime.last_cursor_advance_at_ms,
+                    filtered_entries: runtime.filtered_entries,
                 }
             })
             .collect();
@@ -411,6 +427,7 @@ mod tests {
                 last_error: None,
                 consecutive_failures: 1,
                 last_cursor_advance_at_ms: None,
+                filtered_entries: 4,
             }],
             dead_letters: DeadLetterStatsSnapshot {
                 count: 3,

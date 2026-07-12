@@ -93,6 +93,9 @@ The config file (`maestro.jsonc`) supports:
     "site": "datadoghq.com",
     "include-ingress-logs": true,
     "include-tailscale-logs": true,
+    "logs": {
+      "include-healthcheck": false
+    },
     "include-metrics": false
   },
   "allow-cli-deployment": false
@@ -276,6 +279,13 @@ if every subdivision receives `400`, the response is treated as global and the
 cursor remains pinned. An irreducible rejected entry is preserved in the spool
 database's `sink_dead_letters` table before its cursor advances. Authentication,
 rate-limit, network, and server failures also pin the cursor.
+
+Set `datadog.logs.include-healthcheck` to `false` to keep successful (`GET`/`200`)
+health-check access logs out of Datadog. Maestro matches the service's configured
+`healthcheckPath` against common structured HTTP log attributes. Failures,
+non-health-check requests, and unstructured logs are still delivered. Filtered logs
+remain available in the probe, UI, and S3 and count as acknowledged by Datadog for
+controller spool retention.
 
 Dead letters are capped at 100,000 rows. Reaching the cap pins the Datadog cursor
 instead of growing the quarantine indefinitely. Inspect, export, and explicitly

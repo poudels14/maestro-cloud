@@ -569,6 +569,7 @@ async fn run() -> crate::error::Result<bool> {
                     site: None,
                     include_ingress_logs: true,
                     include_tailscale_logs: true,
+                    logs: config::DatadogLogsConfig::default(),
                     include_metrics: false,
                 });
                 dd.api_key = api_key;
@@ -741,6 +742,7 @@ async fn run() -> crate::error::Result<bool> {
                         &site,
                         dd.include_ingress_logs,
                         dd.include_tailscale_logs,
+                        !dd.logs.include_healthcheck,
                         log_store.clone(),
                     );
                     background_handles.push(

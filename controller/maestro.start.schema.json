@@ -109,6 +109,16 @@
           "type": "boolean",
           "default": true
         },
+        "logs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "include-healthcheck": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
         "include-metrics": {
           "type": "boolean",
           "default": false
