@@ -1,5 +1,6 @@
 mod builder;
 mod cli;
+mod cluster_stats;
 mod config;
 mod deployment;
 mod engine;
@@ -702,6 +703,7 @@ async fn run() -> crate::error::Result<bool> {
                     Error::internal(format!("failed to unregister Datadog sink: {err}"))
                 })?;
             }
+            let sink_runtime_stats = cluster_stats::SinkRuntimeRegistry::default();
             let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
             let collector_handle = log_collector.spawn();
 
@@ -747,6 +749,7 @@ async fn run() -> crate::error::Result<bool> {
                             Box::new(log_sink),
                             signal_tx.subscribe(),
                         )
+                        .with_runtime_stats(sink_runtime_stats.clone())
                         .spawn(),
                     );
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
@@ -896,8 +899,18 @@ async fn run() -> crate::error::Result<bool> {
                 log_store.clone(),
                 Box::new(http_sink),
                 signal_tx.subscribe(),
-            );
+            )
+            .with_runtime_stats(sink_runtime_stats.clone());
             background_handles.push(sink_worker.spawn());
+
+            let metrics_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/metrics");
+            let stats_reporter = cluster_stats::ClusterStatsReporter::new(
+                metrics_endpoint.clone(),
+                log_store.clone(),
+                sink_runtime_stats,
+                signal_tx.subscribe(),
+            );
+            background_handles.push(tokio::spawn(stats_reporter.run()));
             let deployment_signal_rx = signal_tx.subscribe();
             let watcher_signal_rx = signal_tx.subscribe();
 
@@ -910,7 +923,6 @@ async fn run() -> crate::error::Result<bool> {
             let watcher_handle = tokio::spawn(watcher.run());
 
             let metrics_signal_rx = signal_tx.subscribe();
-            let metrics_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/metrics");
             let metrics_collector = metrics::MetricsCollector::new(
                 metrics_endpoint,
                 deployment_config.cluster_name.clone(),

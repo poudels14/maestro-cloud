@@ -49,6 +49,7 @@ pub struct SinkWorker {
     sink: Box<dyn LogSink>,
     notify: Arc<Notify>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
+    runtime_stats: Option<crate::cluster_stats::SinkRuntimeRegistry>,
 }
 
 impl SinkWorker {
@@ -63,7 +64,16 @@ impl SinkWorker {
             sink,
             notify,
             signal_rx,
+            runtime_stats: None,
         }
+    }
+
+    pub fn with_runtime_stats(
+        mut self,
+        runtime_stats: crate::cluster_stats::SinkRuntimeRegistry,
+    ) -> Self {
+        self.runtime_stats = Some(runtime_stats);
+        self
     }
 
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
@@ -94,11 +104,15 @@ impl SinkWorker {
                     Ok(entries) => entries,
                     Err(err) => {
                         eprintln!("[maestro]: log sink `{sink_id}` read error: {err}");
+                        self.record_failure(&sink_id, &err.to_string());
                         break;
                     }
                 };
 
                 if entries.is_empty() {
+                    if let Some(runtime_stats) = &self.runtime_stats {
+                        runtime_stats.record_recovered(&sink_id);
+                    }
                     break;
                 }
 
@@ -108,11 +122,15 @@ impl SinkWorker {
                     eprintln!(
                         "[maestro]: log sink `{sink_id}` failed after {MAX_RETRIES} retries: {err}"
                     );
+                    self.record_failure(&sink_id, &err.to_string());
                     break;
                 }
 
                 if !self.advance_cursor(&sink_id, &mut cursor, last_seq).await {
                     break;
+                }
+                if let Some(runtime_stats) = &self.runtime_stats {
+                    runtime_stats.record_success(&sink_id);
                 }
 
                 if entries.len() < BATCH_SIZE {
@@ -125,11 +143,17 @@ impl SinkWorker {
     async fn load_cursor(&mut self, sink_id: &str) -> Option<i64> {
         loop {
             match self.store.get_sink_cursor(sink_id).await {
-                Ok(cursor) => return Some(cursor),
+                Ok(cursor) => {
+                    if let Some(runtime_stats) = &self.runtime_stats {
+                        runtime_stats.record_recovered(sink_id);
+                    }
+                    return Some(cursor);
+                }
                 Err(err) => {
                     eprintln!(
                         "[maestro]: log sink `{sink_id}` cursor read error (retrying): {err}"
                     );
+                    self.record_failure(sink_id, &err.to_string());
                 }
             }
 
@@ -154,8 +178,15 @@ impl SinkWorker {
             }
             Err(err) => {
                 eprintln!("[maestro]: log sink `{sink_id}` cursor update error: {err}");
+                self.record_failure(sink_id, &err.to_string());
                 false
             }
+        }
+    }
+
+    fn record_failure(&self, sink_id: &str, error: &str) {
+        if let Some(runtime_stats) = &self.runtime_stats {
+            runtime_stats.record_failure(sink_id, error);
         }
     }
 

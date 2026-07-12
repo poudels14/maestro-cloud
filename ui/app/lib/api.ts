@@ -5,9 +5,11 @@ import type {
   LogEntry,
   MaskedConfig,
   MetricPoint,
+  ClusterStats,
   Service,
   SlackCategory,
   SlackWebhook,
+  StatsMetricPoint,
   TrafficPoint
 } from "./types";
 
@@ -23,6 +25,26 @@ export interface ClusterInfo {
 export async function getClusterInfo(): Promise<ClusterInfo> {
   const res = await fetch("/api/cluster");
   if (!res.ok) throw new Error(`Failed to fetch cluster info: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getClusterStats(): Promise<ClusterStats> {
+  const res = await fetch("/api/cluster/stats");
+  if (!res.ok) throw new Error(`Failed to fetch cluster stats: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getStatsMetrics(
+  name?: string,
+  from?: number,
+  to?: number
+): Promise<StatsMetricPoint[]> {
+  const url = new URL("/api/metrics/stats", location.origin);
+  if (name) url.searchParams.set("name", name);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch stats metrics: ${res.statusText}`);
   return res.json();
 }
 

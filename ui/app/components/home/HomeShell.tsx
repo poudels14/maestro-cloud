@@ -13,6 +13,7 @@ import { DisksSection } from "./DisksSection";
 import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
 import { SlackWebhooks } from "../SlackWebhooks";
+import { ClusterStatsSection } from "./ClusterStatsSection";
 
 function HomeShell(props: { tab: HomeTab }) {
   const navigate = useNavigate();
@@ -67,6 +68,7 @@ function HomeShell(props: { tab: HomeTab }) {
                 <Match when={props.tab === "info"}>
                   <div class="space-y-8">
                     <ClusterHero />
+                    <ClusterStatsSection />
                     <ClusterConfigSection />
                     <SlackWebhooks />
                   </div>

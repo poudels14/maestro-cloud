@@ -134,6 +134,85 @@ async fn spool_cleanup_is_bounded_by_the_slowest_registered_sink() {
 }
 
 #[tokio::test]
+async fn stats_snapshot_reports_spool_sink_and_dead_letter_state() {
+    let path = temp_db_path("stats-snapshot");
+    let store = LogStore::open(&path).expect("open store");
+    store.register_sink("controller").await.expect("probe sink");
+    store.register_sink("datadog").await.expect("Datadog sink");
+
+    store
+        .append(&[sample_entry(), sample_entry(), sample_entry()])
+        .await
+        .expect("append");
+    store
+        .set_sink_cursor("controller", 2)
+        .await
+        .expect("probe cursor");
+    store
+        .set_sink_cursor("datadog", 1)
+        .await
+        .expect("Datadog cursor");
+    store
+        .record_sink_dead_letter("datadog", 1, 413, "too large", b"payload")
+        .await
+        .expect("dead letter");
+
+    let stats = store.stats_snapshot().await.expect("stats snapshot");
+    assert_eq!(stats.row_count, 3);
+    assert_eq!(stats.high_watermark, 3);
+    assert_eq!(stats.oldest_entry_at_ms, Some(1_700_000_000_000));
+    assert!(stats.database_bytes > 0);
+    assert_eq!(stats.sinks.len(), 2);
+    assert_eq!(stats.sinks[0].sink_id, "controller");
+    assert_eq!(stats.sinks[0].pending_entries, 1);
+    assert_eq!(stats.sinks[1].sink_id, "datadog");
+    assert_eq!(stats.sinks[1].pending_entries, 2);
+    assert_eq!(stats.dead_letters.count, 1);
+    assert_eq!(stats.dead_letters.payload_bytes, 7);
+    assert_eq!(stats.dead_letters.latest_status, Some(413));
+    assert_eq!(
+        stats.dead_letters.latest_error.as_deref(),
+        Some("too large")
+    );
+
+    drop(store);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn sqlite_stats_metrics_round_trip_with_labels() {
+    let path = temp_db_path("stats-metrics");
+    let store = LogStore::open(&path).expect("open store");
+    let point = crate::cluster_stats::StatsMetricPoint {
+        ts: 1_700_000_000_000,
+        name: "logs.sink.pending_entries".to_string(),
+        value: 12.0,
+        labels: std::collections::BTreeMap::from([("sink".to_string(), "datadog".to_string())]),
+    };
+    store
+        .append_stats_metrics(std::slice::from_ref(&point))
+        .await
+        .expect("append stats metric");
+    store
+        .append_stats_metrics(std::slice::from_ref(&point))
+        .await
+        .expect("duplicate is idempotent");
+
+    let points = store
+        .read_stats_metrics(
+            Some("logs.sink.pending_entries"),
+            1_699_999_999_999,
+            1_700_000_000_001,
+        )
+        .await
+        .expect("read stats metrics");
+    assert_eq!(points, vec![point]);
+
+    drop(store);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn sink_cursor_defaults_only_when_the_sink_row_is_missing() {
     let path = temp_db_path("sink-cursor-errors");
     let store = LogStore::open(&path).expect("open store");

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{ChecksumMode, ServerSideEncryption};
 
+use crate::cluster_stats::SharedBackupStats;
 use crate::logs::{BackupPartition, DuckLogStore};
 
 mod digest;
@@ -91,7 +92,7 @@ impl BackupConfig {
     }
 }
 
-pub async fn run(store: Arc<DuckLogStore>, config: BackupConfig) {
+pub async fn run(store: Arc<DuckLogStore>, config: BackupConfig, stats: SharedBackupStats) {
     let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
     if let Some(region) = config.region.clone() {
         loader = loader.region(aws_sdk_s3::config::Region::new(region));
@@ -102,15 +103,95 @@ pub async fn run(store: Arc<DuckLogStore>, config: BackupConfig) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         interval.tick().await;
-        match backup_once(&client, &store, &config).await {
-            Ok(stats) if stats.attempted_partitions > 0 => eprintln!(
-                "[maestro]: log_backup {}",
-                serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string())
-            ),
-            Ok(_) => {}
-            Err(err) => eprintln!("log partition backup failed: {err:#}"),
+        let attempt_at = crate::cluster_stats::now_ms();
+        {
+            let mut snapshot = stats.write().unwrap_or_else(|err| err.into_inner());
+            snapshot.configured = true;
+            snapshot.last_attempt_at_ms = Some(attempt_at);
+        }
+        let result = backup_once(&client, &store, &config).await;
+        let pending = pending_backup_summary(&store).await;
+        let persisted = {
+            let mut snapshot = stats.write().unwrap_or_else(|err| err.into_inner());
+            match result {
+                Ok(stats) => {
+                    if stats.attempted_partitions > 0 {
+                        eprintln!(
+                            "[maestro]: log_backup {}",
+                            serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string())
+                        );
+                    }
+                    snapshot.uploaded_bytes_last_run = stats.uploaded_bytes;
+                    snapshot.completed_partitions_last_run =
+                        u64::try_from(stats.completed_partitions).unwrap_or(u64::MAX);
+                    snapshot.failed_partitions_last_run =
+                        u64::try_from(stats.failed_partitions).unwrap_or(u64::MAX);
+                    if stats.failed_partitions == 0 {
+                        snapshot.last_success_at_ms = Some(crate::cluster_stats::now_ms());
+                        snapshot.last_error = None;
+                    } else {
+                        snapshot.last_error_at_ms = Some(crate::cluster_stats::now_ms());
+                        snapshot.last_error = Some(format!(
+                            "{} log-backup partition(s) failed",
+                            stats.failed_partitions
+                        ));
+                    }
+                }
+                Err(err) => {
+                    eprintln!("log partition backup failed: {err:#}");
+                    snapshot.last_error_at_ms = Some(crate::cluster_stats::now_ms());
+                    snapshot.last_error = Some(format!("{err:#}").chars().take(500).collect());
+                }
+            }
+            match pending {
+                Ok((partitions, bytes, oldest_date)) => {
+                    snapshot.pending_partitions = partitions;
+                    snapshot.pending_bytes = bytes;
+                    snapshot.oldest_pending_date = oldest_date;
+                }
+                Err(err) => {
+                    snapshot.last_error_at_ms = Some(crate::cluster_stats::now_ms());
+                    snapshot.last_error = Some(
+                        format!("failed to inspect pending backups: {err:#}")
+                            .chars()
+                            .take(500)
+                            .collect(),
+                    );
+                }
+            }
+            snapshot.clone()
+        };
+        if let Err(err) = store.save_backup_stats(&persisted).await {
+            eprintln!("failed to persist backup stats: {err:#}");
+        }
+        if let Err(err) = store
+            .append_stats_metrics(&persisted.metric_points(attempt_at))
+            .await
+        {
+            eprintln!("failed to persist backup metrics: {err:#}");
         }
     }
+}
+
+async fn pending_backup_summary(store: &DuckLogStore) -> Result<(u64, u64, Option<String>)> {
+    let partitions = store.pending_backups().await?;
+    let mut bytes = 0_u64;
+    let mut oldest_date: Option<String> = None;
+    for partition in &partitions {
+        for path in &partition.files {
+            bytes = bytes.saturating_add(std::fs::metadata(path).map(|value| value.len())?);
+        }
+        if let Some(date) = partition.partition_key.rsplit('/').next()
+            && oldest_date.as_deref().is_none_or(|oldest| date < oldest)
+        {
+            oldest_date = Some(date.to_string());
+        }
+    }
+    Ok((
+        u64::try_from(partitions.len()).unwrap_or(u64::MAX),
+        bytes,
+        oldest_date,
+    ))
 }
 
 async fn backup_once(

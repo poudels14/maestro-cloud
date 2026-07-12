@@ -155,6 +155,79 @@ export interface DiskInfo {
   fileSystem: string;
 }
 
+export interface ClusterStats {
+  generatedAtMs: number;
+  probe: {
+    version: string;
+    uptimeMs: number;
+    storageMode: string;
+  };
+  controller: ControllerStats | null;
+  controllerHeartbeatAgeMs: number | null;
+  backup: BackupStats;
+  warnings: StatsWarning[];
+}
+
+export interface ControllerStats {
+  reportedAtMs: number;
+  version: string;
+  uptimeMs: number;
+  spool: {
+    rowCount: number;
+    highWatermark: number;
+    oldestEntryAtMs: number | null;
+    databaseBytes: number;
+  };
+  sinks: SinkStats[];
+  deadLetters: {
+    count: number;
+    capacity: number;
+    payloadBytes: number;
+    latestAtMs: number | null;
+    latestStatus: number | null;
+    latestError: string | null;
+  };
+}
+
+export interface SinkStats {
+  id: string;
+  cursor: number;
+  pendingEntries: number;
+  oldestPendingAtMs: number | null;
+  lastSuccessAtMs: number | null;
+  lastErrorAtMs: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  lastCursorAdvanceAtMs: number | null;
+}
+
+export interface BackupStats {
+  configured: boolean;
+  lastAttemptAtMs: number | null;
+  lastSuccessAtMs: number | null;
+  lastErrorAtMs: number | null;
+  lastError: string | null;
+  pendingPartitions: number;
+  pendingBytes: number;
+  oldestPendingDate: string | null;
+  uploadedBytesLastRun: number;
+  completedPartitionsLastRun: number;
+  failedPartitionsLastRun: number;
+}
+
+export interface StatsWarning {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+}
+
+export interface StatsMetricPoint {
+  ts: number;
+  name: string;
+  value: number;
+  labels?: Record<string, string>;
+}
+
 export interface LogEntry {
   seq: number;
   ts: number;

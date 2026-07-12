@@ -128,6 +128,22 @@ impl TelemetryStore {
         delegate!(self, append_metrics(entries))
     }
 
+    pub async fn append_stats_metrics(
+        &self,
+        entries: &[crate::cluster_stats::StatsMetricPoint],
+    ) -> Result<()> {
+        delegate!(self, append_stats_metrics(entries))
+    }
+
+    pub async fn read_stats_metrics(
+        &self,
+        name: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<crate::cluster_stats::StatsMetricPoint>> {
+        delegate!(self, read_stats_metrics(name, from, to))
+    }
+
     pub async fn read_metrics(
         &self,
         source: &str,
