@@ -257,6 +257,72 @@ maestro daemon start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./d
 
 Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
 
+## Log storage and backups
+
+The probe stores live logs in DuckDB under `/data/duckdb` and seals completed UTC
+days into hive-partitioned Parquet files under `/data/parts`. Set
+`MAESTRO_DUCKDB=false` on the controller only as a temporary rollback switch during
+the migration window; this changes only the probe storage backend.
+`maestro daemon logs` discovers the locally running probe API and reads live data
+rather than opening the retired controller SQLite database.
+
+The controller SQLite spool independently delivers each log to the probe and every
+configured external sink, including Datadog. A spool row is reclaimed only after
+the slowest registered sink has acknowledged it. Datadog failures therefore retain
+the backlog locally until delivery recovers. Datadog payloads are kept below the
+uncompressed intake limit and `400`/`413` responses are bisected to isolate poison
+entries. An isolated `400` is quarantined only when a sibling payload succeeds;
+if every subdivision receives `400`, the response is treated as global and the
+cursor remains pinned. An irreducible rejected entry is preserved in the spool
+database's `sink_dead_letters` table before its cursor advances. Authentication,
+rate-limit, network, and server failures also pin the cursor.
+
+Dead letters are capped at 100,000 rows. Reaching the cap pins the Datadog cursor
+instead of growing the quarantine indefinitely. Inspect, export, and explicitly
+purge them from the controller spool with:
+
+```bash
+maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster list
+maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster export --output dead-letters.jsonl
+maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster purge --all
+```
+
+On first DuckDB startup, the probe automatically imports its retired `/data/logs.db`
+archive. Active controller spool databases are never migration inputs; they continue
+shipping through `/api/logs`.
+
+Daily S3 backups are enabled through the cluster config:
+
+```jsonc
+{
+  "log-backup": {
+    "bucket": "my-maestro-logs",
+    "kms-key-id": "arn:aws:kms:us-west-2:123456789012:key/...",
+    "region": "us-west-2",
+    // Optional object-key prefix and local retention after verified backup
+    "prefix": "clusters/production",
+    "retention-days": 30
+  }
+}
+```
+
+If no prefix is set, the generated cluster name is used to prevent different
+clusters from writing the same object keys.
+
+The probe uses the standard AWS credential-provider chain for authentication and
+uploads every object with SSE-KMS and a SHA-256 checksum. Objects at least 100 MiB
+use the AWS SDK's multipart API with per-part and composite SHA-256 verification;
+failed uploads are explicitly aborted. It verifies object size, checksum, metadata,
+and encryption before marking a partition backed up. Local retention is disabled
+by default and never removes an unverified partition.
+
+The probe role must allow `s3:AbortMultipartUpload`. Configure the backup bucket
+with an `AbortIncompleteMultipartUpload` lifecycle rule as crash cleanup for uploads
+that cannot reach the explicit abort path. The ignored real-AWS integration test can
+be run manually with `MAESTRO_TEST_S3_BUCKET`, `MAESTRO_TEST_S3_KMS_KEY_ID`, and
+`MAESTRO_TEST_S3_REGION`; the CI workflow runs it on manual dispatch using secrets
+with the same names plus `MAESTRO_TEST_AWS_ROLE_ARN` for GitHub OIDC credentials.
+
 ## Deploy to AWS (NixOS on EC2)
 
 ### Step 1: Generate and store the cluster config

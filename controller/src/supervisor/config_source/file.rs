@@ -40,7 +40,7 @@ impl FileServiceConfigSource {
         }
 
         impl RawTaskConfig {
-            fn to_job_config(self, name: String) -> SupervisedJobConfig {
+            fn into_job_config(self, name: String) -> SupervisedJobConfig {
                 SupervisedJobConfig {
                     id: name.clone(),
                     name,
@@ -84,12 +84,12 @@ impl FileServiceConfigSource {
             RawConfigFile::NamedList(list)
             | RawConfigFile::NamedListInObject { services: list } => list
                 .into_iter()
-                .map(|s| s.config.to_job_config(s.name))
+                .map(|s| s.config.into_job_config(s.name))
                 .collect(),
             RawConfigFile::NamedMap { services } | RawConfigFile::FlatNamedMap(services) => {
                 services
                     .into_iter()
-                    .map(|(name, config)| config.to_job_config(name))
+                    .map(|(name, config)| config.into_job_config(name))
                     .collect()
             }
         };

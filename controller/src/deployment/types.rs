@@ -485,18 +485,18 @@ impl ServiceDeployment {
         logger: &Logger,
     ) -> Result<Option<ResolvedSecret>> {
         self.config.deploy.env.items = self.config.deploy.env.resolved(logger).await?;
-        if let Some(secrets) = &mut self.config.deploy.secrets {
-            if let Some(source) = &secrets.source {
-                let source_items = SecretProvider::new(source, logger)?.fetch_kv().await?;
-                let resolved = ResolvedSecret {
-                    source: source.clone(),
-                    count: source_items.len(),
-                };
-                for (key, value) in source_items {
-                    secrets.items.entry(key).or_insert(value);
-                }
-                return Ok(Some(resolved));
+        if let Some(secrets) = &mut self.config.deploy.secrets
+            && let Some(source) = &secrets.source
+        {
+            let source_items = SecretProvider::new(source, logger)?.fetch_kv().await?;
+            let resolved = ResolvedSecret {
+                source: source.clone(),
+                count: source_items.len(),
+            };
+            for (key, value) in source_items {
+                secrets.items.entry(key).or_insert(value);
             }
+            return Ok(Some(resolved));
         }
         Ok(None)
     }

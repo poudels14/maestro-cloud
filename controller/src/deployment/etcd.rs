@@ -10,8 +10,8 @@ use etcd_client::{
 use crate::deployment::keys::{
     SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_RESTART_REQUEST_KEY, SYSTEM_UPGRADE_REQUEST_KEY,
     deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
-    deployment_deploy_secrets_key, deployment_prefix, replica_state_key, replica_states_prefix,
-    service_deployment_history_key, service_deployment_history_prefix,
+    deployment_deploy_secrets_key, deployment_prefix, log_migration_key, replica_state_key,
+    replica_states_prefix, service_deployment_history_key, service_deployment_history_prefix,
     service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
     service_info_key, service_prefix,
 };
@@ -149,11 +149,12 @@ impl EtcdStateStore {
             self.write_encrypted(&key, &deployment.config.deploy.env.items)
                 .await;
         }
-        if let Some(secrets) = &deployment.config.deploy.secrets {
-            if !secrets.items.is_empty() && secrets.source.is_none() {
-                let key = deployment_deploy_secrets_key(service_id, deployment_id);
-                self.write_encrypted(&key, &secrets.items).await;
-            }
+        if let Some(secrets) = &deployment.config.deploy.secrets
+            && !secrets.items.is_empty()
+            && secrets.source.is_none()
+        {
+            let key = deployment_deploy_secrets_key(service_id, deployment_id);
+            self.write_encrypted(&key, &secrets.items).await;
         }
         if let Some(build) = &deployment.config.build {
             if !build.env.items.is_empty() {
@@ -538,11 +539,12 @@ impl ClusterStore for EtcdStateStore {
             let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
 
             let mut deployment = deployment;
-            if let Some(secrets) = &mut deployment.config.deploy.secrets {
-                if secrets.items.is_empty() && !secrets.keys.is_empty() {
-                    let key = deployment_deploy_secrets_key(&service_id, &deployment.id);
-                    secrets.items = self.read_encrypted(&key).await;
-                }
+            if let Some(secrets) = &mut deployment.config.deploy.secrets
+                && secrets.items.is_empty()
+                && !secrets.keys.is_empty()
+            {
+                let key = deployment_deploy_secrets_key(&service_id, &deployment.id);
+                secrets.items = self.read_encrypted(&key).await;
             }
             self.restore_deployment_data(&service_id, &mut deployment)
                 .await;
@@ -996,14 +998,14 @@ impl ClusterStore for EtcdStateStore {
                 let key = deployment_deploy_env_key(service_id, &latest.id);
                 info.config.deploy.env.items = self.read_encrypted(&key).await;
             }
-            if let Some(latest_secrets) = &latest.config.deploy.secrets {
-                if let Some(info_secrets) = &mut info.config.deploy.secrets {
-                    if info_secrets.keys.is_empty() && !latest_secrets.keys.is_empty() {
-                        info_secrets.keys = latest_secrets.keys.clone();
-                    }
-                    if info_secrets.source.is_none() && latest_secrets.source.is_some() {
-                        info_secrets.source = latest_secrets.source.clone();
-                    }
+            if let Some(latest_secrets) = &latest.config.deploy.secrets
+                && let Some(info_secrets) = &mut info.config.deploy.secrets
+            {
+                if info_secrets.keys.is_empty() && !latest_secrets.keys.is_empty() {
+                    info_secrets.keys = latest_secrets.keys.clone();
+                }
+                if info_secrets.source.is_none() && latest_secrets.source.is_some() {
+                    info_secrets.source = latest_secrets.source.clone();
                 }
             }
             if let Some(build) = &mut info.config.build {
@@ -1278,17 +1280,16 @@ impl ClusterStore for EtcdStateStore {
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
 
             let active_deployment = self.find_active_deployment(service_id).await;
-            if let Some(dep_snapshot) = &active_deployment {
-                if let Some(build) = &config.build {
-                    if !build.secrets.items.is_empty() {
-                        let key =
-                            deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
-                        self.write_encrypted(&key, &build.secrets.items).await;
-                    }
-                    if !build.env.items.is_empty() {
-                        let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
-                        self.write_encrypted(&key, &build.env.items).await;
-                    }
+            if let Some(dep_snapshot) = &active_deployment
+                && let Some(build) = &config.build
+            {
+                if !build.secrets.items.is_empty() {
+                    let key = deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
+                    self.write_encrypted(&key, &build.secrets.items).await;
+                }
+                if !build.env.items.is_empty() {
+                    let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
+                    self.write_encrypted(&key, &build.env.items).await;
                 }
             }
 
@@ -1442,6 +1443,22 @@ impl ClusterStore for EtcdStateStore {
             .delete(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(), None)
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
+        Ok(())
+    }
+
+    async fn has_log_migration_marker(&self, archive_hash: &str) -> anyhow::Result<bool> {
+        let key = log_migration_key(archive_hash);
+        let response = self.get(key.into_bytes(), None).await?;
+        Ok(!response.kvs().is_empty())
+    }
+
+    async fn put_log_migration_marker(&self, archive_hash: &str) -> anyhow::Result<()> {
+        let key = log_migration_key(archive_hash);
+        let mut client = self.client.lock().await;
+        client
+            .put(key, current_time_millis()?.to_string(), None)
+            .await
+            .map_err(|err| anyhow!("failed to write log migration marker: {err}"))?;
         Ok(())
     }
 

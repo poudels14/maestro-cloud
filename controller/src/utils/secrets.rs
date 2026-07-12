@@ -68,18 +68,18 @@ impl SecretProvider {
 }
 
 fn parse_kv(raw: &str) -> HashMap<String, String> {
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
-        if let Some(object) = parsed.as_object() {
-            let mut result = HashMap::new();
-            for (key, value) in object {
-                if let Some(string_value) = value.as_str() {
-                    result.insert(key.clone(), string_value.to_string());
-                } else {
-                    result.insert(key.clone(), value.to_string());
-                }
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw)
+        && let Some(object) = parsed.as_object()
+    {
+        let mut result = HashMap::new();
+        for (key, value) in object {
+            if let Some(string_value) = value.as_str() {
+                result.insert(key.clone(), string_value.to_string());
+            } else {
+                result.insert(key.clone(), value.to_string());
             }
-            return result;
         }
+        return result;
     }
     dotenvy::from_read_iter(raw.as_bytes())
         .filter_map(|item| item.ok())

@@ -164,6 +164,32 @@
         }
       }
     },
+    "log-backup": {
+      "type": "object",
+      "required": ["bucket", "kms-key-id"],
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kms-key-id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "retention-days": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "disable-etcd-cert": {
       "type": "boolean",
       "default": false

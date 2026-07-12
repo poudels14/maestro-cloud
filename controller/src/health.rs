@@ -110,10 +110,10 @@ impl ReplicaHealthMonitor for DefaultHealthMonitor {
         let current = self
             .current_state(service_id, deployment_id, replica_index)
             .await;
-        if let Some(state) = &current {
-            if state.status == DeploymentStatus::Crashed {
-                return Ok(());
-            }
+        if let Some(state) = &current
+            && state.status == DeploymentStatus::Crashed
+        {
+            return Ok(());
         }
         let next_failures = current
             .as_ref()

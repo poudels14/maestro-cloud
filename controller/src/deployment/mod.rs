@@ -645,6 +645,17 @@ async fn init_probe(
                     format!("MAESTRO_SLACK_WEBHOOK_URL={}", slack_url.as_str()),
                 ]);
             }
+            for name in [
+                "MAESTRO_DUCKDB",
+                "AWS_REGION",
+                "AWS_DEFAULT_REGION",
+                "AWS_ENDPOINT_URL_S3",
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            ] {
+                if let Ok(value) = std::env::var(name) {
+                    probe_flags.extend(["-e".into(), format!("{name}={value}")]);
+                }
+            }
             probe_flags.extend_from_slice(dns_flag);
             probe_flags.extend(ip_flags);
             runtime.run_command(&RunSpec {
@@ -677,6 +688,17 @@ async fn init_probe(
         }),
     };
     await_job_running(supervisor, probe_job_config).await;
+    let port_path = probe_dir.join("api-port");
+    let temp_port_path = probe_dir.join(format!("api-port.tmp-{}", std::process::id()));
+    std::fs::write(&temp_port_path, probe_host_port.to_string())
+        .expect("failed to write probe API port");
+    std::fs::File::open(&temp_port_path)
+        .and_then(|file| file.sync_all())
+        .expect("failed to sync probe API port");
+    std::fs::rename(&temp_port_path, &port_path).expect("failed to persist probe API port");
+    if let Ok(directory) = std::fs::File::open(&probe_dir) {
+        let _ = directory.sync_all();
+    }
 }
 
 async fn init_tailnet(

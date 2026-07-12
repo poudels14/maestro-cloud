@@ -263,20 +263,19 @@ impl ClusterStore for LifecycleStore {
         status: DeploymentStatus,
     ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
-        if let Some(history) = state.history.get_mut(&deployment.service_id) {
-            if let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id) {
-                if stored.status.can_transition_to(&status) || stored.status == status {
-                    if status == DeploymentStatus::Draining && stored.drained_at.is_none() {
-                        stored.drained_at = Some(self.clock.now_ms());
-                    }
-                    stored.status = status.clone();
-                    state
-                        .transitions
-                        .entry(deployment.id.clone())
-                        .or_default()
-                        .push(status);
-                }
+        if let Some(history) = state.history.get_mut(&deployment.service_id)
+            && let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id)
+            && (stored.status.can_transition_to(&status) || stored.status == status)
+        {
+            if status == DeploymentStatus::Draining && stored.drained_at.is_none() {
+                stored.drained_at = Some(self.clock.now_ms());
             }
+            stored.status = status.clone();
+            state
+                .transitions
+                .entry(deployment.id.clone())
+                .or_default()
+                .push(status);
         }
         Ok(())
     }
@@ -368,7 +367,7 @@ impl ClusterStore for LifecycleStore {
     async fn list_service_deployments(&self, service_id: &str) -> Result<Vec<ServiceDeployment>> {
         let state = self.state.lock().expect("state lock");
         let mut deployments = state.history.get(service_id).cloned().unwrap_or_default();
-        deployments.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at));
         Ok(deployments)
     }
 
@@ -447,14 +446,14 @@ impl ClusterStore for LifecycleStore {
                 Some(stored.clone())
             }
         };
-        if let Some(d) = &updated {
-            if d.status == DeploymentStatus::Draining {
-                state
-                    .transitions
-                    .entry(deployment.id.clone())
-                    .or_default()
-                    .push(DeploymentStatus::Draining);
-            }
+        if let Some(d) = &updated
+            && d.status == DeploymentStatus::Draining
+        {
+            state
+                .transitions
+                .entry(deployment.id.clone())
+                .or_default()
+                .push(DeploymentStatus::Draining);
         }
         Ok(updated)
     }
@@ -497,11 +496,11 @@ impl ClusterStore for LifecycleStore {
         deployment: &ServiceDeployment,
     ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
-        if let Some(history) = state.history.get_mut(service_id) {
-            if let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id) {
-                stored.build = deployment.build.clone();
-                stored.git_commit = deployment.git_commit.clone();
-            }
+        if let Some(history) = state.history.get_mut(service_id)
+            && let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id)
+        {
+            stored.build = deployment.build.clone();
+            stored.git_commit = deployment.git_commit.clone();
         }
         Ok(())
     }
@@ -512,10 +511,10 @@ impl ClusterStore for LifecycleStore {
         deployment: &ServiceDeployment,
     ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
-        if let Some(history) = state.history.get_mut(service_id) {
-            if let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id) {
-                stored.deployed_at = deployment.deployed_at;
-            }
+        if let Some(history) = state.history.get_mut(service_id)
+            && let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id)
+        {
+            stored.deployed_at = deployment.deployed_at;
         }
         Ok(())
     }
@@ -526,11 +525,11 @@ impl ClusterStore for LifecycleStore {
         updated: &ServiceDeployment,
     ) -> Result<()> {
         let mut state = self.state.lock().expect("state lock");
-        if let Some(history) = state.history.get_mut(&deployment.service_id) {
-            if let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id) {
-                stored.git_commit = updated.git_commit.clone();
-                stored.build = updated.build.clone();
-            }
+        if let Some(history) = state.history.get_mut(&deployment.service_id)
+            && let Some(stored) = history.iter_mut().find(|d| d.id == deployment.id)
+        {
+            stored.git_commit = updated.git_commit.clone();
+            stored.build = updated.build.clone();
         }
         Ok(())
     }

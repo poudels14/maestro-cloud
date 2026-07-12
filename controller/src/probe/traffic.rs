@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 
-use crate::logs::LogStore;
+use crate::logs::TelemetryStore;
 use crate::metrics::TrafficPoint;
 
 const SCRAPE_INTERVAL: Duration = Duration::from_secs(5);
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(3);
 const METRICS_URL: &str = "http://web:9100/metrics";
 
-pub async fn run(log_store: Arc<LogStore>) {
+pub async fn run(log_store: Arc<TelemetryStore>) {
     let http_client = match reqwest::Client::builder().timeout(SCRAPE_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
@@ -39,7 +39,7 @@ pub async fn run(log_store: Arc<LogStore>) {
 
 struct TrafficScraper {
     http_client: reqwest::Client,
-    log_store: Arc<LogStore>,
+    log_store: Arc<TelemetryStore>,
     previous: HashMap<SeriesKey, Cumulative>,
     has_scraped: bool,
 }

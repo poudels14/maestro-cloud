@@ -81,10 +81,10 @@ impl BuildWatcher {
             if !build_config.watch || info.deploy_frozen {
                 continue;
             }
-            if let Some((retry_at, _)) = self.backoff.get(&service_id) {
-                if Instant::now() < *retry_at {
-                    continue;
-                }
+            if let Some((retry_at, _)) = self.backoff.get(&service_id)
+                && Instant::now() < *retry_at
+            {
+                continue;
             }
             match self.check_service(&service_id, &info).await {
                 Ok(()) => {

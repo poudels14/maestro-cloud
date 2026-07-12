@@ -209,8 +209,10 @@ struct ContextSetArgs {
 enum DaemonCommand {
     /// Start the cluster controller and all system services
     Start(StartArgs),
-    /// Read logs from the local log store
+    /// Read logs from the locally running probe API
     Logs(LogsArgs),
+    /// Inspect, export, or purge controller sink dead letters
+    DeadLetters(DeadLettersArgs),
     /// Run the health probe server (used internally by the probe container)
     Probe(ProbeArgs),
 }
@@ -344,7 +346,7 @@ struct StartArgs {
 struct LogsArgs {
     #[arg(
         long = "source",
-        help = "Source name (e.g., service name). Shows all sources if omitted"
+        help = "System source name or service/deployment/unit. Shows all sources if omitted"
     )]
     source: Option<String>,
     #[arg(long = "data-dir", help = "Maestro data directory")]
@@ -362,6 +364,50 @@ struct LogsArgs {
     tail: usize,
     #[arg(long = "follow", short = 'f', help = "Follow log output")]
     follow: bool,
+}
+
+#[derive(Debug, Args)]
+struct DeadLettersArgs {
+    #[arg(long = "data-dir", help = "Maestro data directory")]
+    data_dir: PathBuf,
+    #[arg(
+        long = "cluster-name",
+        help = "Cluster name (read from maestro.jsonc if omitted)"
+    )]
+    cluster_name: Option<String>,
+    #[command(subcommand)]
+    command: DeadLettersCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DeadLettersCommand {
+    /// List dead-letter metadata and aggregate storage use
+    List {
+        #[arg(long, default_value = "datadog")]
+        sink: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Export full dead-letter records as JSON Lines
+    Export {
+        #[arg(long, default_value = "datadog")]
+        sink: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Purge dead letters after they have been exported or investigated
+    Purge {
+        #[arg(long, default_value = "datadog")]
+        sink: String,
+        #[arg(
+            long,
+            conflicts_with = "through_seq",
+            required_unless_present = "through_seq"
+        )]
+        all: bool,
+        #[arg(long, conflicts_with = "all", value_name = "SEQ")]
+        through_seq: Option<i64>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -493,6 +539,7 @@ async fn run() -> crate::error::Result<bool> {
                     depot: Default::default(),
                     cloudflare: None,
                     slack: None,
+                    log_backup: None,
                     disable_etcd_cert: false,
                     allow_cli_deployment: false,
                 },
@@ -510,10 +557,10 @@ async fn run() -> crate::error::Result<bool> {
                     advertise_routes: Vec::new(),
                 });
             }
-            if !tailscale_advertise_routes.is_empty() {
-                if let Some(ts) = cfg.tailscale.as_mut() {
-                    ts.advertise_routes.extend(tailscale_advertise_routes);
-                }
+            if !tailscale_advertise_routes.is_empty()
+                && let Some(ts) = cfg.tailscale.as_mut()
+            {
+                ts.advertise_routes.extend(tailscale_advertise_routes);
             }
             if let Some(api_key) = dd_api_key {
                 let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
@@ -642,6 +689,19 @@ async fn run() -> crate::error::Result<bool> {
                 logs::LogStore::open(&data_dir.join("logs/logs.db"))
                     .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?,
             );
+            log_store
+                .register_sink("controller")
+                .await
+                .map_err(|err| Error::internal(format!("failed to register probe sink: {err}")))?;
+            if cfg.datadog.is_some() && datadog_site.is_some() {
+                log_store.register_sink("datadog").await.map_err(|err| {
+                    Error::internal(format!("failed to register Datadog sink: {err}"))
+                })?;
+            } else {
+                log_store.unregister_sink("datadog").await.map_err(|err| {
+                    Error::internal(format!("failed to unregister Datadog sink: {err}"))
+                })?;
+            }
             let (log_collector, log_sender) = logs::LogCollector::new(log_store.clone());
             let collector_handle = log_collector.spawn();
 
@@ -674,22 +734,25 @@ async fn run() -> crate::error::Result<bool> {
             let mut metrics_datadog_tx: Option<flume::Sender<metrics::MetricBatch>> = None;
             if let Some(dd) = cfg.datadog {
                 if let Some(site) = datadog_site {
-                    let include_metrics = dd.include_metrics;
-                    let metrics_api_key = dd.api_key.clone();
-                    let dd_sink = logs::DatadogSink::new(
-                        dd.api_key,
+                    let log_sink = logs::DatadogSink::new(
+                        dd.api_key.clone(),
                         &site,
                         dd.include_ingress_logs,
                         dd.include_tailscale_logs,
-                    );
-                    let dd_worker = logs::SinkWorker::new(
                         log_store.clone(),
-                        Box::new(dd_sink),
-                        signal_tx.subscribe(),
                     );
-                    background_handles.push(dd_worker.spawn());
+                    background_handles.push(
+                        logs::SinkWorker::new(
+                            log_store.clone(),
+                            Box::new(log_sink),
+                            signal_tx.subscribe(),
+                        )
+                        .spawn(),
+                    );
                     logger.emit("info", &format!("datadog log sink enabled (site: {site})"));
 
+                    let include_metrics = dd.include_metrics;
+                    let metrics_api_key = dd.api_key.clone();
                     if include_metrics {
                         let (metrics_tx, metrics_rx) = flume::bounded(1024);
                         let metrics_sink = metrics::datadog::DatadogMetricsSink::new(
@@ -827,7 +890,8 @@ async fn run() -> crate::error::Result<bool> {
                     .await?,
             );
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
-            let http_sink = logs::HttpSink::new("controller", &probe_log_endpoint);
+            let node_id = load_or_create_node_id(&deployment_config.data_dir)?;
+            let http_sink = logs::HttpSink::new("controller", node_id, &probe_log_endpoint);
             let sink_worker = logs::SinkWorker::new(
                 log_store.clone(),
                 Box::new(http_sink),
@@ -993,48 +1057,50 @@ async fn run() -> crate::error::Result<bool> {
                     follow,
                 }),
         }) => {
-            let cluster_name = if let Some(name) = cluster_name {
-                name
-            } else if let Ok(cfg) = config::load_config(DEFAULT_CONFIG_PATH).await {
-                cfg.cluster.name.to_lowercase()
-            } else {
-                return Err(Error::invalid_input(
-                    "provide --cluster-name or create maestro.jsonc with cluster.name",
-                ));
-            };
-            let db_path = data_dir.join(&cluster_name).join("logs/logs.db");
-            let store = logs::LogStore::open(&db_path)
-                .map_err(|err| Error::internal(format!("failed to open log store: {err}")))?;
-
-            let entries = if let Some(src) = &source {
-                store.read_tail(src, tail).await
-            } else {
-                store.read_tail_all(tail).await
-            }
-            .map_err(|err| Error::internal(format!("failed to read logs: {err}")))?;
-
-            let show_source = source.is_none();
-            for entry in &entries {
-                print_log_entry(entry, show_source);
-            }
-
-            if follow {
-                let mut last_seq = entries.last().map(|e| e.seq).unwrap_or(0);
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    let new_entries = if let Some(src) = &source {
-                        store.read_after_for_source(src, last_seq, 500).await
-                    } else {
-                        store.read_after_all(last_seq, 500).await
-                    }
-                    .map_err(|err| Error::internal(format!("failed to read logs: {err}")))?;
-                    for entry in &new_entries {
-                        print_log_entry(entry, show_source);
-                        last_seq = entry.seq;
-                    }
+            let cluster_name = resolve_local_cluster_name(cluster_name).await?;
+            let port_path = data_dir.join(&cluster_name).join("system/probe/api-port");
+            let port = std::fs::read_to_string(&port_path)
+                .map_err(|err| {
+                    Error::not_found(format!(
+                        "probe API location is unavailable at {}: {err}; is the controller running?",
+                        port_path.display()
+                    ))
+                })?
+                .trim()
+                .parse::<u16>()
+                .map_err(|err| {
+                    Error::internal(format!(
+                        "invalid probe API port in {}: {err}",
+                        port_path.display()
+                    ))
+                })?;
+            cli::logs::run_daemon_logs(&format!("http://127.0.0.1:{port}"), source, tail, follow)
+                .await
+                .map(|()| false)
+        }
+        Some(CliCommand::Daemon {
+            command:
+                DaemonCommand::DeadLetters(DeadLettersArgs {
+                    data_dir,
+                    cluster_name,
+                    command,
+                }),
+        }) => {
+            let cluster_name = resolve_local_cluster_name(cluster_name).await?;
+            let db_path = data_dir.join(cluster_name).join("logs/logs.db");
+            match command {
+                DeadLettersCommand::List { sink, limit } => {
+                    cli::dead_letters::list(&db_path, &sink, limit).await?
                 }
+                DeadLettersCommand::Export { sink, output } => {
+                    cli::dead_letters::export(&db_path, &sink, &output).await?
+                }
+                DeadLettersCommand::Purge {
+                    sink,
+                    all: _,
+                    through_seq,
+                } => cli::dead_letters::purge(&db_path, &sink, through_seq).await?,
             }
-
             Ok(false)
         }
         Some(CliCommand::Config { command }) => match command {
@@ -1042,6 +1108,18 @@ async fn run() -> crate::error::Result<bool> {
             ConfigCommand::Validate { path } => cli::config::run_validate(&path).map(|()| false),
         },
     }
+}
+
+async fn resolve_local_cluster_name(cluster_name: Option<String>) -> crate::error::Result<String> {
+    if let Some(name) = cluster_name {
+        return Ok(name.to_lowercase());
+    }
+    if let Ok(cfg) = config::load_config(DEFAULT_CONFIG_PATH).await {
+        return Ok(cfg.cluster.name.to_lowercase());
+    }
+    Err(Error::invalid_input(
+        "provide --cluster-name or create maestro.jsonc with cluster.name",
+    ))
 }
 
 fn help_text() -> String {
@@ -1157,35 +1235,47 @@ fn acquire_lock(data_dir: &Path) -> crate::error::Result<std::fs::File> {
     Ok(file)
 }
 
-fn print_log_entry(entry: &logs::LogEntry, show_source: bool) {
-    let ts = chrono::DateTime::from_timestamp_millis(entry.ts)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_else(|| entry.ts.to_string());
-    let attrs = entry
-        .attrs
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let suffix = if attrs.is_empty() {
-        String::new()
-    } else {
-        format!("  {attrs}")
-    };
-    if show_source {
-        println!(
-            "{ts}  {:<5}  [{}]  {}{suffix}",
-            entry.level.to_uppercase(),
-            entry.source,
-            entry.text
-        );
-    } else {
-        println!(
-            "{ts}  {:<5}  {}{suffix}",
-            entry.level.to_uppercase(),
-            entry.text
-        );
+fn load_or_create_node_id(data_dir: &Path) -> crate::error::Result<String> {
+    use std::io::Write;
+
+    let directory = data_dir.join("logs");
+    let path = directory.join("node-id");
+    let temp = directory.join("node-id.tmp");
+    match std::fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(Error::internal(format!(
+                "failed to remove stale spool identity {}: {err}",
+                temp.display()
+            )));
+        }
     }
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
+        }
+    }
+
+    std::fs::create_dir_all(&directory).map_err(|err| {
+        Error::internal(format!(
+            "failed to create spool identity directory {}: {err}",
+            directory.display()
+        ))
+    })?;
+    let node_id = format!("controller-{}", utils::nanoid::unique_id(16));
+    let mut file = std::fs::File::create(&temp)
+        .map_err(|err| Error::internal(format!("failed to create spool identity: {err}")))?;
+    file.write_all(node_id.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|err| Error::internal(format!("failed to persist spool identity: {err}")))?;
+    std::fs::rename(&temp, &path)
+        .map_err(|err| Error::internal(format!("failed to install spool identity: {err}")))?;
+    if let Ok(directory) = std::fs::File::open(&directory) {
+        let _ = directory.sync_all();
+    }
+    Ok(node_id)
 }
 
 fn validate_subnet_cidr(cidr: &str) -> crate::error::Result<()> {
@@ -1245,4 +1335,26 @@ fn restart_self() -> ! {
     let err = std::process::Command::new(&exe).args(&args).exec();
     eprintln!("[maestro]: exec failed: {err}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod spool_identity_tests {
+    use super::load_or_create_node_id;
+
+    #[test]
+    fn controller_spool_identity_is_stable_for_its_data_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "maestro-node-id-test-{}-{}",
+            std::process::id(),
+            crate::utils::nanoid::unique_id(8)
+        ));
+        let first = load_or_create_node_id(&root).expect("create node id");
+        let stale_temp = root.join("logs/node-id.tmp");
+        std::fs::write(&stale_temp, "stale").expect("stale temp");
+        let second = load_or_create_node_id(&root).expect("read node id");
+        assert_eq!(first, second);
+        assert!(first.starts_with("controller-"));
+        assert!(!stale_temp.exists());
+        std::fs::remove_dir_all(root).ok();
+    }
 }

@@ -4,13 +4,13 @@ use crate::deployment::provider::DeployOutput;
 use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
 use crate::logs::{LogConfig, LogEntry};
 
-pub mod engine;
+pub mod core;
 #[cfg(test)]
 pub mod in_memory;
 pub mod provider;
 pub mod replica_supervisor;
 
-pub use engine::Engine;
+pub use core::Engine;
 
 #[cfg(test)]
 #[path = "../tests/lifecycle.rs"]

@@ -355,8 +355,7 @@ fn service_payload(
     service_template: &ServiceTemplate,
 ) -> Result<PatchServiceRequest> {
     let id = service_id.trim();
-    crate::validation::validate_service_id(id, "service id")
-        .map_err(|err| Error::invalid_config(err))?;
+    crate::validation::validate_service_id(id, "service id").map_err(Error::invalid_config)?;
 
     let name = service_template.name.trim();
     if name.is_empty() {

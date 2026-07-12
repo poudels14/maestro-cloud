@@ -425,9 +425,7 @@ impl DeploymentController {
 
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
         let request = self.store.read_system_upgrade_request().await;
-        let Some(system_type) = request.ok().flatten() else {
-            return None;
-        };
+        let system_type = request.ok().flatten()?;
         if system_type == "nixos" {
             self.logger.emit("info", "starting NixOS system upgrade");
             let flake_result = tokio::process::Command::new("nix")
@@ -620,10 +618,7 @@ impl DeploymentController {
         for (_, pending) in self.pending_builds.drain() {
             pending.handle.abort();
         }
-        let _ = self
-            .container_engine
-            .shutdown_all_replicas(request.clone())
-            .await;
+        let _ = self.container_engine.shutdown_all_replicas(request).await;
         let _ = self.supervisor.shutdown_all(request).await;
     }
 
@@ -1310,8 +1305,8 @@ impl DeploymentController {
                 _ => None,
             };
 
-            if let Some(new_status) = new_status {
-                if let Err(err) = self
+            if let Some(new_status) = new_status
+                && let Err(err) = self
                     .store
                     .update_replica_status(
                         &deployment.service_id,
@@ -1320,15 +1315,14 @@ impl DeploymentController {
                         new_status.clone(),
                     )
                     .await
-                {
-                    self.logger.emit(
-                        "error",
-                        &format!(
-                            "failed to update replica{} of deployment `{}` to {new_status:?}: {err}",
-                            deployment.replica_index, deployment.id
-                        ),
-                    );
-                }
+            {
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "failed to update replica{} of deployment `{}` to {new_status:?}: {err}",
+                        deployment.replica_index, deployment.id
+                    ),
+                );
             }
 
             if matches!(
@@ -1336,13 +1330,11 @@ impl DeploymentController {
                 SupervisedJobStatus::Completed
                     | SupervisedJobStatus::Stopped
                     | SupervisedJobStatus::Crashed
-            ) {
-                if let Ok(Some(deployment_record)) =
-                    self.store.read_service_deployment(&deployment).await
-                {
-                    self.remove_replica_container(&deployment_record, deployment.replica_index)
-                        .await;
-                }
+            ) && let Ok(Some(deployment_record)) =
+                self.store.read_service_deployment(&deployment).await
+            {
+                self.remove_replica_container(&deployment_record, deployment.replica_index)
+                    .await;
             }
         }
     }
@@ -1361,7 +1353,7 @@ impl DeploymentController {
     }
 
     async fn remove_container_by_hostname(&self, hostname: &str) {
-        if let Err(err) = self.runtime.remove_container(&hostname).await {
+        if let Err(err) = self.runtime.remove_container(hostname).await {
             self.logger.emit(
                 "warn",
                 &format!(
@@ -1442,7 +1434,7 @@ impl DeploymentController {
             .filter_map(deployment_image);
 
         let retained_images = active_images
-            .chain(latest_built_image.into_iter())
+            .chain(latest_built_image)
             .collect::<HashSet<_>>();
 
         for deployment in deployments
@@ -2238,9 +2230,7 @@ fn initial_replica_status_for_deployment(deployment: &ServiceDeployment) -> Depl
 }
 
 fn recovered_replica_status_for_deployment(deployment: &ServiceDeployment) -> DeploymentStatus {
-    if deployment.status == DeploymentStatus::Ready {
-        DeploymentStatus::Ready
-    } else if !deployment_has_healthcheck(deployment) {
+    if deployment.status == DeploymentStatus::Ready || !deployment_has_healthcheck(deployment) {
         DeploymentStatus::Ready
     } else {
         initial_replica_status_for_deployment(deployment)
