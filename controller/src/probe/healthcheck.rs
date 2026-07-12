@@ -8,6 +8,8 @@ use crate::deployment::types::{DeploymentStatus, ReplicaState, ServiceDeployment
 use crate::health::ReplicaHealthMonitor;
 
 const UNHEALTHY_RECHECK_SECS: u64 = 5;
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 
 /// Tracks whether each replica was healthy on the last check.
 /// Keys are "{deployment_id}-replica{replica_index}".
@@ -135,10 +137,13 @@ async fn check_replicas(
                 "skipping {}/{}/replica{} healthcheck: ingress.port is not set; marking replica ready",
                 service_id, deployment.id, replica.replica_index
             );
-            state.remove(&key);
-            monitor
-                .report_healthy(service_id, &deployment.id, replica.replica_index)
-                .await?;
+            let was_healthy = state.insert(key.clone(), true);
+            stagger_first_healthy_poll(&key, was_healthy, healthy_interval, now, last_polled);
+            if replica_needs_healthy_update(replica) {
+                monitor
+                    .report_healthy(service_id, &deployment.id, replica.replica_index)
+                    .await?;
+            }
             continue;
         };
 
@@ -177,12 +182,18 @@ async fn check_replicas(
             }
         }
 
+        if is_healthy {
+            stagger_first_healthy_poll(&key, was_healthy, healthy_interval, now, last_polled);
+        }
+
         state.insert(key, is_healthy);
 
         if is_healthy {
-            monitor
-                .report_healthy(service_id, &deployment.id, replica.replica_index)
-                .await?;
+            if replica_needs_healthy_update(replica) {
+                monitor
+                    .report_healthy(service_id, &deployment.id, replica.replica_index)
+                    .await?;
+            }
         } else {
             let reason = format!(
                 "healthcheck failed on `{}` (replica{}, {})",
@@ -197,6 +208,44 @@ async fn check_replicas(
     }
 
     Ok(())
+}
+
+fn replica_needs_healthy_update(replica: &ReplicaState) -> bool {
+    replica.status != DeploymentStatus::Ready || replica.healthcheck_failures != 0
+}
+
+fn stagger_first_healthy_poll(
+    key: &str,
+    was_healthy: Option<bool>,
+    interval: Duration,
+    now: Instant,
+    last_polled: &mut HashMap<String, Instant>,
+) {
+    if was_healthy == Some(true) {
+        return;
+    }
+
+    // A rollout starts replicas together, which would otherwise keep every
+    // steady-state health check on the same interval boundary. Move only the
+    // first healthy interval onto a stable per-replica phase; subsequent checks
+    // retain that phase at the configured frequency.
+    let stagger = healthy_check_stagger(key, interval);
+    let elapsed = interval.saturating_sub(stagger);
+    if let Some(staggered_last_poll) = now.checked_sub(elapsed) {
+        last_polled.insert(key.to_string(), staggered_last_poll);
+    }
+}
+
+fn healthy_check_stagger(key: &str, interval: Duration) -> Duration {
+    let tick_secs = super::POLL_TICK_INTERVAL.as_secs().max(1);
+    let interval_secs = interval.as_secs().max(tick_secs);
+    let slots = (interval_secs / tick_secs).max(1);
+
+    let hash = key.as_bytes().iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    });
+    let slot = (hash % slots) + 1;
+    Duration::from_secs((slot * tick_secs).min(interval_secs))
 }
 
 fn build_health_url_for_replica(
