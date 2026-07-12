@@ -314,6 +314,9 @@ async fn collect_container_stats(runtime_cli: &str) -> Result<Vec<ContainerStats
 }
 
 fn extract_service_id(container_name: &str, cluster_suffix: &str) -> String {
+    // System containers are named `{service}-{cluster}[-{replica}]`. Match the
+    // non-replicated form first because a cluster name may itself end in a
+    // number, then remove an optional replica and match again.
     if let Some(base) = container_name.strip_suffix(cluster_suffix) {
         return base.to_string();
     }
@@ -323,6 +326,9 @@ fn extract_service_id(container_name: &str, cluster_suffix: &str) -> String {
         if tail.parse::<u32>().is_ok() {
             name = &name[..idx];
         }
+    }
+    if let Some(base) = name.strip_suffix(cluster_suffix) {
+        return base.to_string();
     }
     if let Some(idx) = name.rfind('-') {
         let suffix = &name[idx + 1..];
@@ -428,7 +434,25 @@ mod tests {
             extract_service_id("maestro-probe-cluster-1", suffix),
             "maestro-probe"
         );
+        assert_eq!(
+            extract_service_id("maestro-cloudflared-cluster-1-2", suffix),
+            "maestro-cloudflared"
+        );
         assert_eq!(extract_service_id("my-svc-aBc123-1", suffix), "my-svc");
         assert_eq!(extract_service_id("standalone", suffix), "standalone");
+    }
+
+    #[test]
+    fn all_system_services_follow_metrics_naming_contract() {
+        let cluster = "baton-staging-us-west-2-pw7t";
+        let suffix = format!("-{cluster}");
+
+        for service in crate::deployment::SYSTEM_SERVICES {
+            let container = format!("{}-{cluster}", service.id);
+            assert_eq!(extract_service_id(&container, &suffix), service.id);
+
+            let replica = format!("{}-{cluster}-3", service.id);
+            assert_eq!(extract_service_id(&replica, &suffix), service.id);
+        }
     }
 }

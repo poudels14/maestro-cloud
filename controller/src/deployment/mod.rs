@@ -27,6 +27,46 @@ pub const PROBE_IMAGE_TAG: &str = "maestro-probe";
 pub const ADMIN_IMAGE_TAG: &str = "maestro-admin";
 pub const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
 pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
+
+pub struct SystemService {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub image: &'static str,
+}
+
+pub const SYSTEM_SERVICES: &[SystemService] = &[
+    SystemService {
+        id: "maestro-etcd",
+        name: "etcd",
+        image: ETCD_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-ingress",
+        name: "ingress",
+        image: INGRESS_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-probe",
+        name: "controller",
+        image: PROBE_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-admin",
+        name: "admin",
+        image: ADMIN_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-tailscale",
+        name: "tailscale",
+        image: TAILSCALE_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-cloudflared",
+        name: "cloudflared",
+        image: CLOUDFLARED_IMAGE_TAG,
+    },
+];
+
 pub struct SystemStartupInfo {
     pub dns_manager: Arc<DnsManager>,
     pub nameserver_ip: Option<String>,
