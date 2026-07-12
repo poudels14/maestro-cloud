@@ -123,6 +123,11 @@ pub(crate) struct ReplicasResponse {
     pub(crate) replicas_override: Option<u32>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct UpgradeSystemRequest {
+    pub(crate) version: String,
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SlackWebhookView {

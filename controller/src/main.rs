@@ -40,7 +40,7 @@ const DEFAULT_SERVICE_CONFIG_PATH: &str = "maestro.service.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 
 #[derive(Debug, Parser)]
-#[command(name = "maestro", disable_help_subcommand = true)]
+#[command(name = "maestro", version, disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,

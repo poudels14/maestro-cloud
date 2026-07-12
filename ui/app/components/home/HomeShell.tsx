@@ -96,9 +96,21 @@ function ClusterHero() {
     <Show when={cluster.data}>
       {(info) => (
         <div>
-          <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
-            {info().clusterName}
-          </h1>
+          <div class="flex flex-wrap items-center gap-2">
+            <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
+              {info().clusterName}
+            </h1>
+            <Show when={info().version}>
+              {(version) => (
+                <span
+                  class="rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] font-mono text-gray-500"
+                  title="Maestro version"
+                >
+                  v{version()}
+                </span>
+              )}
+            </Show>
+          </div>
           <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono">
             <a
               href={`http://${info().canonicalDomain}`}

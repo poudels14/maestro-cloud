@@ -129,3 +129,34 @@ fn validate_service_id_rejects_non_url_safe_chars() {
     let space = validate_service_id("service 1", "id").expect_err("space must be rejected");
     assert!(space.contains("URL-safe"));
 }
+
+#[test]
+fn upgrade_accepts_only_a_higher_semantic_version() {
+    let (current, target) = validate_upgrade_version("1.2.3", "1.3.0").expect("higher version");
+    assert_eq!(current.to_string(), "1.2.3");
+    assert_eq!(target.to_string(), "1.3.0");
+}
+
+#[test]
+fn upgrade_rejects_an_equal_semantic_version() {
+    assert!(matches!(
+        validate_upgrade_version("1.2.3", "1.2.3"),
+        Err(UpgradeVersionError::NotNewer { .. })
+    ));
+}
+
+#[test]
+fn upgrade_rejects_a_lower_semantic_version() {
+    assert!(matches!(
+        validate_upgrade_version("1.2.3", "1.2.2"),
+        Err(UpgradeVersionError::NotNewer { .. })
+    ));
+}
+
+#[test]
+fn upgrade_rejects_a_malformed_semantic_version() {
+    assert!(matches!(
+        validate_upgrade_version("1.2.3", "release-next"),
+        Err(UpgradeVersionError::InvalidTarget(_))
+    ));
+}
