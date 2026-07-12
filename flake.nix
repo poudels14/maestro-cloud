@@ -12,6 +12,7 @@
     supportedSystems = ["aarch64-darwin" "x86_64-linux" "aarch64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     pkgsFor = system: import nixpkgs {inherit system;};
+    maestroVersion = (builtins.fromTOML (builtins.readFile ./controller/Cargo.toml)).package.version;
   in {
     packages = forAllSystems (
       system: let
@@ -19,7 +20,7 @@
       in {
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "maestro";
-          version = "0.1.0";
+          version = maestroVersion;
           src = ./.;
 
           cargoLock = {

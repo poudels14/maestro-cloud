@@ -388,6 +388,13 @@ maestro contexts use prod
 maestro cluster upgrade system
 ```
 
+The CLI sends its Cargo package version with the upgrade request. The controller
+accepts the request only when that semantic version is newer than the version
+currently running on the cluster. `maestro cluster info` and the UI info page show
+the running version after the cluster comes back online. Bump
+`controller/Cargo.toml` for every release; the Nix package reads the same version
+automatically.
+
 ### Step 3: Manage the service
 
 ```bash

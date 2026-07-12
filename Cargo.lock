@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "controller"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1453,6 +1453,7 @@ dependencies = [
  "rpassword",
  "rusqlite",
  "rustls 0.23.37",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

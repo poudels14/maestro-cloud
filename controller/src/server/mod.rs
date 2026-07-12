@@ -20,7 +20,7 @@ use self::types::{
     CancelDeploymentResponse, CreateSlackWebhookRequest, RemoveDeploymentResponse,
     ReplicasOverrideRequest, ReplicasResponse, RolloutChange, RolloutDiffResponse,
     RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
-    SlackWebhookView, UpdateSlackWebhookRequest, UploadServiceResponse,
+    SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest, UploadServiceResponse,
 };
 use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -36,6 +36,29 @@ mod types;
 const DEFAULT_LOG_LIMIT: usize = 1000;
 const MAX_LOG_LIMIT: usize = 2000;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
+const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug)]
+enum UpgradeVersionError {
+    InvalidCurrent(semver::Error),
+    InvalidTarget(semver::Error),
+    NotNewer {
+        current: semver::Version,
+        target: semver::Version,
+    },
+}
+
+fn validate_upgrade_version(
+    current: &str,
+    target: &str,
+) -> Result<(semver::Version, semver::Version), UpgradeVersionError> {
+    let current = semver::Version::parse(current).map_err(UpgradeVersionError::InvalidCurrent)?;
+    let target = semver::Version::parse(target).map_err(UpgradeVersionError::InvalidTarget)?;
+    if target <= current {
+        return Err(UpgradeVersionError::NotNewer { current, target });
+    }
+    Ok((current, target))
+}
 
 const SYSTEM_SERVICES: &[(&str, &str, &str)] = &[
     ("maestro-etcd", "etcd", crate::deployment::ETCD_IMAGE_TAG),
@@ -271,6 +294,7 @@ impl Server {
             "clusterAlias": state.cluster_alias,
             "canonicalDomain": canonical_domain,
             "aliasDomain": alias_domain,
+            "version": MAESTRO_VERSION,
             "upgrading": upgrading,
         }))
     }
@@ -1503,19 +1527,47 @@ impl Server {
     }
 
     async fn upgrade_system(
+        headers: HeaderMap,
         State(state): State<AppState>,
+        body: Bytes,
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        let request: UpgradeSystemRequest = parse_json_body(&headers, body)?;
+        let requested_version = request.version.trim();
+        let (current_version, target_version) = validate_upgrade_version(
+            MAESTRO_VERSION,
+            requested_version,
+        )
+        .map_err(|err| match err {
+            UpgradeVersionError::InvalidCurrent(source) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("invalid running Maestro version `{MAESTRO_VERSION}`: {source}"),
+            ),
+            UpgradeVersionError::InvalidTarget(source) => (
+                StatusCode::BAD_REQUEST,
+                format!("invalid upgrade version `{requested_version}`: {source}"),
+            ),
+            UpgradeVersionError::NotNewer { current, target } => (
+                StatusCode::CONFLICT,
+                format!("upgrade version {target} must be greater than current version {current}"),
+            ),
+        })?;
         let system_type = state.system_type.as_deref().unwrap_or("controller");
-        eprintln!("upgrade request system={system_type}");
+        eprintln!(
+            "upgrade request system={system_type} current_version={current_version} target_version={target_version}"
+        );
         state
             .store
             .put_system_upgrade_request(system_type)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        eprintln!("upgrade request accepted system={system_type}");
+        eprintln!(
+            "upgrade request accepted system={system_type} current_version={current_version} target_version={target_version}"
+        );
         Ok(Json(json!({
             "accepted": true,
             "system": system_type,
+            "currentVersion": current_version.to_string(),
+            "targetVersion": target_version.to_string(),
         })))
     }
 

@@ -10,6 +10,8 @@ struct ClusterInfo {
     canonical_domain: String,
     alias_domain: String,
     #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
     upgrading: bool,
 }
 
@@ -149,6 +151,9 @@ pub async fn run_info(host: &str) -> Result<()> {
     println!("  alias             {}", cluster.cluster_alias);
     println!("  canonical domain  {}", cluster.canonical_domain);
     println!("  alias domain      {}", cluster.alias_domain);
+    if let Some(version) = cluster.version.as_deref() {
+        println!("  version           {version}");
+    }
     if cluster.upgrading {
         println!("  upgrade           in progress");
     }
