@@ -1,18 +1,39 @@
 # Maestro
 
-A deployment controller that manages containers with zero-downtime redeployments, ingress routing via Traefik, and optional Tailscale networking for remote access. Supports both Docker and containerd/nerdctl runtimes.
+A deployment controller that manages containers with zero-downtime redeployments,
+Traefik ingress routing, and optional Tailscale networking. Maestro supports both
+Docker and containerd/nerdctl runtimes.
 
 ## Prerequisites
 
-- Docker **or** containerd + nerdctl + buildkit (for nerdctl runtime)
-- Rust toolchain (for building from source)
+- Docker, or containerd + nerdctl + BuildKit
+- Rust 1.97.0 or newer
+- Protocol Buffers compiler (`protoc`)
+- A C/C++ toolchain, CMake, and Make (required by native dependencies)
+
+The included Nix development shell provides the build dependencies. On macOS
+without Nix, install the platform tools with:
+
+```bash
+xcode-select --install
+brew install protobuf cmake
+```
 
 ## Installation
 
+From the repository root, optionally enter the Nix development shell:
+
 ```bash
-cd controller
-cargo build --release
+nix develop
 ```
+
+Then build the CLI:
+
+```bash
+cargo build --release --locked --package controller --bin maestro
+```
+
+The binary is written to `target/release/maestro`.
 
 ## Quick start
 
@@ -23,7 +44,8 @@ maestro config init   # choose "cluster" to create maestro.jsonc
 maestro config init   # choose "services" to create maestro.cluster.jsonc
 ```
 
-Set a strong `encryption-key` in `maestro.jsonc`, then edit `maestro.cluster.jsonc` with the services you want to deploy.
+Set a strong `encryption-key` in `maestro.jsonc`, then edit
+`maestro.cluster.jsonc` with the services you want to deploy.
 
 ### 2. Start the cluster
 
@@ -35,15 +57,15 @@ maestro daemon start \
   --project-dir .
 ```
 
-Flags:
+Common startup overrides (cluster settings should normally live in `maestro.jsonc`):
 
 - `--runtime docker|nerdctl` — container runtime (default: docker)
 - `--admin-port` — localhost port for the admin UI and API proxy
-- `--ingress-port` — host port(s) mapped to the ingress (can be repeated for multiple ports)
+- `--ingress-port` — host port mapped to ingress (repeat for multiple ports)
 - `--subnet` — container network subnet CIDR, e.g. `172.22.0.0/16` (required)
 - `--force` — recreate the container network if it already exists or conflicts
 - `--encryption-key` — master key for encrypting secrets
-- `--datadog-api-key` — Datadog API key for log forwarding (or `DATADOG_API_KEY` env var)
+- `--datadog-api-key` — Datadog API key (or `DATADOG_API_KEY`)
 - `--datadog-site` — Datadog site (e.g. `datadoghq.com`, `us3.datadoghq.com`)
 - `--datadog-no-ingress-logs` — exclude Traefik ingress logs from Datadog
 - `--datadog-no-tailscale-logs` — exclude Tailscale logs from Datadog
@@ -94,7 +116,7 @@ The config file (`maestro.jsonc`) supports:
     "include-ingress-logs": true,
     "include-tailscale-logs": true,
     "logs": {
-      "include-healthcheck": false
+      "include-healthcheck": true // default; set false to exclude successful checks
     },
     "include-metrics": false
   },
@@ -104,15 +126,19 @@ The config file (`maestro.jsonc`) supports:
 
 Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
 
-To use Depot for a service build, set `depot.token` in `maestro.jsonc` and `build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is missing, Maestro falls back to the default local builder automatically.
+To use Depot for a service build, set `depot.token` in `maestro.jsonc` and
+`build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is
+missing, Maestro falls back to the default local builder automatically.
 
 ## External Secrets
 
-Maestro can load env vars and secrets from external providers. Currently supported: **AWS Secrets Manager**.
+Maestro can load environment variables and secrets from external providers.
+Currently supported: **AWS Secrets Manager**.
 
 ### `secrets.source`
 
-Loads all key/value pairs from a JSON secret into `secrets.items`. The AWS secret must be a flat JSON object.
+Loads all key/value pairs from a JSON secret into `secrets.items`. The AWS secret
+must be a flat JSON object.
 
 ```jsonc
 {
@@ -125,7 +151,9 @@ Loads all key/value pairs from a JSON secret into `secrets.items`. The AWS secre
 }
 ```
 
-If the AWS secret `prod/my-app-secrets` contains `{ "DB_PASSWORD": "s3cret", "API_KEY": "key123" }`, both will be mounted in `/app/.env`.
+If the AWS secret `prod/my-app-secrets` contains
+`{ "DB_PASSWORD": "s3cret", "API_KEY": "key123" }`, both will be mounted in
+`/app/.env`.
 
 Explicit `items` take precedence over values loaded from `source`:
 
@@ -176,9 +204,11 @@ Same as `deploy.env.source`, but for Docker build args (`--build-arg`).
 
 ### Notes
 
-- Secrets are resolved once when a deployment starts building. All replicas use the same resolved values, even across restarts.
+- Secrets are resolved once when a deployment starts building. All replicas use the
+  same resolved values, even across restarts.
 - Resolved values are encrypted at rest in etcd.
-- To add a new provider (e.g. Vault), implement the `SecretProvider` trait in `controller/src/utils/secrets.rs`.
+- To add a new provider (e.g. Vault), implement the `SecretProvider` trait in
+  `controller/src/utils/secrets.rs`.
 
 ## Tailscale setup
 
@@ -186,23 +216,34 @@ Tailscale enables remote access to your containers from any device on your tailn
 
 ### 1. Start with Tailscale enabled
 
+Add Tailscale to `maestro.jsonc`. Maestro automatically advertises the cluster's
+container subnet; use `advertise-routes` only for additional networks.
+
+```jsonc
+{
+  "cluster": { "name": "my-cluster" },
+  "ingress": { "ports": [80, 443] },
+  "subnet": "172.22.0.0/16",
+  "encryption-key": "replace-with-a-strong-secret",
+  "tailscale": {
+    "auth-key": "tskey-auth-...",
+    "advertise-routes": []
+  }
+}
+```
+
 ```bash
-export TS_AUTHKEY=tskey-auth-...
-export MAESTRO_ENCRYPTION_KEY=replace-with-a-strong-secret
-maestro daemon start \
-  --cluster-name my-cluster \
-  --ingress-port 80 --ingress-port 443 \
-  --data-dir ./data \
-  --subnet 172.22.0.0/16 \
-  --enable-tailscale \
-  --project-dir .
+maestro daemon start --config maestro.jsonc --data-dir ./data --project-dir .
 ```
 
 ### 2. Approve the subnet route
 
-Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines > find `maestro-tailscale-my-cluster` > Edit route settings > approve the advertised subnet.
+Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines, find
+`maestro-tailscale-my-cluster`, select Edit route settings, and approve the
+advertised subnet.
 
-To auto-approve routes for all clusters, add to your ACL policy (Access Controls in Tailscale admin):
+To auto-approve routes for all clusters, add this to your ACL policy under Access
+Controls:
 
 ```json
 {
@@ -217,7 +258,9 @@ To auto-approve routes for all clusters, add to your ACL policy (Access Controls
 }
 ```
 
-`172.16.0.0/12` covers `172.16.x.x` through `172.31.x.x`, so any Docker network subnet is auto-approved. If you use a specific subnet (e.g., `--subnet 172.22.0.0/16`), you can narrow it down.
+`172.16.0.0/12` covers `172.16.x.x` through `172.31.x.x`, so any container network
+in that range is auto-approved. Narrow the policy if all clusters use a smaller
+range.
 
 Then generate an auth key tagged with `tag:maestro`.
 
@@ -225,10 +268,12 @@ Then generate an auth key tagged with `tag:maestro`.
 
 In Tailscale admin > DNS > Add nameserver > Custom:
 
-- Nameserver: the `.255` IP of your subnet (e.g., `172.22.0.255` for `172.22.0.0/16`), shown in maestro's log output
+- Nameserver: the `.255` IP of your subnet (for example, `172.22.0.255` for
+  `172.22.0.0/16`), shown in Maestro's log output
 - Restrict to domain: `maestro.internal`
 
-You only need **one** split DNS entry — the DNS proxy auto-discovers peer clusters via Tailscale and forwards queries across clusters.
+You only need **one** split DNS entry. The DNS proxy discovers peer clusters via
+Tailscale and forwards queries across clusters.
 
 ### 4. Access your services
 
@@ -245,40 +290,32 @@ curl http://web.other-cluster.maestro.internal:8888/
 
 ### Multi-cluster setup
 
-Each cluster needs its own subnet to avoid IP conflicts:
+Each cluster needs a unique `cluster.name` and `subnet` to avoid routing conflicts.
+For example, use `172.22.0.0/16` for `cluster-1` and `172.23.0.0/16` for
+`cluster-2`, then start each from its own configuration and data directory:
 
 ```bash
-export TS_AUTHKEY=tskey-auth-...
-export MAESTRO_ENCRYPTION_KEY=replace-with-a-strong-secret
-
-# Cluster 1
-maestro daemon start --cluster-name cluster-1 --ingress-port 8888 --data-dir ./data1 --subnet 172.22.0.0/16 --enable-tailscale --project-dir .
-
-# Cluster 2
-maestro daemon start --cluster-name cluster-2 --ingress-port 8889 --data-dir ./data2 --subnet 172.23.0.0/16 --enable-tailscale --project-dir .
+maestro daemon start --config cluster-1.jsonc --data-dir ./data1 --project-dir .
+maestro daemon start --config cluster-2.jsonc --data-dir ./data2 --project-dir .
 ```
 
-Clusters auto-discover each other via Tailscale. DNS queries for `*.cluster-2.maestro.internal` hitting cluster-1's DNS are automatically forwarded to cluster-2's DNS proxy.
+Clusters discover each other via Tailscale. DNS queries for
+`*.cluster-2.maestro.internal` that reach cluster-1 are forwarded to cluster-2's DNS
+proxy.
 
 ## Log storage and backups
 
-The probe stores live logs in DuckDB under `/data/duckdb` and seals completed UTC
-days into hive-partitioned Parquet files under `/data/parts`. Set
-`MAESTRO_DUCKDB=false` on the controller only as a temporary rollback switch during
-the migration window; this changes only the probe storage backend.
-`maestro daemon logs` discovers the locally running probe API and reads live data
-rather than opening the retired controller SQLite database.
+### Delivery and spool retention
 
 The controller SQLite spool independently delivers each log to the probe and every
 configured external sink, including Datadog. A spool row is reclaimed only after
 the slowest registered sink has acknowledged it. Datadog failures therefore retain
-the backlog locally until delivery recovers. Datadog payloads are kept below the
-uncompressed intake limit and `400`/`413` responses are bisected to isolate poison
-entries. An isolated `400` is quarantined only when a sibling payload succeeds;
-if every subdivision receives `400`, the response is treated as global and the
-cursor remains pinned. An irreducible rejected entry is preserved in the spool
-database's `sink_dead_letters` table before its cursor advances. Authentication,
-rate-limit, network, and server failures also pin the cursor.
+the backlog locally until delivery recovers.
+
+Retryable, authentication, rate-limit, network, server, and global payload failures
+pin the Datadog cursor. Maestro bisects permanently rejected payloads to isolate a
+poison entry and preserves that entry in the spool's `sink_dead_letters` table
+before advancing the cursor.
 
 Set `datadog.logs.include-healthcheck` to `false` to keep successful (`GET`/`200`)
 health-check access logs out of Datadog. Maestro matches the service's configured
@@ -297,9 +334,22 @@ maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster export -
 maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster purge --all
 ```
 
+### Probe storage and migration
+
+The probe stores live logs in DuckDB under `/data/duckdb` and seals completed UTC
+days into hive-partitioned Parquet files under `/data/parts`. `maestro daemon logs`
+discovers the locally running probe API and reads live data rather than opening the
+retired controller SQLite database.
+
 On first DuckDB startup, the probe automatically imports its retired `/data/logs.db`
 archive. Active controller spool databases are never migration inputs; they continue
 shipping through `/api/logs`.
+
+Set `MAESTRO_DUCKDB=false` on the controller only as a temporary rollback switch
+during the migration window. It changes the probe storage backend; it does not
+change controller spool delivery.
+
+### S3 backups
 
 Daily S3 backups are enabled through the cluster config:
 
@@ -328,16 +378,14 @@ by default and never removes an unverified partition.
 
 The probe role must allow `s3:AbortMultipartUpload`. Configure the backup bucket
 with an `AbortIncompleteMultipartUpload` lifecycle rule as crash cleanup for uploads
-that cannot reach the explicit abort path. The ignored real-AWS integration test can
-be run manually with `MAESTRO_TEST_S3_BUCKET`, `MAESTRO_TEST_S3_KMS_KEY_ID`, and
-`MAESTRO_TEST_S3_REGION`; the CI workflow runs it on manual dispatch using secrets
-with the same names plus `MAESTRO_TEST_AWS_ROLE_ARN` for GitHub OIDC credentials.
+that cannot reach the explicit abort path.
 
 ## Deploy to AWS (NixOS on EC2)
 
 ### Step 1: Generate and store the cluster config
 
-Run `maestro config init` and choose `cluster` to generate a `maestro.jsonc` config, then update it for your environment and store it in AWS Secrets Manager:
+Run `maestro config init` and choose `cluster` to generate `maestro.jsonc`. Update
+it for your environment and store it in AWS Secrets Manager:
 
 ```bash
 aws secretsmanager create-secret \
@@ -358,7 +406,7 @@ echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
 mkdir -p /etc/maestro
 cat > /etc/maestro/flake.nix << 'EOF'
 {
-  inputs.maestro.url = "github:poudels14/maestro-cloud";
+  inputs.maestro.url = "github:poudels14/maestro-cloud/release";
   inputs.nixpkgs.follows = "maestro/nixpkgs";
 
   outputs = { maestro, nixpkgs, ... }: {
@@ -390,7 +438,8 @@ nixos-rebuild switch --flake /etc/maestro#default
 
 Replace `<your-secret-id>` with the secret name from step 1.
 
-Forward local port 3001 to the instance with SSH or Session Manager, configure a context for it, then trigger updates remotely:
+Forward local port 3001 to the instance with SSH or Session Manager, configure a
+context for it, then trigger updates remotely:
 
 ```bash
 maestro contexts set prod http://127.0.0.1:3001
@@ -403,7 +452,12 @@ accepts the request only when that semantic version is newer than the version
 currently running on the cluster. `maestro cluster info` and the UI info page show
 the running version after the cluster comes back online. Bump
 `controller/Cargo.toml` for every release; the Nix package reads the same version
-automatically.
+automatically. On NixOS, the running controller resolves the updated flake source
+and pre-builds the new system container images before rebooting. The old controller
+and probe remain online during that build; startup after reboot reuses the completed
+BuildKit cache instead of compiling the probe while the cluster is unavailable.
+Maestro-owned images use exact release tags such as `maestro-probe:<version>`; upgrade
+prebuilds use the version read from the updated source and never overwrite `:latest`.
 
 ### Step 3: Manage the service
 

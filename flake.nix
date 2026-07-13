@@ -318,6 +318,7 @@
             pkgs.nix
             pkgs.nixos-rebuild
             pkgs.git
+            pkgs.coreutils
             depotPackage
           ];
 
