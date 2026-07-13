@@ -25,7 +25,7 @@ const COL = {
   status: "sm:w-[56px]"
 };
 
-const PAGE_SIZE = 2000;
+const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
 const ALWAYS_SHOW_LEVELS = ["error", "warn", "info"];
 const OPTIONAL_LEVELS = ["debug", "trace"];
