@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
 
 use crate::config::BuilderType;
@@ -27,7 +27,10 @@ use crate::supervisor::controller::{FinishedJob, JobSupervisor};
 use crate::supervisor::{ShutdownRequest, SupervisedJobStatus};
 use crate::utils::clock::{self, Clock};
 
-use super::{ADMIN_IMAGE_TAG, PROBE_IMAGE_TAG, TAILSCALE_IMAGE_TAG};
+use super::{
+    ADMIN_IMAGE_NAME, ADMIN_IMAGE_TAG, PROBE_IMAGE_NAME, PROBE_IMAGE_TAG, TAILSCALE_IMAGE_NAME,
+    TAILSCALE_IMAGE_TAG,
+};
 
 const DEFAULT_RESTART_DELAY_MS: u64 = 5_000;
 const DEFAULT_MAX_RESTARTS: Option<u32> = Some(10);
@@ -62,6 +65,55 @@ fn system_image_build_specs() -> [(&'static str, Option<&'static str>); 3] {
         (PROBE_IMAGE_TAG, Some("Dockerfile.probe")),
         (TAILSCALE_IMAGE_TAG, Some("dns/Dockerfile.tailscale")),
     ]
+}
+
+fn system_image_build_specs_for_version(
+    version: &semver::Version,
+) -> [(String, Option<&'static str>); 3] {
+    [
+        (
+            format!("{ADMIN_IMAGE_NAME}:{version}"),
+            Some("Dockerfile.admin"),
+        ),
+        (
+            format!("{PROBE_IMAGE_NAME}:{version}"),
+            Some("Dockerfile.probe"),
+        ),
+        (
+            format!("{TAILSCALE_IMAGE_NAME}:{version}"),
+            Some("dns/Dockerfile.tailscale"),
+        ),
+    ]
+}
+
+struct NixosUpgradeSource {
+    path: PathBuf,
+    version: semver::Version,
+}
+
+const NIXOS_MAESTRO_SOURCE_ATTR: &str =
+    "/etc/maestro#nixosConfigurations.default.config.services.maestro.source";
+
+fn parse_cargo_package_version(manifest: &str) -> Result<semver::Version> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line == "[package]" {
+            in_package = true;
+            continue;
+        }
+        if in_package && line.starts_with('[') {
+            break;
+        }
+        if in_package
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "version"
+        {
+            let value = value.trim().trim_matches('"');
+            return semver::Version::parse(value)
+                .map_err(|err| anyhow::anyhow!("invalid Cargo package version `{value}`: {err}"));
+        }
+    }
+    bail!("Cargo manifest does not define package.version")
 }
 
 pub struct DeploymentController {
@@ -465,13 +517,25 @@ impl DeploymentController {
 
             self.logger
                 .emit("info", "NixOS rebuild complete, pre-building system images");
-            for (tag, dockerfile) in system_image_build_specs() {
+            let upgrade_source = match self.stage_nixos_upgrade_source().await {
+                Ok(source) => source,
+                Err(err) => {
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "failed to stage updated Maestro source; leaving the current system running: {err}"
+                        ),
+                    );
+                    return None;
+                }
+            };
+            for (tag, dockerfile) in system_image_build_specs_for_version(&upgrade_source.version) {
                 let result = self
                     .runtime
                     .build_image(
                         &BuildSpec {
-                            context_dir: self.config.project_dir.clone(),
-                            tag: tag.to_string(),
+                            context_dir: upgrade_source.path.clone(),
+                            tag: tag.clone(),
                             dockerfile: dockerfile.map(String::from),
                             labels: Default::default(),
                             build_args: Default::default(),
@@ -487,11 +551,16 @@ impl DeploymentController {
                     .await;
                 if let Err(err) = result {
                     self.logger.emit(
-                        "warn",
-                        &format!("failed to pre-build {tag}: {err} (will rebuild on next start)"),
+                        "error",
+                        &format!(
+                            "failed to pre-build {tag} from updated source; leaving the current system running: {err}"
+                        ),
                     );
+                    let _ = std::fs::remove_dir_all(&upgrade_source.path);
+                    return None;
                 }
             }
+            let _ = std::fs::remove_dir_all(&upgrade_source.path);
 
             self.logger.emit(
                 "info",
@@ -537,6 +606,67 @@ impl DeploymentController {
                 .emit("info", "system images rebuilt, draining and restarting");
             Some(ControllerExitReason::Restart)
         }
+    }
+
+    async fn stage_nixos_upgrade_source(&self) -> Result<NixosUpgradeSource> {
+        let source_output =
+            crate::utils::cmd::run("nix", &["eval", "--raw", NIXOS_MAESTRO_SOURCE_ATTR]).await?;
+        let source = PathBuf::from(source_output.trim());
+        if !source.is_absolute() {
+            bail!(
+                "updated services.maestro.source evaluated to a non-absolute path: {}",
+                source.display()
+            );
+        }
+        for (_, dockerfile) in system_image_build_specs() {
+            if let Some(dockerfile) = dockerfile
+                && !source.join(dockerfile).is_file()
+            {
+                bail!(
+                    "updated Maestro source {} is missing {dockerfile}",
+                    source.display()
+                );
+            }
+        }
+        let manifest_path = source.join("controller/Cargo.toml");
+        let source_version =
+            parse_cargo_package_version(&std::fs::read_to_string(&manifest_path)?)?;
+        let running_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
+        if source_version <= running_version {
+            bail!(
+                "updated Maestro source version {source_version} is not newer than running version {running_version}"
+            );
+        }
+        self.logger.emit(
+            "info",
+            &format!(
+                "preparing Maestro {source_version} system images from {}",
+                source.display()
+            ),
+        );
+
+        let stage = self
+            .config
+            .data_dir
+            .join("tmp")
+            .join("nixos-upgrade-source");
+        let _ = std::fs::remove_dir_all(&stage);
+        let Some(parent) = stage.parent() else {
+            bail!("invalid upgrade source staging path: {}", stage.display());
+        };
+        std::fs::create_dir_all(parent)?;
+        let source_arg = source
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("updated Maestro source path is not valid UTF-8"))?;
+        let stage_arg = stage
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("upgrade source staging path is not valid UTF-8"))?;
+        crate::utils::cmd::run("cp", &["-R", "--", source_arg, stage_arg]).await?;
+        crate::utils::cmd::run("chmod", &["-R", "u+w", "--", stage_arg]).await?;
+        Ok(NixosUpgradeSource {
+            path: stage,
+            version: source_version,
+        })
     }
 
     async fn queue_terminated_active_deployments(&self) -> Result<()> {
@@ -2346,4 +2476,47 @@ fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod upgrade_source_tests {
+    use super::{parse_cargo_package_version, system_image_build_specs_for_version};
+
+    #[test]
+    fn reads_version_from_cargo_package_section() {
+        let version = parse_cargo_package_version(
+            r#"
+                [workspace]
+                members = ["controller"]
+
+                [package]
+                name = "controller"
+                version = "1.2.3"
+
+                [dependencies]
+                semver = "1"
+            "#,
+        )
+        .expect("package version");
+        assert_eq!(version, semver::Version::new(1, 2, 3));
+    }
+
+    #[test]
+    fn rejects_manifest_without_package_version() {
+        assert!(parse_cargo_package_version("[package]\nname = \"controller\"").is_err());
+    }
+
+    #[test]
+    fn upgrade_images_use_the_staged_source_version() {
+        let version = semver::Version::new(1, 2, 3);
+        let tags = system_image_build_specs_for_version(&version).map(|(tag, _)| tag);
+        assert_eq!(
+            tags,
+            [
+                "maestro-admin:1.2.3",
+                "maestro-probe:1.2.3",
+                "maestro-tailscale:1.2.3",
+            ]
+        );
+    }
 }

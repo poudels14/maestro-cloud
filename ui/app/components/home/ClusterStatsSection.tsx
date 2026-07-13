@@ -2,11 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
-import type {
-  BackupStats,
-  ControllerStats,
-  SinkStats
-} from "../../lib/types";
+import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
 import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
 import { clusterStatsQuery } from "../../lib/queries";
@@ -29,9 +25,7 @@ function ClusterStatsSection() {
         <Show when={stats.data}>
           {(data) => (
             <HealthPill
-              level={
-                errors().length > 0 ? "error" : warnings().length > 0 ? "warning" : "healthy"
-              }
+              level={errors().length > 0 ? "error" : warnings().length > 0 ? "warning" : "healthy"}
               label={
                 errors().length > 0
                   ? `${errors().length} issue${errors().length === 1 ? "" : "s"}`
@@ -76,8 +70,16 @@ function ClusterStatsSection() {
                   value={`v${data().probe.version} · ${data().probe.storageMode}`}
                   detail={`uptime ${formatDuration(data().probe.uptimeMs)}`}
                 />
-                <SinkRow label="Probe log sync" sink={probeSink()} controllerPresent={!!controller()} />
-                <SinkRow label="Datadog logs" sink={datadogSink()} controllerPresent={!!controller()} />
+                <SinkRow
+                  label="Probe log sync"
+                  sink={probeSink()}
+                  controllerPresent={!!controller()}
+                />
+                <SinkRow
+                  label="Datadog logs"
+                  sink={datadogSink()}
+                  controllerPresent={!!controller()}
+                />
                 <SpoolRow controller={controller()} />
                 <DeadLetterRow controller={controller()} />
                 <BackupRow backup={data().backup} />
@@ -115,11 +117,7 @@ function ClusterStatsSection() {
   );
 }
 
-function SinkRow(props: {
-  label: string;
-  sink?: SinkStats;
-  controllerPresent: boolean;
-}) {
+function SinkRow(props: { label: string; sink?: SinkStats; controllerPresent: boolean }) {
   return (
     <Show
       when={props.controllerPresent}
@@ -172,7 +170,11 @@ function SpoolRow(props: { controller: ControllerStats | null }) {
           ? `${spool()!.rowCount.toLocaleString()} rows · ${formatBytes(spool()!.databaseBytes)}`
           : "Unknown"
       }
-      detail={spool()?.oldestEntryAtMs ? `oldest retained ${timeAgo(spool()!.oldestEntryAtMs!)}` : undefined}
+      detail={
+        spool()?.oldestEntryAtMs
+          ? `oldest retained ${timeAgo(spool()!.oldestEntryAtMs!)}`
+          : undefined
+      }
     />
   );
 }
@@ -222,18 +224,14 @@ function BackupRow(props: { backup: BackupStats }) {
   };
   const detail = () => {
     if (props.backup.lastError) return props.backup.lastError;
-    if (props.backup.lastSuccessAtMs) return `last successful ${timeAgo(props.backup.lastSuccessAtMs)}`;
+    if (props.backup.lastSuccessAtMs)
+      return `last successful ${timeAgo(props.backup.lastSuccessAtMs)}`;
     return props.backup.configured ? "Waiting for first backup run" : undefined;
   };
   return <HealthRow label="S3 log backup" level={level()} value={value()} detail={detail()} />;
 }
 
-function HealthRow(props: {
-  label: string;
-  level: HealthLevel;
-  value: string;
-  detail?: string;
-}) {
+function HealthRow(props: { label: string; level: HealthLevel; value: string; detail?: string }) {
   return (
     <div class="px-4 py-3 flex items-start justify-between gap-5">
       <div class="min-w-0">

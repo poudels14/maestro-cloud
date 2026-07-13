@@ -1754,6 +1754,7 @@ fn best_disk_for_path<'a>(path: &FsPath, disks: &'a sysinfo::Disks) -> Option<&'
 }
 
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // statvfs field widths differ between Unix platforms.
 fn statvfs_space(path: &FsPath) -> Option<(u64, u64)> {
     use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
 

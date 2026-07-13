@@ -23,9 +23,12 @@ pub use types::ControllerConfig;
 
 pub const ETCD_IMAGE_TAG: &str = "quay.io/coreos/etcd:v3.6.8";
 pub const INGRESS_IMAGE_TAG: &str = "traefik:v3.6";
-pub const PROBE_IMAGE_TAG: &str = "maestro-probe";
-pub const ADMIN_IMAGE_TAG: &str = "maestro-admin";
-pub const TAILSCALE_IMAGE_TAG: &str = "maestro-tailscale";
+const PROBE_IMAGE_NAME: &str = "maestro-probe";
+const ADMIN_IMAGE_NAME: &str = "maestro-admin";
+const TAILSCALE_IMAGE_NAME: &str = "maestro-tailscale";
+pub const PROBE_IMAGE_TAG: &str = concat!("maestro-probe:", env!("CARGO_PKG_VERSION"));
+pub const ADMIN_IMAGE_TAG: &str = concat!("maestro-admin:", env!("CARGO_PKG_VERSION"));
+pub const TAILSCALE_IMAGE_TAG: &str = concat!("maestro-tailscale:", env!("CARGO_PKG_VERSION"));
 pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
 
 pub struct SystemService {
