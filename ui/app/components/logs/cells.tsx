@@ -84,14 +84,41 @@ function StatusCell(props: { status?: string }) {
   );
 }
 
-function PathCell(props: { path: string; durationLabel?: string }) {
+function PathCell(props: {
+  path: string;
+  durationLabel?: string;
+  requestHost?: string;
+  clientIp?: string;
+  router?: string;
+}) {
   return (
-    <span class="flex items-baseline gap-2 min-w-0">
-      <span class="text-gray-700 truncate" title={props.path}>
-        {props.path}
+    <span class="flex flex-col gap-0.5 min-w-0">
+      <span class="flex items-baseline gap-2 min-w-0">
+        <span class="text-gray-700 truncate" title={props.path}>
+          {props.path}
+        </span>
+        <Show when={props.durationLabel}>
+          <span class="text-gray-400 tabular-nums shrink-0">{props.durationLabel}</span>
+        </Show>
       </span>
-      <Show when={props.durationLabel}>
-        <span class="text-gray-400 tabular-nums shrink-0">{props.durationLabel}</span>
+      <Show when={props.requestHost || props.clientIp || props.router}>
+        <span class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-gray-400 min-w-0">
+          <Show when={props.requestHost}>
+            <span class="truncate max-w-72" title={`Request host: ${props.requestHost}`}>
+              <span class="text-gray-300">host</span> {props.requestHost}
+            </span>
+          </Show>
+          <Show when={props.clientIp}>
+            <span class="truncate max-w-60" title={`Client IP: ${props.clientIp}`}>
+              <span class="text-gray-300">client</span> {props.clientIp}
+            </span>
+          </Show>
+          <Show when={props.router}>
+            <span class="truncate max-w-52" title={`Traefik router: ${props.router}`}>
+              <span class="text-gray-300">router</span> {props.router}
+            </span>
+          </Show>
+        </span>
       </Show>
     </span>
   );

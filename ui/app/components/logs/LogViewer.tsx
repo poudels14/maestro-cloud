@@ -454,7 +454,7 @@ function LogViewer(props: {
                   </span>
                 </Show>
                 <span class="flex-1 pl-2 truncate border-l border-gray-300">
-                  {showHttp() ? "Path" : "Message"}
+                  {showHttp() ? "Request" : "Message"}
                 </span>
               </li>
               <For each={filteredLines()}>
@@ -527,7 +527,13 @@ function LogRow(props: {
         </div>
         <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
           <Show when={http().path} fallback={<MessageCell text={props.line.text} />}>
-            <PathCell path={http().path!} durationLabel={http().durationLabel} />
+            <PathCell
+              path={http().path!}
+              durationLabel={http().durationLabel}
+              requestHost={http().requestHost}
+              clientIp={http().clientIp}
+              router={http().router}
+            />
           </Show>
         </div>
       </div>
