@@ -24,10 +24,40 @@ pub struct BuildOutput {
     pub image_tag: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReplicaRuntimeIdentity {
+    pub node_id: String,
+    pub service_id: String,
+    pub deployment_id: String,
+    pub replica_index: u32,
+    pub assignment_id: String,
+    pub runtime_suffix: Option<String>,
+}
+
+pub(crate) fn replica_container_name(
+    service_id: &str,
+    deployment_id: &str,
+    replica_index: u32,
+    runtime_suffix: Option<&str>,
+) -> String {
+    let short_deployment_id = deployment_id.chars().take(6).collect::<String>();
+    let mut name = if replica_index == 0 {
+        format!("{service_id}-{short_deployment_id}")
+    } else {
+        format!("{service_id}-{short_deployment_id}-{replica_index}")
+    };
+    if let Some(suffix) = runtime_suffix {
+        name.push('-');
+        name.push_str(suffix);
+    }
+    name
+}
+
 #[derive(Clone)]
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
     pub build_command_env: HashMap<String, SecretString>,
+    pub shared_registry: Option<String>,
     pub network: String,
     pub dns_domain: Option<String>,
     pub dns_server: Option<String>,
@@ -103,18 +133,21 @@ impl ContainerDeploymentProvider {
             BuilderType::Default
         };
 
-        let (build_tag, depot_pushed) =
-            if let (true, Some(registry)) = (use_depot, build_config.registry.as_ref()) {
-                let registry_tag = format!(
-                    "{}/{}:{}",
-                    registry.trim_end_matches('/'),
-                    deployment.config.id,
-                    deployment.id
-                );
-                (registry_tag, true)
-            } else {
-                (image_tag.to_string(), false)
-            };
+        let registry = build_config
+            .registry
+            .as_ref()
+            .or(self.shared_registry.as_ref());
+        let (build_tag, depot_pushed) = if let (true, Some(registry)) = (use_depot, registry) {
+            let registry_tag = format!(
+                "{}/{}:{}",
+                registry.trim_end_matches('/'),
+                deployment.config.id,
+                deployment.id
+            );
+            (registry_tag, true)
+        } else {
+            (image_tag.to_string(), false)
+        };
 
         let mut labels = std::collections::HashMap::new();
         let mut command_env = self.build_command_env.clone();
@@ -147,7 +180,7 @@ impl ContainerDeploymentProvider {
 
         let final_tag = if depot_pushed {
             build_tag
-        } else if let Some(registry) = &build_config.registry {
+        } else if let Some(registry) = registry {
             let registry_tag = format!(
                 "{}/{}:{}",
                 registry.trim_end_matches('/'),
@@ -170,6 +203,15 @@ impl ContainerDeploymentProvider {
         &self,
         deployment: &ServiceDeployment,
         replica_index: u32,
+    ) -> Option<DeployOutput> {
+        self.deploy_with_identity(deployment, replica_index, None)
+    }
+
+    pub fn deploy_with_identity(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+        identity: Option<&ReplicaRuntimeIdentity>,
     ) -> Option<DeployOutput> {
         let built_image = deployment
             .build
@@ -206,15 +248,12 @@ impl ContainerDeploymentProvider {
                 (host_path.display().to_string(), container_path.clone())
             });
 
-            let short_deployment_id = deployment.id.chars().take(6).collect::<String>();
-            let container_name = if replica_index == 0 {
-                format!("{}-{short_deployment_id}", deployment.config.id)
-            } else {
-                format!(
-                    "{}-{short_deployment_id}-{replica_index}",
-                    deployment.config.id
-                )
-            };
+            let container_name = replica_container_name(
+                &deployment.config.id,
+                &deployment.id,
+                replica_index,
+                identity.and_then(|identity| identity.runtime_suffix.as_deref()),
+            );
 
             let mut extra_flags = Vec::new();
             if built_image.is_some() {
@@ -223,11 +262,31 @@ impl ContainerDeploymentProvider {
             if let Some(dns) = &self.dns_server {
                 extra_flags.extend(["--dns".to_string(), dns.clone()]);
             }
-            for port in &deployment.config.deploy.expose_ports {
-                extra_flags.extend(["-p".to_string(), format!("0:{port}")]);
+            if identity.is_none() {
+                for port in &deployment.config.deploy.expose_ports {
+                    extra_flags.extend(["-p".to_string(), format!("0:{port}")]);
+                }
             }
             for (key, value) in &deployment.config.deploy.env.items {
                 extra_flags.extend(["-e".to_string(), format!("{key}={}", value.as_str())]);
+            }
+            if let Some(identity) = identity {
+                for (key, value) in [
+                    ("maestro.node-id", identity.node_id.as_str()),
+                    ("maestro.service-id", identity.service_id.as_str()),
+                    ("maestro.deployment-id", identity.deployment_id.as_str()),
+                    ("maestro.replica-index", &identity.replica_index.to_string()),
+                    ("maestro.assignment-id", identity.assignment_id.as_str()),
+                ] {
+                    extra_flags.extend(["--label".to_string(), format!("{key}={value}")]);
+                }
+                for (key, value) in [
+                    ("MAESTRO_NODE_ID", identity.node_id.as_str()),
+                    ("MAESTRO_REPLICA_INDEX", &identity.replica_index.to_string()),
+                    ("MAESTRO_ASSIGNMENT_ID", identity.assignment_id.as_str()),
+                ] {
+                    extra_flags.extend(["-e".to_string(), format!("{key}={value}")]);
+                }
             }
             if let Some((host_path, container_path)) = &mount_arg {
                 extra_flags.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
@@ -279,5 +338,34 @@ impl ContainerDeploymentProvider {
             .map(|depot| depot.project.trim())
             .filter(|project| !project.is_empty())
             .map(ToString::to_string)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replica_container_name;
+
+    #[test]
+    fn assignment_names_are_isolated_by_explicit_node_endpoint() {
+        assert_eq!(
+            replica_container_name("api", "deploy123", 0, Some("node-3001")),
+            "api-deploy-node-3001"
+        );
+        assert_eq!(
+            replica_container_name("api", "deploy123", 0, Some("node-3101")),
+            "api-deploy-node-3101"
+        );
+    }
+
+    #[test]
+    fn legacy_and_standalone_replica_names_do_not_change() {
+        assert_eq!(
+            replica_container_name("api", "deploy123", 0, None),
+            "api-deploy"
+        );
+        assert_eq!(
+            replica_container_name("api", "deploy123", 2, None),
+            "api-deploy-2"
+        );
     }
 }

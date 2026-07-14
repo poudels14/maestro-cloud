@@ -272,8 +272,7 @@ async fn call_rollout_endpoint(
     payload: &PatchServiceRequest,
     service_id: &str,
 ) -> Result<PatchServiceResponse> {
-    let response = client
-        .post(endpoint)
+    let response = crate::cli::idempotent(client.post(endpoint))
         .json(payload)
         .send()
         .await

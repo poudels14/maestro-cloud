@@ -11,11 +11,12 @@ use crate::error::Error;
 use crate::logs::Logger;
 use crate::signal::ShutdownEvent;
 
-const TABLE_NAME: &str = "maestro_egress";
+pub const DEFAULT_TABLE_NAME: &str = "maestro_egress";
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirewallConfig {
+    pub table_name: String,
     pub subnet: Option<String>,
     pub deny: Vec<String>,
     pub allow: Vec<String>,
@@ -43,7 +44,7 @@ pub fn normalize_cidrs(values: &[String], kind: &str) -> crate::error::Result<Ve
 
 pub async fn apply(config: &FirewallConfig) -> Result<()> {
     if config.deny.is_empty() {
-        let _ = delete_table().await;
+        let _ = delete_table(&config.table_name).await;
         return Ok(());
     }
 
@@ -51,8 +52,8 @@ pub async fn apply(config: &FirewallConfig) -> Result<()> {
         .subnet
         .as_deref()
         .ok_or_else(|| anyhow!("egress deny requires a container subnet"))?;
-    let script = render_nft_rules(subnet, &config.deny, &config.allow)?;
-    delete_table().await?;
+    let script = render_nft_rules(&config.table_name, subnet, &config.deny, &config.allow)?;
+    delete_table(&config.table_name).await?;
     apply_script(&script).await
 }
 
@@ -107,41 +108,53 @@ fn address_family(value: &str) -> crate::error::Result<AddressFamily> {
     }
 }
 
-fn render_nft_rules(subnet: &str, deny: &[String], allow: &[String]) -> Result<String> {
+fn render_nft_rules(
+    table_name: &str,
+    subnet: &str,
+    deny: &[String],
+    allow: &[String],
+) -> Result<String> {
+    if table_name.is_empty()
+        || !table_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return Err(anyhow!("invalid nftables egress table name"));
+    }
     let ipv4_allows = cidrs_for_family(allow, AddressFamily::V4)?;
     let ipv6_allows = cidrs_for_family(allow, AddressFamily::V6)?;
     let ipv4_denies = cidrs_for_family(deny, AddressFamily::V4)?;
     let ipv6_denies = cidrs_for_family(deny, AddressFamily::V6)?;
 
     let mut script = format!(
-        "add table inet {TABLE_NAME}\n\
-         add chain inet {TABLE_NAME} forward {{ type filter hook forward priority -50; policy accept; }}\n"
+        "add table inet {table_name}\n\
+         add chain inet {table_name} forward {{ type filter hook forward priority -50; policy accept; }}\n"
     );
 
     if !ipv4_allows.is_empty() {
         script.push_str(&format!(
-            "add rule inet {TABLE_NAME} forward ip saddr {subnet} ip daddr {{ {} }} accept\n",
+            "add rule inet {table_name} forward ip saddr {subnet} ip daddr {{ {} }} accept\n",
             ipv4_allows.join(", ")
         ));
     }
 
     if !ipv6_allows.is_empty() {
         script.push_str(&format!(
-            "add rule inet {TABLE_NAME} forward ip6 daddr {{ {} }} accept\n",
+            "add rule inet {table_name} forward ip6 daddr {{ {} }} accept\n",
             ipv6_allows.join(", ")
         ));
     }
 
     if !ipv4_denies.is_empty() {
         script.push_str(&format!(
-            "add rule inet {TABLE_NAME} forward ip saddr {subnet} ip daddr {{ {} }} reject\n",
+            "add rule inet {table_name} forward ip saddr {subnet} ip daddr {{ {} }} reject\n",
             ipv4_denies.join(", ")
         ));
     }
 
     if !ipv6_denies.is_empty() {
         script.push_str(&format!(
-            "add rule inet {TABLE_NAME} forward ip6 daddr {{ {} }} reject\n",
+            "add rule inet {table_name} forward ip6 daddr {{ {} }} reject\n",
             ipv6_denies.join(", ")
         ));
     }
@@ -160,9 +173,9 @@ fn cidrs_for_family(cidrs: &[String], family: AddressFamily) -> crate::error::Re
         .collect()
 }
 
-async fn delete_table() -> Result<()> {
+async fn delete_table(table_name: &str) -> Result<()> {
     let status = Command::new("nft")
-        .args(["delete", "table", "inet", TABLE_NAME])
+        .args(["delete", "table", "inet", table_name])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -222,6 +235,7 @@ mod tests {
     #[test]
     fn render_nft_rules_splits_ipv4_and_ipv6() {
         let script = render_nft_rules(
+            DEFAULT_TABLE_NAME,
             "172.22.0.0/16",
             &[
                 "169.254.169.254".to_string(),
@@ -240,6 +254,7 @@ mod tests {
     #[test]
     fn render_nft_rules_emits_allow_before_deny() {
         let script = render_nft_rules(
+            DEFAULT_TABLE_NAME,
             "172.22.0.0/16",
             &["10.0.0.0/8".to_string()],
             &["10.1.2.3".to_string()],
@@ -249,5 +264,18 @@ mod tests {
         let allow_pos = script.find("ip daddr { 10.1.2.3 } accept").unwrap();
         let deny_pos = script.find("ip daddr { 10.0.0.0/8 } reject").unwrap();
         assert!(allow_pos < deny_pos);
+    }
+
+    #[test]
+    fn endpoint_nodes_render_independent_tables() {
+        let script = render_nft_rules(
+            "maestro_egress_3101",
+            "172.22.2.0/24",
+            &["10.0.0.0/8".to_string()],
+            &[],
+        )
+        .unwrap();
+        assert!(script.starts_with("add table inet maestro_egress_3101\n"));
+        assert!(script.contains("add rule inet maestro_egress_3101 forward"));
     }
 }

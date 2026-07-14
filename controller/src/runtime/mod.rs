@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 
 use crate::config::{BuilderType, RuntimeType};
@@ -14,6 +14,12 @@ pub mod docker;
 pub mod nerdctl;
 
 pub const MANAGED_IMAGE_LABEL: (&str, &str) = ("maestro.managed", "true");
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedContainer {
+    pub name: String,
+    pub labels: HashMap<String, String>,
+}
 
 pub struct RunSpec {
     pub container_name: String,
@@ -43,17 +49,38 @@ pub trait RuntimeProvider: Send + Sync {
 
     fn requires_explicit_dns(&self) -> bool;
 
+    fn supports_dynamic_network_attachment(&self) -> bool {
+        false
+    }
+
     async fn ensure_network(&self, name: &str, subnet: Option<&str>) -> Result<()>;
 
     async fn remove_network(&self, name: &str) -> Result<()>;
 
     async fn remove_container(&self, name: &str) -> Result<()>;
 
+    async fn set_container_network_access(
+        &self,
+        name: &str,
+        _network: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        bail!(
+            "runtime `{}` cannot {} container `{name}`",
+            self.cli_name(),
+            if enabled { "enable" } else { "disable" }
+        )
+    }
+
     fn run_command(&self, spec: &RunSpec) -> JobCommand;
 
     async fn inspect_container_ip(&self, name: &str) -> Option<String>;
 
     async fn inspect_network_cidr(&self, name: &str) -> Option<String>;
+
+    async fn list_managed_containers(&self, _node_id: &str) -> Result<Vec<ManagedContainer>> {
+        Ok(Vec::new())
+    }
 
     async fn remove_conflicting_containers(
         &self,
@@ -85,6 +112,10 @@ pub trait RuntimeProvider: Send + Sync {
         log_sender: Option<&flume::Sender<LogEntry>>,
         log_source: Option<&str>,
     ) -> Result<()>;
+
+    async fn image_exists(&self, _image: &str) -> Result<bool> {
+        Ok(false)
+    }
 
     async fn tag_image(&self, source: &str, target: &str) -> Result<()>;
 

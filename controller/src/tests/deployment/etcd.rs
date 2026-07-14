@@ -50,6 +50,7 @@ fn deployment_with_source(
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                node_affinity: None,
                 healthcheck_interval: 60,
             },
             ingress: None,
@@ -74,6 +75,7 @@ fn command_planner_uses_image_for_deploy_when_present() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
+        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -115,6 +117,7 @@ fn command_planner_disables_pull_for_prepared_images() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
+        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -154,6 +157,7 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
+        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -211,6 +215,7 @@ fn secrets_mount_content_quotes_values() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
+        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -324,6 +329,7 @@ impl InMemoryStore {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                node_affinity: None,
                 healthcheck_interval: 60,
             },
             ingress: None,
@@ -373,6 +379,7 @@ impl InMemoryStore {
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                node_affinity: None,
                 healthcheck_interval: 60,
             },
             ingress: None,
@@ -527,6 +534,8 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         etcd_port: 0,
         cluster_alias: "test".to_string(),
         cluster_name: "test".to_string(),
+        cluster: None,
+        etcd_endpoints: Vec::new(),
         probe_port: None,
         admin_port: None,
         ingress_ports: vec![],
@@ -536,6 +545,9 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         tailscale_authkey: None,
         tailscale_advertise_routes: Vec::new(),
         encryption_key: SecretString::new("test".to_string()),
+        ingestion_token: SecretString::new("test-ingestion-token".to_string()),
+        internal_control_token: SecretString::new("test-control-token".to_string()),
+        join_secret: None,
         jwt_secret_key: None,
         build_command_env: Default::default(),
         tags: Default::default(),
@@ -663,10 +675,16 @@ impl ClusterStore for InMemoryStore {
             existing.status = status;
         } else {
             replicas.push(ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index,
                 status,
                 healthcheck_failures: 0,
                 restart_attempts: 0,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             });
         }
         sync_ingress(&mut state, service_id);

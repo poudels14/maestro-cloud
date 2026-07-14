@@ -33,7 +33,7 @@ impl TelemetryStore {
         match self {
             Self::Sqlite(store) => {
                 store
-                    .append(
+                    .append_telemetry(
                         &entries
                             .iter()
                             .map(|value| value.entry.clone())
@@ -82,6 +82,25 @@ impl TelemetryStore {
 
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
         delegate!(self, read_tail(source, limit))
+    }
+
+    pub async fn read_ingress_traffic(
+        &self,
+        service_id: &str,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        delegate!(self, read_ingress_traffic(service_id, from, to, limit))
+    }
+
+    pub async fn read_blocked_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        delegate!(self, read_blocked_ingress_traffic(from, to, limit))
     }
 
     pub async fn read_after_for_source(

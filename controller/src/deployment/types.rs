@@ -13,8 +13,10 @@ use crate::utils::secrets::SecretProvider;
 pub struct ControllerConfig {
     pub cluster_alias: String,
     pub cluster_name: String,
+    pub cluster: Option<crate::cluster::ClusterRuntime>,
     pub data_dir: PathBuf,
     pub etcd_port: u16,
+    pub etcd_endpoints: Vec<String>,
     pub probe_port: Option<u16>,
     pub admin_port: Option<u16>,
     pub ingress_ports: Vec<u16>,
@@ -24,6 +26,9 @@ pub struct ControllerConfig {
     pub tailscale_authkey: Option<String>,
     pub tailscale_advertise_routes: Vec<String>,
     pub encryption_key: SecretString,
+    pub ingestion_token: SecretString,
+    pub internal_control_token: SecretString,
+    pub join_secret: Option<SecretString>,
     pub jwt_secret_key: Option<String>,
     pub build_command_env: HashMap<String, SecretString>,
     pub tags: Vec<String>,
@@ -38,6 +43,20 @@ pub struct ControllerConfig {
 }
 
 impl ControllerConfig {
+    pub fn system_name(&self) -> String {
+        self.cluster
+            .as_ref()
+            .and_then(crate::cluster::ClusterRuntime::resource_suffix)
+            .map(|suffix| format!("{}-{suffix}", self.cluster_name))
+            .unwrap_or_else(|| self.cluster_name.clone())
+    }
+
+    pub fn scheduling_enabled(&self) -> bool {
+        self.cluster
+            .as_ref()
+            .is_some_and(|cluster| cluster.scheduling)
+    }
+
     #[inline]
     pub fn etcd_dir(&self) -> PathBuf {
         self.data_dir.join("system/etcd/")
@@ -54,7 +73,8 @@ impl ControllerConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Deployment {
     pub id: String,
     pub service_id: String,
@@ -69,13 +89,15 @@ pub struct QueuedDeployment {
     pub deployment: ServiceDeployment,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ForceQueueOutcome {
     pub deployment_index: usize,
     pub deployment: ServiceDeployment,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "outcome", content = "deployment", rename_all = "kebab-case")]
 pub enum CancelDeploymentOutcome {
     Canceled(ServiceDeployment),
     NotCancelable(ServiceDeployment),
@@ -137,6 +159,14 @@ pub struct IngressConfig {
     pub hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_affinity: Option<SessionAffinityConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAffinityConfig {
+    pub header: String,
 }
 
 impl IngressConfig {
@@ -150,6 +180,52 @@ impl IngressConfig {
         }
         hosts
     }
+
+    pub fn session_affinity_header(&self) -> &str {
+        self.session_affinity
+            .as_ref()
+            .map(|affinity| affinity.header.as_str())
+            .unwrap_or("X-Maestro-Affinity")
+    }
+}
+
+pub fn validate_ingress_blocklist(blocked_ips: &[String]) -> Result<(), String> {
+    let mut unique = std::collections::HashSet::new();
+    for value in blocked_ips {
+        let address = value
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| format!("ingress blocklist contains invalid IP address `{value}`"))?;
+        if address.to_string() != *value {
+            return Err(format!(
+                "ingress blocklist address `{value}` must use canonical form `{address}`"
+            ));
+        }
+        if !unique.insert(address) {
+            return Err(format!(
+                "ingress blocklist contains duplicate address `{address}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn blocked_ip_matcher(blocked_ips: &[String]) -> Option<String> {
+    if blocked_ips.is_empty() {
+        return None;
+    }
+    let direct = blocked_ips
+        .iter()
+        .map(|ip| format!("ClientIP(`{ip}`)"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let alternatives = blocked_ips
+        .iter()
+        .map(|ip| ip.replace('.', r"\."))
+        .collect::<Vec<_>>()
+        .join("|");
+    Some(format!(
+        "{direct} || HeaderRegexp(`CF-Connecting-IP`, `^({alternatives})$`) || HeaderRegexp(`X-Real-IP`, `^({alternatives})$`) || HeaderRegexp(`X-Forwarded-For`, `(^[[:space:]]*|,[[:space:]]*)({alternatives})([[:space:]]*,|$)`)"
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -231,6 +307,8 @@ pub struct ServiceDeployConfig {
     pub secrets: Option<SecretsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeMount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_affinity: Option<crate::cluster::NodeAffinity>,
 }
 
 pub const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;
@@ -409,6 +487,10 @@ impl DeploymentStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplicaState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
     #[serde(default)]
     pub replica_index: u32,
     pub status: DeploymentStatus,
@@ -416,6 +498,14 @@ pub struct ReplicaState {
     pub healthcheck_failures: u32,
     #[serde(default)]
     pub restart_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<crate::cluster::types::NodeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<crate::cluster::ReplicaEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

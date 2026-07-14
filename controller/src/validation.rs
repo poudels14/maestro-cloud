@@ -121,6 +121,26 @@ pub fn validate_service_provider_config(
             ));
         }
     }
+    if let Some(affinity) = &deploy.node_affinity {
+        if let Some(node_id) = &affinity.node_id
+            && (node_id.len() != 12
+                || !node_id
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit()))
+        {
+            return Err(
+                "deploy.nodeAffinity.node-id must be exactly 12 lowercase alphanumeric characters"
+                    .to_string(),
+            );
+        }
+        for (key, value) in &affinity.labels {
+            if key.trim().is_empty() || value.trim().is_empty() {
+                return Err(
+                    "deploy.nodeAffinity.labels keys and values cannot be empty".to_string()
+                );
+            }
+        }
+    }
     if deploy.replicas > 1 && has_writable_volume(deploy) {
         return Err(format!(
             "deploy.replicas ({}) cannot exceed 1 while a writable volume is mounted; \
@@ -153,6 +173,24 @@ pub fn validate_ingress_config(ingress: &Option<IngressConfig>) -> Result<(), St
     }
     for (index, host) in ingress.hosts().iter().enumerate() {
         validate_ingress_host(host, index)?;
+    }
+    if let Some(affinity) = &ingress.session_affinity {
+        let header = affinity.header.as_str();
+        if header.is_empty() || header.trim() != header {
+            return Err(
+                "ingress.sessionAffinity.header must be a non-empty HTTP header name without surrounding whitespace"
+                    .to_string(),
+            );
+        }
+        if header.eq_ignore_ascii_case("host") {
+            return Err(
+                "ingress.sessionAffinity.header cannot be `Host`; configure ingress.host or ingress.hosts instead"
+                    .to_string(),
+            );
+        }
+        axum::http::HeaderName::from_bytes(header.as_bytes()).map_err(|_| {
+            format!("ingress.sessionAffinity.header `{header}` is not a valid HTTP header name")
+        })?;
     }
     Ok(())
 }
@@ -222,4 +260,36 @@ fn sensitive_host_path_reason(path: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deployment::types::SessionAffinityConfig;
+
+    fn ingress_with_affinity_header(header: &str) -> Option<IngressConfig> {
+        Some(IngressConfig {
+            host: Some("api.example.com".to_string()),
+            hosts: Vec::new(),
+            port: Some(8080),
+            session_affinity: Some(SessionAffinityConfig {
+                header: header.to_string(),
+            }),
+        })
+    }
+
+    #[test]
+    fn validates_session_affinity_header_names() {
+        assert!(validate_ingress_config(&ingress_with_affinity_header("X-Session-Node")).is_ok());
+        assert!(
+            validate_ingress_config(&ingress_with_affinity_header("bad header"))
+                .unwrap_err()
+                .contains("not a valid HTTP header name")
+        );
+        assert!(
+            validate_ingress_config(&ingress_with_affinity_header("Host"))
+                .unwrap_err()
+                .contains("cannot be `Host`")
+        );
+    }
 }

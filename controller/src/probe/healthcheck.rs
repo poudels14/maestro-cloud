@@ -22,6 +22,7 @@ pub async fn check_deployments(
     state: &mut HealthState,
     last_polled: &mut HashMap<String, Instant>,
     dns_domain: Option<&str>,
+    local_node_id: Option<&str>,
 ) -> Result<()> {
     let service_ids = store.list_service_ids().await?;
 
@@ -50,7 +51,11 @@ pub async fn check_deployments(
                     matches!(
                         r.status,
                         DeploymentStatus::PendingReady | DeploymentStatus::Ready
-                    )
+                    ) && local_node_id.is_none_or(|node_id| {
+                        r.node_id
+                            .as_deref()
+                            .is_none_or(|state_node| state_node == node_id)
+                    })
                 })
                 .collect();
             if checkable_replicas.is_empty() {
@@ -58,7 +63,11 @@ pub async fn check_deployments(
             }
 
             for replica in &checkable_replicas {
-                let key = replica_health_key(&deployment.id, replica.replica_index);
+                let key = replica_health_key(
+                    &deployment.id,
+                    replica.replica_index,
+                    replica.assignment_id.as_deref(),
+                );
                 active_keys.insert(key.clone());
             }
 
@@ -112,7 +121,11 @@ async fn check_replicas(
     let now = Instant::now();
 
     for replica in replicas {
-        let key = replica_health_key(&deployment.id, replica.replica_index);
+        let key = replica_health_key(
+            &deployment.id,
+            replica.replica_index,
+            replica.assignment_id.as_deref(),
+        );
         let last_known_healthy = state.get(&key).copied().unwrap_or(false);
         let is_steady_state = replica.status == DeploymentStatus::Ready && last_known_healthy;
         let due_after = if is_steady_state {
@@ -141,7 +154,12 @@ async fn check_replicas(
             stagger_first_healthy_poll(&key, was_healthy, healthy_interval, now, last_polled);
             if replica_needs_healthy_update(replica) {
                 monitor
-                    .report_healthy(service_id, &deployment.id, replica.replica_index)
+                    .report_healthy(
+                        service_id,
+                        &deployment.id,
+                        replica.replica_index,
+                        replica.assignment_id.as_deref(),
+                    )
                     .await?;
             }
             continue;
@@ -191,7 +209,12 @@ async fn check_replicas(
         if is_healthy {
             if replica_needs_healthy_update(replica) {
                 monitor
-                    .report_healthy(service_id, &deployment.id, replica.replica_index)
+                    .report_healthy(
+                        service_id,
+                        &deployment.id,
+                        replica.replica_index,
+                        replica.assignment_id.as_deref(),
+                    )
                     .await?;
             }
         } else {
@@ -202,7 +225,13 @@ async fn check_replicas(
                 failure_reason.as_deref().unwrap_or("unknown"),
             );
             monitor
-                .report_unhealthy(service_id, &deployment.id, replica.replica_index, &reason)
+                .report_unhealthy(
+                    service_id,
+                    &deployment.id,
+                    replica.replica_index,
+                    replica.assignment_id.as_deref(),
+                    &reason,
+                )
                 .await?;
         }
     }
@@ -266,6 +295,13 @@ fn build_health_url_for_replica(
 #[path = "../tests/probe/healthcheck.rs"]
 mod tests;
 
-fn replica_health_key(deployment_id: &str, replica_index: u32) -> String {
-    format!("{deployment_id}-replica{replica_index}")
+fn replica_health_key(
+    deployment_id: &str,
+    replica_index: u32,
+    assignment_id: Option<&str>,
+) -> String {
+    assignment_id.map_or_else(
+        || format!("{deployment_id}-replica{replica_index}"),
+        |assignment_id| format!("{deployment_id}-replica{replica_index}-{assignment_id}"),
+    )
 }

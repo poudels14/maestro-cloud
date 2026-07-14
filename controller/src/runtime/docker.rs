@@ -10,7 +10,7 @@ use crate::utils::cmd;
 
 use crate::config::BuilderType;
 
-use super::{BuildSpec, RunSpec, RuntimeProvider};
+use super::{BuildSpec, ManagedContainer, RunSpec, RuntimeProvider};
 
 pub struct DockerRuntimeProvider;
 
@@ -22,6 +22,10 @@ impl RuntimeProvider for DockerRuntimeProvider {
 
     fn requires_explicit_dns(&self) -> bool {
         false
+    }
+
+    fn supports_dynamic_network_attachment(&self) -> bool {
+        true
     }
 
     async fn ensure_network(&self, name: &str, subnet: Option<&str>) -> Result<()> {
@@ -46,12 +50,51 @@ impl RuntimeProvider for DockerRuntimeProvider {
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
-        let _ = cmd::run("docker", &["network", "rm", name]).await;
+        let inspect = match cmd::run("docker", &["network", "inspect", name]).await {
+            Ok(inspect) => inspect,
+            Err(_) => return Ok(()),
+        };
+        for container in attached_container_names(&inspect)? {
+            cmd::run("docker", &["rm", "-f", &container])
+                .await
+                .map_err(|error| {
+                    anyhow!(
+                        "failed to remove container `{container}` from network `{name}`: {error}"
+                    )
+                })?;
+        }
+        cmd::run("docker", &["network", "rm", name])
+            .await
+            .map_err(|error| anyhow!("failed to remove docker network `{name}`: {error}"))?;
         Ok(())
     }
 
     async fn remove_container(&self, name: &str) -> Result<()> {
         let _ = cmd::run("docker", &["rm", "-f", name]).await;
+        Ok(())
+    }
+
+    async fn set_container_network_access(
+        &self,
+        name: &str,
+        network: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        let attached = docker_network_attached(name, network).await?;
+        if attached == enabled {
+            return Ok(());
+        }
+        if enabled {
+            cmd::run("docker", &["network", "connect", network, name]).await?;
+        } else {
+            cmd::run("docker", &["network", "disconnect", "-f", network, name]).await?;
+        }
+        if docker_network_attached(name, network).await? != enabled {
+            anyhow::bail!(
+                "docker reported success but container `{name}` network `{network}` did not become {}",
+                if enabled { "attached" } else { "detached" }
+            );
+        }
         Ok(())
     }
 
@@ -121,6 +164,32 @@ impl RuntimeProvider for DockerRuntimeProvider {
         .ok()?;
         let cidr = stdout.trim().to_string();
         if cidr.is_empty() { None } else { Some(cidr) }
+    }
+
+    async fn list_managed_containers(&self, node_id: &str) -> Result<Vec<ManagedContainer>> {
+        let filter = format!("label=maestro.node-id={node_id}");
+        let output = cmd::run(
+            "docker",
+            &["ps", "--filter", &filter, "--format", "{{.Names}}"],
+        )
+        .await?;
+        let mut containers = Vec::new();
+        for name in output
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let labels = cmd::run(
+                "docker",
+                &["inspect", "-f", "{{json .Config.Labels}}", name],
+            )
+            .await?;
+            containers.push(ManagedContainer {
+                name: name.to_string(),
+                labels: serde_json::from_str(labels.trim()).unwrap_or_default(),
+            });
+        }
+        Ok(containers)
     }
 
     async fn prune_images(&self) -> Result<()> {
@@ -215,6 +284,16 @@ impl RuntimeProvider for DockerRuntimeProvider {
         Ok(())
     }
 
+    async fn image_exists(&self, image: &str) -> Result<bool> {
+        let status = tokio::process::Command::new("docker")
+            .args(["image", "inspect", image])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await?;
+        Ok(status.success())
+    }
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
         cmd::run("docker", &["tag", source, target]).await?;
         Ok(())
@@ -234,5 +313,46 @@ impl RuntimeProvider for DockerRuntimeProvider {
     async fn remove_image(&self, image_id: &str) -> Result<()> {
         let _ = cmd::run("docker", &["rmi", image_id]).await;
         Ok(())
+    }
+}
+
+async fn docker_network_attached(name: &str, network: &str) -> Result<bool> {
+    let networks = cmd::run(
+        "docker",
+        &["inspect", "-f", "{{json .NetworkSettings.Networks}}", name],
+    )
+    .await?;
+    Ok(serde_json::from_str::<serde_json::Value>(networks.trim())?
+        .as_object()
+        .is_some_and(|networks| networks.contains_key(network)))
+}
+
+fn attached_container_names(network_inspect: &str) -> Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(network_inspect)?;
+    let containers = value
+        .as_array()
+        .and_then(|networks| networks.first())
+        .and_then(|network| network.get("Containers"))
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow!("docker network inspect response has no Containers object"))?;
+    Ok(containers
+        .values()
+        .filter_map(|container| container.get("Name"))
+        .filter_map(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::attached_container_names;
+
+    #[test]
+    fn parses_attached_containers_from_network_inspect() {
+        let inspect =
+            r#"[{"Containers":{"abc":{"Name":"maestro-etcd-prod-a1b2"},"def":{"Name":"app-1"}}}]"#;
+        let mut names = attached_container_names(inspect).unwrap();
+        names.sort();
+        assert_eq!(names, ["app-1", "maestro-etcd-prod-a1b2"]);
     }
 }

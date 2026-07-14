@@ -97,6 +97,7 @@ function DeploymentRow(props: Props) {
                   deployment={props.deployment}
                   replicaIndex={replica.replicaIndex}
                   replicaStatus={replica.status}
+                  nodeId={replica.nodeId}
                   clusterInfo={props.clusterInfo}
                 />
               )}
@@ -124,6 +125,7 @@ function ReplicaRow(props: {
   deployment: Deployment;
   replicaIndex: number;
   replicaStatus: string;
+  nodeId?: string | null;
   clusterInfo: ClusterInfo | null;
 }) {
   const shortDepId = () => props.deployment.id.slice(0, 6);
@@ -161,7 +163,19 @@ function ReplicaRow(props: {
           </a>
         )}
       </Show>
-      <span class="text-gray-400 ml-auto">{props.replicaStatus.toLowerCase()}</span>
+      <div class="ml-auto flex items-center gap-2">
+        <Show when={props.nodeId}>
+          {(nodeId) => (
+            <span
+              class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
+              title="Cluster node"
+            >
+              {nodeId()}
+            </span>
+          )}
+        </Show>
+        <span class="text-gray-400">{props.replicaStatus.toLowerCase()}</span>
+      </div>
     </div>
   );
 }

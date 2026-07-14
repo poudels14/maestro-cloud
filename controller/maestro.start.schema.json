@@ -14,6 +14,95 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              {
+                "format": "ipv4"
+              },
+              {
+                "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$"
+              }
+            ]
+          },
+          "description": "Initial voter IPs, or IP:controller-port endpoints. Endpoint entries reserve API, gateway, etcd client, and etcd peer ports at P through P+3.",
+          "default": []
+        },
+        "bind-ip": {
+          "type": "string",
+          "format": "ipv4"
+        },
+        "subnets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "api-port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 3001,
+          "description": "Local controller API port. With IP:port nodes, this selects the local voter entry."
+        },
+        "gateway-port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 3002,
+          "description": "Gateway host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +1."
+        },
+        "control-allow-cidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "role": {
+          "type": "string",
+          "enum": ["voter", "worker"],
+          "default": "voter"
+        },
+        "etcd-client-port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 2379,
+          "description": "etcd client host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +2."
+        },
+        "etcd-peer-port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 2380,
+          "description": "etcd peer host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +3."
+        },
+        "scheduling": {
+          "type": "boolean",
+          "default": false
+        },
+        "shared-registry": {
+          "type": "string"
+        },
+        "ca-sha256": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9A-Fa-f]{64}$"
+        },
+        "join-secret": {
+          "type": "string",
+          "minLength": 32
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
         }
       }
     },

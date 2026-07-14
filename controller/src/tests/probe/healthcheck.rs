@@ -70,10 +70,16 @@ impl ClusterStore for ProbeTestStore {
             replica.status = status;
         } else {
             replicas.push(ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index,
                 status,
                 healthcheck_failures: 0,
                 restart_attempts: 0,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             });
         }
         Ok(())
@@ -165,12 +171,14 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 env: Default::default(),
                 secrets: None,
                 volumes: vec![],
+                node_affinity: None,
                 healthcheck_interval: 60,
             },
             ingress: ingress_port.map(|port| crate::deployment::types::IngressConfig {
                 host: Some("svc.local".to_string()),
                 hosts: Vec::new(),
                 port: Some(port),
+                session_affinity: None,
             }),
         },
         git_commit: None,
@@ -220,10 +228,16 @@ fn health_url_uses_fqdn_when_dns_domain_is_provided() {
 #[test]
 fn ready_replica_without_failures_skips_redundant_store_update() {
     let ready = ReplicaState {
+        service_id: None,
+        deployment_id: None,
         replica_index: 0,
         status: DeploymentStatus::Ready,
         healthcheck_failures: 0,
         restart_attempts: 0,
+        node_id: None,
+        assignment_id: None,
+        endpoint: None,
+        error: None,
     };
     assert!(!replica_needs_healthy_update(&ready));
 
@@ -262,10 +276,16 @@ async fn marks_replica_crashed_after_tenth_consecutive_healthcheck_failure() {
         replica_states: Mutex::new(HashMap::from([(
             ProbeTestStore::key(&deployment.config.id, &deployment.id),
             vec![ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index: 0,
                 status: DeploymentStatus::PendingReady,
                 healthcheck_failures: 9,
                 restart_attempts: 0,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             }],
         )])),
     });
@@ -283,6 +303,7 @@ async fn marks_replica_crashed_after_tenth_consecutive_healthcheck_failure() {
         &http,
         &mut state,
         &mut last_polled,
+        None,
         None,
     )
     .await

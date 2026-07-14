@@ -17,7 +17,10 @@ pub use compat::TelemetryStore;
 use db::Db;
 use ingestion::{append_log_batch, parse_service_source};
 use migration::migrate_sqlite_inner;
-use query::{cold_tier_has_seq_after, parquet_glob_if_present, query_logs, service_glob};
+use query::{
+    cold_tier_has_seq_after, parquet_glob_if_present, query_blocked_ingress_traffic,
+    query_ingress_traffic, query_logs, service_glob,
+};
 use rollover::{remove_stale_exports, rollover_service, rollover_system, write_partition_manifest};
 
 const SERVICE_SCHEMA: &str = r#"
@@ -76,6 +79,17 @@ CREATE TABLE IF NOT EXISTS logs (
     attributes MAP(VARCHAR, VARCHAR) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS logs_source_seq ON logs(source, seq);
+CREATE TABLE IF NOT EXISTS ingress_traffic (
+    bucket_at_ms BIGINT NOT NULL,
+    router VARCHAR NOT NULL,
+    dimension VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    status_code INTEGER NOT NULL,
+    requests BIGINT NOT NULL,
+    last_seen_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (bucket_at_ms, router, dimension, value, status_code)
+);
+CREATE INDEX IF NOT EXISTS ingress_traffic_time ON ingress_traffic(bucket_at_ms);
 CREATE TABLE IF NOT EXISTS ingest_offsets (
     node_id VARCHAR PRIMARY KEY,
     last_origin_seq BIGINT NOT NULL,
@@ -366,6 +380,36 @@ impl DuckLogStore {
 
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
         self.read_system(&[source], None, None, limit, true).await
+    }
+
+    pub async fn read_ingress_traffic(
+        &self,
+        service_id: &str,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let db = self.system.clone();
+        let service_id = service_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _visibility = db.read_parquet()?;
+            query_ingress_traffic(&db, &service_id, from, to, limit)
+        })
+        .await?
+    }
+
+    pub async fn read_blocked_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let db = self.system.clone();
+        tokio::task::spawn_blocking(move || {
+            let _visibility = db.read_parquet()?;
+            query_blocked_ingress_traffic(&db, from, to, limit)
+        })
+        .await?
     }
 
     pub async fn read_after_for_source(
@@ -760,10 +804,11 @@ impl DuckLogStore {
 
     pub async fn cleanup_old_metrics(&self, max_age_ms: i64) -> Result<usize> {
         let db = self.metrics.clone();
+        let system = self.system.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db.writer()?;
             let cutoff = now_ms() - max_age_ms;
-            let count: i64 = conn.query_row(
+            let mut count: i64 = conn.query_row(
                 r#"
                     SELECT
                         (SELECT count(*) FROM metrics WHERE ts < ?)
@@ -777,6 +822,17 @@ impl DuckLogStore {
             conn.execute("DELETE FROM traffic_metrics WHERE ts < ?", params![cutoff])?;
             conn.execute("DELETE FROM stats_metrics WHERE ts < ?", params![cutoff])?;
             conn.execute_batch("CHECKPOINT")?;
+            let system = system.writer()?;
+            count += system.query_row(
+                "SELECT count(*) FROM ingress_traffic WHERE bucket_at_ms < ?",
+                params![cutoff],
+                |row| row.get::<_, i64>(0),
+            )?;
+            system.execute(
+                "DELETE FROM ingress_traffic WHERE bucket_at_ms < ?",
+                params![cutoff],
+            )?;
+            system.execute_batch("CHECKPOINT")?;
             Ok(count as usize)
         })
         .await?

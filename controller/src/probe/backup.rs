@@ -47,6 +47,7 @@ struct PartitionUploadStats {
 pub struct BackupConfig {
     bucket: String,
     prefix: String,
+    node_id: Option<String>,
     kms_key_id: String,
     region: Option<String>,
     parts_root: PathBuf,
@@ -56,6 +57,7 @@ impl BackupConfig {
     pub fn from_config(
         data_root: &Path,
         cluster_name: &str,
+        node_id: Option<&str>,
         config: &crate::config::LogBackupConfig,
     ) -> Result<Self> {
         let bucket = config.bucket.trim();
@@ -77,9 +79,23 @@ impl BackupConfig {
             .unwrap_or(cluster_name.trim())
             .trim_matches('/')
             .to_string();
+        let node_id = node_id
+            .map(str::trim)
+            .map(|node_id| {
+                if node_id.len() != 12
+                    || !node_id.chars().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
+                    })
+                {
+                    bail!("invalid cluster node ID `{node_id}` for log backup objects");
+                }
+                Ok(node_id.to_string())
+            })
+            .transpose()?;
         Ok(Self {
             bucket: bucket.to_string(),
             prefix,
+            node_id,
             kms_key_id: kms_key_id.to_string(),
             region: config
                 .region
@@ -244,28 +260,91 @@ async fn upload_partition(
     }
     let mut stats = PartitionUploadStats::default();
     for path in &partition.files {
-        let relative = path.strip_prefix(&config.parts_root).with_context(|| {
-            format!(
-                "{} is outside {}",
-                path.display(),
-                config.parts_root.display()
-            )
-        })?;
-        let relative = relative
-            .to_str()
-            .ok_or_else(|| anyhow!("backup path is not UTF-8: {}", path.display()))?;
-        let key = if config.prefix.is_empty() {
-            relative.to_string()
-        } else {
-            format!("{}/{relative}", config.prefix)
+        let key = backup_object_key(config, path)?;
+        let prepared_manifest = match config.node_id.as_deref() {
+            Some(node_id) if path.file_name().is_some_and(|name| name == "manifest.json") => {
+                Some(prepare_node_manifest(path, node_id)?)
+            }
+            _ => None,
         };
-        let object = upload_file(client, config, path, &key).await?;
+        let upload_path = prepared_manifest
+            .as_ref()
+            .map(TemporaryUpload::path)
+            .unwrap_or(path);
+        let object = upload_file(client, config, upload_path, &key).await?;
         stats.objects += 1;
         stats.multipart_objects += usize::from(object.multipart);
         stats.parts += object.parts;
         stats.bytes += object.bytes;
     }
     Ok(stats)
+}
+
+fn backup_object_key(config: &BackupConfig, path: &Path) -> Result<String> {
+    let relative = path.strip_prefix(&config.parts_root).with_context(|| {
+        format!(
+            "{} is outside {}",
+            path.display(),
+            config.parts_root.display()
+        )
+    })?;
+    let relative = if let Some(node_id) = config.node_id.as_deref() {
+        let file_name = relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow!("backup path has no UTF-8 filename: {}", path.display()))?;
+        relative.with_file_name(format!("{node_id}-{file_name}"))
+    } else {
+        relative.to_path_buf()
+    };
+    let relative = relative
+        .to_str()
+        .ok_or_else(|| anyhow!("backup path is not UTF-8: {}", path.display()))?;
+    Ok(if config.prefix.is_empty() {
+        relative.to_string()
+    } else {
+        format!("{}/{relative}", config.prefix)
+    })
+}
+
+struct TemporaryUpload {
+    path: PathBuf,
+}
+
+impl TemporaryUpload {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryUpload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn prepare_node_manifest(path: &Path, node_id: &str) -> Result<TemporaryUpload> {
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    let parts = manifest
+        .get_mut("parts")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| anyhow!("backup manifest {} has no parts array", path.display()))?;
+    for part in parts {
+        let file = part
+            .get("file")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("backup manifest {} has an invalid part", path.display()))?;
+        part["file"] = serde_json::Value::String(format!("{node_id}-{file}"));
+    }
+    let temporary_path = path.with_file_name(format!(
+        "{node_id}-manifest.json.tmp-{}",
+        std::process::id()
+    ));
+    std::fs::write(&temporary_path, serde_json::to_vec_pretty(&manifest)?)?;
+    Ok(TemporaryUpload {
+        path: temporary_path,
+    })
 }
 
 struct ObjectUploadStats {
@@ -349,13 +428,103 @@ mod tests {
             prefix: None,
             retention_days: Some(30),
         };
-        let config = BackupConfig::from_config(Path::new("/data"), "production", &settings)
-            .expect("backup config");
+        let config = BackupConfig::from_config(
+            Path::new("/data"),
+            "production",
+            Some("abc123def456"),
+            &settings,
+        )
+        .expect("backup config");
         assert_eq!(config.bucket, "maestro-logs");
         assert_eq!(config.kms_key_id, "kms-key");
         assert_eq!(config.region.as_deref(), Some("us-west-2"));
         assert_eq!(config.prefix, "production");
+        assert_eq!(config.node_id.as_deref(), Some("abc123def456"));
         assert_eq!(config.parts_root, Path::new("/data/parts"));
+    }
+
+    #[test]
+    fn cluster_backup_keys_prefix_filenames_without_adding_a_directory() {
+        let config = BackupConfig {
+            bucket: "logs".into(),
+            prefix: "clusters/production".into(),
+            node_id: Some("abc123def456".into()),
+            kms_key_id: "kms".into(),
+            region: None,
+            parts_root: PathBuf::from("/data/parts"),
+        };
+        let partition =
+            Path::new("/data/parts/service-logs/service_id=app/deployment_id=dep/date=2026-07-14");
+        let parquet = partition.join("part-1-500.parquet");
+        assert_eq!(
+            backup_object_key(&config, &parquet).expect("Parquet key"),
+            "clusters/production/service-logs/service_id=app/deployment_id=dep/date=2026-07-14/abc123def456-part-1-500.parquet"
+        );
+        assert_eq!(
+            backup_object_key(&config, &partition.join("manifest.json")).expect("manifest key"),
+            "clusters/production/service-logs/service_id=app/deployment_id=dep/date=2026-07-14/abc123def456-manifest.json"
+        );
+
+        let other_node = BackupConfig {
+            node_id: Some("def456abc123".into()),
+            ..config
+        };
+        assert_eq!(
+            backup_object_key(&other_node, &parquet).expect("other node Parquet key"),
+            "clusters/production/service-logs/service_id=app/deployment_id=dep/date=2026-07-14/def456abc123-part-1-500.parquet"
+        );
+    }
+
+    #[test]
+    fn standalone_backup_keys_keep_the_existing_filename() {
+        let config = BackupConfig {
+            bucket: "logs".into(),
+            prefix: "production".into(),
+            node_id: None,
+            kms_key_id: "kms".into(),
+            region: None,
+            parts_root: PathBuf::from("/data/parts"),
+        };
+        assert_eq!(
+            backup_object_key(
+                &config,
+                Path::new("/data/parts/system-logs/date=2026-07-14/part-1-500.parquet")
+            )
+            .expect("standalone key"),
+            "production/system-logs/date=2026-07-14/part-1-500.parquet"
+        );
+    }
+
+    #[test]
+    fn uploaded_node_manifest_references_prefixed_parquet_objects() {
+        let root = std::env::temp_dir().join(format!(
+            "maestro-backup-manifest-{}-{}",
+            std::process::id(),
+            crate::utils::nanoid::unique_id(8)
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture directory");
+        let manifest_path = root.join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            br#"{"version":1,"parts":[{"file":"part-1-500.parquet"}]}"#,
+        )
+        .expect("write manifest");
+
+        let prepared =
+            prepare_node_manifest(&manifest_path, "abc123def456").expect("prepare manifest");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(prepared.path()).expect("read upload manifest"))
+                .expect("parse upload manifest");
+        assert_eq!(
+            manifest["parts"][0]["file"],
+            "abc123def456-part-1-500.parquet"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&manifest_path).expect("read local manifest"),
+            r#"{"version":1,"parts":[{"file":"part-1-500.parquet"}]}"#
+        );
+        drop(prepared);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -449,6 +618,7 @@ mod tests {
         let config = BackupConfig {
             bucket,
             prefix: "maestro-integration-tests".into(),
+            node_id: None,
             kms_key_id,
             region,
             parts_root: std::env::temp_dir(),

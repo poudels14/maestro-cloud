@@ -69,6 +69,7 @@ pub struct MetricsCollector {
     cluster_suffix: String,
     runtime_cli: String,
     client: reqwest::Client,
+    ingestion_token: Option<String>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
     logger: Logger,
     datadog_tx: Option<flume::Sender<MetricBatch>>,
@@ -82,6 +83,7 @@ impl MetricsCollector {
         signal_rx: broadcast::Receiver<ShutdownEvent>,
         logger: Logger,
         datadog_tx: Option<flume::Sender<MetricBatch>>,
+        ingestion_token: Option<String>,
     ) -> Self {
         Self {
             endpoint,
@@ -91,6 +93,7 @@ impl MetricsCollector {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("failed to build metrics http client"),
+            ingestion_token,
             signal_rx,
             logger,
             datadog_tx,
@@ -189,9 +192,14 @@ impl MetricsCollector {
         points.push(cluster);
         points.extend(service_agg.into_values());
 
-        self.client
+        let mut request = self
+            .client
             .post(&self.endpoint)
-            .json(&TypedMetricBatch::Resource(points.clone()))
+            .json(&TypedMetricBatch::Resource(points.clone()));
+        if let Some(token) = &self.ingestion_token {
+            request = request.header("X-Maestro-Ingestion-Token", token);
+        }
+        request
             .send()
             .await
             .map_err(|err| anyhow!("failed to send metrics: {err}"))?;
@@ -327,7 +335,7 @@ fn extract_service_id(container_name: &str, cluster_suffix: &str) -> String {
     if let Some(base) = container_name.strip_suffix(cluster_suffix) {
         return base.to_string();
     }
-    let mut name = container_name;
+    let mut name = strip_node_runtime_suffix(container_name);
     if let Some(idx) = name.rfind('-') {
         let tail = &name[idx + 1..];
         if tail.parse::<u32>().is_ok() {
@@ -344,6 +352,12 @@ fn extract_service_id(container_name: &str, cluster_suffix: &str) -> String {
         }
     }
     name.to_string()
+}
+
+fn strip_node_runtime_suffix(name: &str) -> &str {
+    name.rsplit_once("-node-")
+        .filter(|(_, port)| port.parse::<u16>().is_ok())
+        .map_or(name, |(base, _)| base)
 }
 
 fn parse_percent(s: &str) -> f64 {
@@ -471,6 +485,10 @@ mod tests {
         );
         assert_eq!(extract_service_id("my-svc-aBc123-1", suffix), "my-svc");
         assert_eq!(extract_service_id("standalone", suffix), "standalone");
+        assert_eq!(
+            extract_service_id("my-svc-aBc123-2-node-3101", suffix),
+            "my-svc"
+        );
     }
 
     #[test]

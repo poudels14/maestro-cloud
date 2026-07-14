@@ -10,17 +10,22 @@ path = "src/main.rs"
 
 [dependencies]
 aes-gcm = "0.10.3"
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 argon2 = "0.5.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["multipart"] }
+http-body-util = "0.1"
 backon = "1.6.0"
 base64 = "0.22"
 chrono = "0.4"
+chacha20poly1305 = "0.11.0"
 clap = { version = "4.5", features = ["derive", "env"] }
-etcd-client = { version = "0.14", features = ["tls"] }
+etcd-client = { version = "0.19", features = ["tls"] }
 flume = "0.12.0"
 flate2 = "1.1"
+hex = "0.4.3"
+hkdf = "0.12.4"
+hmac = "0.12.1"
 json5 = "0.4"
 libc = "0.2"
 nanoid = "0.4"
@@ -28,11 +33,13 @@ os_pipe = "1"
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "multipart",
+  "stream",
   "rustls-tls"
 ] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
 semver = "1.0"
 sha2 = "0.10"
 shellexpand = "3.1.2"
@@ -48,11 +55,16 @@ tokio = { version = "1.48", features = [
   "fs",
   "io-util"
 ] }
+tokio-util = { version = "0.7", features = ["io"] }
 watchexec-supervisor = "4.0"
+x25519-dalek = { version = "3.0.0", features = ["getrandom", "static_secrets"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
-aws-sdk-secretsmanager = "1.99.0"
-aws-config = "1.8.13"
-jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+aws-sdk-secretsmanager = { version = "1.109.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio"
+] }
+aws-config = "1.9.0"
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["hmac"] }
 rcgen = { version = "0.14.7", features = ["pem"] }
 rustls = { version = "0.23.37", features = ["ring"] }
 dotenvy = "0.15.7"
@@ -64,7 +76,13 @@ ignore = "0.4.25"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.34.0"
 duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
-aws-sdk-s3 = "1.138.0"
+aws-sdk-s3 = { version = "1.138.0", default-features = false, features = [
+  "sigv4a",
+  "http-1x",
+  "default-https-client",
+  "rt-tokio"
+] }
+axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 
 [dev-dependencies]
 proptest = "1.11.0"

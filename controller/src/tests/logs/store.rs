@@ -79,6 +79,62 @@ async fn entry_without_attrs_round_trips_with_empty_vec() {
 }
 
 #[tokio::test]
+async fn sqlite_ingress_traffic_fallback_groups_access_logs() {
+    let path = temp_db_path("ingress-traffic");
+    let store = LogStore::open(&path).expect("open store");
+    let mut entry = sample_entry();
+    entry.ts = 1_700_000_000_000;
+    entry.source = Arc::from("maestro-ingress");
+    entry.origin = LogOrigin::System;
+    entry.attrs = vec![
+        ("RouterName".into(), "api@etcd".into()),
+        ("maestro.client_ip".into(), "203.0.113.9".into()),
+        ("RequestPath".into(), "/login?token=secret".into()),
+        ("DownstreamStatus".into(), "401".into()),
+    ];
+    let mut blocked_entry = entry.clone();
+    blocked_entry.ts = 1_700_000_000_100;
+    blocked_entry.attrs = vec![
+        (
+            "RouterName".into(),
+            "maestro.internal-blocked-deadbeef-0@etcd".into(),
+        ),
+        ("maestro.client_ip".into(), "2001:db8::9".into()),
+        ("RequestPath".into(), "/wp-admin?probe=1".into()),
+        ("DownstreamStatus".into(), "403".into()),
+    ];
+    store
+        .append_telemetry(&[entry, blocked_entry])
+        .await
+        .expect("append telemetry");
+
+    let traffic = store
+        .read_ingress_traffic("api", 1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("traffic query");
+    assert_eq!(traffic.by_ip[0].value, "203.0.113.9");
+    assert_eq!(traffic.by_ip[0].status_code, 401);
+    assert_eq!(traffic.by_path[0].value, "/login");
+    let blocked = store
+        .read_blocked_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("blocked traffic query");
+    assert_eq!(blocked.by_ip[0].value, "2001:db8::9");
+    assert_eq!(blocked.by_ip[0].status_code, 403);
+    assert_eq!(blocked.by_path[0].value, "/wp-admin");
+    assert!(
+        store
+            .read_tail("maestro-ingress", 10)
+            .await
+            .expect("read raw ingress logs")
+            .is_empty(),
+        "access records should be discarded after aggregation"
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn spool_cleanup_is_bounded_by_the_slowest_registered_sink() {
     let path = temp_db_path("sink-watermark");
     let store = LogStore::open(&path).expect("open store");

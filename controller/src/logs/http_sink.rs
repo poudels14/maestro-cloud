@@ -15,6 +15,7 @@ pub struct HttpSink {
     id: String,
     node_id: String,
     endpoint: String,
+    ingestion_token: Option<String>,
     client: reqwest::Client,
 }
 
@@ -24,11 +25,17 @@ impl HttpSink {
             id: id.to_string(),
             node_id,
             endpoint: endpoint.to_string(),
+            ingestion_token: None,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("failed to build http client"),
         }
+    }
+
+    pub fn with_ingestion_token(mut self, token: &str) -> Self {
+        self.ingestion_token = Some(token.to_string());
+        self
     }
 }
 
@@ -51,14 +58,16 @@ impl LogSink for HttpSink {
             })
             .collect::<Vec<_>>();
         let compressed_body = gzip_json(&entries)?;
-        let response = self
+        let mut request = self
             .client
             .post(&self.endpoint)
             .header(CONTENT_TYPE, "application/json")
             .header(CONTENT_ENCODING, "gzip")
-            .body(compressed_body)
-            .send()
-            .await?;
+            .body(compressed_body);
+        if let Some(token) = &self.ingestion_token {
+            request = request.header("X-Maestro-Ingestion-Token", token);
+        }
+        let response = request.send().await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();

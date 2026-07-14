@@ -89,8 +89,20 @@ impl Engine {
         self.provider.deploy(deployment, replica_index)
     }
 
+    pub fn deploy_command_for_assignment(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+        identity: &crate::deployment::provider::ReplicaRuntimeIdentity,
+    ) -> Option<DeployOutput> {
+        self.provider
+            .deploy_with_identity(deployment, replica_index, identity)
+    }
+
     pub async fn start_replica(&self, spec: ReplicaSpec<'_>) -> Result<Option<ReplicaHandle>> {
-        let job_id = format!("{}-replica-{}", spec.deployment.id, spec.replica_index);
+        let job_id = spec
+            .task_id
+            .unwrap_or_else(|| format!("{}-replica-{}", spec.deployment.id, spec.replica_index));
         let job = SupervisedJobConfig {
             id: job_id.clone(),
             name: format!(

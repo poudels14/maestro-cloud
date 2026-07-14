@@ -10,6 +10,7 @@ use crate::metrics::TrafficPoint;
 const SCRAPE_INTERVAL: Duration = Duration::from_secs(5);
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(3);
 const METRICS_URL: &str = "http://web:9100/metrics";
+const SERVICE_MAP_REFRESH: Duration = Duration::from_secs(30);
 
 pub async fn run(log_store: Arc<TelemetryStore>) {
     let http_client = match reqwest::Client::builder().timeout(SCRAPE_TIMEOUT).build() {
@@ -25,6 +26,8 @@ pub async fn run(log_store: Arc<TelemetryStore>) {
         log_store,
         previous: HashMap::new(),
         has_scraped: false,
+        service_map: HashMap::new(),
+        service_map_refreshed_at: None,
     };
 
     let mut interval = tokio::time::interval(SCRAPE_INTERVAL);
@@ -42,6 +45,8 @@ struct TrafficScraper {
     log_store: Arc<TelemetryStore>,
     previous: HashMap<SeriesKey, Cumulative>,
     has_scraped: bool,
+    service_map: HashMap<String, crate::cluster::types::TraefikServiceIdentity>,
+    service_map_refreshed_at: Option<tokio::time::Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -65,12 +70,21 @@ struct Cumulative {
 
 impl TrafficScraper {
     async fn scrape_once(&mut self) -> Result<()> {
+        if self.service_map_refreshed_at.is_none_or(|last| {
+            tokio::time::Instant::now().saturating_duration_since(last) >= SERVICE_MAP_REFRESH
+        }) {
+            match load_service_map().await {
+                Ok(service_map) => self.service_map = service_map,
+                Err(error) => eprintln!("traffic service-map refresh failed: {error}"),
+            }
+            self.service_map_refreshed_at = Some(tokio::time::Instant::now());
+        }
         let response = self.http_client.get(METRICS_URL).send().await?;
         if !response.status().is_success() {
             return Err(anyhow!("traefik metrics returned {}", response.status()));
         }
         let body = response.text().await?;
-        let current = parse_prometheus_text(&body);
+        let current = parse_prometheus_text_with_map(&body, &self.service_map);
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -123,7 +137,15 @@ fn compute_delta(prev: Cumulative, cur: Cumulative) -> Cumulative {
     }
 }
 
+#[cfg(test)]
 fn parse_prometheus_text(body: &str) -> HashMap<SeriesKey, Cumulative> {
+    parse_prometheus_text_with_map(body, &HashMap::new())
+}
+
+fn parse_prometheus_text_with_map(
+    body: &str,
+    service_map: &HashMap<String, crate::cluster::types::TraefikServiceIdentity>,
+) -> HashMap<SeriesKey, Cumulative> {
     let mut out: HashMap<SeriesKey, Cumulative> = HashMap::new();
     for line in body.lines() {
         let line = line.trim();
@@ -136,8 +158,24 @@ fn parse_prometheus_text(body: &str) -> HashMap<SeriesKey, Cumulative> {
         let Some(svc_raw) = sample.labels.get("service") else {
             continue;
         };
-        let Some((service_id, deployment_id)) = split_service_label(svc_raw) else {
+        let label = svc_raw
+            .rsplit_once('@')
+            .map(|(label, _)| label)
+            .unwrap_or(svc_raw);
+        if crate::deployment::ingress_blocklist::is_internal_service_label(label) {
             continue;
+        }
+        let identity = service_map.get(label);
+        let (service_id, deployment_id) = if let Some(identity) = identity {
+            (
+                identity.service_id.clone(),
+                Some(identity.deployment_id.clone()),
+            )
+        } else {
+            let Some(identity) = split_service_label(svc_raw) else {
+                continue;
+            };
+            identity
         };
         let method = sample
             .labels
@@ -186,6 +224,49 @@ fn parse_prometheus_text(body: &str) -> HashMap<SeriesKey, Cumulative> {
         }
     }
     out
+}
+
+async fn load_service_map() -> Result<HashMap<String, crate::cluster::types::TraefikServiceIdentity>>
+{
+    let Some(raw_endpoints) = std::env::var("ETCD_ENDPOINTS").ok() else {
+        return Ok(HashMap::new());
+    };
+    let endpoints = raw_endpoints
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let tls = match (
+        std::env::var("ETCD_CA_FILE").ok(),
+        std::env::var("ETCD_CERT_FILE").ok(),
+        std::env::var("ETCD_KEY_FILE").ok(),
+    ) {
+        (Some(ca), Some(cert), Some(key)) => {
+            crate::deployment::build_etcd_tls_from_files(&ca, &cert, &key)
+        }
+        _ => None,
+    };
+    let options = tls.map(|tls| etcd_client::ConnectOptions::new().with_tls(tls));
+    let mut client = etcd_client::Client::connect(endpoints, options).await?;
+    let response = client
+        .get(
+            "/maetro/cluster/traefik-service-map/",
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await?;
+    let mut map = HashMap::new();
+    for entry in response.kvs() {
+        let key = std::str::from_utf8(entry.key())?;
+        let Some(label) = key.strip_prefix("/maetro/cluster/traefik-service-map/") else {
+            continue;
+        };
+        map.insert(label.to_string(), serde_json::from_slice(entry.value())?);
+    }
+    Ok(map)
 }
 
 struct Sample {
@@ -311,6 +392,30 @@ traefik_service_requests_total{service="service-1-whLB04@docker",code="200",meth
         assert_eq!(k.status_code, 200);
         assert_eq!(k.method, "GET");
         assert_eq!(v.requests, 42);
+    }
+
+    #[test]
+    fn resolves_generation_labels_through_explicit_map() {
+        let body = r#"traefik_service_requests_total{service="service-with-dashes-g-deadbeef@etcd",code="200",method="GET"} 4"#;
+        let map = HashMap::from([(
+            "service-with-dashes-g-deadbeef".to_string(),
+            crate::cluster::types::TraefikServiceIdentity {
+                service_id: "service-with-dashes".to_string(),
+                deployment_id: "deployment-123".to_string(),
+                node_id: None,
+            },
+        )]);
+        let result = parse_prometheus_text_with_map(body, &map);
+        let (key, value) = result.iter().next().unwrap();
+        assert_eq!(key.service_id, "service-with-dashes");
+        assert_eq!(key.deployment_id.as_deref(), Some("deployment-123"));
+        assert_eq!(value.requests, 4);
+    }
+
+    #[test]
+    fn internal_block_policy_is_not_reported_as_a_service() {
+        let body = r#"traefik_service_requests_total{service="maestro.internal-blocked@etcd",code="403",method="GET"} 12"#;
+        assert!(parse_prometheus_text(body).is_empty());
     }
 
     #[test]

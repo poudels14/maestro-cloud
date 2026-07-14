@@ -148,10 +148,16 @@ impl LifecycleStore {
             existing.status = status;
         } else {
             replicas.push(ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index,
                 status,
                 healthcheck_failures: 0,
                 restart_attempts: 0,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             });
         }
     }
@@ -297,10 +303,16 @@ impl ClusterStore for LifecycleStore {
             existing.status = status;
         } else {
             replicas.push(ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index,
                 status,
                 healthcheck_failures: 0,
                 restart_attempts: 0,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             });
         }
         Ok(())
@@ -534,19 +546,19 @@ impl ClusterStore for LifecycleStore {
         Ok(())
     }
 
-    async fn read_system_upgrade_request(&self) -> Result<Option<String>> {
+    async fn read_system_upgrade_request(&self, _node_id: Option<&str>) -> Result<Option<String>> {
         Ok(None)
     }
 
-    async fn delete_system_upgrade_request(&self) -> Result<()> {
+    async fn delete_system_upgrade_request(&self, _node_id: Option<&str>) -> Result<()> {
         Ok(())
     }
 
-    async fn read_system_restart_request(&self) -> Result<bool> {
+    async fn read_system_restart_request(&self, _node_id: Option<&str>) -> Result<bool> {
         Ok(false)
     }
 
-    async fn delete_system_restart_request(&self) -> Result<()> {
+    async fn delete_system_restart_request(&self, _node_id: Option<&str>) -> Result<()> {
         Ok(())
     }
 }
@@ -669,6 +681,8 @@ impl Harness {
                 etcd_port: 0,
                 cluster_alias: "test".to_string(),
                 cluster_name: "test-cluster".to_string(),
+                cluster: None,
+                etcd_endpoints: Vec::new(),
                 probe_port: None,
                 admin_port: None,
                 ingress_ports: vec![],
@@ -678,6 +692,9 @@ impl Harness {
                 tailscale_authkey: None,
                 tailscale_advertise_routes: Vec::new(),
                 encryption_key: SecretString::new("test".to_string()),
+                ingestion_token: SecretString::new("test-ingestion-token".to_string()),
+                internal_control_token: SecretString::new("test-control-token".to_string()),
+                join_secret: None,
                 jwt_secret_key: None,
                 build_command_env: Default::default(),
                 tags: Default::default(),
@@ -719,7 +736,7 @@ impl Harness {
 
     async fn report_replica_healthy(&self, service_id: &str, deployment_id: &str, replica: u32) {
         self.health
-            .report_healthy(service_id, deployment_id, replica)
+            .report_healthy(service_id, deployment_id, replica, None)
             .await
             .expect("report_healthy");
     }
@@ -733,7 +750,7 @@ impl Harness {
         reason: &str,
     ) {
         self.health
-            .report_unhealthy(service_id, deployment_id, replica, reason)
+            .report_unhealthy(service_id, deployment_id, replica, None, reason)
             .await
             .expect("report_unhealthy");
     }
@@ -826,6 +843,7 @@ fn docker_service(id: &str, replicas: u32) -> ServiceConfig {
             env: Default::default(),
             secrets: None,
             volumes: vec![],
+            node_affinity: None,
         },
         ingress: None,
     }
@@ -837,6 +855,7 @@ fn docker_service_with_ingress(id: &str, replicas: u32, host: &str) -> ServiceCo
         host: Some(host.to_string()),
         hosts: vec![],
         port: Some(80),
+        session_affinity: None,
     });
     cfg
 }
@@ -1023,10 +1042,16 @@ async fn replica_restart_budget_caps_at_max_attempts() {
         &deployment.config.id,
         &deployment.id,
         ReplicaState {
+            service_id: None,
+            deployment_id: None,
             replica_index: 0,
             status: DeploymentStatus::Crashed,
             healthcheck_failures: crate::health::DEFAULT_MAX_HEALTHCHECK_FAILURES,
             restart_attempts: crate::health::MAX_REPLICA_RESTART_ATTEMPTS,
+            node_id: None,
+            assignment_id: None,
+            endpoint: None,
+            error: None,
         },
     );
 
@@ -1092,10 +1117,16 @@ async fn deployment_crashes_only_when_every_replica_exhausts_restart_budget() {
             &deployment.config.id,
             &deployment.id,
             ReplicaState {
+                service_id: None,
+                deployment_id: None,
                 replica_index,
                 status: DeploymentStatus::Crashed,
                 healthcheck_failures: crate::health::DEFAULT_MAX_HEALTHCHECK_FAILURES,
                 restart_attempts: crate::health::MAX_REPLICA_RESTART_ATTEMPTS,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
             },
         );
     }

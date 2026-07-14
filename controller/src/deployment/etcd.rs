@@ -1,19 +1,21 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
 use etcd_client::{
-    Client as EtcdClient, Compare, CompareOp, GetOptions, SortOrder, SortTarget, Txn, TxnOp,
+    Client as EtcdClient, Compare, CompareOp, GetOptions, PutOptions, SortOrder, SortTarget, Txn,
+    TxnOp,
 };
 
+use crate::deployment::ingress_blocklist;
 use crate::deployment::keys::{
-    SERVICES_PREFIX, SERVICES_ROOT, SYSTEM_RESTART_REQUEST_KEY, SYSTEM_UPGRADE_REQUEST_KEY,
+    CLUSTER_FREEZE_KEY, CLUSTER_UPGRADE_KEY, SERVICES_PREFIX, SERVICES_ROOT,
     deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
     deployment_deploy_secrets_key, deployment_prefix, log_migration_key, replica_state_key,
     replica_states_prefix, service_deployment_history_key, service_deployment_history_prefix,
     service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
-    service_info_key, service_prefix,
+    service_info_key, service_prefix, system_restart_request_key, system_upgrade_request_key,
 };
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
@@ -30,6 +32,17 @@ const MAX_TXN_RETRIES: usize = 16;
 pub struct EtcdStateStore {
     client: Arc<tokio::sync::Mutex<EtcdClient>>,
     encryption_key: crate::utils::crypto::EncryptionKey,
+    mutation_relay: Option<MutationRelay>,
+}
+
+#[derive(Clone)]
+struct MutationRelay {
+    socket_path: String,
+    token: String,
+}
+
+tokio::task_local! {
+    static CLUSTER_WRITE_FENCE: crate::cluster::types::LeadershipToken;
 }
 
 struct DeploymentSnapshot {
@@ -51,12 +64,26 @@ struct InfoSnapshot {
     info: ServiceInfo,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterRequestReceipt {
+    fingerprint: String,
+    state: String,
+    status_code: Option<u16>,
+    content_type: Option<String>,
+    body: Vec<u8>,
+    updated_at_ms: i64,
+}
+
 impl EtcdStateStore {
-    pub async fn new(
-        endpoint: &str,
+    pub async fn new_with_endpoints(
+        endpoints: &[String],
         encryption_key: crate::utils::crypto::EncryptionKey,
         tls: Option<etcd_client::TlsOptions>,
     ) -> Result<Self> {
+        if endpoints.is_empty() {
+            return Err(anyhow!("at least one etcd endpoint is required"));
+        }
         let backoff = ConstantBuilder::default()
             .with_delay(Duration::from_secs(1))
             .with_max_times(15);
@@ -64,11 +91,18 @@ impl EtcdStateStore {
         let connect_options =
             tls.map(|tls_opts| etcd_client::ConnectOptions::new().with_tls(tls_opts));
 
+        let endpoints = endpoints.to_vec();
         let client: EtcdClient = (|| {
             let opts = connect_options.clone();
+            let endpoints = endpoints.clone();
             async move {
-                let mut client = EtcdClient::connect([endpoint], opts).await?;
-                client.status().await?;
+                let mut client = EtcdClient::connect(endpoints, opts).await?;
+                client
+                    .get(
+                        "/maetro/",
+                        Some(GetOptions::new().with_prefix().with_limit(1)),
+                    )
+                    .await?;
                 Ok::<EtcdClient, anyhow::Error>(client)
             }
         })
@@ -79,7 +113,33 @@ impl EtcdStateStore {
         Ok(Self {
             client: Arc::new(tokio::sync::Mutex::new(client)),
             encryption_key,
+            mutation_relay: None,
         })
+    }
+
+    pub fn with_mutation_relay(mut self, socket_path: String, token: String) -> Self {
+        self.mutation_relay = Some(MutationRelay { socket_path, token });
+        self
+    }
+
+    async fn relay_mutation(
+        &self,
+        mutation: crate::deployment::store::ClusterMutation,
+    ) -> Result<Option<serde_json::Value>> {
+        let relay = self
+            .mutation_relay
+            .as_ref()
+            .ok_or_else(|| anyhow!("cluster mutation relay is not configured"))?;
+        crate::cluster::control::send_command_with_response(
+            &relay.socket_path,
+            &relay.token,
+            crate::cluster::control::ControlCommand::StoreMutation { mutation },
+        )
+        .await
+    }
+
+    fn current_write_fence() -> Option<crate::cluster::types::LeadershipToken> {
+        CLUSTER_WRITE_FENCE.try_with(Clone::clone).ok()
     }
 
     fn strip_deployment_with_metadata(
@@ -113,19 +173,21 @@ impl EtcdStateStore {
             .unwrap_or_default()
     }
 
-    async fn write_encrypted(&self, key: &str, data: &impl serde::Serialize) {
-        let json = match serde_json::to_string(data) {
-            Ok(json) => json,
-            Err(_) => return,
-        };
-        let value = match crate::utils::crypto::encrypt_string(&self.encryption_key, &json) {
-            Ok(encrypted) => encrypted,
-            Err(_) => return,
-        };
-        let mut client = self.client.lock().await;
-        let _ = client
-            .put(key.as_bytes().to_vec(), value.as_bytes().to_vec(), None)
-            .await;
+    async fn write_encrypted(&self, key: &str, data: &impl serde::Serialize) -> Result<()> {
+        if !self
+            .txn(Vec::new(), vec![self.encrypted_put(key, data)?])
+            .await?
+        {
+            bail!("leadership changed while writing encrypted cluster state");
+        }
+        Ok(())
+    }
+
+    fn encrypted_put(&self, key: &str, data: &impl serde::Serialize) -> Result<TxnOp> {
+        let json = serde_json::to_string(data)?;
+        let value = crate::utils::crypto::encrypt_string(&self.encryption_key, &json)
+            .map_err(anyhow::Error::msg)?;
+        Ok(request_put(key, &value))
     }
 
     async fn read_encrypted<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> T {
@@ -142,30 +204,35 @@ impl EtcdStateStore {
         serde_json::from_str(&json).unwrap_or_default()
     }
 
-    async fn write_deployment_data(&self, service_id: &str, deployment: &ServiceDeployment) {
+    fn deployment_data_operations(
+        &self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> Result<Vec<TxnOp>> {
+        let mut operations = Vec::new();
         let deployment_id = &deployment.id;
         if !deployment.config.deploy.env.items.is_empty() {
             let key = deployment_deploy_env_key(service_id, deployment_id);
-            self.write_encrypted(&key, &deployment.config.deploy.env.items)
-                .await;
+            operations.push(self.encrypted_put(&key, &deployment.config.deploy.env.items)?);
         }
         if let Some(secrets) = &deployment.config.deploy.secrets
             && !secrets.items.is_empty()
             && secrets.source.is_none()
         {
             let key = deployment_deploy_secrets_key(service_id, deployment_id);
-            self.write_encrypted(&key, &secrets.items).await;
+            operations.push(self.encrypted_put(&key, &secrets.items)?);
         }
         if let Some(build) = &deployment.config.build {
             if !build.env.items.is_empty() {
                 let key = deployment_build_env_key(service_id, deployment_id);
-                self.write_encrypted(&key, &build.env.items).await;
+                operations.push(self.encrypted_put(&key, &build.env.items)?);
             }
             if !build.secrets.items.is_empty() {
                 let key = deployment_build_secrets_key(service_id, deployment_id);
-                self.write_encrypted(&key, &build.secrets.items).await;
+                operations.push(self.encrypted_put(&key, &build.secrets.items)?);
             }
         }
+        Ok(operations)
     }
 
     async fn restore_deployment_data(&self, service_id: &str, deployment: &mut ServiceDeployment) {
@@ -217,6 +284,10 @@ impl EtcdStateStore {
     }
 
     async fn txn(&self, compare: Vec<Compare>, success: Vec<TxnOp>) -> Result<bool> {
+        let mut compare = compare;
+        if let Some(token) = Self::current_write_fence() {
+            compare.push(cluster_leadership_compare(&token));
+        }
         let txn = Txn::new().when(compare).and_then(success);
         let mut client = self.client.lock().await;
         let response = client
@@ -320,6 +391,9 @@ impl EtcdStateStore {
                 }
             }
         }
+        drop(client);
+        let blocked_ips = ingress_blocklist::read(&self.client).await?;
+        ingress_blocklist::reconcile_traefik(&self.client, &blocked_ips, None).await?;
 
         let urls: Vec<String> = container_names
             .iter()
@@ -336,17 +410,17 @@ impl EtcdStateStore {
     async fn remove_ingress(&self, service_id: &str) -> Result<()> {
         let router_prefix = format!("traefik/http/routers/{service_id}/");
         let service_prefix = format!("traefik/http/services/{service_id}/");
-
-        let mut client = self.client.lock().await;
+        let mut operations = Vec::new();
         for prefix in [&router_prefix, &service_prefix] {
             if let Some(range_end) = prefix_range_end(prefix.as_bytes()) {
-                let options = GetOptions::new().with_range(range_end).with_keys_only();
-                if let Ok(response) = client.get(prefix.as_bytes(), Some(options)).await {
-                    for kv in response.kvs() {
-                        let _ = client.delete(kv.key(), None).await;
-                    }
-                }
+                operations.push(TxnOp::delete(
+                    prefix.as_bytes(),
+                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+                ));
             }
+        }
+        if !operations.is_empty() && !self.txn(Vec::new(), operations).await? {
+            bail!("leadership changed while removing ingress for `{service_id}`");
         }
 
         eprintln!("removed ingress for `{service_id}`");
@@ -404,6 +478,9 @@ impl EtcdStateStore {
     }
 
     async fn sync_ingress_for_service(&self, service_id: &str) {
+        if self.read_cluster_meta().await.ok().flatten().is_some() {
+            return;
+        }
         let deployments = match self.list_service_deployments(service_id).await {
             Ok(d) => d,
             Err(_) => return,
@@ -475,6 +552,47 @@ impl EtcdStateStore {
                 .map_err(|err| anyhow!("invalid replica state JSON: {err}"))?;
             states.push(state);
         }
+        let cluster_response = self
+            .get(
+                b"/maetro/cluster/replica-states/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        for kv in cluster_response.kvs() {
+            let state = serde_json::from_slice::<ReplicaState>(kv.value())
+                .map_err(|err| anyhow!("invalid scheduled replica state JSON: {err}"))?;
+            if state.service_id.as_deref() == Some(service_id)
+                && state.deployment_id.as_deref() == Some(deployment_id)
+            {
+                let (Some(node_id), Some(assignment_id)) =
+                    (state.node_id.as_deref(), state.assignment_id.as_deref())
+                else {
+                    continue;
+                };
+                let manifest = self
+                    .get(
+                        format!("/maetro/cluster/assignments/{node_id}").into_bytes(),
+                        None,
+                    )
+                    .await?;
+                let desired = manifest.kvs().first().is_some_and(|entry| {
+                    serde_json::from_slice::<crate::cluster::AssignmentManifest>(entry.value())
+                        .ok()
+                        .is_some_and(|manifest| {
+                            manifest.assignments.iter().any(|assignment| {
+                                assignment.assignment_id == assignment_id
+                                    && assignment.service_id == service_id
+                                    && assignment.deployment_id == deployment_id
+                                    && assignment.replica_index == state.replica_index
+                            })
+                        })
+                });
+                if !desired {
+                    continue;
+                }
+                states.push(state);
+            }
+        }
         states.sort_by_key(|s| s.replica_index);
         Ok(states)
     }
@@ -482,6 +600,755 @@ impl EtcdStateStore {
 
 #[async_trait]
 impl ClusterStore for EtcdStateStore {
+    async fn apply_cluster_mutation(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        mutation: crate::deployment::store::ClusterMutation,
+    ) -> Result<Option<serde_json::Value>> {
+        use crate::deployment::store::ClusterMutation;
+
+        if self.mutation_relay.is_some() {
+            bail!("a relaying store cannot execute privileged cluster mutations");
+        }
+        CLUSTER_WRITE_FENCE
+            .scope(token.clone(), async {
+                let value = match mutation {
+                    ClusterMutation::ClaimRequest {
+                        request_id,
+                        fingerprint,
+                        now_ms,
+                    } => Some(
+                        self.claim_cluster_request(
+                            &token.info.node_id,
+                            &request_id,
+                            &fingerprint,
+                            now_ms,
+                        )
+                        .await?
+                        .into_json()?,
+                    ),
+                    ClusterMutation::CompleteRequest {
+                        request_id,
+                        fingerprint,
+                        status_code,
+                        content_type,
+                        body,
+                        now_ms,
+                    } => {
+                        self.complete_cluster_request(
+                            &token.info.node_id,
+                            &request_id,
+                            &fingerprint,
+                            status_code,
+                            content_type.as_deref(),
+                            &body,
+                            now_ms,
+                        )
+                        .await?;
+                        None
+                    }
+                    ClusterMutation::QueueDeployment { deployment } => Some(serde_json::to_value(
+                        self.queue_deployment(deployment).await?,
+                    )?),
+                    ClusterMutation::CancelDeployment { deployment } => Some(serde_json::to_value(
+                        self.cancel_service_deployment(&deployment).await?,
+                    )?),
+                    ClusterMutation::StopDeployment { deployment } => Some(serde_json::to_value(
+                        self.stop_service_deployment(&deployment).await?,
+                    )?),
+                    ClusterMutation::DeleteDeployment { deployment } => Some(serde_json::to_value(
+                        self.delete_deployment(&deployment).await?,
+                    )?),
+                    ClusterMutation::DeleteService { service_id } => {
+                        self.delete_service(&service_id).await?;
+                        None
+                    }
+                    ClusterMutation::UpdateServiceConfig { service_id, config } => {
+                        self.update_service_config(&service_id, config).await?;
+                        None
+                    }
+                    ClusterMutation::SetDeployFrozen { service_id, frozen } => {
+                        self.set_deploy_frozen(&service_id, frozen).await?;
+                        None
+                    }
+                    ClusterMutation::SetReplicasOverride {
+                        service_id,
+                        override_value,
+                    } => {
+                        self.set_replicas_override(&service_id, override_value)
+                            .await?;
+                        None
+                    }
+                    ClusterMutation::SetBlockedIngressIp { address, blocked } => {
+                        Some(serde_json::to_value(
+                            self.set_blocked_ingress_ip(&address, blocked).await?,
+                        )?)
+                    }
+                    ClusterMutation::WriteSlackWebhooks { webhooks } => {
+                        self.write_slack_webhooks(&webhooks).await?;
+                        None
+                    }
+                };
+                Ok(value)
+            })
+            .await
+    }
+
+    async fn list_cluster_nodes(&self) -> Result<Vec<crate::cluster::NodeInfo>> {
+        let response = self
+            .client
+            .lock()
+            .await
+            .get(
+                "/maetro/cluster/nodes/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        response
+            .kvs()
+            .iter()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .collect()
+    }
+
+    async fn read_cluster_leader(&self) -> Result<Option<crate::cluster::LeaderInfo>> {
+        let response = self
+            .client
+            .lock()
+            .await
+            .leader("/maetro/cluster/leader")
+            .await?;
+        Ok(response.kv().and_then(|entry| {
+            std::str::from_utf8(entry.value())
+                .ok()
+                .map(|node_id| crate::cluster::LeaderInfo {
+                    node_id: node_id.to_string(),
+                })
+        }))
+    }
+
+    async fn read_cluster_meta(&self) -> Result<Option<crate::cluster::ClusterMeta>> {
+        let response = self
+            .get(b"/maetro/system/cluster-meta".to_vec(), None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .transpose()
+    }
+
+    async fn list_cluster_node_records(&self) -> Result<Vec<crate::cluster::NodeRecord>> {
+        let response = self
+            .get(
+                b"/maetro/cluster/node-records/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        response
+            .kvs()
+            .iter()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .collect()
+    }
+
+    async fn read_cluster_node_state(&self, node_id: &str) -> Result<crate::cluster::NodeState> {
+        let response = self
+            .get(
+                format!("/maetro/cluster/node-state/{node_id}").into_bytes(),
+                None,
+            )
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .transpose()
+            .map(|state| state.unwrap_or_default())
+    }
+
+    async fn read_cluster_freeze(&self) -> Result<Option<crate::cluster::types::ClusterFreeze>> {
+        let response = self
+            .get(CLUSTER_FREEZE_KEY.as_bytes().to_vec(), None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .transpose()
+    }
+
+    async fn read_cluster_upgrade(&self) -> Result<Option<crate::cluster::UpgradeRun>> {
+        let response = self
+            .get(CLUSTER_UPGRADE_KEY.as_bytes().to_vec(), None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .transpose()
+    }
+
+    async fn create_cluster_upgrade(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        run: &crate::cluster::UpgradeRun,
+        freeze: &crate::cluster::types::ClusterFreeze,
+    ) -> Result<bool> {
+        let mut client = self.client.lock().await;
+        let existing = client.get(CLUSTER_UPGRADE_KEY, None).await?;
+        let mut comparisons = vec![
+            cluster_leadership_compare(token),
+            Compare::version(CLUSTER_FREEZE_KEY, CompareOp::Equal, 0),
+        ];
+        if let Some(entry) = existing.kvs().first() {
+            let previous: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
+            if !previous.phase.is_terminal() {
+                bail!("cluster upgrade `{}` is already active", previous.run_id);
+            }
+            comparisons.push(Compare::value(
+                CLUSTER_UPGRADE_KEY,
+                CompareOp::Equal,
+                entry.value(),
+            ));
+        } else {
+            comparisons.push(Compare::version(CLUSTER_UPGRADE_KEY, CompareOp::Equal, 0));
+        }
+        let transaction = Txn::new().when(comparisons).and_then([
+            TxnOp::put(CLUSTER_UPGRADE_KEY, serde_json::to_vec(run)?, None),
+            TxnOp::put(CLUSTER_FREEZE_KEY, serde_json::to_vec(freeze)?, None),
+        ]);
+        Ok(client.txn(transaction).await?.succeeded())
+    }
+
+    async fn update_cluster_upgrade(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        run: &crate::cluster::UpgradeRun,
+        clear_freeze: bool,
+    ) -> Result<bool> {
+        let mut client = self.client.lock().await;
+        let response = client.get(CLUSTER_UPGRADE_KEY, None).await?;
+        let Some(entry) = response.kvs().first() else {
+            bail!("cluster upgrade run disappeared");
+        };
+        let existing: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
+        if existing.run_id != run.run_id {
+            bail!("cluster upgrade run changed");
+        }
+        let mut operations = vec![TxnOp::put(
+            CLUSTER_UPGRADE_KEY,
+            serde_json::to_vec(run)?,
+            None,
+        )];
+        if clear_freeze {
+            operations.push(TxnOp::delete(CLUSTER_FREEZE_KEY, None));
+        }
+        let transaction = Txn::new()
+            .when([
+                cluster_leadership_compare(token),
+                Compare::value(CLUSTER_UPGRADE_KEY, CompareOp::Equal, entry.value()),
+            ])
+            .and_then(operations);
+        Ok(client.txn(transaction).await?.succeeded())
+    }
+
+    async fn manually_unfreeze_cluster_upgrade(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        run_id: &str,
+        now_ms: i64,
+    ) -> Result<crate::cluster::UpgradeRun> {
+        let mut client = self.client.lock().await;
+        let response = client.get(CLUSTER_UPGRADE_KEY, None).await?;
+        let entry = response
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("no cluster upgrade run exists"))?;
+        let mut run: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
+        if run.run_id != run_id {
+            bail!("upgrade run id does not match the active run");
+        }
+        if run.phase.is_terminal() {
+            let transaction = Txn::new()
+                .when([
+                    cluster_leadership_compare(token),
+                    Compare::value(CLUSTER_UPGRADE_KEY, CompareOp::Equal, entry.value()),
+                ])
+                .and_then([TxnOp::delete(CLUSTER_FREEZE_KEY, None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership changed while clearing a terminal upgrade freeze");
+            }
+            return Ok(run);
+        }
+        if now_ms.saturating_sub(run.updated_at_ms) < 30_000 {
+            bail!("upgrade orchestrator is active; manual unfreeze is unsafe");
+        }
+        run.phase = crate::cluster::UpgradePhase::Failed;
+        let failure = "manually unfrozen by an operator".to_string();
+        run.failure = Some(failure.clone());
+        run.updated_at_ms = now_ms;
+        if let Some(node) = run.current_node_mut() {
+            node.status = crate::cluster::types::UpgradeNodeStatus::Failed;
+            node.error = Some(failure);
+            node.completed_at_ms = Some(now_ms);
+        }
+        run.history.push(crate::cluster::UpgradeEvent {
+            at_ms: now_ms,
+            phase: run.phase,
+            node_id: run.current_node().map(|node| node.node_id.clone()),
+            message: "cluster manually unfrozen; upgrade run aborted".to_string(),
+        });
+        let transaction = Txn::new()
+            .when([
+                cluster_leadership_compare(token),
+                Compare::value(CLUSTER_UPGRADE_KEY, CompareOp::Equal, entry.value()),
+            ])
+            .and_then([
+                TxnOp::put(CLUSTER_UPGRADE_KEY, serde_json::to_vec(&run)?, None),
+                TxnOp::delete(CLUSTER_FREEZE_KEY, None),
+            ]);
+        if !client.txn(transaction).await?.succeeded() {
+            bail!("leadership changed while manually unfreezing the cluster");
+        }
+        Ok(run)
+    }
+
+    async fn list_unschedulable_replicas(
+        &self,
+    ) -> Result<Vec<crate::cluster::UnschedulableReplica>> {
+        let response = self
+            .get(b"/maetro/cluster/unschedulable".to_vec(), None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .transpose()
+            .map(|entries| entries.unwrap_or_default())
+    }
+
+    async fn list_cluster_traffic(&self) -> Result<Vec<crate::cluster::TrafficGeneration>> {
+        let response = self
+            .get(
+                b"/maetro/cluster/traffic/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        response
+            .kvs()
+            .iter()
+            .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
+            .collect()
+    }
+
+    async fn list_placement_history(
+        &self,
+        service_id: Option<&str>,
+        deployment_id: Option<&str>,
+        replica_index: Option<u32>,
+    ) -> Result<Vec<crate::cluster::PlacementHistory>> {
+        let response = self
+            .get(
+                b"/maetro/cluster/placements/".to_vec(),
+                Some(GetOptions::new().with_prefix().with_limit(10_000)),
+            )
+            .await?;
+        let mut placements = response
+            .kvs()
+            .iter()
+            .filter_map(|entry| {
+                serde_json::from_slice::<crate::cluster::PlacementHistory>(entry.value()).ok()
+            })
+            .filter(|placement| {
+                service_id.is_none_or(|value| placement.service_id == value)
+                    && deployment_id.is_none_or(|value| placement.deployment_id == value)
+                    && replica_index.is_none_or(|value| placement.replica_index == value)
+            })
+            .collect::<Vec<_>>();
+        placements.sort_by(|left, right| {
+            right
+                .started_at_ms
+                .cmp(&left.started_at_ms)
+                .then_with(|| left.assignment_id.cmp(&right.assignment_id))
+        });
+        Ok(placements)
+    }
+
+    async fn publish_node_stats(
+        &self,
+        node_id: &str,
+        snapshot: &crate::cluster_stats::ControllerStatsSnapshot,
+    ) -> Result<()> {
+        let mut client = self.client.lock().await;
+        let lease = client.lease_grant(30, None).await?.id();
+        client
+            .put(
+                format!("/maetro/cluster/stats/{node_id}"),
+                serde_json::to_vec(snapshot)?,
+                Some(PutOptions::new().with_lease(lease)),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_node_stats(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, crate::cluster_stats::ControllerStatsSnapshot>>
+    {
+        let response = self
+            .get(
+                b"/maetro/cluster/stats/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        response
+            .kvs()
+            .iter()
+            .map(|entry| {
+                let node_id = std::str::from_utf8(entry.key())?
+                    .trim_start_matches("/maetro/cluster/stats/")
+                    .to_string();
+                Ok((node_id, serde_json::from_slice(entry.value())?))
+            })
+            .collect()
+    }
+
+    async fn publish_node_disks(
+        &self,
+        node_id: &str,
+        disks: &[crate::cluster::NodeDiskInfo],
+    ) -> Result<()> {
+        let mut client = self.client.lock().await;
+        let lease = client.lease_grant(90, None).await?.id();
+        client
+            .put(
+                format!("/maetro/cluster/disks/{node_id}"),
+                serde_json::to_vec(disks)?,
+                Some(PutOptions::new().with_lease(lease)),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_node_disks(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<crate::cluster::NodeDiskInfo>>> {
+        let response = self
+            .get(
+                b"/maetro/cluster/disks/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        response
+            .kvs()
+            .iter()
+            .map(|entry| {
+                let node_id = std::str::from_utf8(entry.key())?
+                    .trim_start_matches("/maetro/cluster/disks/")
+                    .to_string();
+                Ok((node_id, serde_json::from_slice(entry.value())?))
+            })
+            .collect()
+    }
+
+    async fn claim_cluster_request(
+        &self,
+        local_node_id: &str,
+        request_id: &str,
+        fingerprint: &str,
+        now_ms: i64,
+    ) -> Result<crate::deployment::store::RequestClaim> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(crate::deployment::store::ClusterMutation::ClaimRequest {
+                    request_id: request_id.to_string(),
+                    fingerprint: fingerprint.to_string(),
+                    now_ms,
+                })
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no request claim"))?;
+            return crate::deployment::store::RequestClaim::from_json(value);
+        }
+        validate_request_id(request_id)?;
+        let key = format!("/maetro/cluster/requests/{request_id}");
+        let mut client = self.client.lock().await;
+        let leader = client.leader("/maetro/cluster/leader").await?;
+        let leader = leader
+            .kv()
+            .filter(|entry| entry.value() == local_node_id.as_bytes())
+            .ok_or_else(|| anyhow!("local node is no longer cluster leader"))?;
+        let response = client.get(key.clone(), None).await?;
+        if let Some(entry) = response.kvs().first() {
+            return request_claim_from_receipt(entry.value(), fingerprint);
+        }
+        let receipt = ClusterRequestReceipt {
+            fingerprint: fingerprint.to_string(),
+            state: "in-progress".to_string(),
+            status_code: None,
+            content_type: None,
+            body: Vec::new(),
+            updated_at_ms: now_ms,
+        };
+        let transaction = Txn::new()
+            .when([
+                Compare::create_revision(leader.key(), CompareOp::Equal, leader.create_revision()),
+                Compare::version(key.clone(), CompareOp::Equal, 0),
+            ])
+            .and_then([TxnOp::put(key.clone(), serde_json::to_vec(&receipt)?, None)]);
+        if client.txn(transaction).await?.succeeded() {
+            return Ok(crate::deployment::store::RequestClaim::Started);
+        }
+        let response = client.get(key, None).await?;
+        response.kvs().first().map_or_else(
+            || Err(anyhow!("leadership changed while claiming request")),
+            |entry| request_claim_from_receipt(entry.value(), fingerprint),
+        )
+    }
+
+    async fn complete_cluster_request(
+        &self,
+        local_node_id: &str,
+        request_id: &str,
+        fingerprint: &str,
+        status_code: u16,
+        content_type: Option<&str>,
+        body: &[u8],
+        now_ms: i64,
+    ) -> Result<()> {
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(crate::deployment::store::ClusterMutation::CompleteRequest {
+                request_id: request_id.to_string(),
+                fingerprint: fingerprint.to_string(),
+                status_code,
+                content_type: content_type.map(str::to_string),
+                body: body.to_vec(),
+                now_ms,
+            })
+            .await?;
+            return Ok(());
+        }
+        validate_request_id(request_id)?;
+        if body.len() > 1024 * 1024 {
+            bail!("cluster request response exceeds the 1 MiB receipt limit");
+        }
+        let key = format!("/maetro/cluster/requests/{request_id}");
+        let mut client = self.client.lock().await;
+        let leader = client.leader("/maetro/cluster/leader").await?;
+        let leader = leader
+            .kv()
+            .filter(|entry| entry.value() == local_node_id.as_bytes())
+            .ok_or_else(|| anyhow!("local node is no longer cluster leader"))?;
+        let response = client.get(key.clone(), None).await?;
+        let current = response
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("cluster request receipt disappeared"))?;
+        let current_value = current.value().to_vec();
+        let current_receipt: ClusterRequestReceipt = serde_json::from_slice(&current_value)?;
+        if current_receipt.fingerprint != fingerprint {
+            bail!("cluster request fingerprint changed");
+        }
+        let receipt = ClusterRequestReceipt {
+            fingerprint: fingerprint.to_string(),
+            state: "complete".to_string(),
+            status_code: Some(status_code),
+            content_type: content_type.map(str::to_string),
+            body: body.to_vec(),
+            updated_at_ms: now_ms,
+        };
+        let transaction = Txn::new()
+            .when([
+                Compare::create_revision(leader.key(), CompareOp::Equal, leader.create_revision()),
+                Compare::value(key.clone(), CompareOp::Equal, current_value),
+            ])
+            .and_then([TxnOp::put(key, serde_json::to_vec(&receipt)?, None)]);
+        if !client.txn(transaction).await?.succeeded() {
+            bail!("leadership or request receipt changed before completion");
+        }
+        Ok(())
+    }
+
+    async fn sweep_cluster_state(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        now_ms: i64,
+    ) -> Result<()> {
+        let mut client = self.client.lock().await;
+        let records = client
+            .get(
+                "/maetro/cluster/node-records/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        let parsed_records = records
+            .kvs()
+            .iter()
+            .map(|entry| {
+                serde_json::from_slice::<crate::cluster::NodeRecord>(entry.value())
+                    .map(|record| (record.last_info.node_id.clone(), record))
+                    .map_err(Into::into)
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+        for (node_id, record) in &parsed_records {
+            if record
+                .lost_at_ms
+                .is_some_and(|lost_at| now_ms.saturating_sub(lost_at) >= 7 * 24 * 60 * 60 * 1000)
+            {
+                let transaction = Txn::new()
+                    .when([cluster_leadership_compare(token)])
+                    .and_then([TxnOp::delete(
+                        format!("/maetro/cluster/node-state/{node_id}"),
+                        None,
+                    )]);
+                if !client.txn(transaction).await?.succeeded() {
+                    bail!("leadership changed during node-state garbage collection");
+                }
+            }
+        }
+
+        let states = client
+            .get(
+                "/maetro/cluster/replica-states/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        for entry in states.kvs() {
+            let key = entry.key().to_vec();
+            let previous = entry.value().to_vec();
+            let mut state: ReplicaState = serde_json::from_slice(&previous)?;
+            let dead_past_grace = state
+                .node_id
+                .as_ref()
+                .and_then(|node_id| parsed_records.get(node_id))
+                .and_then(|record| record.lost_at_ms)
+                .is_some_and(|lost_at| now_ms.saturating_sub(lost_at) >= 30_000);
+            if !dead_past_grace || state.status == DeploymentStatus::Crashed {
+                continue;
+            }
+            state.status = DeploymentStatus::Crashed;
+            state.error = Some("node lost".to_string());
+            let transaction = Txn::new()
+                .when([
+                    cluster_leadership_compare(token),
+                    Compare::value(key.clone(), CompareOp::Equal, previous),
+                ])
+                .and_then([TxnOp::put(key, serde_json::to_vec(&state)?, None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership or replica state changed during lost-node sweep");
+            }
+        }
+
+        let placements = client
+            .get(
+                "/maetro/cluster/placements/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        for entry in placements.kvs() {
+            let placement: crate::cluster::PlacementHistory =
+                serde_json::from_slice(entry.value())?;
+            let index_key = format!(
+                "/maetro/cluster/placement-index/{}/{}/{}/{}",
+                placement.service_id,
+                placement.deployment_id,
+                placement.replica_index,
+                placement.assignment_id
+            );
+            let index = client.get(index_key.clone(), None).await?;
+            if index
+                .kvs()
+                .first()
+                .is_some_and(|index| index.value() == entry.key())
+            {
+                continue;
+            }
+            let transaction = Txn::new()
+                .when([cluster_leadership_compare(token)])
+                .and_then([TxnOp::put(index_key, entry.key(), None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership changed while rebuilding placement index");
+            }
+        }
+
+        let members = client.member_list().await?;
+        let mut desired_voters = std::collections::BTreeMap::new();
+        for member in members
+            .members()
+            .iter()
+            .filter(|member| !member.is_learner())
+        {
+            desired_voters.insert(
+                format!("/maetro/cluster/voters/{:016x}", member.id()),
+                serde_json::to_vec(&serde_json::json!({
+                    "memberId": member.id(),
+                    "name": member.name(),
+                    "peerUrls": member.peer_urls(),
+                    "clientUrls": member.client_urls(),
+                }))?,
+            );
+        }
+        let existing_voters = client
+            .get(
+                "/maetro/cluster/voters/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        let existing_voter_values = existing_voters
+            .kvs()
+            .iter()
+            .map(|entry| (entry.key().to_vec(), entry.value().to_vec()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (key, value) in &desired_voters {
+            if existing_voter_values
+                .get(key.as_bytes())
+                .is_some_and(|existing| existing == value)
+            {
+                continue;
+            }
+            let transaction = Txn::new()
+                .when([cluster_leadership_compare(token)])
+                .and_then([TxnOp::put(key.as_str(), value.clone(), None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership changed while reconciling voter records");
+            }
+        }
+        for stale in existing_voter_values.keys() {
+            if desired_voters.contains_key(std::str::from_utf8(stale)?) {
+                continue;
+            }
+            let transaction = Txn::new()
+                .when([cluster_leadership_compare(token)])
+                .and_then([TxnOp::delete(stale.clone(), None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership changed while removing a stale voter record");
+            }
+        }
+
+        let receipts = client
+            .get(
+                "/maetro/cluster/requests/",
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        for entry in receipts.kvs() {
+            let receipt: ClusterRequestReceipt = serde_json::from_slice(entry.value())?;
+            if now_ms.saturating_sub(receipt.updated_at_ms) < 24 * 60 * 60 * 1000 {
+                continue;
+            }
+            let transaction = Txn::new()
+                .when([
+                    cluster_leadership_compare(token),
+                    Compare::value(entry.key(), CompareOp::Equal, entry.value()),
+                ])
+                .and_then([TxnOp::delete(entry.key(), None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                bail!("leadership or request receipt changed during garbage collection");
+            }
+        }
+        Ok(())
+    }
+
     async fn list_service_ids(&self) -> anyhow::Result<Vec<String>> {
         let prefix_key = format!("{SERVICES_ROOT}/");
         let prefix = prefix_key.as_bytes();
@@ -617,6 +1484,56 @@ impl ClusterStore for EtcdStateStore {
         .await
     }
 
+    async fn claim_deployment_building_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        queued_deployment: &QueuedDeployment,
+    ) -> anyhow::Result<bool> {
+        let mut building = queued_deployment.deployment.clone();
+        building.status = DeploymentStatus::Building;
+        let prev_keys = self.prev_secret_keys(&queued_deployment.service_id).await;
+        let building = self.strip_deployment_with_metadata(&building, &prev_keys);
+        let deployment_json = serde_json::to_vec(&building)?;
+        let info_key = service_info_key(&queued_deployment.service_id);
+        let existing_info = self
+            .read_service_info_snapshot(&queued_deployment.service_id)
+            .await?;
+        let updated_info = ServiceInfo {
+            deploy_frozen: existing_info
+                .as_ref()
+                .map(|snapshot| snapshot.info.deploy_frozen)
+                .unwrap_or(false),
+            replicas_override: existing_info
+                .as_ref()
+                .and_then(|snapshot| snapshot.info.replicas_override),
+            config: queued_deployment
+                .deployment
+                .config
+                .strip_secrets(&Default::default()),
+        };
+        let transaction = Txn::new()
+            .when([
+                Compare::create_revision(
+                    token.election_key.clone(),
+                    CompareOp::Equal,
+                    token.create_revision,
+                ),
+                compare_mod_revision_or_absent(
+                    &queued_deployment.key,
+                    Some(queued_deployment.mod_revision),
+                ),
+                compare_mod_revision_or_absent(
+                    &info_key,
+                    existing_info.as_ref().map(|snapshot| snapshot.mod_revision),
+                ),
+            ])
+            .and_then([
+                TxnOp::put(queued_deployment.key.clone(), deployment_json, None),
+                TxnOp::put(info_key, serde_json::to_vec(&updated_info)?, None),
+            ]);
+        Ok(self.client.lock().await.txn(transaction).await?.succeeded())
+    }
+
     async fn update_deployment_status(
         &self,
         deployment: &Deployment,
@@ -668,6 +1585,142 @@ impl ClusterStore for EtcdStateStore {
         ))
     }
 
+    async fn update_deployment_status_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        deployment: &Deployment,
+        status: DeploymentStatus,
+    ) -> anyhow::Result<()> {
+        for _attempt in 0..MAX_STATUS_TXN_RETRIES {
+            let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+                return Err(anyhow!(
+                    "deployment `{}` for service `{}` not found",
+                    deployment.id,
+                    deployment.service_id,
+                ));
+            };
+            if !snapshot.deployment.status.can_transition_to(&status) {
+                return Ok(());
+            }
+            let mut updated = snapshot.deployment.clone();
+            updated.status = status.clone();
+            if status == DeploymentStatus::Ready && updated.deployed_at.is_none() {
+                updated.deployed_at = Some(current_time_millis()?);
+            }
+            if status == DeploymentStatus::Draining && updated.drained_at.is_none() {
+                updated.drained_at = Some(current_time_millis()?);
+            }
+            let transaction = Txn::new()
+                .when([
+                    Compare::create_revision(
+                        token.election_key.clone(),
+                        CompareOp::Equal,
+                        token.create_revision,
+                    ),
+                    Compare::mod_revision(
+                        snapshot.key.clone(),
+                        CompareOp::Equal,
+                        i64::try_from(snapshot.mod_revision)
+                            .map_err(|_| anyhow!("deployment revision does not fit i64"))?,
+                    ),
+                ])
+                .and_then([TxnOp::put(
+                    snapshot.key,
+                    serde_json::to_vec(&updated)?,
+                    None,
+                )]);
+            if self.client.lock().await.txn(transaction).await?.succeeded() {
+                return Ok(());
+            }
+            let election = self
+                .client
+                .lock()
+                .await
+                .get(token.election_key.clone(), None)
+                .await?;
+            if !election
+                .kvs()
+                .first()
+                .is_some_and(|entry| entry.create_revision() == token.create_revision)
+            {
+                return Err(anyhow!("leadership fence rejected stale status writer"));
+            }
+        }
+        Err(anyhow!(
+            "failed to update deployment `{}` to {status:?} due to concurrent updates",
+            deployment.id,
+        ))
+    }
+
+    async fn prepare_rollout_status_cutover(
+        &self,
+        incoming: &Deployment,
+        draining: &[Deployment],
+        now_ms: u64,
+    ) -> anyhow::Result<crate::deployment::store::AtomicDeploymentUpdates> {
+        let mut comparisons = Vec::with_capacity(1 + draining.len());
+        let mut operations = Vec::with_capacity(1 + draining.len());
+        let Some(incoming_snapshot) = self.find_deployment_snapshot(incoming).await? else {
+            return Err(anyhow!(
+                "incoming deployment `{}` no longer exists",
+                incoming.id
+            ));
+        };
+        if !incoming_snapshot
+            .deployment
+            .status
+            .can_transition_to(&DeploymentStatus::Ready)
+        {
+            return Err(anyhow!(
+                "incoming deployment `{}` cannot transition to Ready",
+                incoming.id
+            ));
+        }
+        let mut incoming_value = incoming_snapshot.deployment;
+        incoming_value.status = DeploymentStatus::Ready;
+        incoming_value.deployed_at.get_or_insert(now_ms);
+        comparisons.push(Compare::mod_revision(
+            incoming_snapshot.key.clone(),
+            CompareOp::Equal,
+            i64::try_from(incoming_snapshot.mod_revision)
+                .map_err(|_| anyhow!("deployment revision does not fit i64"))?,
+        ));
+        operations.push(TxnOp::put(
+            incoming_snapshot.key,
+            serde_json::to_vec(&incoming_value)?,
+            None,
+        ));
+        for deployment in draining {
+            let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+                return Err(anyhow!(
+                    "old deployment `{}` no longer exists",
+                    deployment.id
+                ));
+            };
+            if !snapshot
+                .deployment
+                .status
+                .can_transition_to(&DeploymentStatus::Draining)
+            {
+                continue;
+            }
+            let mut value = snapshot.deployment;
+            value.status = DeploymentStatus::Draining;
+            value.drained_at.get_or_insert(now_ms);
+            comparisons.push(Compare::mod_revision(
+                snapshot.key.clone(),
+                CompareOp::Equal,
+                i64::try_from(snapshot.mod_revision)
+                    .map_err(|_| anyhow!("deployment revision does not fit i64"))?,
+            ));
+            operations.push(TxnOp::put(snapshot.key, serde_json::to_vec(&value)?, None));
+        }
+        Ok(crate::deployment::store::AtomicDeploymentUpdates {
+            comparisons,
+            operations,
+        })
+    }
+
     async fn save_build_data(
         &self,
         service_id: &str,
@@ -677,14 +1730,25 @@ impl ClusterStore for EtcdStateStore {
         if let Some(build) = &deployment.config.build {
             if !build.env.items.is_empty() {
                 let key = deployment_build_env_key(service_id, deployment_id);
-                self.write_encrypted(&key, &build.env.items).await;
+                self.write_encrypted(&key, &build.env.items).await?;
             }
             if !build.secrets.items.is_empty() {
                 let key = deployment_build_secrets_key(service_id, deployment_id);
-                self.write_encrypted(&key, &build.secrets.items).await;
+                self.write_encrypted(&key, &build.secrets.items).await?;
             }
         }
         Ok(())
+    }
+
+    async fn save_build_data_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        CLUSTER_WRITE_FENCE
+            .scope(token.clone(), self.save_build_data(service_id, deployment))
+            .await
     }
 
     async fn save_deploy_data(
@@ -696,7 +1760,7 @@ impl ClusterStore for EtcdStateStore {
         if !deployment.config.deploy.env.items.is_empty() {
             let key = deployment_deploy_env_key(service_id, deployment_id);
             self.write_encrypted(&key, &deployment.config.deploy.env.items)
-                .await;
+                .await?;
         }
 
         let dep = Deployment {
@@ -739,6 +1803,17 @@ impl ClusterStore for EtcdStateStore {
         ))
     }
 
+    async fn save_deploy_data_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        CLUSTER_WRITE_FENCE
+            .scope(token.clone(), self.save_deploy_data(service_id, deployment))
+            .await
+    }
+
     async fn update_deployment_build_info(
         &self,
         deployment: &Deployment,
@@ -771,38 +1846,89 @@ impl ClusterStore for EtcdStateStore {
         Ok(())
     }
 
+    async fn update_deployment_build_info_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        deployment: &Deployment,
+        updated: &ServiceDeployment,
+    ) -> anyhow::Result<()> {
+        let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
+            return Err(anyhow!(
+                "deployment `{}` for service `{}` not found",
+                deployment.id,
+                deployment.service_id,
+            ));
+        };
+        let mut stored = snapshot.deployment.clone();
+        stored.build = updated.build.clone();
+        stored.git_commit = updated.git_commit.clone();
+        let transaction = Txn::new()
+            .when([
+                Compare::create_revision(
+                    token.election_key.clone(),
+                    CompareOp::Equal,
+                    token.create_revision,
+                ),
+                Compare::mod_revision(
+                    snapshot.key.clone(),
+                    CompareOp::Equal,
+                    i64::try_from(snapshot.mod_revision)
+                        .map_err(|_| anyhow!("deployment revision does not fit i64"))?,
+                ),
+            ])
+            .and_then([TxnOp::put(snapshot.key, serde_json::to_vec(&stored)?, None)]);
+        if !self.client.lock().await.txn(transaction).await?.succeeded() {
+            return Err(anyhow!("leadership fence rejected stale build result"));
+        }
+        Ok(())
+    }
+
     async fn delete_deployment(
         &self,
         deployment: &Deployment,
     ) -> anyhow::Result<Option<ServiceDeployment>> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(
+                    crate::deployment::store::ClusterMutation::DeleteDeployment {
+                        deployment: deployment.clone(),
+                    },
+                )
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no deployment deletion result"))?;
+            return Ok(serde_json::from_value(value)?);
+        }
         let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
             return Ok(None);
         };
 
-        let mut client = self.client.lock().await;
-        client
-            .delete(snapshot.key.as_bytes(), None)
-            .await
-            .map_err(|err| anyhow!("failed to delete deployment key: {err}"))?;
-
+        let mut operations = vec![TxnOp::delete(snapshot.key.as_bytes(), None)];
         let replicas_prefix = replica_states_prefix(&deployment.service_id, &deployment.id);
         if let Some(range_end) = prefix_range_end(replicas_prefix.as_bytes()) {
-            let _ = client
-                .delete(
-                    replicas_prefix.as_bytes(),
-                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
-                )
-                .await;
+            operations.push(TxnOp::delete(
+                replicas_prefix.as_bytes(),
+                Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+            ));
         }
 
         let dep_prefix = deployment_prefix(&deployment.service_id, &deployment.id);
         if let Some(range_end) = prefix_range_end(dep_prefix.as_bytes()) {
-            let _ = client
-                .delete(
-                    dep_prefix.as_bytes(),
-                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
-                )
-                .await;
+            operations.push(TxnOp::delete(
+                dep_prefix.as_bytes(),
+                Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+            ));
+        }
+        if !self
+            .txn(
+                vec![compare_mod_revision_or_absent(
+                    &snapshot.key,
+                    Some(snapshot.mod_revision),
+                )],
+                operations,
+            )
+            .await?
+        {
+            bail!("leadership or deployment state changed while deleting deployment");
         }
 
         Ok(Some(snapshot.deployment))
@@ -823,6 +1949,10 @@ impl ClusterStore for EtcdStateStore {
             .into_iter()
             .find(|state| state.replica_index == replica_index);
         let state = ReplicaState {
+            service_id: existing.as_ref().and_then(|state| state.service_id.clone()),
+            deployment_id: existing
+                .as_ref()
+                .and_then(|state| state.deployment_id.clone()),
             replica_index,
             status,
             healthcheck_failures: existing
@@ -833,6 +1963,12 @@ impl ClusterStore for EtcdStateStore {
                 .as_ref()
                 .map(|state| state.restart_attempts)
                 .unwrap_or(0),
+            node_id: existing.as_ref().and_then(|state| state.node_id.clone()),
+            assignment_id: existing
+                .as_ref()
+                .and_then(|state| state.assignment_id.clone()),
+            endpoint: existing.as_ref().and_then(|state| state.endpoint.clone()),
+            error: existing.as_ref().and_then(|state| state.error.clone()),
         };
         let json = serde_json::to_string(&state)
             .map_err(|err| anyhow!("failed to serialize replica state: {err}"))?;
@@ -856,6 +1992,38 @@ impl ClusterStore for EtcdStateStore {
         deployment_id: &str,
         state: ReplicaState,
     ) -> anyhow::Result<()> {
+        if let (Some(node_id), Some(assignment_id)) =
+            (state.node_id.as_deref(), state.assignment_id.as_deref())
+        {
+            let manifest_key = format!("/maetro/cluster/assignments/{node_id}");
+            let state_key = format!("/maetro/cluster/replica-states/{node_id}/{assignment_id}");
+            let mut client = self.client.lock().await;
+            let response = client.get(manifest_key.clone(), None).await?;
+            let Some(entry) = response.kvs().first() else {
+                return Err(anyhow!("scheduled assignment manifest is absent"));
+            };
+            let manifest: crate::cluster::AssignmentManifest =
+                serde_json::from_slice(entry.value())?;
+            if !manifest.assignments.iter().any(|assignment| {
+                assignment.assignment_id == assignment_id
+                    && assignment.service_id == service_id
+                    && assignment.deployment_id == deployment_id
+                    && assignment.replica_index == state.replica_index
+            }) {
+                return Err(anyhow!("scheduled assignment is no longer desired"));
+            }
+            let transaction = Txn::new()
+                .when([Compare::mod_revision(
+                    manifest_key,
+                    CompareOp::Equal,
+                    entry.mod_revision(),
+                )])
+                .and_then([TxnOp::put(state_key, serde_json::to_vec(&state)?, None)]);
+            if !client.txn(transaction).await?.succeeded() {
+                return Err(anyhow!("scheduled assignment changed during state update"));
+            }
+            return Ok(());
+        }
         let key = replica_state_key(service_id, deployment_id, state.replica_index);
         let json = serde_json::to_string(&state)
             .map_err(|err| anyhow!("failed to serialize replica state: {err}"))?;
@@ -1105,10 +2273,28 @@ impl ClusterStore for EtcdStateStore {
         Ok(self.read_encrypted(&key).await)
     }
 
+    async fn read_deployment_env(
+        &self,
+        service_id: &str,
+        deployment_id: &str,
+    ) -> anyhow::Result<std::collections::HashMap<String, crate::utils::crypto::SecretString>> {
+        let key = deployment_deploy_env_key(service_id, deployment_id);
+        Ok(self.read_encrypted(&key).await)
+    }
+
     async fn queue_deployment(
         &self,
         deployment: ServiceDeployment,
     ) -> anyhow::Result<ForceQueueOutcome> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(crate::deployment::store::ClusterMutation::QueueDeployment {
+                    deployment,
+                })
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no queue result"))?;
+            return Ok(serde_json::from_value(value)?);
+        }
         if deployment.status != DeploymentStatus::Queued {
             return Err(anyhow!(
                 "queue_deployment requires deployment status QUEUED"
@@ -1148,13 +2334,14 @@ impl ClusterStore for EtcdStateStore {
             let service_history_key = service_deployment_history_key(service_id, deployment_index);
 
             let compare = vec![
+                Compare::version(CLUSTER_FREEZE_KEY, CompareOp::Equal, 0),
                 compare_counter(&service_counter_key, &service_counter),
                 compare_mod_revision_or_absent(
                     &info_key,
                     existing_info.as_ref().map(|s| s.mod_revision),
                 ),
             ];
-            let success = vec![
+            let mut success = vec![
                 request_put(
                     &service_counter_key,
                     &(deployment_index_u64 + 1).to_string(),
@@ -1162,15 +2349,22 @@ impl ClusterStore for EtcdStateStore {
                 request_put(&service_history_key, &deployment_json),
                 request_put(&info_key, &info_json),
             ];
+            success.extend(self.deployment_data_operations(service_id, &deployment)?);
 
             let committed = self.txn(compare, success).await?;
             if committed {
-                let service_id = &deployment.config.id;
-                self.write_deployment_data(service_id, &deployment).await;
                 return Ok(ForceQueueOutcome {
                     deployment_index,
                     deployment: deployment.clone(),
                 });
+            }
+            if !self
+                .get(CLUSTER_FREEZE_KEY.as_bytes().to_vec(), None)
+                .await?
+                .kvs()
+                .is_empty()
+            {
+                bail!("cluster deploys are frozen for a rolling upgrade");
             }
         }
 
@@ -1183,6 +2377,17 @@ impl ClusterStore for EtcdStateStore {
         &self,
         deployment: &Deployment,
     ) -> anyhow::Result<CancelDeploymentOutcome> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(
+                    crate::deployment::store::ClusterMutation::CancelDeployment {
+                        deployment: deployment.clone(),
+                    },
+                )
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no cancellation result"))?;
+            return Ok(serde_json::from_value(value)?);
+        }
         for _attempt in 0..MAX_TXN_RETRIES {
             let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
                 return Ok(CancelDeploymentOutcome::NotFound);
@@ -1224,6 +2429,15 @@ impl ClusterStore for EtcdStateStore {
         &self,
         deployment: &Deployment,
     ) -> anyhow::Result<Option<ServiceDeployment>> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(crate::deployment::store::ClusterMutation::StopDeployment {
+                    deployment: deployment.clone(),
+                })
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no stop result"))?;
+            return Ok(serde_json::from_value(value)?);
+        }
         for _attempt in 0..MAX_TXN_RETRIES {
             let Some(snapshot) = self.find_deployment_snapshot(deployment).await? else {
                 return Ok(None);
@@ -1269,6 +2483,16 @@ impl ClusterStore for EtcdStateStore {
         service_id: &str,
         config: ServiceConfig,
     ) -> anyhow::Result<()> {
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(
+                crate::deployment::store::ClusterMutation::UpdateServiceConfig {
+                    service_id: service_id.to_string(),
+                    config,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         for _attempt in 0..MAX_STATUS_TXN_RETRIES {
             let Some(info_snapshot) = self.read_service_info_snapshot(service_id).await? else {
                 return Err(anyhow!("service `{service_id}` not found"));
@@ -1280,23 +2504,14 @@ impl ClusterStore for EtcdStateStore {
                 .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
 
             let active_deployment = self.find_active_deployment(service_id).await;
-            if let Some(dep_snapshot) = &active_deployment
-                && let Some(build) = &config.build
-            {
-                if !build.secrets.items.is_empty() {
-                    let key = deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
-                    self.write_encrypted(&key, &build.secrets.items).await;
-                }
-                if !build.env.items.is_empty() {
-                    let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
-                    self.write_encrypted(&key, &build.env.items).await;
-                }
-            }
 
-            let mut compare = vec![compare_mod_revision_or_absent(
-                &info_snapshot.key,
-                Some(info_snapshot.mod_revision),
-            )];
+            let mut compare = vec![
+                Compare::version(CLUSTER_FREEZE_KEY, CompareOp::Equal, 0),
+                compare_mod_revision_or_absent(
+                    &info_snapshot.key,
+                    Some(info_snapshot.mod_revision),
+                ),
+            ];
             let mut success = vec![request_put(&info_snapshot.key, &info_json)];
 
             if let Some(dep_snapshot) = &active_deployment {
@@ -1310,12 +2525,32 @@ impl ClusterStore for EtcdStateStore {
                     Some(dep_snapshot.mod_revision),
                 ));
                 success.push(request_put(&dep_snapshot.key, &dep_json));
+                if let Some(build) = &config.build {
+                    if !build.secrets.items.is_empty() {
+                        let key =
+                            deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
+                        success.push(self.encrypted_put(&key, &build.secrets.items)?);
+                    }
+                    if !build.env.items.is_empty() {
+                        let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
+                        success.push(self.encrypted_put(&key, &build.env.items)?);
+                    }
+                }
             }
 
             let committed = self.txn(compare, success).await?;
 
             if committed {
+                self.sync_ingress_for_service(service_id).await;
                 return Ok(());
+            }
+            if !self
+                .get(CLUSTER_FREEZE_KEY.as_bytes().to_vec(), None)
+                .await?
+                .kvs()
+                .is_empty()
+            {
+                bail!("cluster deploys are frozen for a rolling upgrade");
             }
         }
 
@@ -1324,7 +2559,60 @@ impl ClusterStore for EtcdStateStore {
         ))
     }
 
+    async fn update_service_config_fenced(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        service_id: &str,
+        config: ServiceConfig,
+    ) -> anyhow::Result<()> {
+        CLUSTER_WRITE_FENCE
+            .scope(
+                token.clone(),
+                self.update_service_config(service_id, config),
+            )
+            .await
+    }
+
+    async fn set_blocked_ingress_ip(
+        &self,
+        address: &str,
+        blocked: bool,
+    ) -> anyhow::Result<Vec<String>> {
+        if self.mutation_relay.is_some() {
+            let value = self
+                .relay_mutation(
+                    crate::deployment::store::ClusterMutation::SetBlockedIngressIp {
+                        address: address.to_string(),
+                        blocked,
+                    },
+                )
+                .await?
+                .ok_or_else(|| anyhow!("daemon returned no ingress blocklist"))?;
+            return Ok(serde_json::from_value(value)?);
+        }
+        let fence = Self::current_write_fence();
+        let blocked_ips =
+            ingress_blocklist::set(&self.client, address, blocked, fence.as_ref()).await?;
+        if self.read_cluster_meta().await?.is_none() {
+            ingress_blocklist::reconcile_traefik(&self.client, &blocked_ips, fence.as_ref())
+                .await?;
+        }
+        Ok(blocked_ips)
+    }
+
+    async fn read_ingress_blocklist(&self) -> anyhow::Result<Vec<String>> {
+        ingress_blocklist::read(&self.client).await
+    }
+
     async fn set_deploy_frozen(&self, service_id: &str, frozen: bool) -> anyhow::Result<()> {
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(crate::deployment::store::ClusterMutation::SetDeployFrozen {
+                service_id: service_id.to_string(),
+                frozen,
+            })
+            .await?;
+            return Ok(());
+        }
         let key = service_info_key(service_id);
         let response = self.get(key.as_bytes().to_vec(), None).await?;
         let kv = response
@@ -1336,14 +2624,18 @@ impl ClusterStore for EtcdStateStore {
         info.deploy_frozen = frozen;
         let info_json = serde_json::to_string(&info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
-        self.txn(
-            vec![compare_mod_revision_or_absent(
-                &key,
-                Some(kv.mod_revision() as u64),
-            )],
-            vec![request_put(&key, &info_json)],
-        )
-        .await?;
+        if !self
+            .txn(
+                vec![compare_mod_revision_or_absent(
+                    &key,
+                    Some(kv.mod_revision() as u64),
+                )],
+                vec![request_put(&key, &info_json)],
+            )
+            .await?
+        {
+            bail!("leadership or service state changed while updating deploy freeze");
+        }
         Ok(())
     }
 
@@ -1352,6 +2644,16 @@ impl ClusterStore for EtcdStateStore {
         service_id: &str,
         override_value: Option<u32>,
     ) -> anyhow::Result<()> {
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(
+                crate::deployment::store::ClusterMutation::SetReplicasOverride {
+                    service_id: service_id.to_string(),
+                    override_value,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         let key = service_info_key(service_id);
         let response = self.get(key.as_bytes().to_vec(), None).await?;
         let kv = response
@@ -1363,14 +2665,18 @@ impl ClusterStore for EtcdStateStore {
         info.replicas_override = override_value;
         let info_json = serde_json::to_string(&info)
             .map_err(|err| anyhow!("failed to serialize service info: {err}"))?;
-        self.txn(
-            vec![compare_mod_revision_or_absent(
-                &key,
-                Some(kv.mod_revision() as u64),
-            )],
-            vec![request_put(&key, &info_json)],
-        )
-        .await?;
+        if !self
+            .txn(
+                vec![compare_mod_revision_or_absent(
+                    &key,
+                    Some(kv.mod_revision() as u64),
+                )],
+                vec![request_put(&key, &info_json)],
+            )
+            .await?
+        {
+            bail!("leadership or service state changed while updating replicas");
+        }
         Ok(())
     }
 
@@ -1386,34 +2692,54 @@ impl ClusterStore for EtcdStateStore {
         &self,
         webhooks: &[crate::slack::SlackWebhook],
     ) -> anyhow::Result<()> {
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(
+                crate::deployment::store::ClusterMutation::WriteSlackWebhooks {
+                    webhooks: webhooks.to_vec(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         self.write_encrypted(crate::deployment::keys::SLACK_WEBHOOKS_KEY, &webhooks)
-            .await;
+            .await?;
         Ok(())
     }
 
     async fn delete_service(&self, service_id: &str) -> anyhow::Result<()> {
-        let mut client = self.client.lock().await;
-
+        if self.mutation_relay.is_some() {
+            self.relay_mutation(crate::deployment::store::ClusterMutation::DeleteService {
+                service_id: service_id.to_string(),
+            })
+            .await?;
+            return Ok(());
+        }
         let prefix = service_prefix(service_id);
         let range_end = prefix_range_end(prefix.as_bytes())
             .ok_or_else(|| anyhow!("failed to compute range end for service prefix"))?;
-        client
-            .delete(
-                prefix.as_bytes(),
-                Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+        if !self
+            .txn(
+                Vec::new(),
+                vec![TxnOp::delete(
+                    prefix.as_bytes(),
+                    Some(etcd_client::DeleteOptions::new().with_range(range_end)),
+                )],
             )
-            .await
-            .map_err(|err| anyhow!("failed to delete service keys: {err}"))?;
-
-        drop(client);
+            .await?
+        {
+            bail!("leadership changed while deleting service `{service_id}`");
+        }
         let _ = self.remove_ingress(service_id).await;
 
         Ok(())
     }
 
-    async fn read_system_upgrade_request(&self) -> anyhow::Result<Option<String>> {
+    async fn read_system_upgrade_request(
+        &self,
+        node_id: Option<&str>,
+    ) -> anyhow::Result<Option<String>> {
         let response = self
-            .get(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes().to_vec(), None)
+            .get(system_upgrade_request_key(node_id).into_bytes(), None)
             .await?;
         if let Some(kv) = response.kvs().first() {
             let value = String::from_utf8(kv.value().to_vec())
@@ -1424,11 +2750,15 @@ impl ClusterStore for EtcdStateStore {
         }
     }
 
-    async fn put_system_upgrade_request(&self, system_type: &str) -> anyhow::Result<()> {
+    async fn put_system_upgrade_request(
+        &self,
+        node_id: Option<&str>,
+        system_type: &str,
+    ) -> anyhow::Result<()> {
         let mut client = self.client.lock().await;
         client
             .put(
-                SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(),
+                system_upgrade_request_key(node_id),
                 system_type.as_bytes(),
                 None,
             )
@@ -1437,10 +2767,10 @@ impl ClusterStore for EtcdStateStore {
         Ok(())
     }
 
-    async fn delete_system_upgrade_request(&self) -> anyhow::Result<()> {
+    async fn delete_system_upgrade_request(&self, node_id: Option<&str>) -> anyhow::Result<()> {
         let mut client = self.client.lock().await;
         client
-            .delete(SYSTEM_UPGRADE_REQUEST_KEY.as_bytes(), None)
+            .delete(system_upgrade_request_key(node_id), None)
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
         Ok(())
@@ -1462,26 +2792,26 @@ impl ClusterStore for EtcdStateStore {
         Ok(())
     }
 
-    async fn read_system_restart_request(&self) -> anyhow::Result<bool> {
+    async fn read_system_restart_request(&self, node_id: Option<&str>) -> anyhow::Result<bool> {
         let response = self
-            .get(SYSTEM_RESTART_REQUEST_KEY.as_bytes().to_vec(), None)
+            .get(system_restart_request_key(node_id).into_bytes(), None)
             .await?;
         Ok(!response.kvs().is_empty())
     }
 
-    async fn put_system_restart_request(&self) -> anyhow::Result<()> {
+    async fn put_system_restart_request(&self, node_id: Option<&str>) -> anyhow::Result<()> {
         let mut client = self.client.lock().await;
         client
-            .put(SYSTEM_RESTART_REQUEST_KEY.as_bytes(), b"1".to_vec(), None)
+            .put(system_restart_request_key(node_id), b"1".to_vec(), None)
             .await
             .map_err(|err| anyhow!("failed to write restart request: {err}"))?;
         Ok(())
     }
 
-    async fn delete_system_restart_request(&self) -> anyhow::Result<()> {
+    async fn delete_system_restart_request(&self, node_id: Option<&str>) -> anyhow::Result<()> {
         let mut client = self.client.lock().await;
         client
-            .delete(SYSTEM_RESTART_REQUEST_KEY.as_bytes(), None)
+            .delete(system_restart_request_key(node_id), None)
             .await
             .map_err(|err| anyhow!("failed to delete restart request: {err}"))?;
         Ok(())
@@ -1493,7 +2823,22 @@ impl ClusterStore for EtcdStateStore {
         let routers_prefix = "traefik/http/routers/";
         let services_prefix = "traefik/http/services/";
 
-        let mut routers: HashMap<String, (String, Vec<String>)> = HashMap::new();
+        let traffic_response = self
+            .get(
+                b"/maetro/cluster/traffic/".to_vec(),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        let cluster_services = traffic_response
+            .kvs()
+            .iter()
+            .filter_map(|entry| {
+                serde_json::from_slice::<crate::cluster::types::TrafficGeneration>(entry.value())
+                    .ok()
+                    .map(|traffic| traffic.service_id)
+            })
+            .collect::<HashSet<_>>();
+        let mut routers: HashMap<String, (String, Vec<String>, String)> = HashMap::new();
 
         if let Some(range_end) = prefix_range_end(routers_prefix.as_bytes()) {
             let options = GetOptions::new().with_range(range_end);
@@ -1505,16 +2850,22 @@ impl ClusterStore for EtcdStateStore {
                 let value = String::from_utf8_lossy(kv.value()).to_string();
                 let rest = &key[routers_prefix.len()..];
                 let service_id = rest.split('/').next().unwrap_or_default().to_string();
-                if service_id.is_empty() {
+                if service_id.is_empty() || ingress_blocklist::is_internal_router_label(&service_id)
+                {
+                    continue;
+                }
+                if !cluster_services.is_empty() && !cluster_services.contains(&service_id) {
                     continue;
                 }
                 let entry = routers
                     .entry(service_id)
-                    .or_insert_with(|| (String::new(), Vec::new()));
+                    .or_insert_with(|| (String::new(), Vec::new(), String::new()));
                 if key.ends_with("/rule") {
                     entry.0 = value;
                 } else if key.contains("/entryPoints/") {
                     entry.1.push(value);
+                } else if key.ends_with("/service") {
+                    entry.2 = value;
                 }
             }
         }
@@ -1531,7 +2882,7 @@ impl ClusterStore for EtcdStateStore {
                 let value = String::from_utf8_lossy(kv.value()).to_string();
                 let rest = &key[services_prefix.len()..];
                 let service_id = rest.split('/').next().unwrap_or_default().to_string();
-                if !service_id.is_empty() {
+                if !service_id.is_empty() && key.ends_with("/url") {
                     server_map.entry(service_id).or_default().push(value);
                 }
             }
@@ -1539,9 +2890,9 @@ impl ClusterStore for EtcdStateStore {
 
         let mut routes: Vec<IngressRouting> = routers
             .into_iter()
-            .filter(|(_, (rule, _))| !rule.is_empty())
-            .map(|(service_id, (rule, entry_points))| {
-                let servers = server_map.remove(&service_id).unwrap_or_default();
+            .filter(|(_, (rule, _, _))| !rule.is_empty())
+            .map(|(service_id, (rule, entry_points, service_label))| {
+                let servers = server_map.remove(&service_label).unwrap_or_default();
                 IngressRouting {
                     service_id,
                     rule,
@@ -1578,6 +2929,45 @@ fn request_put(key: &str, value: &str) -> TxnOp {
 fn decode_mod_revision(mod_revision: i64, key: &str) -> Result<u64> {
     u64::try_from(mod_revision)
         .map_err(|err| anyhow!("invalid mod_revision `{mod_revision}` for key `{key}`: {err}"))
+}
+
+fn cluster_leadership_compare(token: &crate::cluster::types::LeadershipToken) -> Compare {
+    Compare::create_revision(
+        token.election_key.clone(),
+        CompareOp::Equal,
+        token.create_revision,
+    )
+}
+
+fn validate_request_id(request_id: &str) -> Result<()> {
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || !request_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+    {
+        bail!("invalid Idempotency-Key");
+    }
+    Ok(())
+}
+
+fn request_claim_from_receipt(
+    value: &[u8],
+    fingerprint: &str,
+) -> Result<crate::deployment::store::RequestClaim> {
+    let receipt: ClusterRequestReceipt = serde_json::from_slice(value)?;
+    if receipt.fingerprint != fingerprint {
+        return Ok(crate::deployment::store::RequestClaim::Conflict);
+    }
+    if receipt.state == "complete" {
+        Ok(crate::deployment::store::RequestClaim::Complete {
+            status_code: receipt.status_code.unwrap_or(500),
+            content_type: receipt.content_type,
+            body: receipt.body,
+        })
+    } else {
+        Ok(crate::deployment::store::RequestClaim::InProgress)
+    }
 }
 
 fn host_rule(host: &str) -> String {

@@ -283,6 +283,7 @@ pub struct ClusterStatsReporter {
     sink_runtime: SinkRuntimeRegistry,
     started_at: Instant,
     client: reqwest::Client,
+    ingestion_token: Option<String>,
     signal_rx: broadcast::Receiver<ShutdownEvent>,
 }
 
@@ -292,6 +293,7 @@ impl ClusterStatsReporter {
         store: Arc<LogStore>,
         sink_runtime: SinkRuntimeRegistry,
         signal_rx: broadcast::Receiver<ShutdownEvent>,
+        ingestion_token: Option<String>,
     ) -> Self {
         Self {
             endpoint,
@@ -302,6 +304,7 @@ impl ClusterStatsReporter {
                 .timeout(REPORT_TIMEOUT)
                 .build()
                 .expect("failed to build cluster stats client"),
+            ingestion_token,
             signal_rx,
         }
     }
@@ -375,12 +378,11 @@ impl ClusterStatsReporter {
             },
         };
         let payload = crate::metrics::TypedMetricBatch::ControllerStats(snapshot);
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .json(&payload)
-            .send()
-            .await?;
+        let mut request = self.client.post(&self.endpoint).json(&payload);
+        if let Some(token) = &self.ingestion_token {
+            request = request.header("X-Maestro-Ingestion-Token", token);
+        }
+        let response = request.send().await?;
         if !response.status().is_success() {
             return Err(anyhow!(
                 "probe returned {}: {}",

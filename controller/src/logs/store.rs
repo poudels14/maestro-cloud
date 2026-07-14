@@ -214,6 +214,20 @@ impl LogStore {
 
             CREATE INDEX IF NOT EXISTS idx_logs_source_seq ON logs (source, seq);
 
+            CREATE TABLE IF NOT EXISTS ingress_traffic (
+                bucket_at_ms INTEGER NOT NULL,
+                router TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                value TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                requests INTEGER NOT NULL,
+                last_seen_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (bucket_at_ms, router, dimension, value, status_code)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ingress_traffic_time
+                ON ingress_traffic (bucket_at_ms);
+
             CREATE TABLE IF NOT EXISTS metrics (
                 ts INTEGER NOT NULL,
                 source TEXT NOT NULL,
@@ -274,6 +288,14 @@ impl LogStore {
     }
 
     pub async fn append(&self, entries: &[LogEntry]) -> Result<()> {
+        self.append_inner(entries, false).await
+    }
+
+    pub async fn append_telemetry(&self, entries: &[LogEntry]) -> Result<()> {
+        self.append_inner(entries, true).await
+    }
+
+    async fn append_inner(&self, entries: &[LogEntry], compact_ingress: bool) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -286,7 +308,34 @@ impl LogStore {
                 "INSERT INTO logs (ts, level, stream, text, source, origin, tags, attributes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
+            let mut traffic_stmt = tx.prepare_cached(
+                "INSERT INTO ingress_traffic
+                    (bucket_at_ms, router, dimension, value, status_code, requests, last_seen_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+                 ON CONFLICT(bucket_at_ms, router, dimension, value, status_code)
+                 DO UPDATE SET
+                    requests = ingress_traffic.requests + 1,
+                    last_seen_at_ms = max(ingress_traffic.last_seen_at_ms, excluded.last_seen_at_ms)",
+            )?;
             for entry in &entries {
+                if compact_ingress
+                    && let Some(sample) = crate::logs::ingress_access_sample(entry)
+                {
+                    for (dimension, value) in [
+                        ("ip", sample.client_ip.as_str()),
+                        ("path", sample.path.as_str()),
+                    ] {
+                        traffic_stmt.execute(rusqlite::params![
+                            sample.bucket_at_ms,
+                            sample.router,
+                            dimension,
+                            value,
+                            i64::from(sample.status_code),
+                            sample.last_seen_at_ms,
+                        ])?;
+                    }
+                    continue;
+                }
                 let tags_json = serde_json::to_string(&entry.tags).unwrap_or_default();
                 let attrs_json =
                     serde_json::to_string(&entry.attrs).unwrap_or_else(|_| "[]".into());
@@ -302,12 +351,63 @@ impl LogStore {
                 ])?;
             }
             drop(stmt);
+            drop(traffic_stmt);
             tx.commit()?;
             Ok(())
         })
         .await??;
         self.notify.notify_waiters();
         Ok(())
+    }
+
+    pub async fn read_ingress_traffic(
+        &self,
+        service_id: &str,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let pool = self.pool.clone();
+        let service_id = service_id.to_string();
+        task::spawn_blocking(move || -> Result<crate::logs::IngressTrafficBreakdown> {
+            let conn = pool.get()?;
+            Ok(crate::logs::IngressTrafficBreakdown {
+                by_ip: read_compact_traffic_dimension(
+                    &conn,
+                    Some(&service_id),
+                    "ip",
+                    from,
+                    to,
+                    limit,
+                )?,
+                by_path: read_compact_traffic_dimension(
+                    &conn,
+                    Some(&service_id),
+                    "path",
+                    from,
+                    to,
+                    limit,
+                )?,
+            })
+        })
+        .await?
+    }
+
+    pub async fn read_blocked_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<crate::logs::IngressTrafficBreakdown> {
+            let conn = pool.get()?;
+            Ok(crate::logs::IngressTrafficBreakdown {
+                by_ip: read_compact_traffic_dimension(&conn, None, "ip", from, to, limit)?,
+                by_path: read_compact_traffic_dimension(&conn, None, "path", from, to, limit)?,
+            })
+        })
+        .await?
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1228,6 +1328,10 @@ impl LogStore {
                 "DELETE FROM stats_metrics WHERE ts < ?1",
                 rusqlite::params![cutoff],
             )?;
+            deleted += conn.execute(
+                "DELETE FROM ingress_traffic WHERE bucket_at_ms < ?1",
+                rusqlite::params![cutoff],
+            )?;
             Ok(deleted)
         })
         .await?
@@ -1328,6 +1432,106 @@ impl LogStore {
             attrs,
         })
     }
+}
+
+fn read_compact_traffic_dimension(
+    conn: &rusqlite::Connection,
+    service_id: Option<&str>,
+    dimension: &str,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<Vec<crate::logs::TrafficBreakdownEntry>> {
+    let router_filter = if service_id.is_some() {
+        "router = ? OR (instr(router, ?) = 1 AND substr(router, -5) = '@etcd')"
+    } else {
+        "instr(router, ?) = 1 AND substr(router, -5) = '@etcd'"
+    };
+    let sql = format!(
+        "SELECT value, status_code, sum(requests), max(last_seen_at_ms)
+         FROM ingress_traffic
+         WHERE bucket_at_ms >= ? AND bucket_at_ms <= ? AND dimension = ?
+           AND ({router_filter})
+         GROUP BY value, status_code"
+    );
+    let mut values = vec![
+        rusqlite::types::Value::Integer(from - from.rem_euclid(60_000)),
+        rusqlite::types::Value::Integer(to),
+        rusqlite::types::Value::Text(dimension.to_string()),
+    ];
+    if let Some(service_id) = service_id {
+        values.extend([
+            rusqlite::types::Value::Text(format!("{service_id}@etcd")),
+            rusqlite::types::Value::Text(format!("{service_id}-aff-")),
+        ]);
+    } else {
+        values.push(rusqlite::types::Value::Text(
+            crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
+        ));
+    }
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+        let status_code = row.get::<_, i64>(1)?;
+        let requests = row.get::<_, i64>(2)?;
+        Ok((
+            (
+                row.get::<_, String>(0)?,
+                u16::try_from(status_code).unwrap_or_default(),
+            ),
+            (
+                u64::try_from(requests).unwrap_or_default(),
+                row.get::<_, i64>(3)?,
+            ),
+        ))
+    })?;
+    let groups = rows.collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
+    Ok(finish_traffic_groups(groups, limit))
+}
+
+fn finish_traffic_groups(
+    groups: std::collections::HashMap<(String, u16), (u64, i64)>,
+    limit: usize,
+) -> Vec<crate::logs::TrafficBreakdownEntry> {
+    let mut totals = std::collections::HashMap::<String, (u64, i64)>::new();
+    for ((value, _), (requests, last_seen)) in &groups {
+        let total = totals.entry(value.clone()).or_insert((0, *last_seen));
+        total.0 = total.0.saturating_add(*requests);
+        total.1 = total.1.max(*last_seen);
+    }
+    let mut dimensions = totals.into_iter().collect::<Vec<_>>();
+    dimensions.sort_by(|left, right| {
+        right
+            .1
+            .0
+            .cmp(&left.1.0)
+            .then_with(|| right.1.1.cmp(&left.1.1))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    dimensions.truncate(limit);
+    let ranks = dimensions
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (value, _))| (value, rank))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut entries = groups
+        .into_iter()
+        .filter_map(|((value, status_code), (requests, last_seen_at_ms))| {
+            ranks
+                .contains_key(&value)
+                .then_some(crate::logs::TrafficBreakdownEntry {
+                    value,
+                    status_code,
+                    requests,
+                    last_seen_at_ms,
+                })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        ranks[&left.value]
+            .cmp(&ranks[&right.value])
+            .then_with(|| left.status_code.cmp(&right.status_code))
+    });
+    entries
 }
 
 fn sqlite_file_set_bytes(path: &Path) -> u64 {

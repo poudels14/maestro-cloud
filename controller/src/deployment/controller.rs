@@ -6,7 +6,11 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use tokio::{sync::broadcast, task::JoinHandle, time::sleep};
+use tokio::{
+    sync::{broadcast, watch},
+    task::JoinHandle,
+    time::sleep,
+};
 
 use crate::config::BuilderType;
 use crate::deployment::dns::DnsManager;
@@ -46,10 +50,27 @@ const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
 const BUILD_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 
+async fn wait_for_demotion(
+    receiver: &mut Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
+) -> bool {
+    let Some(receiver) = receiver else {
+        std::future::pending::<()>().await;
+        return false;
+    };
+    if receiver.changed().await.is_err() {
+        return true;
+    }
+    !matches!(
+        receiver.borrow().clone(),
+        crate::cluster::types::LeadershipState::Leading(_)
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControllerExitReason {
     Shutdown,
     Restart,
+    Demoted,
 }
 
 struct PendingBuild {
@@ -134,6 +155,7 @@ pub struct DeploymentController {
     slack: crate::slack::SlackNotifier,
     notified_ready: HashSet<String>,
     notified_crashed: HashSet<String>,
+    leadership_rx: Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
 }
 
 impl DeploymentController {
@@ -147,11 +169,9 @@ impl DeploymentController {
         dns_manager: Option<Arc<DnsManager>>,
         coredns_ip: Option<String>,
     ) -> Self {
-        let dns_domain = config
-            .tailscale_authkey
-            .as_ref()
-            .map(|_| format!("{}.maestro.internal", config.cluster_name));
-        let dns_server = if runtime.requires_explicit_dns() {
+        let dns_domain = (config.cluster.is_some() || config.tailscale_authkey.is_some())
+            .then(|| format!("{}.maestro.internal", config.cluster_name));
+        let dns_server = if config.cluster.is_some() || runtime.requires_explicit_dns() {
             coredns_ip.clone()
         } else {
             None
@@ -159,6 +179,10 @@ impl DeploymentController {
         let container_provider = ContainerDeploymentProvider {
             runtime: runtime.clone(),
             build_command_env: config.build_command_env.clone(),
+            shared_registry: config
+                .cluster
+                .as_ref()
+                .and_then(|cluster| cluster.shared_registry.clone()),
             network: config.network.clone(),
             dns_domain: dns_domain.clone(),
             dns_server,
@@ -225,7 +249,120 @@ impl DeploymentController {
             slack,
             notified_ready: HashSet::new(),
             notified_crashed: HashSet::new(),
+            leadership_rx: None,
         }
+    }
+
+    pub fn observe_leadership(
+        &mut self,
+        receiver: watch::Receiver<crate::cluster::types::LeadershipState>,
+    ) {
+        self.leadership_rx = Some(receiver);
+    }
+
+    fn leadership_token(&self) -> Result<crate::cluster::types::LeadershipToken> {
+        match self
+            .leadership_rx
+            .as_ref()
+            .map(|receiver| receiver.borrow().clone())
+        {
+            Some(crate::cluster::types::LeadershipState::Leading(token)) => Ok(token),
+            _ => bail!("leader-owned write rejected after demotion"),
+        }
+    }
+
+    async fn write_deployment_status(
+        &self,
+        deployment: &Deployment,
+        status: DeploymentStatus,
+    ) -> Result<()> {
+        if self.config.scheduling_enabled() {
+            let token = self.leadership_token()?;
+            self.store
+                .update_deployment_status_fenced(&token, deployment, status)
+                .await
+        } else {
+            self.store
+                .update_deployment_status(deployment, status)
+                .await
+        }
+    }
+
+    async fn claim_deployment(&self, queued: &QueuedDeployment) -> Result<bool> {
+        if self.config.scheduling_enabled() {
+            let token = self.leadership_token()?;
+            self.store
+                .claim_deployment_building_fenced(&token, queued)
+                .await
+        } else {
+            self.store.claim_deployment_building(queued).await
+        }
+    }
+
+    async fn write_deployment_build_info(
+        &self,
+        deployment: &Deployment,
+        updated: &ServiceDeployment,
+    ) -> Result<()> {
+        if self.config.scheduling_enabled() {
+            let token = self.leadership_token()?;
+            self.store
+                .update_deployment_build_info_fenced(&token, deployment, updated)
+                .await
+        } else {
+            self.store
+                .update_deployment_build_info(deployment, updated)
+                .await
+        }
+    }
+
+    async fn save_build_data(
+        &self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> Result<()> {
+        if self.config.scheduling_enabled() {
+            let token = self.leadership_token()?;
+            self.store
+                .save_build_data_fenced(&token, service_id, deployment)
+                .await
+        } else {
+            self.store.save_build_data(service_id, deployment).await
+        }
+    }
+
+    async fn save_deploy_data(
+        &self,
+        service_id: &str,
+        deployment: &ServiceDeployment,
+    ) -> Result<()> {
+        if self.config.scheduling_enabled() {
+            let token = self.leadership_token()?;
+            self.store
+                .save_deploy_data_fenced(&token, service_id, deployment)
+                .await
+        } else {
+            self.store.save_deploy_data(service_id, deployment).await
+        }
+    }
+
+    async fn requeue_stale_builds(&self) -> Result<()> {
+        for service_id in self.store.list_service_ids().await? {
+            for deployment in self.store.list_service_deployments(&service_id).await? {
+                if deployment.status == DeploymentStatus::Building {
+                    self.write_deployment_status(
+                        &Deployment {
+                            service_id: service_id.clone(),
+                            id: deployment.id,
+                            replica_index: 0,
+                        },
+                        DeploymentStatus::Queued,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn run(&mut self) -> Result<ControllerExitReason> {
@@ -238,10 +375,23 @@ impl DeploymentController {
 
         let tmp_dir = self.config.data_dir.join("tmp");
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        let _ = self.store.delete_system_upgrade_request().await;
-        let _ = self.store.delete_system_restart_request().await;
+        let request_node_id = self
+            .config
+            .cluster
+            .as_ref()
+            .map(|cluster| cluster.node_id.as_str());
+        let _ = self
+            .store
+            .delete_system_upgrade_request(request_node_id)
+            .await;
+        let _ = self
+            .store
+            .delete_system_restart_request(request_node_id)
+            .await;
 
-        if let Err(err) = self.queue_terminated_active_deployments().await {
+        if self.config.scheduling_enabled() {
+            self.requeue_stale_builds().await?;
+        } else if let Err(err) = self.queue_terminated_active_deployments().await {
             self.logger.emit(
                 "error",
                 &format!("failed to queue terminated deployments on startup: {err}"),
@@ -251,6 +401,19 @@ impl DeploymentController {
 
         loop {
             tokio::select! {
+                demoted = wait_for_demotion(&mut self.leadership_rx), if self.leadership_rx.is_some() => {
+                    if demoted {
+                        let pending_builds = self
+                            .pending_builds
+                            .drain()
+                            .map(|(_, pending)| pending)
+                            .collect::<Vec<_>>();
+                        for pending in pending_builds {
+                            pending.handle.abort();
+                        }
+                        return Ok(ControllerExitReason::Demoted);
+                    }
+                }
                 signal = signal_rx.recv() => {
                     match signal {
                         Ok(ShutdownEvent::Graceful) => {
@@ -299,18 +462,24 @@ impl DeploymentController {
     }
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
-        self.stop_removed_deployments().await;
-        self.drain_old_deployments().await;
+        if !self.config.scheduling_enabled() {
+            self.stop_removed_deployments().await;
+        }
         self.abort_canceled_builds().await;
         self.check_pending_builds().await;
-        self.reconcile_replicas().await;
+        if !self.config.scheduling_enabled() {
+            self.drain_old_deployments().await;
+            self.reconcile_replicas().await;
+        }
         let queued = self.store.list_queued_deployments().await?;
         for queued_deployment in queued {
             self.process_queued_deployment(queued_deployment).await?;
         }
-        self.cleanup_orphaned_deployments().await;
-        self.reconcile_replica_dns().await;
-        self.reconcile_stable_dns().await;
+        if !self.config.scheduling_enabled() {
+            self.cleanup_orphaned_deployments().await;
+            self.reconcile_replica_dns().await;
+            self.reconcile_stable_dns().await;
+        }
         Ok(())
     }
 
@@ -463,7 +632,12 @@ impl DeploymentController {
     async fn check_system_restart(&self) -> bool {
         let requested = self
             .store
-            .read_system_restart_request()
+            .read_system_restart_request(
+                self.config
+                    .cluster
+                    .as_ref()
+                    .map(|cluster| cluster.node_id.as_str()),
+            )
             .await
             .ok()
             .unwrap_or(false);
@@ -476,7 +650,15 @@ impl DeploymentController {
     }
 
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
-        let request = self.store.read_system_upgrade_request().await;
+        let request = self
+            .store
+            .read_system_upgrade_request(
+                self.config
+                    .cluster
+                    .as_ref()
+                    .map(|cluster| cluster.node_id.as_str()),
+            )
+            .await;
         let system_type = request.ok().flatten()?;
         if system_type == "nixos" {
             self.logger.emit("info", "starting NixOS system upgrade");
@@ -712,8 +894,7 @@ impl DeploymentController {
                             replica_index: 0,
                         };
                         if let Err(err) = self
-                            .store
-                            .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
+                            .write_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
                             .await
                         {
                             self.logger.emit(
@@ -798,10 +979,7 @@ impl DeploymentController {
             return Ok(());
         }
 
-        let claimed = self
-            .store
-            .claim_deployment_building(&queued_deployment)
-            .await?;
+        let claimed = self.claim_deployment(&queued_deployment).await?;
         if !claimed {
             return Ok(());
         }
@@ -849,8 +1027,7 @@ impl DeploymentController {
                         LogOrigin::Service,
                     );
                     let _ = self
-                        .store
-                        .update_deployment_status(
+                        .write_deployment_status(
                             &Deployment {
                                 id: deployment_id.clone(),
                                 service_id: queued_deployment.service_id.clone(),
@@ -895,8 +1072,7 @@ impl DeploymentController {
                         LogOrigin::Service,
                     );
                     let _ = self
-                        .store
-                        .update_deployment_status(
+                        .write_deployment_status(
                             &Deployment {
                                 id: deployment_id.clone(),
                                 service_id: queued_deployment.service_id.clone(),
@@ -916,7 +1092,6 @@ impl DeploymentController {
                 }
 
                 if let Err(err) = self
-                    .store
                     .save_build_data(&queued_deployment.service_id, &queued_deployment.deployment)
                     .await
                 {
@@ -948,8 +1123,7 @@ impl DeploymentController {
                             replica_index: 0,
                         };
                         let _ = self
-                            .store
-                            .update_deployment_build_info(
+                            .write_deployment_build_info(
                                 &deployment_ref,
                                 &queued_deployment.deployment,
                             )
@@ -972,8 +1146,7 @@ impl DeploymentController {
                         replica_index: 0,
                     };
                     let _ = self
-                        .store
-                        .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                        .write_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
                     self.notify_deployment_crashed_once(
                         &deployment_ref.service_id.clone(),
@@ -1050,8 +1223,7 @@ impl DeploymentController {
                     replica_index: 0,
                 };
                 let _ = self
-                    .store
-                    .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                    .write_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                     .await;
                 self.notify_deployment_crashed_once(
                     &deployment_ref.service_id.clone(),
@@ -1116,8 +1288,7 @@ impl DeploymentController {
                         replica_index: 0,
                     };
                     if let Err(err) = self
-                        .store
-                        .update_deployment_build_info(&deployment_ref, &queued.deployment)
+                        .write_deployment_build_info(&deployment_ref, &queued.deployment)
                         .await
                     {
                         self.logger.emit(
@@ -1144,8 +1315,7 @@ impl DeploymentController {
                         replica_index: 0,
                     };
                     let _ = self
-                        .store
-                        .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                        .write_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                         .await;
                     let _ = self
                         .container_engine
@@ -1190,8 +1360,7 @@ impl DeploymentController {
                     LogOrigin::Service,
                 );
                 let _ = self
-                    .store
-                    .update_deployment_status(
+                    .write_deployment_status(
                         &Deployment {
                             id: deployment_id.clone(),
                             service_id: service_id.clone(),
@@ -1207,7 +1376,6 @@ impl DeploymentController {
         }
 
         if let Err(err) = self
-            .store
             .save_deploy_data(service_id, &queued_deployment.deployment)
             .await
         {
@@ -1215,6 +1383,46 @@ impl DeploymentController {
                 "warn",
                 &format!("{service_id}/{deployment_id}: failed to save deploy data: {err}"),
             );
+        }
+
+        if self.config.scheduling_enabled() {
+            let has_writable_volume = queued_deployment
+                .deployment
+                .config
+                .deploy
+                .volumes
+                .iter()
+                .any(|volume| !volume.read_only);
+            let hard_pinned = queued_deployment
+                .deployment
+                .config
+                .deploy
+                .node_affinity
+                .as_ref()
+                .and_then(|affinity| affinity.node_id.as_ref())
+                .is_some();
+            let status = if has_writable_volume && !hard_pinned {
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "{service_id}/{deployment_id}: writable host volumes require deploy.node-affinity.node-id in cluster scheduling mode"
+                    ),
+                );
+                DeploymentStatus::Crashed
+            } else {
+                DeploymentStatus::PendingReady
+            };
+            let _ = self
+                .write_deployment_status(
+                    &Deployment {
+                        service_id: service_id.clone(),
+                        id: deployment_id.clone(),
+                        replica_index: 0,
+                    },
+                    status,
+                )
+                .await;
+            return;
         }
 
         if let Err(err) = prepare_volumes(&queued_deployment.deployment) {
@@ -1230,8 +1438,7 @@ impl DeploymentController {
                 LogOrigin::Service,
             );
             let _ = self
-                .store
-                .update_deployment_status(
+                .write_deployment_status(
                     &Deployment {
                         id: deployment_id.clone(),
                         service_id: service_id.clone(),
@@ -1286,6 +1493,9 @@ impl DeploymentController {
                 tags.push(format!("deployment_id:{deployment_id}"));
                 tags.push(format!("replica:{replica_index}"));
                 tags.push(format!("cluster:{}", self.config.cluster_name));
+                if let Some(cluster) = &self.config.cluster {
+                    tags.push(format!("node:{}", cluster.node_id));
+                }
                 if let Some(path) = queued_deployment
                     .deployment
                     .config
@@ -1304,6 +1514,7 @@ impl DeploymentController {
                 }
             });
             let spec = ReplicaSpec {
+                task_id: None,
                 deployment: &queued_deployment.deployment,
                 replica_index,
                 deploy_output,
@@ -1389,8 +1600,7 @@ impl DeploymentController {
             replica_index: 0,
         };
         let _ = self
-            .store
-            .update_deployment_status(&deployment_ref, replica_status)
+            .write_deployment_status(&deployment_ref, replica_status)
             .await;
         self.prune_service_images(service_id).await;
     }
@@ -1610,8 +1820,7 @@ impl DeploymentController {
                 continue;
             }
             if let Err(err) = self
-                .store
-                .update_deployment_status(deployment, DeploymentStatus::Terminated)
+                .write_deployment_status(deployment, DeploymentStatus::Terminated)
                 .await
             {
                 self.logger.emit(
@@ -1716,8 +1925,7 @@ impl DeploymentController {
                 replica_index: 0,
             };
             let _ = self
-                .store
-                .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                .write_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                 .await;
             remove_build_dir(deployment, &self.config.data_dir);
             remove_upload_archive(deployment, &self.config.probe_dir().join("data/uploads"));
@@ -1785,8 +1993,7 @@ impl DeploymentController {
                     replica_index: 0,
                 };
                 let _ = self
-                    .store
-                    .update_deployment_status(&deployment_ref, deployment_status)
+                    .write_deployment_status(&deployment_ref, deployment_status)
                     .await;
             }
         } else if orphaned_replicas.len() == replicas as usize {
@@ -1811,8 +2018,7 @@ impl DeploymentController {
                 replica_index: 0,
             };
             let _ = self
-                .store
-                .update_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
+                .write_deployment_status(&deployment_ref, DeploymentStatus::Terminated)
                 .await;
         }
     }
@@ -1882,8 +2088,7 @@ impl DeploymentController {
                         replica_index: deployment.replica_index,
                     };
                     let _ = self
-                        .store
-                        .update_deployment_status(&deployment_ref, DeploymentStatus::Removed)
+                        .write_deployment_status(&deployment_ref, DeploymentStatus::Removed)
                         .await;
                     self.shutdown_deployment_replica(
                         &deployment.service_id,
@@ -1969,8 +2174,7 @@ impl DeploymentController {
                 );
 
                 if let Err(err) = self
-                    .store
-                    .update_deployment_status(&deployment_ref, DeploymentStatus::Draining)
+                    .write_deployment_status(&deployment_ref, DeploymentStatus::Draining)
                     .await
                 {
                     self.logger.emit(
@@ -2056,10 +2260,16 @@ impl DeploymentController {
                             service_id,
                             deployment_id,
                             ReplicaState {
+                                service_id: None,
+                                deployment_id: None,
                                 replica_index,
                                 status: initial_replica_status_for_deployment(&deployment_record),
                                 healthcheck_failures: 0,
                                 restart_attempts: attempts + 1,
+                                node_id: None,
+                                assignment_id: None,
+                                endpoint: None,
+                                error: None,
                             },
                         )
                         .await;
@@ -2189,8 +2399,7 @@ impl DeploymentController {
                     replica_index: 0,
                 };
                 let _ = self
-                    .store
-                    .update_deployment_status(&deployment_ref, DeploymentStatus::Ready)
+                    .write_deployment_status(&deployment_ref, DeploymentStatus::Ready)
                     .await;
                 if self.notified_ready.insert(deployment_id.clone()) {
                     self.slack
@@ -2213,8 +2422,7 @@ impl DeploymentController {
                     replica_index: 0,
                 };
                 let _ = self
-                    .store
-                    .update_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
+                    .write_deployment_status(&deployment_ref, DeploymentStatus::Crashed)
                     .await;
                 let reason = format!(
                     "all {desired} replicas exhausted {MAX_REPLICA_RESTART_ATTEMPTS} restart attempts"
@@ -2251,6 +2459,9 @@ impl DeploymentController {
             tags.push(format!("deployment_id:{deployment_id}"));
             tags.push(format!("replica:{replica_index}"));
             tags.push(format!("cluster:{}", self.config.cluster_name));
+            if let Some(cluster) = &self.config.cluster {
+                tags.push(format!("node:{}", cluster.node_id));
+            }
             if let Some(path) = deployment_record
                 .config
                 .deploy
@@ -2268,6 +2479,7 @@ impl DeploymentController {
             }
         });
         let spec = ReplicaSpec {
+            task_id: None,
             deployment: deployment_record,
             replica_index,
             deploy_output,
