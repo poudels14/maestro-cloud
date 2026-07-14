@@ -23,8 +23,7 @@ pub async fn run_restart(host: &str, yes: bool) -> Result<()> {
 
     let base = normalize_base_url(host)?;
     let endpoint = format!("{base}/api/system/restart");
-    let response = contexts::build_http_client()?
-        .post(&endpoint)
+    let response = crate::cli::idempotent(contexts::build_http_client()?.post(&endpoint))
         .send()
         .await
         .map_err(|err| Error::external(format!("failed to call restart endpoint: {err}")))?;

@@ -13,3 +13,62 @@ pub(crate) use filter::healthcheck_path_tag;
 pub use http_sink::HttpSink;
 pub use sink::SinkWorker;
 pub use store::{LogEntry, LogOrigin, LogStore, Logger};
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficBreakdownEntry {
+    pub value: String,
+    pub status_code: u16,
+    pub requests: u64,
+    pub last_seen_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressTrafficBreakdown {
+    pub by_ip: Vec<TrafficBreakdownEntry>,
+    pub by_path: Vec<TrafficBreakdownEntry>,
+}
+
+pub(crate) struct IngressAccessSample {
+    pub bucket_at_ms: i64,
+    pub last_seen_at_ms: i64,
+    pub router: String,
+    pub client_ip: String,
+    pub path: String,
+    pub status_code: u16,
+}
+
+pub(crate) fn ingress_access_sample(entry: &LogEntry) -> Option<IngressAccessSample> {
+    if entry.source.as_ref() != "maestro-ingress" {
+        return None;
+    }
+    let attr = |name: &str| {
+        entry
+            .attrs
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let router = attr("RouterName")?;
+    let client_ip = attr("maestro.client_ip")
+        .or_else(|| attr("ClientHost"))?
+        .parse::<std::net::IpAddr>()
+        .ok()?
+        .to_string();
+    let status_code = attr("DownstreamStatus")?.parse::<u16>().ok()?;
+    if !(100..=599).contains(&status_code) {
+        return None;
+    }
+    let path = attr("RequestPath")?.split('?').next().unwrap_or("/");
+    let path = if path.is_empty() { "/" } else { path };
+    let path = path.chars().take(2_048).collect::<String>();
+    Some(IngressAccessSample {
+        bucket_at_ms: entry.ts - entry.ts.rem_euclid(60_000),
+        last_seen_at_ms: entry.ts,
+        router: router.to_string(),
+        client_ip,
+        path,
+        status_code,
+    })
+}

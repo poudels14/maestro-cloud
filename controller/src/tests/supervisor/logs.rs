@@ -58,6 +58,47 @@ fn json_collects_extra_fields_as_attrs() {
 }
 
 #[test]
+fn ingress_access_logs_use_forwarded_ip_only_for_internal_proxies() {
+    let mut attrs = vec![
+        ("ClientHost".to_string(), "172.22.0.20".to_string()),
+        (
+            "request_CF-Connecting-IP".to_string(),
+            "203.0.113.9".to_string(),
+        ),
+    ];
+    normalize_ingress_access_log_attrs(&mut attrs);
+    assert_eq!(find_attr(&attrs, "maestro.client_ip"), Some("203.0.113.9"));
+
+    let mut spoofed = vec![
+        ("ClientHost".to_string(), "198.51.100.8".to_string()),
+        (
+            "request_CF-Connecting-IP".to_string(),
+            "203.0.113.9".to_string(),
+        ),
+    ];
+    normalize_ingress_access_log_attrs(&mut spoofed);
+    assert_eq!(
+        find_attr(&spoofed, "maestro.client_ip"),
+        Some("198.51.100.8")
+    );
+}
+
+#[test]
+fn cloudflare_tunnel_access_log_keeps_the_normalized_visitor_ip() {
+    let visitor = "2607:f598:f0e9:c000:b0aa:3a2e:a438:d81f";
+    let mut attrs = vec![
+        ("ClientAddr".to_string(), "10.100.0.255:55258".to_string()),
+        ("ClientHost".to_string(), visitor.to_string()),
+        ("request_Cf-Connecting-Ip".to_string(), visitor.to_string()),
+        ("request_X-Forwarded-For".to_string(), visitor.to_string()),
+    ];
+
+    normalize_ingress_access_log_attrs(&mut attrs);
+
+    assert_eq!(find_attr(&attrs, "maestro.client_ip"), Some(visitor));
+}
+
+#[test]
 fn json_attrs_serialize_nested_values() {
     let line = r#"{"msg":"x","obj":{"a":1},"arr":[1,2],"flag":true,"nothing":null}"#;
     let parsed = parse_log_line(line);

@@ -21,6 +21,149 @@ struct UpgradeSystemResponse {
     target_version: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterUpgradeRequest<'a> {
+    target_version: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterUnfreezeRequest<'a> {
+    upgrade_run_id: &'a str,
+}
+
+pub async fn run_cluster_upgrade(host: &str, version: &str, yes: bool) -> Result<()> {
+    let version = semver::Version::parse(version.trim())
+        .map_err(|error| Error::invalid_input(format!("invalid target version: {error}")))?;
+    let confirmed = crate::cli::confirm::confirm_action(
+        host,
+        &format!("About to roll every cluster node to Maestro {version}"),
+        &[
+            "Deploys will be frozen for the duration of the run".to_string(),
+            "Nodes will drain and restart serially".to_string(),
+        ],
+        yes,
+    )
+    .await?;
+    if !confirmed {
+        println!("[maestro]: aborted");
+        return Ok(());
+    }
+    let base = normalize_base_url(host)?;
+    let response = crate::cli::idempotent(
+        contexts::build_http_client()?.post(format!("{base}/api/cluster/upgrade")),
+    )
+    .json(&ClusterUpgradeRequest {
+        target_version: &version.to_string(),
+    })
+    .send()
+    .await
+    .map_err(|error| Error::external(format!("failed to start cluster upgrade: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::external(format!(
+            "cluster upgrade was rejected ({status}): {body}"
+        )));
+    }
+    let run: crate::cluster::UpgradeRun = response
+        .json()
+        .await
+        .map_err(|error| Error::external(format!("invalid cluster upgrade response: {error}")))?;
+    println!("[maestro]: cluster upgrade `{}` started", run.run_id);
+    stream_cluster_upgrade(&base, run).await
+}
+
+pub async fn run_cluster_unfreeze(host: &str, run_id: &str) -> Result<()> {
+    let base = normalize_base_url(host)?;
+    let response = crate::cli::idempotent(
+        contexts::build_http_client()?.post(format!("{base}/api/cluster/upgrade/unfreeze")),
+    )
+    .json(&ClusterUnfreezeRequest {
+        upgrade_run_id: run_id,
+    })
+    .send()
+    .await
+    .map_err(|error| Error::external(format!("failed to unfreeze cluster: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::external(format!(
+            "manual unfreeze was rejected ({status}): {body}"
+        )));
+    }
+    let run: crate::cluster::UpgradeRun = response
+        .json()
+        .await
+        .map_err(|error| Error::external(format!("invalid unfreeze response: {error}")))?;
+    println!(
+        "[maestro]: upgrade `{}` aborted and cluster deploys unfrozen",
+        run.run_id
+    );
+    Ok(())
+}
+
+async fn stream_cluster_upgrade(base: &str, mut run: crate::cluster::UpgradeRun) -> Result<()> {
+    let mut printed = 0_usize;
+    loop {
+        for event in run.history.iter().skip(printed) {
+            let node = event
+                .node_id
+                .as_deref()
+                .map(|node| format!(" [{node}]"))
+                .unwrap_or_default();
+            println!("{}{}: {}", event.at_ms, node, event.message);
+        }
+        printed = run.history.len();
+        if run.phase.is_terminal() {
+            return if run.phase == crate::cluster::UpgradePhase::Succeeded {
+                println!(
+                    "[maestro]: cluster upgrade `{}` completed at version {}",
+                    run.run_id, run.target_version
+                );
+                Ok(())
+            } else {
+                Err(Error::external(
+                    run.failure
+                        .unwrap_or_else(|| "cluster upgrade failed".to_string()),
+                ))
+            };
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        match contexts::build_http_client()?
+            .get(format!("{base}/api/cluster/upgrade"))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let next: Option<crate::cluster::UpgradeRun> =
+                    response.json().await.map_err(|error| {
+                        Error::external(format!("invalid cluster upgrade status: {error}"))
+                    })?;
+                let Some(next) = next else {
+                    return Err(Error::external("cluster upgrade status disappeared"));
+                };
+                if next.run_id != run.run_id {
+                    return Err(Error::external(
+                        "a different cluster upgrade run replaced this run",
+                    ));
+                }
+                run = next;
+            }
+            Ok(response) => {
+                eprintln!(
+                    "[maestro]: upgrade status temporarily unavailable ({})",
+                    response.status()
+                );
+            }
+            Err(error) => {
+                eprintln!("[maestro]: waiting for cluster API after node restart: {error}");
+            }
+        }
+    }
+}
+
 pub async fn run_upgrade_system(host: &str, yes: bool) -> Result<()> {
     let confirmed = crate::cli::confirm::confirm_action(
         host,
@@ -35,8 +178,7 @@ pub async fn run_upgrade_system(host: &str, yes: bool) -> Result<()> {
     }
 
     let endpoint = upgrade_system_endpoint(host)?;
-    let response = contexts::build_http_client()?
-        .post(&endpoint)
+    let response = crate::cli::idempotent(contexts::build_http_client()?.post(&endpoint))
         .json(&UpgradeSystemRequest {
             version: CLIENT_VERSION,
         })
@@ -109,5 +251,14 @@ mod tests {
         let payload = serde_json::to_value(request).expect("serialize upgrade request");
 
         assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn cluster_upgrade_request_uses_camel_case_target() {
+        let payload = serde_json::to_value(ClusterUpgradeRequest {
+            target_version: "1.2.3",
+        })
+        .expect("serialize cluster upgrade request");
+        assert_eq!(payload["targetVersion"], "1.2.3");
     }
 }

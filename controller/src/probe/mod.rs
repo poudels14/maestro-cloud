@@ -21,7 +21,17 @@ const POLL_TICK_INTERVAL: Duration = Duration::from_secs(5);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
-    eprintln!("starting probe etcd={etcd_endpoint} port={port}");
+    let etcd_endpoints = std::env::var("ETCD_ENDPOINTS")
+        .unwrap_or_else(|_| etcd_endpoint.to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    eprintln!(
+        "starting probe etcd={} port={port}",
+        etcd_endpoints.join(",")
+    );
 
     let encryption_key = std::env::var("MAESTRO_ENCRYPTION_KEY_FILE")
         .ok()
@@ -38,11 +48,19 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         }
         _ => None,
     };
-    let store = EtcdStateStore::new(etcd_endpoint, derived_key, etcd_tls).await?;
+    let internal_control_token =
+        read_secret_env_or_file("MAESTRO_CONTROL_TOKEN", "MAESTRO_CONTROL_TOKEN_FILE");
+    let control_socket = std::env::var("MAESTRO_CONTROL_SOCKET").ok();
+    let mut store =
+        EtcdStateStore::new_with_endpoints(&etcd_endpoints, derived_key, etcd_tls).await?;
+    if let (Some(socket), Some(token)) = (&control_socket, &internal_control_token) {
+        store = store.with_mutation_relay(socket.clone(), token.clone());
+    }
     let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownEvent>(4);
     let cluster_name = std::env::var("MAESTRO_CLUSTER_NAME").unwrap_or_default();
+    let local_node_id = std::env::var("MAESTRO_NODE_ID").ok();
     let masked_config = std::env::var("MAESTRO_CONFIG").ok().map(|encoded| {
         let json = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
@@ -148,7 +166,12 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             }
         });
         if let Some(settings) = log_backup.as_ref() {
-            let config = backup::BackupConfig::from_config(&data_root, &cluster_name, settings)?;
+            let config = backup::BackupConfig::from_config(
+                &data_root,
+                &cluster_name,
+                local_node_id.as_deref(),
+                settings,
+            )?;
             tokio::spawn(backup::run(duck.clone(), config, backup_stats.clone()));
         }
         crate::logs::TelemetryStore::duck(duck)
@@ -178,7 +201,10 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         traffic::run(traffic_log_store).await;
     });
     let dns_domain = std::env::var("MAESTRO_DNS_DOMAIN").ok();
-    let jwt_secret_key = std::env::var("MAESTRO_JWT_SECRET_KEY").ok();
+    let jwt_secret_key =
+        read_secret_env_or_file("MAESTRO_JWT_SECRET_KEY", "MAESTRO_JWT_SECRET_KEY_FILE");
+    let ingestion_token =
+        read_secret_env_or_file("MAESTRO_INGESTION_TOKEN", "MAESTRO_INGESTION_TOKEN_FILE");
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
     let cluster_alias = std::env::var("MAESTRO_CLUSTER_ALIAS").unwrap_or_default();
     let slack_webhook_url = std::env::var("MAESTRO_SLACK_WEBHOOK_URL")
@@ -201,34 +227,58 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let server = server::Server::new(
         store.clone(),
         Some(log_store),
-        jwt_secret_key,
-        system_type,
-        cluster_name,
-        cluster_alias,
-        masked_config,
-        slack_notifier,
-        allow_cli_deployment,
-        upload_dir,
-        server::ServerStatsState {
+        server::ServerConfig {
+            jwt_secret_key,
+            ingestion_token,
+            internal_control_token,
+            control_socket,
+            system_type,
+            cluster_name,
+            cluster_alias,
+            masked_config,
+            slack: slack_notifier,
+            allow_cli_deployment,
+            upload_dir,
             controller_stats,
             backup_stats,
             storage_mode,
+            local_node_id: local_node_id.clone(),
         },
     );
     let bind_addr = format!("0.0.0.0:{port}");
     let server_shutdown_rx = shutdown_tx.subscribe();
+    let tls_shutdown_rx = shutdown_tx.subscribe();
     let server_shutdown_tx = shutdown_tx.clone();
     let server_future = async move {
-        let result = server.serve(&bind_addr, server_shutdown_rx).await;
+        let http_server = server.clone().serve(&bind_addr, server_shutdown_rx);
+        let result = match (
+            std::env::var("MAESTRO_TLS_PORT").ok(),
+            std::env::var("MAESTRO_API_CERT_FILE").ok(),
+            std::env::var("MAESTRO_API_KEY_FILE").ok(),
+        ) {
+            (Some(tls_port), Some(certificate), Some(key)) => {
+                let tls_bind_addr = format!("0.0.0.0:{tls_port}");
+                let client_ca = std::env::var("ETCD_CA_FILE").ok();
+                let tls_server = server.serve_tls(
+                    &tls_bind_addr,
+                    &certificate,
+                    &key,
+                    client_ca.as_deref(),
+                    tls_shutdown_rx,
+                );
+                tokio::try_join!(http_server, tls_server).map(|_| ())
+            }
+            _ => http_server.await,
+        };
         let _ = server_shutdown_tx.send(ShutdownEvent::Graceful);
         result
     };
 
     let healthcheck_shutdown_tx = shutdown_tx.clone();
-    let healthcheck_monitor: Arc<dyn ReplicaHealthMonitor> = Arc::new(DefaultHealthMonitor::new(
-        store.clone(),
-        DEFAULT_MAX_HEALTHCHECK_FAILURES,
-    ));
+    let healthcheck_monitor: Arc<dyn ReplicaHealthMonitor> = Arc::new(
+        DefaultHealthMonitor::new(store.clone(), DEFAULT_MAX_HEALTHCHECK_FAILURES)
+            .for_node(local_node_id.clone()),
+    );
     let healthcheck_future = async move {
         let http_client = reqwest::Client::builder()
             .timeout(HEALTH_TIMEOUT)
@@ -251,6 +301,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
                     &mut health_state,
                     &mut last_polled,
                     dns_domain.as_deref(),
+                    local_node_id.as_deref(),
                 )
                 .await
                 {
@@ -283,6 +334,15 @@ fn env_bool(name: &str, default: bool) -> bool {
     std::env::var(name)
         .map(|value| parse_bool(&value, default))
         .unwrap_or(default)
+}
+
+fn read_secret_env_or_file(value_name: &str, file_name: &str) -> Option<String> {
+    std::env::var(file_name)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .or_else(|| std::env::var(value_name).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_bool(value: &str, default: bool) -> bool {

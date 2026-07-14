@@ -12,7 +12,7 @@ use crate::utils::nanoid;
 
 use crate::config::BuilderType;
 
-use super::{BuildSpec, RunSpec, RuntimeProvider};
+use super::{BuildSpec, ManagedContainer, RunSpec, RuntimeProvider};
 
 pub struct NerdctlRuntimeProvider;
 
@@ -48,25 +48,22 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
-        if let Ok(output) = cmd::run("nerdctl", &["ps", "-a", "--format", "{{.Names}}"]).await {
-            for container in output.lines().map(str::trim).filter(|s| !s.is_empty()) {
-                let on_network = cmd::run(
-                    "nerdctl",
-                    &[
-                        "inspect",
-                        "--format",
-                        "{{json .NetworkSettings.Networks}}",
-                        container,
-                    ],
-                )
+        let inspect = match cmd::run("nerdctl", &["network", "inspect", name]).await {
+            Ok(inspect) => inspect,
+            Err(_) => return Ok(()),
+        };
+        for container in attached_container_names(&inspect)? {
+            cmd::run("nerdctl", &["rm", "-f", &container])
                 .await
-                .is_ok_and(|out| out.contains(name));
-                if on_network {
-                    let _ = cmd::run("nerdctl", &["rm", "-f", container]).await;
-                }
-            }
+                .map_err(|error| {
+                    anyhow!(
+                        "failed to remove container `{container}` from network `{name}`: {error}"
+                    )
+                })?;
         }
-        let _ = cmd::run("nerdctl", &["network", "rm", name]).await;
+        cmd::run("nerdctl", &["network", "rm", name])
+            .await
+            .map_err(|error| anyhow!("failed to remove nerdctl network `{name}`: {error}"))?;
         let cni_state = std::path::Path::new("/var/lib/cni/networks").join(name);
         if cni_state.exists() {
             let _ = std::fs::remove_dir_all(&cni_state);
@@ -77,6 +74,30 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     async fn remove_container(&self, name: &str) -> Result<()> {
         let _ = cmd::run("nerdctl", &["kill", name]).await;
         let _ = cmd::run("nerdctl", &["rm", "-f", name]).await;
+        Ok(())
+    }
+
+    async fn set_container_network_access(
+        &self,
+        name: &str,
+        _network: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        let paused = nerdctl_container_paused(name).await?;
+        if paused != enabled {
+            return Ok(());
+        }
+        if enabled {
+            cmd::run("nerdctl", &["unpause", name]).await?;
+        } else {
+            cmd::run("nerdctl", &["pause", name]).await?;
+        }
+        if nerdctl_container_paused(name).await? == enabled {
+            anyhow::bail!(
+                "nerdctl reported success but container `{name}` did not become {}",
+                if enabled { "unpaused" } else { "paused" }
+            );
+        }
         Ok(())
     }
 
@@ -146,6 +167,32 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         .ok()?;
         let cidr = stdout.trim().to_string();
         if cidr.is_empty() { None } else { Some(cidr) }
+    }
+
+    async fn list_managed_containers(&self, node_id: &str) -> Result<Vec<ManagedContainer>> {
+        let filter = format!("label=maestro.node-id={node_id}");
+        let output = cmd::run(
+            "nerdctl",
+            &["ps", "--filter", &filter, "--format", "{{.Names}}"],
+        )
+        .await?;
+        let mut containers = Vec::new();
+        for name in output
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let labels = cmd::run(
+                "nerdctl",
+                &["inspect", "-f", "{{json .Config.Labels}}", name],
+            )
+            .await?;
+            containers.push(ManagedContainer {
+                name: name.to_string(),
+                labels: serde_json::from_str(labels.trim()).unwrap_or_default(),
+            });
+        }
+        Ok(containers)
     }
 
     async fn remove_conflicting_containers(
@@ -311,6 +358,16 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         Ok(())
     }
 
+    async fn image_exists(&self, image: &str) -> Result<bool> {
+        let status = tokio::process::Command::new("nerdctl")
+            .args(["image", "inspect", image])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await?;
+        Ok(status.success())
+    }
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
         cmd::run("nerdctl", &["tag", source, target]).await?;
         Ok(())
@@ -330,5 +387,43 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
     async fn remove_image(&self, image_id: &str) -> Result<()> {
         let _ = cmd::run("nerdctl", &["rmi", image_id]).await;
         Ok(())
+    }
+}
+
+async fn nerdctl_container_paused(name: &str) -> Result<bool> {
+    Ok(
+        cmd::run("nerdctl", &["inspect", "-f", "{{.State.Paused}}", name])
+            .await?
+            .trim()
+            .eq_ignore_ascii_case("true"),
+    )
+}
+
+fn attached_container_names(network_inspect: &str) -> Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(network_inspect)?;
+    let containers = value
+        .as_array()
+        .and_then(|networks| networks.first())
+        .and_then(|network| network.get("Containers"))
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow!("nerdctl network inspect response has no Containers object"))?;
+    Ok(containers
+        .values()
+        .filter_map(|container| container.get("Name"))
+        .filter_map(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::attached_container_names;
+
+    #[test]
+    fn parses_attached_containers_without_relying_on_interface_names() {
+        let inspect = r#"[{"Containers":{"abc":{"Name":"maestro-ingress-prod-a1b2"},"def":{"Name":"app-1"}}}]"#;
+        let mut names = attached_container_names(inspect).unwrap();
+        names.sort();
+        assert_eq!(names, ["app-1", "maestro-ingress-prod-a1b2"]);
     }
 }

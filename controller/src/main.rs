@@ -1,5 +1,6 @@
 mod builder;
 mod cli;
+mod cluster;
 mod cluster_stats;
 mod config;
 mod deployment;
@@ -148,8 +149,109 @@ enum ServicesCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClusterCommand {
+    /// Convert an existing legacy single-node data directory into a cluster seed
+    Enable {
+        #[arg(
+            long = "config",
+            default_value = DEFAULT_CONFIG_PATH,
+            help = "Path to the cluster-enabled maestro.jsonc"
+        )]
+        config: String,
+        #[arg(long = "data-dir", help = "Base Maestro data directory")]
+        data_dir: PathBuf,
+    },
+    /// Initialize the shared cluster identity and CA on cluster.nodes[0]
+    InitCa {
+        #[arg(
+            long = "config",
+            default_value = DEFAULT_CONFIG_PATH,
+            help = "Path to maestro.jsonc"
+        )]
+        config: String,
+        #[arg(long = "data-dir", help = "Base Maestro data directory")]
+        data_dir: PathBuf,
+    },
+    /// Issue a node-endpoint-bound certificate bundle from the initialized cluster CA
+    IssueNode {
+        #[arg(
+            long = "config",
+            default_value = DEFAULT_CONFIG_PATH,
+            help = "Path to maestro.jsonc"
+        )]
+        config: String,
+        #[arg(long = "data-dir", help = "Base Maestro data directory")]
+        data_dir: PathBuf,
+        #[arg(long = "host-ip", help = "Private control IP of the node")]
+        host_ip: Ipv4Addr,
+        #[arg(
+            long = "api-port",
+            help = "Node API port when using IP:port identities"
+        )]
+        api_port: Option<u16>,
+        #[arg(long = "node-id", help = "Prepared 12-character node identity")]
+        node_id: String,
+        #[arg(long, help = "Reserved Docker /24 for the node")]
+        subnet: String,
+        #[arg(long = "role", default_value = "worker", help = "voter or worker")]
+        role: cluster::NodeRole,
+        #[arg(long = "output", help = "Output directory for the certificate bundle")]
+        output: Option<PathBuf>,
+    },
+    /// Prepare a node identity or join it to an existing cluster
+    Join {
+        #[arg(help = "Private leader address (host or host:port)")]
+        leader: Option<String>,
+        #[arg(
+            long,
+            help = "Generate the node join key and print its approval identity"
+        )]
+        prepare: bool,
+        #[arg(
+            long = "config",
+            default_value = DEFAULT_CONFIG_PATH,
+            help = "Path to maestro.jsonc"
+        )]
+        config: String,
+        #[arg(long = "data-dir", help = "Base Maestro data directory")]
+        data_dir: PathBuf,
+    },
+    /// Approve a one-time voter admission on the current leader
+    ApproveNode {
+        #[arg(long = "role", default_value = "voter")]
+        role: cluster::NodeRole,
+        #[arg(long = "node-id")]
+        node_id: String,
+        #[arg(long = "host-ip")]
+        host_ip: Ipv4Addr,
+        #[arg(
+            long = "api-port",
+            help = "Node API port when using IP:port identities"
+        )]
+        api_port: Option<u16>,
+        #[arg(long)]
+        subnet: String,
+        #[arg(long = "public-key-sha256")]
+        public_key_sha256: String,
+    },
     /// Show information about the active cluster
     Info,
+    /// List live cluster nodes and their data-plane status
+    Nodes,
+    /// Drain workloads from a cluster node
+    Drain {
+        #[arg(help = "Cluster node ID")]
+        node_id: String,
+    },
+    /// Make a drained cluster node schedulable again
+    Restore {
+        #[arg(help = "Cluster node ID")]
+        node_id: String,
+    },
+    /// Drain and permanently remove a node from cluster membership
+    RemoveNode {
+        #[arg(help = "Cluster node ID")]
+        node_id: String,
+    },
     /// Show the controller's effective config (secrets are masked)
     Config,
     /// Restart the maestro controller (stops all containers and restarts the process)
@@ -162,16 +264,25 @@ enum ClusterCommand {
         yes: bool,
     },
     /// Upgrade system components
-    #[command(after_help = "Example: maestro cluster upgrade system")]
+    #[command(
+        after_help = "Examples:\n  maestro cluster upgrade --version 0.3.0\n  maestro cluster upgrade system"
+    )]
     Upgrade {
         #[command(subcommand)]
-        target: UpgradeTarget,
+        target: Option<UpgradeTarget>,
+        #[arg(long, help = "Roll the entire cluster to this Maestro version")]
+        version: Option<String>,
         #[arg(
             short = 'y',
             long = "yes",
             help = "Skip the cluster-confirmation prompt"
         )]
         yes: bool,
+    },
+    /// Manually abort a stale upgrade run and remove its deployment freeze
+    Unfreeze {
+        #[arg(long = "upgrade-run", help = "Exact upgrade run ID")]
+        upgrade_run: String,
     },
 }
 
@@ -518,6 +629,7 @@ async fn run() -> crate::error::Result<bool> {
                     cluster: config::ClusterConfig {
                         name: cluster_name
                             .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
+                        ..Default::default()
                     },
                     ingress: config::IngressConfig {
                         port: None,
@@ -618,6 +730,8 @@ async fn run() -> crate::error::Result<bool> {
                 .and_then(|dd| dd.site.clone())
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
+            let runtime_type = cfg.runtime;
+            let runtime = runtime::create_provider(runtime_type);
 
             let enable_tailscale = enable_tailscale || cfg.tailscale.is_some();
             if enable_tailscale && cfg.tailscale.is_none() {
@@ -630,16 +744,53 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             validate_subnet_cidr(&subnet)?;
             cfg.subnet = Some(subnet);
+            let cluster_alias = cfg.cluster.name.to_lowercase();
+            let cluster_data_dir = data_dir.join(&cluster_alias);
+            let migration_in_progress = cluster::migration::is_in_progress(&cluster_data_dir);
+            if cfg.cluster.ca_sha256.is_none()
+                && let Some(fingerprint) =
+                    cluster::migration::installed_ca_fingerprint(&cluster_data_dir)
+                        .map_err(|error| Error::invalid_config(error.to_string()))?
+            {
+                cfg.cluster.ca_sha256 = Some(fingerprint);
+            }
+            if cfg.cluster.nodes.is_empty()
+                && (migration_in_progress || cluster_data_dir.join("system/cluster-id").exists())
+            {
+                return Err(Error::invalid_config(
+                    "this data directory is cluster-enabled; cluster.nodes cannot be removed",
+                ));
+            }
+            let automatic_legacy_migration = migration_in_progress
+                || cluster::migration::is_legacy_candidate(&cfg.cluster, &cluster_data_dir);
+            if automatic_legacy_migration {
+                cluster::network::validate_cluster_provisioning_config(
+                    &cfg.cluster,
+                    cfg.subnet.as_deref(),
+                )
+            } else {
+                cluster::network::validate_cluster_config(&cfg.cluster, cfg.subnet.as_deref())
+            }
+            .map_err(|err| Error::invalid_config(err.to_string()))?;
+            if !cfg.cluster.nodes.is_empty()
+                && cfg
+                    .jwt_secret_key
+                    .as_deref()
+                    .is_none_or(|secret| secret.len() < 32)
+            {
+                return Err(Error::invalid_config(
+                    "jwt-secret-key must contain at least 32 characters in cluster mode",
+                ));
+            }
+            if !cfg.cluster.nodes.is_empty() && cfg.disable_etcd_cert {
+                cfg.disable_etcd_cert = false;
+                eprintln!("[maestro]: --disable-etcd-cert is ignored in multi-node mode");
+            }
             let egress_deny = firewall::normalize_cidrs(&cfg.egress.deny, "deny")?;
             let egress_allow = firewall::normalize_cidrs(&cfg.egress.allow, "allow")?;
 
-            let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
-                Error::internal(format!("failed to serialize masked config: {err}"))
-            })?;
-
             let (signal_tx, signal_task) = spawn_shutdown_signal_bus()?;
-            let cluster_alias = cfg.cluster.name.to_lowercase();
-            let data_dir = data_dir.join(&cluster_alias);
+            let data_dir = cluster_data_dir;
             std::fs::create_dir_all(&data_dir).map_err(|err| {
                 Error::internal(format!(
                     "failed to create data directory {}: {err}",
@@ -648,19 +799,155 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             verify_encryption_key(&data_dir, &cfg.encryption_key)?;
             let _lock = acquire_lock(&data_dir)?;
-            let cluster_suffix = load_or_create_cluster_suffix(&data_dir)?;
-            let cluster_name = format!("{cluster_alias}-{cluster_suffix}");
-            let etcd_port = etcd_port.unwrap_or_else(|| {
-                let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                    .expect("failed to bind to random port for etcd");
-                listener
-                    .local_addr()
-                    .expect("failed to get local addr")
-                    .port()
+            if automatic_legacy_migration {
+                let legacy_etcd =
+                    cluster::migration::legacy_etcd_container_name(&cfg.cluster, &data_dir)
+                        .map_err(|error| Error::invalid_config(error.to_string()))?;
+                runtime
+                    .remove_container(&legacy_etcd)
+                    .await
+                    .map_err(|error| {
+                        Error::internal(format!(
+                            "failed to stop legacy etcd container `{legacy_etcd}`: {error}"
+                        ))
+                    })?;
+                let host_ip = cluster::network::resolve_cluster_host_ip(&cfg.cluster, &data_dir)
+                    .map_err(|error| Error::invalid_config(error.to_string()))?
+                    .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+                let migration = cluster::migration::migrate(&cfg.cluster, &data_dir, host_ip)
+                    .map_err(|error| {
+                        Error::invalid_config(format!(
+                            "automatic legacy cluster migration failed: {error}"
+                        ))
+                    })?;
+                cfg.cluster.ca_sha256 = Some(migration.ca_sha256.clone());
+                eprintln!(
+                    "[maestro]: migrated legacy etcd member into cluster `{}`; CA SHA-256: {}; offline backup: {}; recovery manifest: {}",
+                    migration.cluster_id,
+                    migration.ca_sha256,
+                    migration.etcd_backup.display(),
+                    migration.etcd_backup_manifest.display()
+                );
+            }
+            let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
+                Error::internal(format!("failed to serialize masked config: {err}"))
+            })?;
+            let ingestion_token = load_or_create_ingestion_token(&data_dir)?;
+            let cluster_runtime = if cfg.cluster.nodes.is_empty() {
+                None
+            } else {
+                let host_ip = cluster::network::resolve_cluster_host_ip(&cfg.cluster, &data_dir)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?
+                    .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+                let cluster_id = cluster::identity::load_cluster_id(&data_dir)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?;
+                let voter_cache = cluster::join::load_voter_cache(&data_dir, &cluster_id)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?;
+                let node_id = cluster::identity::load_or_create_node_id(&data_dir)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?;
+                let certs_dir = data_dir.join("system/certs");
+                let node_certs = utils::certs::read_etcd_certs(&certs_dir).map_err(|err| {
+                    Error::invalid_config(format!(
+                        "node certificate bundle is missing or invalid: {err}; provision the host-specific bundle issued by `maestro cluster init-ca` or the join API"
+                    ))
+                })?;
+                validate_ca_fingerprint(cfg.cluster.ca_sha256.as_deref(), &node_certs.ca_pem)?;
+                if cfg.cluster.role == cluster::NodeRole::Voter {
+                    let ca = utils::certs::load_cluster_ca(&certs_dir.join("cluster-ca")).map_err(
+                        |err| {
+                            Error::invalid_config(format!(
+                                "voter cluster CA material is missing or invalid: {err}"
+                            ))
+                        },
+                    )?;
+                    if ca.cert_pem != node_certs.ca_pem {
+                        return Err(Error::invalid_config(
+                            "voter CA private material does not match the provisioned node certificate bundle",
+                        ));
+                    }
+                }
+                let local_endpoint = cfg
+                    .cluster
+                    .local_endpoint(host_ip)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?;
+                Some(cluster::ClusterRuntime {
+                    cluster_id,
+                    node_id,
+                    instance_id: cluster::identity::new_instance_id(),
+                    host_ip,
+                    role: cfg.cluster.role,
+                    initial_voters: cfg
+                        .cluster
+                        .resolved_nodes()
+                        .map_err(|err| Error::invalid_config(err.to_string()))?,
+                    subnets: voter_cache
+                        .as_ref()
+                        .map(|cache| cache.subnets.clone())
+                        .unwrap_or_else(|| cfg.cluster.subnets.clone()),
+                    control_allow_cidrs: cfg.cluster.control_allow_cidrs.clone(),
+                    api_port: local_endpoint.api_port,
+                    gateway_port: local_endpoint.gateway_port,
+                    etcd_client_port: local_endpoint.etcd_client_port,
+                    etcd_peer_port: local_endpoint.etcd_peer_port,
+                    scheduling: cfg.cluster.scheduling,
+                    shared_registry: cfg.cluster.shared_registry.clone(),
+                    labels: cfg.cluster.labels.clone(),
+                    identity_api_port: local_endpoint.identity_api_port,
+                })
+            };
+            let cluster_name = if let Some(cluster) = &cluster_runtime {
+                format!("{cluster_alias}-{}", &cluster.cluster_id[..8])
+            } else {
+                let cluster_suffix = load_or_create_cluster_suffix(&data_dir)?;
+                format!("{cluster_alias}-{cluster_suffix}")
+            };
+            let etcd_port = if let Some(cluster) = &cluster_runtime {
+                if etcd_port.is_some_and(|port| port != cluster.etcd_client_port) {
+                    return Err(Error::invalid_input(
+                        "--etcd-port conflicts with cluster.etcd-client-port",
+                    ));
+                }
+                cluster.etcd_client_port
+            } else {
+                etcd_port.unwrap_or_else(|| {
+                    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                        .expect("failed to bind to random port for etcd");
+                    listener
+                        .local_addr()
+                        .expect("failed to get local addr")
+                        .port()
+                })
+            };
+            let etcd_endpoints = if let Some(cluster) = &cluster_runtime {
+                cluster::join::load_voter_cache(&data_dir, &cluster.cluster_id)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?
+                    .map(|cache| cache.client_endpoints())
+                    .unwrap_or_else(|| cluster.client_endpoints())
+            } else {
+                let etcd_scheme = if cfg.disable_etcd_cert {
+                    "http"
+                } else {
+                    "https"
+                };
+                vec![format!("{etcd_scheme}://127.0.0.1:{etcd_port}")]
+            };
+            let etcd_endpoint = if cluster_runtime
+                .as_ref()
+                .is_some_and(|cluster| cluster.role == cluster::NodeRole::Worker)
+            {
+                etcd_endpoints[0].clone()
+            } else if let Some(cluster) = &cluster_runtime {
+                format!("https://{}:{etcd_port}", cluster.host_ip)
+            } else {
+                etcd_endpoints[0].clone()
+            };
+            let network = network.unwrap_or_else(|| {
+                cluster_runtime
+                    .as_ref()
+                    .and_then(cluster::ClusterRuntime::resource_suffix)
+                    .map(|suffix| format!("maestro-{cluster_alias}-{suffix}"))
+                    .unwrap_or_else(|| format!("maestro-{cluster_alias}"))
             });
-            let etcd_scheme = if disable_etcd_cert { "http" } else { "https" };
-            let etcd_endpoint = format!("{etcd_scheme}://127.0.0.1:{}", etcd_port);
-            let network = network.unwrap_or_else(|| format!("maestro-{cluster_alias}"));
 
             let project_dir = std::fs::canonicalize(&project_dir).unwrap_or_else(|_| {
                 std::env::current_dir()
@@ -675,8 +962,6 @@ async fn run() -> crate::error::Result<bool> {
             } else {
                 (None, Vec::new())
             };
-            let runtime_type = cfg.runtime;
-            let runtime = runtime::create_provider(runtime_type);
             let build_command_env = cfg
                 .depot
                 .and_then(|depot| depot.token)
@@ -728,11 +1013,10 @@ async fn run() -> crate::error::Result<bool> {
 
             let mut background_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-            let enable_ingress_access_logs = cfg
-                .datadog
-                .as_ref()
-                .map(|dd| dd.include_ingress_logs)
-                .unwrap_or(false);
+            // Local ingress traffic analytics and blocklist suggestions depend on
+            // structured access logs. Datadog delivery remains independently
+            // controlled by datadog.include-ingress-logs.
+            let enable_ingress_access_logs = true;
 
             let mut metrics_datadog_tx: Option<flume::Sender<metrics::MetricBatch>> = None;
             if let Some(dd) = cfg.datadog {
@@ -786,11 +1070,15 @@ async fn run() -> crate::error::Result<bool> {
                 }
             }
 
+            let recreate_legacy_network =
+                cluster::migration::network_reconfiguration_required(&data_dir);
             let mut deployment_config = ControllerConfig {
                 cluster_alias,
                 cluster_name,
+                cluster: cluster_runtime,
                 data_dir,
                 etcd_port,
+                etcd_endpoints,
                 probe_port: None,
                 admin_port,
                 ingress_ports: {
@@ -811,11 +1099,14 @@ async fn run() -> crate::error::Result<bool> {
                 tailscale_authkey,
                 tailscale_advertise_routes,
                 encryption_key: SecretString::new(cfg.encryption_key),
+                ingestion_token,
+                internal_control_token: SecretString::new(utils::nanoid::unique_id(48)),
+                join_secret: cfg.cluster.join_secret.clone().map(SecretString::new),
                 jwt_secret_key: cfg.jwt_secret_key,
                 build_command_env,
                 tags: parse_tags(cfg.tags)?,
                 system_type: cfg.system,
-                force,
+                force: force || recreate_legacy_network,
                 disable_etcd_cert: cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
                 maestro_config,
@@ -829,17 +1120,30 @@ async fn run() -> crate::error::Result<bool> {
                 slack_webhook_url: cfg.slack.map(|sl| sl.webhook_url),
             };
 
-            let probe_host_port = deployment_config.probe_port.unwrap_or_else(|| {
-                let listener =
-                    std::net::TcpListener::bind("0.0.0.0:0").expect("failed to bind probe port");
-                listener
-                    .local_addr()
-                    .expect("failed to get local addr")
-                    .port()
-            });
+            let probe_host_port = deployment_config
+                .cluster
+                .as_ref()
+                .map(|cluster| cluster.api_port)
+                .or(deployment_config.probe_port)
+                .unwrap_or_else(|| {
+                    let listener = std::net::TcpListener::bind("0.0.0.0:0")
+                        .expect("failed to bind probe port");
+                    listener
+                        .local_addr()
+                        .expect("failed to get local addr")
+                        .port()
+                });
             deployment_config.probe_port = Some(probe_host_port);
 
             let firewall_config = firewall::FirewallConfig {
+                table_name: deployment_config
+                    .cluster
+                    .as_ref()
+                    .and_then(|cluster| cluster.identity_api_port)
+                    .map_or_else(
+                        || firewall::DEFAULT_TABLE_NAME.to_string(),
+                        |port| format!("maestro_egress_{port}"),
+                    ),
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
                 allow: egress_allow,
@@ -871,6 +1175,7 @@ async fn run() -> crate::error::Result<bool> {
                     &log_sender,
                     &logger,
                     &mut supervisor,
+                    signal_tx.subscribe(),
                 ) => info,
                 _ = startup_shutdown_rx.recv() => {
                     eprintln!("[maestro]: shutdown requested during startup");
@@ -878,9 +1183,11 @@ async fn run() -> crate::error::Result<bool> {
                     return Ok(false);
                 }
             };
+            background_handles.extend(system_info.cluster_handles);
+            let leader_elector = system_info.leader_elector.clone();
 
             let derived_key = derive_key(deployment_config.encryption_key.as_str());
-            let etcd_tls = if disable_etcd_cert {
+            let etcd_tls = if deployment_config.disable_etcd_cert {
                 None
             } else {
                 let certs_dir = deployment_config.certs_dir();
@@ -890,13 +1197,302 @@ async fn run() -> crate::error::Result<bool> {
                     &certs_dir.join("client-key.pem").to_string_lossy(),
                 )
             };
+            if let (Some(cluster), Some(tls)) =
+                (deployment_config.cluster.clone(), etcd_tls.clone())
+            {
+                background_handles.push(tokio::spawn(cluster::join::run_voter_cache_sync(
+                    deployment_config.data_dir.clone(),
+                    cluster,
+                    deployment_config.etcd_endpoints.clone(),
+                    tls,
+                    signal_tx.subscribe(),
+                    logger.clone(),
+                )));
+            }
+            let mut cluster_registry: Option<std::sync::Arc<dyn cluster::registry::NodeRegistry>> =
+                None;
+            if let Some(cluster) = deployment_config.cluster.clone() {
+                let registry = Arc::new(
+                    cluster::registry::EtcdNodeRegistry::connect(
+                        &deployment_config.etcd_endpoints,
+                        etcd_tls.clone(),
+                        cluster.node_id.clone(),
+                    )
+                    .await
+                    .map_err(|err| {
+                        Error::external(format!("failed to connect cluster registry: {err}"))
+                    })?,
+                );
+                let data_plane_ready = false;
+                let tailscale_container =
+                    format!("maestro-tailscale-{}", deployment_config.system_name());
+                let tailscale_ip = cluster::data_plane::inspect_tailscale_ip(
+                    runtime.as_ref(),
+                    &tailscale_container,
+                )
+                .await;
+                let node_info = cluster::NodeInfo {
+                    node_id: cluster.node_id.clone(),
+                    instance_id: cluster.instance_id.clone(),
+                    hostname: cluster::identity::local_hostname(),
+                    role: cluster.role,
+                    scheduling: cluster.scheduling,
+                    cluster_host_ip: cluster.host_ip,
+                    cluster_api_port: cluster.api_port,
+                    cluster_gateway_port: cluster.gateway_port,
+                    subnet: deployment_config
+                        .subnet
+                        .clone()
+                        .expect("cluster subnet was validated"),
+                    tailscale_ip,
+                    data_plane_ready,
+                    data_plane_checked_at_ms: i64::try_from(
+                        utils::time::current_time_millis().unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
+                    data_plane_error: Some("node gateway validation is pending".to_string()),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    started_at_ms: i64::try_from(
+                        utils::time::current_time_millis().unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
+                    labels: cluster.labels.clone(),
+                };
+                background_handles.push(registry.clone().spawn(
+                    node_info,
+                    signal_tx.subscribe(),
+                    logger.clone(),
+                ));
+                cluster_registry = Some(registry.clone());
+                background_handles.push(cluster::data_plane::spawn(
+                    registry,
+                    runtime.clone(),
+                    cluster,
+                    deployment_config.certs_dir(),
+                    deployment_config
+                        .cloudflare_tunnel_token
+                        .as_ref()
+                        .filter(|_| deployment_config.cluster.is_some())
+                        .map(|_| cluster::data_plane::IngressConnectorGate {
+                            network: deployment_config.network.clone(),
+                            containers: (1..=deployment_config.cloudflare_tunnel_replicas)
+                                .map(|replica| {
+                                    format!(
+                                        "maestro-cloudflared-{}-{replica}",
+                                        deployment_config.system_name()
+                                    )
+                                })
+                                .collect(),
+                        }),
+                    signal_tx.subscribe(),
+                    logger.clone(),
+                ));
+            }
             let store: Arc<dyn deployment::store::ClusterStore> = Arc::new(
-                deployment::etcd::EtcdStateStore::new(&etcd_endpoint, derived_key, etcd_tls)
-                    .await?,
+                deployment::etcd::EtcdStateStore::new_with_endpoints(
+                    &deployment_config.etcd_endpoints,
+                    derived_key,
+                    etcd_tls.clone(),
+                )
+                .await?,
             );
+            if deployment_config.scheduling_enabled()
+                && cluster::migration::image_publication_required(&deployment_config.data_dir)
+            {
+                let cluster = deployment_config
+                    .cluster
+                    .as_ref()
+                    .expect("scheduling requires cluster configuration");
+                let registry = cluster
+                    .shared_registry
+                    .as_deref()
+                    .expect("cluster validation requires a shared registry");
+                let elector = leader_elector.as_ref().ok_or_else(|| {
+                    Error::external("legacy image migration requires a leader elector")
+                })?;
+                let token = elector
+                    .wait_until_leading(std::time::Duration::from_secs(30))
+                    .await
+                    .map_err(|error| {
+                        Error::external(format!(
+                            "legacy image migration seed did not acquire leadership: {error}"
+                        ))
+                    })?;
+                cluster::migration::publish_legacy_images(
+                    &deployment_config.data_dir,
+                    registry,
+                    runtime.clone(),
+                    store.clone(),
+                    &token,
+                )
+                .await
+                .map_err(|error| {
+                    Error::external(format!(
+                        "failed to make migrated service images cluster-ready; scheduling remains disabled: {error}"
+                    ))
+                })?;
+                logger.emit(
+                    "info",
+                    "migrated service images are available in the shared registry",
+                );
+            }
+            let cluster_assignment_store: Option<
+                Arc<dyn cluster::assignment_store::AssignmentStore>,
+            > = if deployment_config.cluster.is_some() {
+                Some(Arc::new(
+                    cluster::assignment_store::EtcdAssignmentStore::connect(
+                        &deployment_config.etcd_endpoints,
+                        etcd_tls.clone(),
+                    )
+                    .await
+                    .map_err(|err| {
+                        Error::external(format!(
+                            "failed to connect cluster assignment store: {err}"
+                        ))
+                    })?,
+                ))
+            } else {
+                None
+            };
+            let upgrade_orchestrator = match (
+                deployment_config.cluster.as_ref(),
+                leader_elector.clone(),
+                cluster_registry.clone(),
+                cluster_assignment_store.clone(),
+            ) {
+                (Some(cluster), Some(elector), Some(registry), Some(assignments)) => {
+                    Some(Arc::new(
+                        cluster::upgrade::ClusterUpgradeOrchestrator::new(
+                            cluster.node_id.clone(),
+                            cluster.host_ip.into(),
+                            &deployment_config.certs_dir(),
+                            elector,
+                            registry,
+                            assignments,
+                            store.clone(),
+                            deployment_config.jwt_secret_key.clone(),
+                            logger.clone(),
+                        )
+                        .map_err(|error| {
+                            Error::external(format!(
+                                "failed to initialize cluster upgrades: {error}"
+                            ))
+                        })?,
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(upgrade) = &upgrade_orchestrator {
+                background_handles.push(tokio::spawn(upgrade.clone().run(signal_tx.subscribe())));
+            }
+            if let (Some(elector), Some(registry)) =
+                (leader_elector.clone(), cluster_registry.clone())
+            {
+                let join = match (
+                    deployment_config.cluster.clone(),
+                    deployment_config.join_secret.as_ref(),
+                    etcd_tls.clone(),
+                ) {
+                    (Some(cluster), Some(join_secret), Some(tls)) => {
+                        Some(cluster::join::JoinCoordinator::new(
+                            cluster,
+                            deployment_config.cluster_alias.clone(),
+                            deployment_config.data_dir.clone(),
+                            join_secret.as_str().to_string(),
+                            deployment_config.etcd_endpoints.clone(),
+                            tls,
+                        ))
+                    }
+                    _ => None,
+                };
+                let control = cluster::control::ControlServer::new(
+                    deployment_config
+                        .data_dir
+                        .join("system/control/control.sock"),
+                    deployment_config
+                        .internal_control_token
+                        .as_str()
+                        .to_string(),
+                    elector,
+                    registry,
+                    join,
+                    upgrade_orchestrator.clone(),
+                    store.clone(),
+                    logger.clone(),
+                );
+                background_handles.push(tokio::spawn(control.run(signal_tx.subscribe())));
+            }
+            if let Some(cluster) = &deployment_config.cluster {
+                background_handles.push(tokio::spawn(cluster::telemetry::run_disk_reporter(
+                    store.clone(),
+                    cluster.node_id.clone(),
+                    signal_tx.subscribe(),
+                    logger.clone(),
+                )));
+            }
+            if deployment_config.scheduling_enabled() {
+                let cluster = deployment_config
+                    .cluster
+                    .as_ref()
+                    .expect("scheduling requires cluster runtime");
+                let assignment_store = cluster_assignment_store
+                    .clone()
+                    .expect("cluster assignment store was initialized");
+                let traffic_manager = Arc::new(
+                    cluster::traefik::EtcdTrafficManager::connect(
+                        &deployment_config.etcd_endpoints,
+                        etcd_tls.clone(),
+                    )
+                    .await
+                    .map_err(|err| {
+                        Error::external(format!("failed to connect cluster routing store: {err}"))
+                    })?,
+                );
+                background_handles.push(tokio::spawn(cluster::traefik::run_dns_sync(
+                    traffic_manager.clone(),
+                    system_info.dns_manager.clone(),
+                    system_info
+                        .ingress_ip
+                        .clone()
+                        .expect("cluster ingress requires a static network address"),
+                    signal_tx.subscribe(),
+                    logger.clone(),
+                )));
+                let executor = cluster::executor::EngineReplicaExecutor::new(
+                    &deployment_config,
+                    runtime.clone(),
+                    store.clone(),
+                    assignment_store.clone(),
+                    Some(log_sender.clone()),
+                )?;
+                let reconciler = cluster::reconciler::AssignmentReconciler::new(
+                    cluster.node_id.clone(),
+                    assignment_store.clone(),
+                    executor,
+                    logger.clone(),
+                );
+                background_handles.push(tokio::spawn(reconciler.run(signal_tx.subscribe())));
+                if let (Some(elector), Some(registry)) =
+                    (leader_elector.clone(), cluster_registry.clone())
+                {
+                    let leader_loop = cluster::leader_loop::LeaderLoop::new(
+                        cluster.cluster_id.clone(),
+                        deployment_config.cluster_name.clone(),
+                        elector,
+                        assignment_store,
+                        registry,
+                        store.clone(),
+                        traffic_manager,
+                        logger.clone(),
+                    );
+                    background_handles.push(tokio::spawn(leader_loop.run(signal_tx.subscribe())));
+                }
+            }
             let probe_log_endpoint = format!("http://127.0.0.1:{probe_host_port}/api/logs");
             let node_id = load_or_create_node_id(&deployment_config.data_dir)?;
-            let http_sink = logs::HttpSink::new("controller", node_id, &probe_log_endpoint);
+            let ingestion_token = deployment_config.ingestion_token.as_str().to_string();
+            let http_sink = logs::HttpSink::new("controller", node_id, &probe_log_endpoint)
+                .with_ingestion_token(&ingestion_token);
             let sink_worker = logs::SinkWorker::new(
                 log_store.clone(),
                 Box::new(http_sink),
@@ -911,27 +1507,37 @@ async fn run() -> crate::error::Result<bool> {
                 log_store.clone(),
                 sink_runtime_stats,
                 signal_tx.subscribe(),
+                Some(ingestion_token.clone()),
             );
             background_handles.push(tokio::spawn(stats_reporter.run()));
             let deployment_signal_rx = signal_tx.subscribe();
-            let watcher_signal_rx = signal_tx.subscribe();
-
-            let watcher = builder::BuildWatcher::new(
-                store.clone(),
-                deployment_config.data_dir.clone(),
-                watcher_signal_rx,
-                logger.clone(),
-            );
-            let watcher_handle = tokio::spawn(watcher.run());
+            let scheduling_enabled = deployment_config.scheduling_enabled();
+            let watcher_store = store.clone();
+            let watcher_data_dir = deployment_config.data_dir.clone();
+            let watcher_logger = logger.clone();
+            let watcher_handle = if scheduling_enabled {
+                None
+            } else {
+                Some(tokio::spawn(
+                    builder::BuildWatcher::new(
+                        watcher_store.clone(),
+                        watcher_data_dir.clone(),
+                        signal_tx.subscribe(),
+                        watcher_logger.clone(),
+                    )
+                    .run(),
+                ))
+            };
 
             let metrics_signal_rx = signal_tx.subscribe();
             let metrics_collector = metrics::MetricsCollector::new(
                 metrics_endpoint,
-                deployment_config.cluster_name.clone(),
+                deployment_config.system_name(),
                 runtime.cli_name().to_string(),
                 metrics_signal_rx,
                 logger,
                 metrics_datadog_tx,
+                Some(ingestion_token),
             );
             let metrics_handle = tokio::spawn(metrics_collector.run());
 
@@ -945,16 +1551,68 @@ async fn run() -> crate::error::Result<bool> {
                 Some(system_info.dns_manager),
                 system_info.nameserver_ip,
             );
+            if scheduling_enabled && let Some(elector) = &leader_elector {
+                controller
+                    .observe_leadership(cluster::elector::LeaderElector::watch(elector.as_ref()));
+            }
             let deployment_shutdown_tx = signal_tx.clone();
+            let deployment_wait_shutdown_rx = signal_tx.subscribe();
 
             let result = async move {
-                let result = controller.run().await.map_err(Into::into);
-                let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
-                result.map(|exit_reason| (exit_reason, controller))
+                let mut wait_shutdown = deployment_wait_shutdown_rx;
+                loop {
+                    if let Some(elector) = &leader_elector
+                        && scheduling_enabled
+                    {
+                        let mut leadership =
+                            cluster::elector::LeaderElector::watch(elector.as_ref());
+                        loop {
+                            if matches!(
+                                leadership.borrow().clone(),
+                                cluster::types::LeadershipState::Leading(_)
+                            ) {
+                                break;
+                            }
+                            tokio::select! {
+                                changed = leadership.changed() => {
+                                    if changed.is_err() {
+                                        return Err(Error::external("cluster leader elector stopped"));
+                                    }
+                                }
+                                _ = wait_shutdown.recv() => {
+                                    return Ok((deployment::controller::ControllerExitReason::Shutdown, controller));
+                                }
+                            }
+                        }
+                    }
+                    let scoped_watcher = scheduling_enabled.then(|| {
+                        tokio::spawn(
+                            builder::BuildWatcher::new(
+                                watcher_store.clone(),
+                                watcher_data_dir.clone(),
+                                deployment_shutdown_tx.subscribe(),
+                                watcher_logger.clone(),
+                            )
+                            .run(),
+                        )
+                    });
+                    let controller_result = controller.run().await;
+                    if let Some(handle) = scoped_watcher {
+                        handle.abort();
+                    }
+                    let exit_reason = controller_result.map_err(Error::from)?;
+                    if exit_reason == deployment::controller::ControllerExitReason::Demoted {
+                        continue;
+                    }
+                    let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
+                    return Ok((exit_reason, controller));
+                }
             }
             .await;
 
-            watcher_handle.abort();
+            if let Some(handle) = watcher_handle {
+                handle.abort();
+            }
             metrics_handle.abort();
             for handle in &background_handles {
                 handle.abort();
@@ -1031,22 +1689,144 @@ async fn run() -> crate::error::Result<bool> {
                 }
             }
         }
-        Some(CliCommand::Cluster { command }) => {
-            let host = cli::contexts::active_host()?;
-            match command {
-                ClusterCommand::Info => cli::info::run_info(&host).await.map(|()| false),
-                ClusterCommand::Config => cli::config::run_config(&host).await.map(|()| false),
-                ClusterCommand::Restart { yes } => {
-                    cli::restart::run_restart(&host, yes).await.map(|()| false)
-                }
-                ClusterCommand::Upgrade {
-                    target: UpgradeTarget::System,
-                    yes,
-                } => cli::upgrade::run_upgrade_system(&host, yes)
+        Some(CliCommand::Cluster { command }) => match command {
+            ClusterCommand::Enable { config, data_dir } => {
+                enable_legacy_cluster(&config, &data_dir)
                     .await
-                    .map(|()| false),
+                    .map(|()| false)
             }
-        }
+            ClusterCommand::InitCa { config, data_dir } => {
+                init_cluster_ca(&config, &data_dir).await.map(|()| false)
+            }
+            ClusterCommand::IssueNode {
+                config,
+                data_dir,
+                host_ip,
+                api_port,
+                node_id,
+                subnet,
+                role,
+                output,
+            } => issue_cluster_node(
+                &config,
+                &data_dir,
+                host_ip,
+                api_port,
+                &node_id,
+                &subnet,
+                role,
+                output.as_deref(),
+            )
+            .await
+            .map(|()| false),
+            ClusterCommand::Join {
+                leader,
+                prepare,
+                config,
+                data_dir,
+            } => {
+                if prepare {
+                    if leader.is_some() {
+                        return Err(Error::invalid_input(
+                            "leader address is not accepted with --prepare",
+                        ));
+                    }
+                    cli::cluster_lifecycle::prepare_join(&config, &data_dir)
+                        .await
+                        .map(|()| false)
+                } else {
+                    let leader = leader.ok_or_else(|| {
+                        Error::invalid_input("leader address is required unless --prepare is used")
+                    })?;
+                    cli::cluster_lifecycle::join_cluster(&leader, &config, &data_dir)
+                        .await
+                        .map(|()| false)
+                }
+            }
+            ClusterCommand::ApproveNode {
+                role,
+                node_id,
+                host_ip,
+                api_port,
+                subnet,
+                public_key_sha256,
+            } => {
+                let host = cli::contexts::active_host()?;
+                cli::cluster_lifecycle::approve_node(
+                    &host,
+                    node_id,
+                    role,
+                    host_ip,
+                    api_port,
+                    subnet,
+                    public_key_sha256,
+                )
+                .await
+                .map(|()| false)
+            }
+            ClusterCommand::Info => {
+                let host = cli::contexts::active_host()?;
+                cli::info::run_info(&host).await.map(|()| false)
+            }
+            ClusterCommand::Nodes => {
+                let host = cli::contexts::active_host()?;
+                cli::nodes::run_nodes(&host).await.map(|()| false)
+            }
+            ClusterCommand::Drain { node_id } => {
+                let host = cli::contexts::active_host()?;
+                cli::nodes::set_drain_state(&host, &node_id, true)
+                    .await
+                    .map(|()| false)
+            }
+            ClusterCommand::Restore { node_id } => {
+                let host = cli::contexts::active_host()?;
+                cli::nodes::set_drain_state(&host, &node_id, false)
+                    .await
+                    .map(|()| false)
+            }
+            ClusterCommand::RemoveNode { node_id } => {
+                let host = cli::contexts::active_host()?;
+                cli::cluster_lifecycle::remove_node(&host, &node_id)
+                    .await
+                    .map(|()| false)
+            }
+            ClusterCommand::Config => {
+                let host = cli::contexts::active_host()?;
+                cli::config::run_config(&host).await.map(|()| false)
+            }
+            ClusterCommand::Restart { yes } => {
+                let host = cli::contexts::active_host()?;
+                cli::restart::run_restart(&host, yes).await.map(|()| false)
+            }
+            ClusterCommand::Upgrade {
+                target,
+                version,
+                yes,
+            } => {
+                let host = cli::contexts::active_host()?;
+                match (target, version) {
+                    (Some(UpgradeTarget::System), None) => {
+                        cli::upgrade::run_upgrade_system(&host, yes).await
+                    }
+                    (None, Some(version)) => {
+                        cli::upgrade::run_cluster_upgrade(&host, &version, yes).await
+                    }
+                    (Some(_), Some(_)) => Err(Error::invalid_input(
+                        "choose either `upgrade system` or `upgrade --version`, not both",
+                    )),
+                    (None, None) => Err(Error::invalid_input(
+                        "--version is required for a cluster upgrade",
+                    )),
+                }
+                .map(|()| false)
+            }
+            ClusterCommand::Unfreeze { upgrade_run } => {
+                let host = cli::contexts::active_host()?;
+                cli::upgrade::run_cluster_unfreeze(&host, &upgrade_run)
+                    .await
+                    .map(|()| false)
+            }
+        },
         Some(CliCommand::Logs(args)) => {
             let host = cli::contexts::active_host()?;
             cli::logs::run_logs(&host, args).await.map(|()| false)
@@ -1211,6 +1991,50 @@ fn is_valid_cluster_suffix(value: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
 }
 
+fn load_or_create_ingestion_token(
+    data_dir: &Path,
+) -> crate::error::Result<utils::crypto::SecretString> {
+    let directory = data_dir.join("system/probe");
+    std::fs::create_dir_all(&directory).map_err(|err| {
+        Error::internal(format!(
+            "failed to create probe secret directory {}: {err}",
+            directory.display()
+        ))
+    })?;
+    let path = directory.join("ingestion-token");
+    if let Ok(value) = std::fs::read_to_string(&path) {
+        let value = value.trim();
+        if value.len() >= 32 {
+            return Ok(utils::crypto::SecretString::new(value.to_string()));
+        }
+        return Err(Error::invalid_config(format!(
+            "invalid ingestion token in {}",
+            path.display()
+        )));
+    }
+    let value = utils::nanoid::unique_id(48);
+    let temporary = directory.join(format!("ingestion-token.tmp-{}", std::process::id()));
+    std::fs::write(&temporary, format!("{value}\n")).map_err(|err| {
+        Error::internal(format!(
+            "failed to write ingestion token {}: {err}",
+            temporary.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
+            .map_err(|err| Error::internal(format!("failed to protect ingestion token: {err}")))?;
+    }
+    std::fs::rename(&temporary, &path).map_err(|err| {
+        Error::internal(format!(
+            "failed to persist ingestion token {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(utils::crypto::SecretString::new(value))
+}
+
 fn acquire_lock(data_dir: &Path) -> crate::error::Result<std::fs::File> {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -1290,6 +2114,300 @@ fn load_or_create_node_id(data_dir: &Path) -> crate::error::Result<String> {
         let _ = directory.sync_all();
     }
     Ok(node_id)
+}
+
+async fn enable_legacy_cluster(
+    config_source: &str,
+    base_data_dir: &Path,
+) -> crate::error::Result<()> {
+    let config = config::load_config(config_source)
+        .await
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    cluster::network::validate_cluster_provisioning_config(
+        &config.cluster,
+        config.subnet.as_deref(),
+    )
+    .map_err(|err| Error::invalid_config(err.to_string()))?;
+    if config.cluster.nodes.is_empty() || config.cluster.role != cluster::NodeRole::Voter {
+        return Err(Error::invalid_config(
+            "cluster enable requires a voter with one or three configured initial voter IPs",
+        ));
+    }
+    if config
+        .cluster
+        .join_secret
+        .as_deref()
+        .is_none_or(|secret| secret.len() < 32)
+    {
+        return Err(Error::invalid_config(
+            "cluster.join-secret must contain at least 32 characters",
+        ));
+    }
+    if config
+        .jwt_secret_key
+        .as_deref()
+        .is_none_or(|secret| secret.len() < 32)
+    {
+        return Err(Error::invalid_config(
+            "jwt-secret-key must contain at least 32 characters",
+        ));
+    }
+    let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
+    std::fs::create_dir_all(&data_dir)?;
+    let _lock = acquire_lock(&data_dir)?;
+    let legacy_etcd = cluster::migration::legacy_etcd_container_name(&config.cluster, &data_dir)
+        .map_err(|error| Error::invalid_config(error.to_string()))?;
+    runtime::create_provider(config.runtime)
+        .remove_container(&legacy_etcd)
+        .await
+        .map_err(|error| {
+            Error::internal(format!(
+                "failed to stop legacy etcd container `{legacy_etcd}`: {error}"
+            ))
+        })?;
+    let host_ip = cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir)
+        .map_err(|err| Error::invalid_config(err.to_string()))?
+        .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+    let migration = cluster::migration::migrate(&config.cluster, &data_dir, host_ip)
+        .map_err(|error| Error::invalid_config(error.to_string()))?;
+    println!("[maestro]: legacy single-node cluster migration prepared");
+    println!("cluster id: {}", migration.cluster_id);
+    println!("CA SHA-256: {}", migration.ca_sha256);
+    println!("offline etcd backup: {}", migration.etcd_backup.display());
+    println!(
+        "recovery manifest: {}",
+        migration.etcd_backup_manifest.display()
+    );
+    println!(
+        "legacy certificate backup: {}",
+        data_dir.join("system/certs.legacy-backup").display()
+    );
+    Ok(())
+}
+
+async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::error::Result<()> {
+    let config = config::load_config(config_source)
+        .await
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    cluster::network::validate_cluster_provisioning_config(
+        &config.cluster,
+        config.subnet.as_deref(),
+    )
+    .map_err(|err| Error::invalid_config(err.to_string()))?;
+    if config.cluster.nodes.is_empty() {
+        return Err(Error::invalid_config(
+            "cluster.nodes is required for multi-node CA initialization",
+        ));
+    }
+    let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
+    std::fs::create_dir_all(&data_dir)?;
+    let host_ip = cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir)
+        .map_err(|err| Error::invalid_config(err.to_string()))?
+        .ok_or_else(|| Error::invalid_config("cluster host IP was not resolved"))?;
+    let local_endpoint = config
+        .cluster
+        .local_endpoint(host_ip)
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    let voter_endpoints = config
+        .cluster
+        .resolved_nodes()
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    if voter_endpoints.first() != Some(&local_endpoint) {
+        return Err(Error::invalid_config(format!(
+            "cluster init-ca must run on cluster.nodes[0] ({}), resolved this node as {}",
+            config.cluster.nodes[0],
+            local_endpoint.api_address()
+        )));
+    }
+    let ca_dir = data_dir.join("system/certs/cluster-ca");
+    if ca_dir.exists() || data_dir.join("system/cluster-id").exists() {
+        return Err(Error::conflict(format!(
+            "cluster identity or CA already exists under {}",
+            data_dir.display()
+        )));
+    }
+    let ca = utils::certs::generate_cluster_ca()
+        .map_err(|err| Error::internal(format!("failed to generate cluster CA: {err}")))?;
+    let cluster_id = cluster::identity::create_cluster_id(&data_dir)
+        .map_err(|err| Error::internal(err.to_string()))?;
+    utils::certs::write_cluster_ca(&ca_dir, &ca)
+        .map_err(|err| Error::internal(format!("failed to persist cluster CA: {err}")))?;
+    let provision_dir = data_dir.join("system/cluster-provision");
+    for voter in &voter_endpoints {
+        let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
+            &ca,
+            voter.host_ip,
+            voter.identity_api_port,
+            cluster::NodeRole::Voter,
+        )
+        .map_err(|err| {
+            Error::internal(format!(
+                "failed to issue certificates for {}: {err}",
+                voter.api_address()
+            ))
+        })?;
+        let voter_dir = provision_dir.join(voter.identity_suffix());
+        utils::certs::write_etcd_certs(&voter_dir, &certs).map_err(|err| {
+            Error::internal(format!(
+                "failed to persist certificates for {}: {err}",
+                voter.api_address()
+            ))
+        })?;
+        if *voter == local_endpoint {
+            utils::certs::write_etcd_certs(&data_dir.join("system/certs"), &certs).map_err(
+                |err| Error::internal(format!("failed to install seed certificates: {err}")),
+            )?;
+        }
+    }
+    cluster::bootstrap::arm_seed(&data_dir, &cluster_id, host_ip)
+        .map_err(|err| Error::internal(format!("failed to arm bootstrap seed: {err}")))?;
+    let fingerprint = certificate_fingerprint(&ca.cert_pem)?;
+    println!("cluster id: {cluster_id}");
+    println!("bootstrap node: {}", local_endpoint.api_address());
+    println!("CA SHA-256: {fingerprint}");
+    println!("cluster material: {}", data_dir.join("system").display());
+    println!("host certificate bundles: {}", provision_dir.display());
+    Ok(())
+}
+
+async fn issue_cluster_node(
+    config_source: &str,
+    base_data_dir: &Path,
+    host_ip: Ipv4Addr,
+    api_port: Option<u16>,
+    node_id: &str,
+    subnet: &str,
+    role: cluster::NodeRole,
+    output: Option<&Path>,
+) -> crate::error::Result<()> {
+    let config = config::load_config(config_source)
+        .await
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    cluster::network::validate_cluster_config(&config.cluster, config.subnet.as_deref())
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    if !host_ip.is_private() || host_ip.is_loopback() || host_ip.is_unspecified() {
+        return Err(Error::invalid_input(
+            "--host-ip must be a private, non-loopback IPv4 address",
+        ));
+    }
+    if !cluster::network::control_ip_allowed(&config.cluster, host_ip)
+        .map_err(|err| Error::invalid_config(err.to_string()))?
+    {
+        return Err(Error::invalid_input(
+            "--host-ip is absent from cluster.control-allow-cidrs",
+        ));
+    }
+    if role == cluster::NodeRole::Worker
+        && !config.cluster.uses_node_ports()
+        && config
+            .cluster
+            .nodes
+            .iter()
+            .any(|node| node.host_ip() == host_ip)
+    {
+        return Err(Error::invalid_input(
+            "a worker --host-ip cannot also be listed in cluster.nodes",
+        ));
+    }
+    let subnet = cluster::network::Ipv4Cidr::parse(subnet)
+        .map_err(|err| Error::invalid_input(err.to_string()))?;
+    if subnet.prefix() != 24
+        || !config
+            .cluster
+            .subnets
+            .iter()
+            .any(|value| value == &subnet.to_string())
+    {
+        return Err(Error::invalid_input(
+            "--subnet must be a configured cluster.subnets IPv4 /24",
+        ));
+    }
+    let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
+    let ca = utils::certs::load_cluster_ca(&data_dir.join("system/certs/cluster-ca")).map_err(
+        |err| Error::invalid_config(format!("failed to load initialized cluster CA: {err}")),
+    )?;
+    let identity_api_port = if config.cluster.uses_node_ports() {
+        Some(api_port.ok_or_else(|| {
+            Error::invalid_input("--api-port is required when cluster.nodes uses IP:port")
+        })?)
+    } else {
+        None
+    };
+    let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
+        &ca,
+        host_ip,
+        identity_api_port,
+        role,
+    )
+    .map_err(|err| Error::internal(format!("failed to issue node certificates: {err}")))?;
+    let issuer_certs =
+        utils::certs::read_etcd_certs(&data_dir.join("system/certs")).map_err(|err| {
+            Error::invalid_config(format!("failed to load issuer node certificate: {err}"))
+        })?;
+    cluster::auth::provision_node_users(
+        &config
+            .cluster
+            .resolved_nodes()
+            .map_err(|err| Error::invalid_config(err.to_string()))?
+            .into_iter()
+            .map(cluster::ClusterNodeEndpoint::client_url)
+            .collect::<Vec<_>>(),
+        deployment::build_etcd_tls_options(Some(&issuer_certs))
+            .expect("cluster certificate produces TLS options"),
+        host_ip,
+        identity_api_port,
+        node_id,
+        &subnet.to_string(),
+        role,
+    )
+    .await
+    .map_err(|err| Error::external(format!("failed to provision etcd RBAC identity: {err}")))?;
+    let output = output.map(Path::to_path_buf).unwrap_or_else(|| {
+        data_dir
+            .join("system/cluster-provision")
+            .join(identity_api_port.map_or_else(
+                || format!("{:08x}", u32::from(host_ip)),
+                |port| format!("{:08x}-{port:04x}", u32::from(host_ip)),
+            ))
+    });
+    utils::certs::write_etcd_certs(&output, &certs).map_err(|err| {
+        Error::internal(format!("failed to write node certificate bundle: {err}"))
+    })?;
+    println!("issued {role} certificate bundle for {host_ip}");
+    println!("bundle: {}", output.display());
+    if role == cluster::NodeRole::Voter {
+        println!(
+            "copy the voter CA directory separately from {}",
+            data_dir.join("system/certs/cluster-ca").display()
+        );
+    }
+    Ok(())
+}
+
+fn certificate_fingerprint(certificate_pem: &str) -> crate::error::Result<String> {
+    utils::certs::certificate_fingerprint(certificate_pem)
+        .map_err(|error| Error::invalid_config(error.to_string()))
+}
+
+fn validate_ca_fingerprint(
+    expected: Option<&str>,
+    certificate_pem: &str,
+) -> crate::error::Result<()> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let expected = expected
+        .trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(expected.trim())
+        .to_ascii_lowercase();
+    let actual = certificate_fingerprint(certificate_pem)?;
+    if expected != actual {
+        return Err(Error::invalid_config(format!(
+            "cluster CA fingerprint mismatch: expected `{expected}`, got `{actual}`"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_subnet_cidr(cidr: &str) -> crate::error::Result<()> {

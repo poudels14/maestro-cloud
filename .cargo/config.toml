@@ -1,0 +1,2 @@
+[alias]
+test-multi-node = "test cluster::integration_tests --no-fail-fast -- --ignored --test-threads=1"

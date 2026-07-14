@@ -129,6 +129,23 @@
           "type": "integer",
           "minimum": 0
         },
+        "nodeAffinity": {
+          "type": "object",
+          "description": "Constrain cluster placement to one node and/or nodes whose labels all match. Writable host volumes require node-id.",
+          "additionalProperties": false,
+          "properties": {
+            "node-id": {
+              "type": "string",
+              "minLength": 12,
+              "maxLength": 12,
+              "pattern": "^[a-z0-9]{12}$"
+            },
+            "labels": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
         "env": {
           "$ref": "#/$defs/envConfig"
         },
@@ -242,6 +259,21 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
+        },
+        "sessionAffinity": {
+          "$ref": "#/$defs/sessionAffinity"
+        }
+      }
+    },
+    "sessionAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header"],
+      "properties": {
+        "header": {
+          "type": "string",
+          "minLength": 1,
+          "description": "HTTP request header used for node-level session affinity. Its value must be the target Maestro node ID."
         }
       }
     }

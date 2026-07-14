@@ -378,7 +378,7 @@ fn parse_user_container_name(name: &str) -> Option<ParsedContainer> {
     if name.starts_with("maestro-") {
         return None;
     }
-    let mut working = name;
+    let mut working = super::strip_node_runtime_suffix(name);
     let mut replica_index: u32 = 0;
     if let Some(idx) = working.rfind('-') {
         let tail = &working[idx + 1..];
@@ -418,6 +418,14 @@ mod tests {
     #[test]
     fn parses_higher_replica_index() {
         let parsed = parse_user_container_name("redis-PAmRwS-3").unwrap();
+        assert_eq!(parsed.service_id, "redis");
+        assert_eq!(parsed.deployment_short, "PAmRwS");
+        assert_eq!(parsed.replica_index, 3);
+    }
+
+    #[test]
+    fn parses_endpoint_namespaced_replica() {
+        let parsed = parse_user_container_name("redis-PAmRwS-3-node-3101").unwrap();
         assert_eq!(parsed.service_id, "redis");
         assert_eq!(parsed.deployment_short, "PAmRwS");
         assert_eq!(parsed.replica_index, 3);

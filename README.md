@@ -213,6 +213,8 @@ Same as `deploy.env.source`, but for Docker build args (`--build-arg`).
 ## Tailscale setup
 
 Tailscale enables remote access to your containers from any device on your tailnet.
+For a routed multi-node cluster, use the topology, bootstrap, security, operations,
+and chaos-test guide in [docs/multi-node.md](docs/multi-node.md).
 
 ### 1. Start with Tailscale enabled
 
@@ -367,7 +369,9 @@ Daily S3 backups are enabled through the cluster config:
 ```
 
 If no prefix is set, the generated cluster name is used to prevent different
-clusters from writing the same object keys.
+clusters from writing the same object keys. In cluster mode, each uploaded
+Parquet filename and partition manifest is prefixed with the stable node ID so
+replicas of the same deployment cannot overwrite another node's log objects.
 
 The probe uses the standard AWS credential-provider chain for authentication and
 uploads every object with SSE-KMS and a SHA-256 checksum. Objects at least 100 MiB

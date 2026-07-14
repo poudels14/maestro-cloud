@@ -1,28 +1,38 @@
-use std::{collections::HashSet, io::Read, path::Path as FsPath, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    io::Read,
+    path::Path as FsPath,
+    sync::Arc,
+    time::Instant,
+};
 
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{DefaultBodyLimit, Multipart, Path, Query, Request, State},
+    body::{Body, Bytes, to_bytes},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
-    response::Response,
-    routing::{delete, get, patch, post},
+    response::{IntoResponse, Response},
+    routing::{any, delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
+use http_body_util::BodyExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
+use tokio_util::io::ReaderStream;
 
 use self::types::{
-    CancelDeploymentResponse, CreateSlackWebhookRequest, RemoveDeploymentResponse,
+    BlockedIpRequest, BlockedIpsResponse, CancelDeploymentResponse, ClusterUnfreezeRequest,
+    ClusterUpgradeRequest, CreateSlackWebhookRequest, RemoveDeploymentResponse,
     ReplicasOverrideRequest, ReplicasResponse, RolloutChange, RolloutDiffResponse,
     RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
     SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest, UploadServiceResponse,
 };
-use crate::deployment::store::{ClusterStore, UpsertServiceOutcome};
+use crate::deployment::store::{ClusterStore, RequestClaim, UpsertServiceOutcome};
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment,
@@ -37,6 +47,8 @@ const DEFAULT_LOG_LIMIT: usize = 1000;
 const MAX_LOG_LIMIT: usize = 2000;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
 const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
+const INGESTION_TOKEN_HEADER: &str = "x-maestro-ingestion-token";
+const MAX_CLUSTER_WRITE_BODY_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 enum UpgradeVersionError {
@@ -70,11 +82,25 @@ struct DiskInfo {
     file_system: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterNodeView {
+    #[serde(flatten)]
+    info: crate::cluster::NodeInfo,
+    state: crate::cluster::NodeState,
+    alive: bool,
+    last_seen_at_ms: i64,
+    lost_at_ms: Option<i64>,
+}
+
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
     log_store: Option<Arc<crate::logs::TelemetryStore>>,
     jwt_secret_key: Option<String>,
+    ingestion_token: Option<String>,
+    internal_control_token: Option<String>,
+    control_socket: Option<String>,
     system_type: Option<String>,
     cluster_name: String,
     cluster_alias: String,
@@ -86,37 +112,64 @@ struct AppState {
     backup_stats: crate::cluster_stats::SharedBackupStats,
     probe_started_at: Instant,
     storage_mode: String,
+    local_node_id: Option<String>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Server {
     state: AppState,
 }
 
-pub(crate) struct ServerStatsState {
+pub(crate) struct ServerConfig {
+    pub jwt_secret_key: Option<String>,
+    pub ingestion_token: Option<String>,
+    pub internal_control_token: Option<String>,
+    pub control_socket: Option<String>,
+    pub system_type: Option<String>,
+    pub cluster_name: String,
+    pub cluster_alias: String,
+    pub masked_config: Option<Arc<crate::config::MaskedConfig>>,
+    pub slack: crate::slack::SlackNotifier,
+    pub allow_cli_deployment: bool,
+    pub upload_dir: std::path::PathBuf,
     pub controller_stats: crate::cluster_stats::SharedControllerStats,
     pub backup_stats: crate::cluster_stats::SharedBackupStats,
     pub storage_mode: String,
+    pub local_node_id: Option<String>,
 }
 
 impl Server {
     pub(crate) fn new(
         store: Arc<dyn ClusterStore>,
         log_store: Option<Arc<crate::logs::TelemetryStore>>,
-        jwt_secret_key: Option<String>,
-        system_type: Option<String>,
-        cluster_name: String,
-        cluster_alias: String,
-        masked_config: Option<Arc<crate::config::MaskedConfig>>,
-        slack: crate::slack::SlackNotifier,
-        allow_cli_deployment: bool,
-        upload_dir: std::path::PathBuf,
-        stats: ServerStatsState,
+        config: ServerConfig,
     ) -> Self {
+        let ServerConfig {
+            jwt_secret_key,
+            ingestion_token,
+            internal_control_token,
+            control_socket,
+            system_type,
+            cluster_name,
+            cluster_alias,
+            masked_config,
+            slack,
+            allow_cli_deployment,
+            upload_dir,
+            controller_stats,
+            backup_stats,
+            storage_mode,
+            local_node_id,
+        } = config;
+        cleanup_stale_cluster_request_spools(&upload_dir);
         Self {
             state: AppState {
                 store,
                 log_store,
                 jwt_secret_key,
+                ingestion_token,
+                internal_control_token,
+                control_socket,
                 system_type,
                 cluster_name,
                 cluster_alias,
@@ -124,17 +177,22 @@ impl Server {
                 slack,
                 allow_cli_deployment,
                 upload_dir,
-                controller_stats: stats.controller_stats,
-                backup_stats: stats.backup_stats,
+                controller_stats,
+                backup_stats,
                 probe_started_at: Instant::now(),
-                storage_mode: stats.storage_mode,
+                storage_mode,
+                local_node_id,
             },
         }
     }
 
     fn app(&self) -> Router {
         let auth = middleware::from_fn_with_state(self.state.clone(), require_jwt);
-        let protected = Router::new()
+        let cluster_write_proxy =
+            middleware::from_fn_with_state(self.state.clone(), proxy_cluster_write);
+        let node_read_proxy =
+            middleware::from_fn_with_state(self.state.clone(), proxy_node_selected_read);
+        let operator = Router::new()
             .route("/api/services/rollout", post(Self::rollout_service))
             .route(
                 "/api/services/up",
@@ -142,12 +200,39 @@ impl Server {
             )
             .route("/api/system/upgrade", post(Self::upgrade_system))
             .route("/api/system/restart", post(Self::restart_system))
-            .route_layer(auth);
-
-        let public = Router::new()
-            .route("/_healthy", get(Self::healthy))
             .route("/api/cluster", get(Self::get_cluster_info))
+            .route("/api/cluster/nodes", get(Self::get_cluster_nodes))
+            .route(
+                "/api/cluster/unschedulable",
+                get(Self::get_cluster_unschedulable),
+            )
+            .route("/api/cluster/placements", get(Self::get_cluster_placements))
+            .route(
+                "/api/cluster/nodes/{nodeId}/drain",
+                post(Self::drain_cluster_node),
+            )
+            .route(
+                "/api/cluster/nodes/{nodeId}/restore",
+                post(Self::restore_cluster_node),
+            )
+            .route(
+                "/api/cluster/nodes/{nodeId}",
+                delete(Self::remove_cluster_node),
+            )
+            .route("/api/cluster/admissions", post(Self::approve_cluster_node))
+            .route(
+                "/api/cluster/upgrade",
+                get(Self::get_cluster_upgrade).post(Self::start_cluster_upgrade),
+            )
+            .route(
+                "/api/cluster/upgrade/unfreeze",
+                post(Self::unfreeze_cluster_upgrade),
+            )
             .route("/api/cluster/stats", get(Self::get_cluster_stats))
+            .route(
+                "/api/cluster/stats/nodes",
+                get(Self::get_cluster_node_stats),
+            )
             .route("/api/config", get(Self::get_config))
             .route("/api/services", get(Self::list_services))
             .route("/api/services/rollout/diff", post(Self::rollout_diff))
@@ -205,8 +290,6 @@ impl Server {
                 get(Self::get_service_logs),
             )
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
-            .route("/api/logs", post(Self::ingest_logs))
-            .route("/api/metrics", post(Self::ingest_metrics))
             .route("/api/metrics/node", get(Self::get_node_metrics))
             .route("/api/metrics/cluster", get(Self::get_cluster_metrics))
             .route("/api/metrics/stats", get(Self::get_stats_metrics))
@@ -218,14 +301,47 @@ impl Server {
                 "/api/services/{serviceId}/traffic",
                 get(Self::get_service_traffic),
             )
+            .route(
+                "/api/services/{serviceId}/traffic/breakdown",
+                get(Self::get_service_traffic_breakdown),
+            )
             .route("/api/disks", get(Self::get_disks))
+            .route("/api/disks/nodes", get(Self::get_node_disks))
             .route("/api/ingress/routes", get(Self::list_ingress_routes))
+            .route(
+                "/api/ingress/blocked-ips",
+                get(Self::get_blocked_ingress_ips).patch(Self::set_blocked_ingress_ip),
+            )
+            .route(
+                "/api/ingress/blocked-traffic",
+                get(Self::get_blocked_ingress_traffic),
+            )
             .route(
                 "/api/services/{serviceId}/metrics/containers",
                 get(Self::get_container_metrics),
-            );
+            )
+            .route_layer(node_read_proxy)
+            .route_layer(cluster_write_proxy)
+            .route_layer(auth);
 
-        public.merge(protected).with_state(self.state.clone())
+        let ingestion_auth =
+            middleware::from_fn_with_state(self.state.clone(), require_ingestion_token);
+        let ingestion = Router::new()
+            .route("/api/logs", post(Self::ingest_logs))
+            .route("/api/metrics", post(Self::ingest_metrics))
+            .route_layer(ingestion_auth);
+
+        let machine = Router::new()
+            .route("/_healthy", get(Self::healthy))
+            .route("/_ready", get(Self::ready))
+            .route("/_maestro/ingress-denied", any(Self::ingress_denied));
+        let joining = Router::new().route("/api/cluster/join", post(Self::join_cluster_node));
+
+        machine
+            .merge(joining)
+            .merge(ingestion)
+            .merge(operator)
+            .with_state(self.state.clone())
     }
 
     pub(crate) async fn serve(
@@ -241,22 +357,104 @@ impl Server {
             "server listening on http://{bind_addr} [pid={}]",
             std::process::id()
         );
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                loop {
-                    match shutdown_rx.recv().await {
-                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force) => break,
-                        Err(broadcast::error::RecvError::Lagged(_)) => {}
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            loop {
+                match shutdown_rx.recv().await {
+                    Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
-            })
+            }
+        })
+        .await
+        .map_err(|err| format!("server error: {err}").into())
+    }
+
+    async fn ingress_denied() -> StatusCode {
+        StatusCode::FORBIDDEN
+    }
+
+    pub(crate) async fn serve_tls(
+        self,
+        bind_addr: &str,
+        certificate_path: &str,
+        key_path: &str,
+        client_ca_path: Option<&str>,
+        mut shutdown_rx: broadcast::Receiver<ShutdownEvent>,
+    ) -> crate::error::Result<()> {
+        let app = self.app();
+        let address = bind_addr
+            .parse::<std::net::SocketAddr>()
+            .map_err(|err| format!("invalid TLS bind address `{bind_addr}`: {err}"))?;
+        let config = build_api_tls_config(certificate_path, key_path, client_ca_path)
+            .map_err(|err| format!("failed to load probe TLS identity: {err}"))?;
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            loop {
+                match shutdown_rx.recv().await {
+                    Ok(ShutdownEvent::Graceful) => {
+                        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+                        break;
+                    }
+                    Ok(ShutdownEvent::Force) | Err(broadcast::error::RecvError::Closed) => {
+                        shutdown_handle.shutdown();
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                }
+            }
+        });
+        println!(
+            "server listening on https://{bind_addr} [pid={}]",
+            std::process::id()
+        );
+        axum_server::bind_rustls(address, config)
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await
-            .map_err(|err| format!("server error: {err}").into())
+            .map_err(|err| format!("TLS server error: {err}").into())
     }
 
     async fn healthy() -> &'static str {
         "ok"
+    }
+
+    async fn ready(State(state): State<AppState>) -> Result<&'static str, (StatusCode, String)> {
+        let Some(node_id) = state.local_node_id.as_deref() else {
+            return Ok("ready");
+        };
+        let nodes = state.store.list_cluster_nodes().await.map_err(|err| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("failed to read local node readiness: {err}"),
+            )
+        })?;
+        let now = crate::utils::time::current_time_millis()
+            .ok()
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or_default();
+        match nodes.into_iter().find(|node| node.node_id == node_id) {
+            Some(node)
+                if node.data_plane_ready
+                    && now.saturating_sub(node.data_plane_checked_at_ms) <= 15_000 =>
+            {
+                Ok("ready")
+            }
+            Some(node) => Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                node.data_plane_error
+                    .unwrap_or_else(|| "local workload data plane is unready".to_string()),
+            )),
+            None => Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "local cluster node is not registered".to_string(),
+            )),
+        }
     }
 
     async fn get_config(
@@ -271,24 +469,349 @@ impl Server {
         }
     }
 
-    async fn get_cluster_info(State(state): State<AppState>) -> Json<serde_json::Value> {
+    async fn get_cluster_info(
+        State(state): State<AppState>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
         let canonical_domain = format!("{}.maestro.internal", state.cluster_name);
         let alias_domain = format!("{}.maestro.internal", state.cluster_alias);
-        let upgrading = state
+        let upgrade_run = state.store.read_cluster_upgrade().await.ok().flatten();
+        let upgrading = upgrade_run
+            .as_ref()
+            .is_some_and(|run| !run.phase.is_terminal())
+            || state
+                .store
+                .read_system_upgrade_request(state.local_node_id.as_deref())
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+        let nodes = cluster_node_views(&state).await?;
+        let leader = state
             .store
-            .read_system_upgrade_request()
+            .read_cluster_leader()
             .await
-            .ok()
-            .flatten()
-            .is_some();
-        Json(serde_json::json!({
+            .map_err(internal_error)?;
+        let meta = state
+            .store
+            .read_cluster_meta()
+            .await
+            .map_err(internal_error)?;
+        let traffic = state
+            .store
+            .list_cluster_traffic()
+            .await
+            .map_err(internal_error)?;
+        let mut services = Vec::new();
+        for generation in &traffic {
+            let states = state
+                .store
+                .list_replica_states(&generation.service_id, &generation.deployment_id)
+                .await
+                .unwrap_or_default();
+            let active = generation
+                .active_assignment_ids
+                .iter()
+                .collect::<HashSet<_>>();
+            let endpoints = states
+                .into_iter()
+                .filter(|replica| {
+                    replica
+                        .assignment_id
+                        .as_ref()
+                        .is_some_and(|assignment| active.contains(assignment))
+                })
+                .filter_map(|replica| replica.endpoint)
+                .collect::<Vec<_>>();
+            services.push(json!({
+                "serviceId": generation.service_id,
+                "deploymentId": generation.deployment_id,
+                "trafficEpoch": generation.traffic_epoch,
+                "activeAssignmentIds": generation.active_assignment_ids,
+                "endpoints": endpoints,
+            }));
+        }
+        Ok(Json(serde_json::json!({
+            "clusterId": meta.as_ref().map(|meta| meta.cluster_id.as_str()),
             "clusterName": state.cluster_name,
             "clusterAlias": state.cluster_alias,
             "canonicalDomain": canonical_domain,
             "aliasDomain": alias_domain,
             "version": MAESTRO_VERSION,
             "upgrading": upgrading,
-        }))
+            "upgradeRun": upgrade_run,
+            "thisNodeId": state.local_node_id,
+            "leader": leader.as_ref().map(|leader| leader.node_id.as_str()),
+            "leaderNodeId": leader.map(|leader| leader.node_id),
+            "nodes": nodes,
+            "services": services,
+        })))
+    }
+
+    async fn get_cluster_nodes(
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<ClusterNodeView>>, (StatusCode, String)> {
+        let nodes = cluster_node_views(&state).await?;
+        Ok(Json(nodes))
+    }
+
+    async fn get_cluster_unschedulable(
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::cluster::UnschedulableReplica>>, (StatusCode, String)> {
+        state
+            .store
+            .list_unschedulable_replicas()
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    async fn get_cluster_placements(
+        State(state): State<AppState>,
+        Query(query): Query<PlacementQuery>,
+    ) -> Result<Json<Vec<crate::cluster::PlacementHistory>>, (StatusCode, String)> {
+        state
+            .store
+            .list_placement_history(
+                query.service_id.as_deref(),
+                query.deployment_id.as_deref(),
+                query.replica_index,
+            )
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    async fn drain_cluster_node(
+        State(state): State<AppState>,
+        Path(node_id): Path<String>,
+        headers: HeaderMap,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        set_cluster_node_drain_state(&state, &headers, &node_id, true).await?;
+        Ok(Json(json!({ "nodeId": node_id, "unschedulable": true })))
+    }
+
+    async fn restore_cluster_node(
+        State(state): State<AppState>,
+        Path(node_id): Path<String>,
+        headers: HeaderMap,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        set_cluster_node_drain_state(&state, &headers, &node_id, false).await?;
+        Ok(Json(json!({ "nodeId": node_id, "unschedulable": false })))
+    }
+
+    async fn remove_cluster_node(
+        State(state): State<AppState>,
+        Path(node_id): Path<String>,
+    ) -> Result<Response, (StatusCode, String)> {
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::RemoveNode {
+                node_id: node_id.clone(),
+            },
+        )
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon returned no removal state".to_string(),
+            )
+        })?;
+        let outcome: crate::cluster::join::RemoveNodeOutcome =
+            serde_json::from_value(value).map_err(internal_error)?;
+        let status = match outcome {
+            crate::cluster::join::RemoveNodeOutcome::Removed => StatusCode::OK,
+            crate::cluster::join::RemoveNodeOutcome::Draining
+            | crate::cluster::join::RemoveNodeOutcome::LeadershipTransferRequired => {
+                StatusCode::ACCEPTED
+            }
+        };
+        Ok((
+            status,
+            Json(json!({
+                "nodeId": node_id,
+                "state": outcome,
+            })),
+        )
+            .into_response())
+    }
+
+    async fn approve_cluster_node(
+        State(state): State<AppState>,
+        Json(mut admission): Json<crate::cluster::join::JoinAdmission>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        if admission.created_at_ms == 0 {
+            admission.created_at_ms = crate::cluster_stats::now_ms();
+        }
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        crate::cluster::control::send_command(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::ApproveNode {
+                admission: admission.clone(),
+            },
+        )
+        .await
+        .map_err(internal_error)?;
+        Ok(Json(json!({
+            "nodeId": admission.node_id,
+            "approved": true,
+        })))
+    }
+
+    async fn get_cluster_upgrade(
+        State(state): State<AppState>,
+    ) -> Result<Json<Option<crate::cluster::UpgradeRun>>, (StatusCode, String)> {
+        state
+            .store
+            .read_cluster_upgrade()
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    async fn start_cluster_upgrade(
+        State(state): State<AppState>,
+        Json(request): Json<ClusterUpgradeRequest>,
+    ) -> Result<(StatusCode, Json<crate::cluster::UpgradeRun>), (StatusCode, String)> {
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::StartUpgrade {
+                target_version: request.target_version,
+            },
+        )
+        .await
+        .map_err(|error| (StatusCode::CONFLICT, error.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon returned no upgrade run".to_string(),
+            )
+        })?;
+        let run = serde_json::from_value(value).map_err(internal_error)?;
+        Ok((StatusCode::ACCEPTED, Json(run)))
+    }
+
+    async fn unfreeze_cluster_upgrade(
+        State(state): State<AppState>,
+        Json(request): Json<ClusterUnfreezeRequest>,
+    ) -> Result<Json<crate::cluster::UpgradeRun>, (StatusCode, String)> {
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::UnfreezeUpgrade {
+                run_id: request.upgrade_run_id,
+            },
+        )
+        .await
+        .map_err(|error| (StatusCode::CONFLICT, error.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon returned no upgrade run".to_string(),
+            )
+        })?;
+        serde_json::from_value(value)
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    async fn join_cluster_node(
+        State(state): State<AppState>,
+        ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+        headers: HeaderMap,
+        Json(request): Json<crate::cluster::join::JoinRequest>,
+    ) -> Result<Json<crate::cluster::join::JoinEnvelope>, (StatusCode, String)> {
+        let signature = headers
+            .get("x-maestro-join-signature")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let source_ip = match peer.ip() {
+            std::net::IpAddr::V4(ip) => Some(ip),
+            std::net::IpAddr::V6(ip) => ip.to_ipv4_mapped(),
+        }
+        .ok_or_else(join_forbidden)?;
+        let socket = state.control_socket.as_deref().ok_or_else(join_forbidden)?;
+        let token = state
+            .internal_control_token
+            .as_deref()
+            .ok_or_else(join_forbidden)?;
+        let result = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::JoinNode {
+                request,
+                signature,
+                source_ip,
+            },
+        )
+        .await;
+        let value = match result {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                eprintln!("cluster join rejected: daemon returned no response payload");
+                return Err(join_forbidden());
+            }
+            Err(error) => {
+                eprintln!("cluster join rejected from {source_ip}: {error}");
+                return Err(join_forbidden());
+            }
+        };
+        let envelope = serde_json::from_value(value).map_err(|error| {
+            eprintln!("cluster join response encoding failed: {error}");
+            join_forbidden()
+        })?;
+        Ok(Json(envelope))
     }
 
     async fn get_cluster_stats(
@@ -335,12 +858,27 @@ impl Server {
         })
     }
 
+    async fn get_cluster_node_stats(
+        State(state): State<AppState>,
+    ) -> Result<
+        Json<BTreeMap<String, crate::cluster_stats::ControllerStatsSnapshot>>,
+        (StatusCode, String),
+    > {
+        state
+            .store
+            .list_node_stats()
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
     async fn rollout_service(
         headers: HeaderMap,
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
         body: Bytes,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+        reject_cluster_freeze(&state).await?;
         let request: RolloutServiceRequest = parse_json_body(&headers, body)?;
         let service_config = build_service_config(request).map_err(|err| {
             (
@@ -390,7 +928,7 @@ impl Server {
 
         let outcome = upsert_config_and_maybe_queue(state.store.as_ref(), service_config)
             .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            .map_err(deployment_mutation_error)?;
 
         let response = match outcome {
             UpsertServiceOutcome::Queued {
@@ -482,6 +1020,7 @@ impl Server {
         State(state): State<AppState>,
         mut multipart: Multipart,
     ) -> Result<Json<UploadServiceResponse>, (StatusCode, String)> {
+        reject_cluster_freeze(&state).await?;
         if !state.allow_cli_deployment {
             return Err((
                 StatusCode::FORBIDDEN,
@@ -602,7 +1141,7 @@ impl Server {
             Ok(queued) => queued,
             Err(err) => {
                 let _ = std::fs::remove_file(&archive_path);
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string()));
+                return Err(deployment_mutation_error(err));
             }
         };
 
@@ -676,6 +1215,7 @@ impl Server {
                         env: Default::default(),
                         secrets: None,
                         volumes: vec![],
+                        node_affinity: None,
                     },
                     ingress: None,
                 },
@@ -888,6 +1428,64 @@ impl Server {
         }))
     }
 
+    async fn set_blocked_ingress_ip(
+        State(state): State<AppState>,
+        Json(request): Json<BlockedIpRequest>,
+    ) -> Result<Json<BlockedIpsResponse>, (StatusCode, String)> {
+        let address = request
+            .ip
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid IP address `{}`", request.ip),
+                )
+            })?
+            .to_string();
+
+        let blocked_ips = state
+            .store
+            .set_blocked_ingress_ip(&address, request.blocked)
+            .await
+            .map_err(deployment_mutation_error)?;
+
+        Ok(Json(BlockedIpsResponse { blocked_ips }))
+    }
+
+    async fn get_blocked_ingress_ips(
+        State(state): State<AppState>,
+    ) -> Result<Json<BlockedIpsResponse>, (StatusCode, String)> {
+        let blocked_ips = state
+            .store
+            .read_ingress_blocklist()
+            .await
+            .map_err(internal_error)?;
+        Ok(Json(BlockedIpsResponse { blocked_ips }))
+    }
+
+    async fn get_blocked_ingress_traffic(
+        Query(query): Query<TrafficBreakdownQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<crate::logs::IngressTrafficBreakdown>, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
+        };
+        let (from, to) = metrics_time_range(&query.range);
+        if from > to {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "traffic range `from` cannot be after `to`".to_string(),
+            ));
+        }
+        let limit = query.limit.unwrap_or(100).clamp(1, 500);
+        log_store
+            .read_blocked_ingress_traffic(from, to, limit)
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
     async fn list_slack_webhooks(
         State(state): State<AppState>,
     ) -> Result<Json<Vec<SlackWebhookView>>, (StatusCode, String)> {
@@ -1058,6 +1656,7 @@ impl Server {
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+        reject_cluster_freeze(&state).await?;
         let service_id = service_id.trim().to_string();
         crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1106,7 +1705,7 @@ impl Server {
             .store
             .queue_deployment(deployment)
             .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            .map_err(deployment_mutation_error)?;
 
         Ok(Json(RolloutServiceResponse {
             queued: true,
@@ -1124,6 +1723,7 @@ impl Server {
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
     ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+        reject_cluster_freeze(&state).await?;
         let service_id = service_id.trim().to_string();
         crate::validation::validate_service_id(&service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1188,7 +1788,7 @@ impl Server {
             .store
             .queue_deployment(deployment)
             .await
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            .map_err(deployment_mutation_error)?;
 
         Ok(Json(RolloutServiceResponse {
             queued: true,
@@ -1473,6 +2073,13 @@ impl Server {
                     .append_stats_metrics(&snapshot.metric_points())
                     .await
                     .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+                if let Some(node_id) = state.local_node_id.as_deref() {
+                    state
+                        .store
+                        .publish_node_stats(node_id, &snapshot)
+                        .await
+                        .map_err(internal_error)?;
+                }
                 *state
                     .controller_stats
                     .write()
@@ -1577,6 +2184,32 @@ impl Server {
         Ok(Json(entries))
     }
 
+    async fn get_service_traffic_breakdown(
+        Path(service_id): Path<String>,
+        Query(query): Query<TrafficBreakdownQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<crate::logs::IngressTrafficBreakdown>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        crate::validation::validate_service_id(service_id, "serviceId")
+            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
+        };
+        let (from, to) = metrics_time_range(&query.range);
+        if from > to {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "traffic range `from` cannot be after `to`".to_string(),
+            ));
+        }
+        let limit = query.limit.unwrap_or(100).clamp(1, 500);
+        log_store
+            .read_ingress_traffic(service_id, from, to, limit)
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
     async fn get_container_metrics(
         Path(service_id): Path<String>,
         Query(query): Query<MetricsQuery>,
@@ -1628,7 +2261,7 @@ impl Server {
         );
         state
             .store
-            .put_system_upgrade_request(system_type)
+            .put_system_upgrade_request(state.local_node_id.as_deref(), system_type)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         eprintln!(
@@ -1648,14 +2281,38 @@ impl Server {
         eprintln!("restart request received");
         state
             .store
-            .put_system_restart_request()
+            .put_system_restart_request(state.local_node_id.as_deref())
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         eprintln!("restart request accepted");
         Ok(Json(json!({ "accepted": true })))
     }
 
-    async fn get_disks() -> Json<Vec<DiskInfo>> {
+    async fn get_node_disks(
+        State(state): State<AppState>,
+    ) -> Result<Json<BTreeMap<String, Vec<crate::cluster::NodeDiskInfo>>>, (StatusCode, String)>
+    {
+        state
+            .store
+            .list_node_disks()
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    async fn get_disks(
+        State(state): State<AppState>,
+    ) -> Result<Json<Vec<crate::cluster::NodeDiskInfo>>, (StatusCode, String)> {
+        if let Some(node_id) = state.local_node_id.as_deref()
+            && let Some(disks) = state
+                .store
+                .list_node_disks()
+                .await
+                .map_err(internal_error)?
+                .remove(node_id)
+        {
+            return Ok(Json(disks));
+        }
         let disks = sysinfo::Disks::new_with_refreshed_list();
         let host_root = std::env::var("MAESTRO_HOST_ROOT")
             .ok()
@@ -1688,7 +2345,7 @@ impl Server {
         });
 
         let mut seen = HashSet::new();
-        let items = candidates
+        let items: Vec<DiskInfo> = candidates
             .into_iter()
             .filter(|disk| {
                 seen.insert((
@@ -1699,7 +2356,18 @@ impl Server {
                 ))
             })
             .collect();
-        Json(items)
+        Ok(Json(
+            items
+                .into_iter()
+                .map(|disk: DiskInfo| crate::cluster::NodeDiskInfo {
+                    name: disk.name,
+                    mount_point: disk.mount_point,
+                    total_bytes: disk.total_bytes,
+                    available_bytes: disk.available_bytes,
+                    file_system: disk.file_system,
+                })
+                .collect(),
+        ))
     }
 }
 
@@ -2004,6 +2672,13 @@ struct StatsMetricsQuery {
     range: MetricsQuery,
 }
 
+#[derive(serde::Deserialize)]
+struct TrafficBreakdownQuery {
+    #[serde(flatten)]
+    range: MetricsQuery,
+    limit: Option<usize>,
+}
+
 fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2025,6 +2700,249 @@ struct LogsQuery {
 #[derive(serde::Deserialize)]
 struct ForceQuery {
     force: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlacementQuery {
+    service_id: Option<String>,
+    deployment_id: Option<String>,
+    replica_index: Option<u32>,
+}
+
+async fn cluster_node_views(
+    state: &AppState,
+) -> Result<Vec<ClusterNodeView>, (StatusCode, String)> {
+    let live = state
+        .store
+        .list_cluster_nodes()
+        .await
+        .map_err(internal_error)?
+        .into_iter()
+        .map(|info| (info.node_id.clone(), info))
+        .collect::<BTreeMap<_, _>>();
+    let records = state
+        .store
+        .list_cluster_node_records()
+        .await
+        .map_err(internal_error)?
+        .into_iter()
+        .map(|record| (record.last_info.node_id.clone(), record))
+        .collect::<BTreeMap<_, _>>();
+    let node_ids = live
+        .keys()
+        .chain(records.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let now = crate::cluster_stats::now_ms();
+    let mut views = Vec::with_capacity(node_ids.len());
+    for node_id in node_ids {
+        let record = records.get(&node_id);
+        let alive = live.contains_key(&node_id);
+        let info = live
+            .get(&node_id)
+            .cloned()
+            .or_else(|| record.map(|record| record.last_info.clone()))
+            .expect("node id came from live or durable records");
+        let node_state = state
+            .store
+            .read_cluster_node_state(&node_id)
+            .await
+            .map_err(internal_error)?;
+        views.push(ClusterNodeView {
+            info,
+            state: node_state,
+            alive,
+            last_seen_at_ms: if alive {
+                now
+            } else {
+                record
+                    .map(|record| record.last_seen_at_ms)
+                    .unwrap_or_default()
+            },
+            lost_at_ms: record.and_then(|record| record.lost_at_ms),
+        });
+    }
+    Ok(views)
+}
+
+async fn set_cluster_node_drain_state(
+    state: &AppState,
+    headers: &HeaderMap,
+    node_id: &str,
+    unschedulable: bool,
+) -> Result<(), (StatusCode, String)> {
+    let leader = state
+        .store
+        .read_cluster_leader()
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cluster leader is not available".to_string(),
+            )
+        })?;
+    let local_node_id = state.local_node_id.as_deref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cluster node identity is unavailable".to_string(),
+        )
+    })?;
+    if leader.node_id != local_node_id {
+        if headers.contains_key("x-maestro-forwarded") {
+            return Err((
+                StatusCode::LOOP_DETECTED,
+                "cluster write forwarding loop detected".to_string(),
+            ));
+        }
+        let leader_node = state
+            .store
+            .list_cluster_nodes()
+            .await
+            .map_err(internal_error)?
+            .into_iter()
+            .find(|node| node.node_id == leader.node_id)
+            .ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "leader has no live cluster address".to_string(),
+                )
+            })?;
+        let operation = if unschedulable { "drain" } else { "restore" };
+        let url = format!(
+            "https://{}:{}/api/cluster/nodes/{}/{}",
+            leader_node.cluster_host_ip, leader_node.cluster_api_port, node_id, operation
+        );
+        let mut request = cluster_http_client()
+            .map_err(internal_error)?
+            .post(url)
+            .header("X-Maestro-Forwarded", local_node_id);
+        for name in [
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static("idempotency-key"),
+        ] {
+            if let Some(value) = headers.get(&name) {
+                request = request.header(name.as_str(), value.as_bytes());
+            }
+        }
+        let response = request.send().await.map_err(internal_error)?;
+        if !response.status().is_success() {
+            let status =
+                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            return Err((status, response.text().await.unwrap_or_default()));
+        }
+        return Ok(());
+    }
+
+    let socket = state.control_socket.as_deref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "daemon control socket is unavailable".to_string(),
+        )
+    })?;
+    let token = state.internal_control_token.as_deref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "daemon control authentication is unavailable".to_string(),
+        )
+    })?;
+    crate::cluster::control::send_command(
+        socket,
+        token,
+        crate::cluster::control::ControlCommand::SetNodeState {
+            node_id: node_id.to_string(),
+            unschedulable,
+            reason: unschedulable.then(|| "drain".to_string()),
+        },
+    )
+    .await
+    .map_err(internal_error)
+}
+
+fn cluster_http_client() -> anyhow::Result<reqwest::Client> {
+    let ca = std::fs::read("/certs/ca.pem")?;
+    let mut identity = std::fs::read("/certs/probe-client.pem")?;
+    identity.extend_from_slice(b"\n");
+    identity.extend_from_slice(&std::fs::read("/certs/probe-client-key.pem")?);
+    Ok(reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(&ca)?)
+        .identity(reqwest::Identity::from_pem(&identity)?)
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?)
+}
+
+fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
+    (StatusCode::SERVICE_UNAVAILABLE, error.to_string())
+}
+
+fn deployment_mutation_error(error: impl std::fmt::Display) -> (StatusCode, String) {
+    let message = error.to_string();
+    if message.contains("cluster deploys are frozen") {
+        (StatusCode::CONFLICT, message)
+    } else if message.contains("ingress blocklist") {
+        (StatusCode::BAD_REQUEST, message)
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+}
+
+async fn reject_cluster_freeze(state: &AppState) -> Result<(), (StatusCode, String)> {
+    if let Some(freeze) = state
+        .store
+        .read_cluster_freeze()
+        .await
+        .map_err(internal_error)?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "cluster deploys are frozen by upgrade run `{}`: {}",
+                freeze.upgrade_run_id, freeze.reason
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn build_api_tls_config(
+    certificate_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
+) -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
+    let certificate_pem = std::fs::read(certificate_path)?;
+    let certificates =
+        CertificateDer::pem_slice_iter(&certificate_pem).collect::<Result<Vec<_>, _>>()?;
+    let private_key = PrivateKeyDer::from_pem_file(key_path)?;
+    let builder = rustls::ServerConfig::builder();
+    let mut server = if let Some(client_ca_path) = client_ca_path {
+        let ca_pem = std::fs::read(client_ca_path)?;
+        let mut roots = rustls::RootCertStore::empty();
+        for certificate in CertificateDer::pem_slice_iter(&ca_pem) {
+            roots.add(certificate?)?;
+        }
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .allow_unauthenticated()
+            .build()?;
+        builder
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certificates, private_key)?
+    } else {
+        builder
+            .with_no_client_auth()
+            .with_single_cert(certificates, private_key)?
+    };
+    server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(axum_server::tls_rustls::RustlsConfig::from_config(
+        Arc::new(server),
+    ))
+}
+
+fn join_forbidden() -> (StatusCode, String) {
+    (StatusCode::FORBIDDEN, "join rejected".to_string())
 }
 
 fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, String)> {
@@ -2068,6 +2986,579 @@ async fn require_jwt(
         )
     })?;
     Ok(next.run(request).await)
+}
+
+struct SpooledClusterRequest {
+    path: std::path::PathBuf,
+    fingerprint: String,
+}
+
+impl SpooledClusterRequest {
+    async fn body(&self) -> Result<Body, (StatusCode, String)> {
+        let file = tokio::fs::File::open(&self.path).await.map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to reopen cluster request body: {error}"),
+            )
+        })?;
+        Ok(Body::from_stream(ReaderStream::new(file)))
+    }
+}
+
+impl Drop for SpooledClusterRequest {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "failed to remove spooled cluster request `{}`: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+fn cleanup_stale_cluster_request_spools(upload_dir: &FsPath) {
+    let entries = match std::fs::read_dir(upload_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "failed to inspect cluster request spool directory `{}`: {error}",
+                upload_dir.display()
+            );
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name
+            .to_string_lossy()
+            .starts_with(".maestro-cluster-request-")
+        {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_file(entry.path()) {
+            eprintln!(
+                "failed to remove stale cluster request spool `{}`: {error}",
+                entry.path().display()
+            );
+        }
+    }
+}
+
+async fn spool_cluster_request(
+    upload_dir: &FsPath,
+    parts: &axum::http::request::Parts,
+    mut body: Body,
+    max_bytes: u64,
+) -> Result<SpooledClusterRequest, (StatusCode, String)> {
+    tokio::fs::create_dir_all(upload_dir)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create the request spool directory: {error}"),
+            )
+        })?;
+    let path = upload_dir.join(format!(
+        ".maestro-cluster-request-{}-{}",
+        std::process::id(),
+        crate::utils::nanoid::unique_id(20)
+    ));
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to create a cluster request spool: {error}"),
+        )
+    })?;
+    let mut spooled = SpooledClusterRequest {
+        path,
+        fingerprint: String::new(),
+    };
+    let mut digest = cluster_request_fingerprint_hasher(parts);
+    let mut length = 0_u64;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        length = length.checked_add(data.len() as u64).ok_or_else(|| {
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "cluster request body is too large".to_string(),
+            )
+        })?;
+        if length > max_bytes {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("cluster request body exceeds the {max_bytes} byte limit"),
+            ));
+        }
+        digest.update(&data);
+        file.write_all(&data).await.map_err(|error| {
+            (
+                StatusCode::INSUFFICIENT_STORAGE,
+                format!("failed to spool the cluster request body: {error}"),
+            )
+        })?;
+    }
+    file.flush().await.map_err(|error| {
+        (
+            StatusCode::INSUFFICIENT_STORAGE,
+            format!("failed to flush the cluster request body: {error}"),
+        )
+    })?;
+    drop(file);
+    spooled.fingerprint = format!("{:x}", digest.finalize());
+    Ok(spooled)
+}
+
+async fn proxy_cluster_write(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    if !is_cluster_write(request.method(), request.uri().path()) || state.local_node_id.is_none() {
+        return Ok(next.run(request).await);
+    }
+    let request_id = request
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::utils::nanoid::unique_id(32));
+    request.headers_mut().insert(
+        "idempotency-key",
+        axum::http::HeaderValue::from_str(&request_id).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid idempotency key".to_string(),
+            )
+        })?,
+    );
+    let leader = state
+        .store
+        .read_cluster_leader()
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cluster leader is not available; retry after 2 seconds".to_string(),
+            )
+        })?;
+    let local_node_id = state.local_node_id.as_deref().expect("checked above");
+    if leader.node_id == local_node_id {
+        let (parts, body) = request.into_parts();
+        let spooled = spool_cluster_request(
+            &state.upload_dir,
+            &parts,
+            body,
+            MAX_CLUSTER_WRITE_BODY_BYTES,
+        )
+        .await?;
+        let fingerprint = spooled.fingerprint.clone();
+        let claim = state
+            .store
+            .claim_cluster_request(
+                local_node_id,
+                &request_id,
+                &fingerprint,
+                crate::cluster_stats::now_ms(),
+            )
+            .await
+            .map_err(internal_error)?;
+        match claim {
+            RequestClaim::Conflict => {
+                return Ok(cluster_request_response(
+                    StatusCode::CONFLICT,
+                    None,
+                    "Idempotency-Key was already used for a different request".into(),
+                    &request_id,
+                ));
+            }
+            RequestClaim::InProgress => {
+                return Ok(cluster_request_response(
+                    StatusCode::ACCEPTED,
+                    None,
+                    "request is already in progress".into(),
+                    &request_id,
+                ));
+            }
+            RequestClaim::Complete {
+                status_code,
+                content_type,
+                body,
+            } => {
+                let status =
+                    StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                return Ok(cluster_request_response(
+                    status,
+                    content_type.as_deref(),
+                    body.into(),
+                    &request_id,
+                ));
+            }
+            RequestClaim::Started => {}
+        }
+
+        let request = Request::from_parts(parts, spooled.body().await?);
+        let response = next.run(request).await;
+        let (parts, body) = response.into_parts();
+        let body = to_bytes(body, 1024 * 1024)
+            .await
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        let content_type = parts
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        let receipt_result = state
+            .store
+            .complete_cluster_request(
+                local_node_id,
+                &request_id,
+                &fingerprint,
+                parts.status.as_u16(),
+                content_type,
+                &body,
+                crate::cluster_stats::now_ms(),
+            )
+            .await;
+        let mut response = Response::from_parts(parts, axum::body::Body::from(body));
+        if let Err(error) = receipt_result {
+            eprintln!("failed to finalize cluster request receipt `{request_id}`: {error}");
+            response.headers_mut().insert(
+                "x-maestro-receipt-status",
+                axum::http::HeaderValue::from_static("incomplete"),
+            );
+        }
+        set_cluster_request_id(&mut response, &request_id);
+        return Ok(response);
+    }
+    if request.headers().contains_key("x-maestro-forwarded") {
+        return Err((
+            StatusCode::LOOP_DETECTED,
+            "cluster write forwarding loop detected".to_string(),
+        ));
+    }
+    let leader_node = state
+        .store
+        .list_cluster_nodes()
+        .await
+        .map_err(internal_error)?
+        .into_iter()
+        .find(|node| node.node_id == leader.node_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "leader has no live cluster address; retry after 2 seconds".to_string(),
+            )
+        })?;
+    let (parts, body) = request.into_parts();
+    let url = format!(
+        "https://{}:{}{}",
+        leader_node.cluster_host_ip, leader_node.cluster_api_port, parts.uri
+    );
+    let mut forwarded = cluster_http_client()
+        .map_err(internal_error)?
+        .request(parts.method, url)
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+        .header("X-Maestro-Forwarded", local_node_id);
+    for (name, value) in &parts.headers {
+        if !is_hop_by_hop_header(name) && name != axum::http::header::CONTENT_LENGTH {
+            forwarded = forwarded.header(name, value);
+        }
+    }
+    let response = forwarded.send().await.map_err(internal_error)?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut output = Response::builder()
+        .status(status)
+        .body(Body::from_stream(response.bytes_stream()))
+        .map_err(internal_error)?;
+    for (name, value) in &headers {
+        if !is_hop_by_hop_header(name) && name != axum::http::header::CONTENT_LENGTH {
+            output.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    output.headers_mut().insert(
+        "x-maestro-request-id",
+        axum::http::HeaderValue::from_str(&request_id)
+            .expect("generated request id is a valid header"),
+    );
+    Ok(output)
+}
+
+#[cfg(test)]
+fn cluster_request_fingerprint(parts: &axum::http::request::Parts, body: &Bytes) -> String {
+    let mut digest = cluster_request_fingerprint_hasher(parts);
+    digest.update(body);
+    format!("{:x}", digest.finalize())
+}
+
+fn cluster_request_fingerprint_hasher(parts: &axum::http::request::Parts) -> Sha256 {
+    let mut digest = Sha256::new();
+    digest.update(parts.method.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(
+        parts
+            .uri
+            .path_and_query()
+            .map_or("", |value| value.as_str())
+            .as_bytes(),
+    );
+    digest.update([0]);
+    if let Some(authorization) = parts.headers.get(axum::http::header::AUTHORIZATION) {
+        digest.update(authorization.as_bytes());
+    }
+    digest.update([0]);
+    digest
+}
+
+fn is_hop_by_hop_header(name: &axum::http::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+    )
+}
+
+fn cluster_request_response(
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: Bytes,
+    request_id: &str,
+) -> Response {
+    let mut response = Response::builder()
+        .status(status)
+        .body(axum::body::Body::from(body))
+        .expect("static cluster request response is valid");
+    if let Some(content_type) = content_type
+        && let Ok(value) = axum::http::HeaderValue::from_str(content_type)
+    {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, value);
+    }
+    set_cluster_request_id(&mut response, request_id);
+    response
+}
+
+fn set_cluster_request_id(response: &mut Response, request_id: &str) {
+    response.headers_mut().insert(
+        "x-maestro-request-id",
+        axum::http::HeaderValue::from_str(request_id)
+            .expect("validated request id is a valid header"),
+    );
+}
+
+async fn proxy_node_selected_read(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    if request.method() != axum::http::Method::GET
+        || !is_node_local_read(request.uri().path())
+        || state.local_node_id.is_none()
+    {
+        return Ok(next.run(request).await);
+    }
+    let local_node_id = state.local_node_id.as_deref().expect("checked above");
+    let parsed = reqwest::Url::parse(&format!("http://maestro.local{}", request.uri()))
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    let mut selected_node = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "nodeId")
+        .map(|(_, value)| value.into_owned());
+    if selected_node.is_none() {
+        let replica_index = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "replicaIndex")
+            .and_then(|(_, value)| value.parse::<u32>().ok());
+        if let Some(replica_index) = replica_index {
+            let segments = request
+                .uri()
+                .path()
+                .trim_matches('/')
+                .split('/')
+                .collect::<Vec<_>>();
+            if segments.len() >= 6
+                && segments[0] == "api"
+                && segments[1] == "services"
+                && segments[3] == "deployments"
+            {
+                selected_node = state
+                    .store
+                    .list_placement_history(
+                        Some(segments[2]),
+                        Some(segments[4]),
+                        Some(replica_index),
+                    )
+                    .await
+                    .map_err(internal_error)?
+                    .first()
+                    .map(|placement| placement.node_id.clone());
+            }
+        }
+    }
+    let Some(selected_node) = selected_node else {
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            "x-maestro-node-id",
+            axum::http::HeaderValue::from_str(local_node_id)
+                .expect("node id is a valid header value"),
+        );
+        return Ok(response);
+    };
+    if selected_node == local_node_id {
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            "x-maestro-node-id",
+            axum::http::HeaderValue::from_str(local_node_id)
+                .expect("node id is a valid header value"),
+        );
+        return Ok(response);
+    }
+    if request
+        .headers()
+        .contains_key("x-maestro-telemetry-forwarded")
+    {
+        return Err((
+            StatusCode::LOOP_DETECTED,
+            "telemetry forwarding loop detected".to_string(),
+        ));
+    }
+    let live_destination = state
+        .store
+        .list_cluster_nodes()
+        .await
+        .map_err(internal_error)?
+        .into_iter()
+        .find(|node| node.node_id == selected_node);
+    let destination = match live_destination {
+        Some(node) => Some(node),
+        None => state
+            .store
+            .list_cluster_node_records()
+            .await
+            .map_err(internal_error)?
+            .into_iter()
+            .find(|record| record.last_info.node_id == selected_node)
+            .map(|record| record.last_info),
+    }
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("cluster node `{selected_node}` is unknown"),
+        )
+    })?;
+    let (parts, body) = request.into_parts();
+    let body = to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    let url = format!(
+        "https://{}:{}{}",
+        destination.cluster_host_ip, destination.cluster_api_port, parts.uri
+    );
+    let mut forwarded = cluster_http_client()
+        .map_err(internal_error)?
+        .request(parts.method, url)
+        .body(body.to_vec())
+        .header("X-Maestro-Telemetry-Forwarded", local_node_id);
+    for (name, value) in &parts.headers {
+        if name != axum::http::header::HOST && name != axum::http::header::CONTENT_LENGTH {
+            forwarded = forwarded.header(name, value);
+        }
+    }
+    let response = forwarded.send().await.map_err(internal_error)?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await.map_err(internal_error)?;
+    let mut output = Response::builder()
+        .status(status)
+        .body(axum::body::Body::from(body))
+        .map_err(internal_error)?;
+    for (name, value) in &headers {
+        if name != axum::http::header::CONTENT_LENGTH {
+            output.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    output.headers_mut().insert(
+        "x-maestro-node-id",
+        axum::http::HeaderValue::from_str(&selected_node).expect("node id is a valid header value"),
+    );
+    Ok(output)
+}
+
+fn is_cluster_write(method: &axum::http::Method, path: &str) -> bool {
+    if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+        return false;
+    }
+    if matches!(path, "/api/logs" | "/api/metrics")
+        || path.starts_with("/api/system/")
+        || path == "/api/services/rollout/diff"
+    {
+        return false;
+    }
+    path.starts_with("/api/")
+}
+
+fn is_node_local_read(path: &str) -> bool {
+    path.contains("/logs")
+        || path.contains("/metrics")
+        || path.contains("/traffic")
+        || path == "/api/ingress/blocked-traffic"
+        || path == "/api/disks"
+        || path == "/api/cluster/stats"
+}
+
+async fn require_ingestion_token(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(expected) = state.ingestion_token.as_deref() else {
+        return Ok(next.run(request).await);
+    };
+    let presented = request
+        .headers()
+        .get(INGESTION_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !constant_time_token_matches(expected, presented) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid ingestion token".to_string(),
+        ));
+    }
+    Ok(next.run(request).await)
+}
+
+fn constant_time_token_matches(expected: &str, presented: &str) -> bool {
+    let expected = Sha256::digest(expected.as_bytes());
+    let presented = Sha256::digest(presented.as_bytes());
+    expected
+        .iter()
+        .zip(presented.iter())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn parse_json_body<T: DeserializeOwned>(

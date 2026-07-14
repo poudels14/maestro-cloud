@@ -63,6 +63,7 @@ pub struct ReplicaHandle {
 }
 
 pub struct ReplicaSpec<'a> {
+    pub task_id: Option<String>,
     pub deployment: &'a ServiceDeployment,
     pub replica_index: u32,
     pub deploy_output: DeployOutput,

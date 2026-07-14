@@ -7,6 +7,100 @@ use duckdb::{params, params_from_iter, types::Value};
 use super::{Db, contains_parquet, hive_component, sql_lit};
 use crate::logs::{LogEntry, LogOrigin};
 
+pub(super) fn query_ingress_traffic(
+    db: &Db,
+    service_id: &str,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<crate::logs::IngressTrafficBreakdown> {
+    Ok(crate::logs::IngressTrafficBreakdown {
+        by_ip: query_ingress_dimension(db, Some(service_id), from, to, limit, "ip")?,
+        by_path: query_ingress_dimension(db, Some(service_id), from, to, limit, "path")?,
+    })
+}
+
+pub(super) fn query_blocked_ingress_traffic(
+    db: &Db,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<crate::logs::IngressTrafficBreakdown> {
+    Ok(crate::logs::IngressTrafficBreakdown {
+        by_ip: query_ingress_dimension(db, None, from, to, limit, "ip")?,
+        by_path: query_ingress_dimension(db, None, from, to, limit, "path")?,
+    })
+}
+
+fn query_ingress_dimension(
+    db: &Db,
+    service_id: Option<&str>,
+    from: i64,
+    to: i64,
+    limit: usize,
+    dimension: &str,
+) -> Result<Vec<crate::logs::TrafficBreakdownEntry>> {
+    let router_filter = if service_id.is_some() {
+        "router = ? OR (starts_with(router, ?) AND ends_with(router, '@etcd'))"
+    } else {
+        "starts_with(router, ?) AND ends_with(router, '@etcd')"
+    };
+    let sql = format!(
+        r#"
+            WITH grouped AS (
+                SELECT value, status_code, sum(requests)::BIGINT AS requests,
+                       max(last_seen_at_ms) AS last_seen_at_ms
+                FROM ingress_traffic
+                WHERE bucket_at_ms >= ? AND bucket_at_ms <= ?
+                  AND dimension = ?
+                  AND ({router_filter})
+                GROUP BY value, status_code
+            ),
+            top_values AS (
+                SELECT value, sum(requests)::BIGINT AS total, max(last_seen_at_ms) AS last_seen_at_ms
+                FROM grouped
+                GROUP BY value
+                ORDER BY total DESC, last_seen_at_ms DESC, value ASC
+                LIMIT ?
+            )
+            SELECT grouped.value, grouped.status_code, grouped.requests, grouped.last_seen_at_ms
+            FROM grouped
+            INNER JOIN top_values USING (value)
+            ORDER BY top_values.total DESC, top_values.last_seen_at_ms DESC,
+                     grouped.value ASC, grouped.status_code ASC
+        "#
+    );
+    let mut values = vec![
+        Value::BigInt(from - from.rem_euclid(60_000)),
+        Value::BigInt(to),
+        Value::Text(dimension.to_string()),
+    ];
+    if let Some(service_id) = service_id {
+        values.extend([
+            Value::Text(format!("{service_id}@etcd")),
+            Value::Text(format!("{service_id}-aff-")),
+        ]);
+    } else {
+        values.push(Value::Text(
+            crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
+        ));
+    }
+    values.push(Value::BigInt(i64::try_from(limit).unwrap_or(i64::MAX)));
+    let conn = db.reader()?;
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let status_code = row.get::<_, i32>(1)?;
+        let requests = row.get::<_, i64>(2)?;
+        Ok(crate::logs::TrafficBreakdownEntry {
+            value: row.get(0)?,
+            status_code: u16::try_from(status_code).unwrap_or_default(),
+            requests: u64::try_from(requests).unwrap_or_default(),
+            last_seen_at_ms: row.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+}
+
 pub(super) fn query_logs(
     db: &Db,
     service: bool,

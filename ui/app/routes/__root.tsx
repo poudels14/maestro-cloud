@@ -5,7 +5,7 @@ import { createSignal, createEffect, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";
 import { queryClient } from "../lib/queryClient";
-import { clusterInfoQuery } from "../lib/queries";
+import { clusterInfoQuery, unschedulableQuery } from "../lib/queries";
 import { ClientOnly } from "../components/ClientOnly";
 import appCss from "../app.css?url";
 
@@ -48,10 +48,26 @@ function RootComponent() {
       <RootDocument>
         <ClientOnly>
           <UpgradeBanner />
+          <SchedulingBanner />
         </ClientOnly>
         <Outlet />
       </RootDocument>
     </QueryClientProvider>
+  );
+}
+
+function SchedulingBanner() {
+  const scheduling = useQuery(() => unschedulableQuery());
+  const count = () => scheduling.data?.length ?? 0;
+  return (
+    <Show when={count() > 0}>
+      <div class="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 shadow-lg">
+        <span class="text-xs font-medium text-amber-800">
+          {count()} replica{count() === 1 ? " is" : "s are"} unschedulable — check the Nodes page
+          for placement constraints.
+        </span>
+      </div>
+    </Show>
   );
 }
 
@@ -68,7 +84,7 @@ function UpgradeBanner() {
     <Show when={isUpgrading() && !dismissed()}>
       <div class="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-center">
         <span class="text-xs font-medium text-amber-700">
-          System upgrade in progress — the cluster will reboot shortly
+          Rolling cluster upgrade in progress — deploys are frozen while nodes drain and restart
         </span>
         <button
           type="button"

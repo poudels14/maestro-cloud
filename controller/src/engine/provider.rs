@@ -10,7 +10,9 @@ use std::path::Path;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::deployment::provider::{BuildOutput, ContainerDeploymentProvider, DeployOutput};
+use crate::deployment::provider::{
+    BuildOutput, ContainerDeploymentProvider, DeployOutput, ReplicaRuntimeIdentity,
+};
 use crate::deployment::types::{GitCommitInfo, ServiceDeployment};
 use crate::logs::LogEntry;
 
@@ -32,6 +34,16 @@ pub trait DeploymentProvider: Send + Sync {
     ) -> Result<BuildOutput>;
 
     fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput>;
+
+    fn deploy_with_identity(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+        identity: &ReplicaRuntimeIdentity,
+    ) -> Option<DeployOutput> {
+        let _ = identity;
+        self.deploy(deployment, replica_index)
+    }
 
     /// Provider-specific cleanup after a deployment is terminal — e.g., remove
     /// upload archive, prune images. The engine still removes its own
@@ -62,6 +74,20 @@ impl DeploymentProvider for ContainerDeploymentProvider {
 
     fn deploy(&self, deployment: &ServiceDeployment, replica_index: u32) -> Option<DeployOutput> {
         ContainerDeploymentProvider::deploy(self, deployment, replica_index)
+    }
+
+    fn deploy_with_identity(
+        &self,
+        deployment: &ServiceDeployment,
+        replica_index: u32,
+        identity: &ReplicaRuntimeIdentity,
+    ) -> Option<DeployOutput> {
+        ContainerDeploymentProvider::deploy_with_identity(
+            self,
+            deployment,
+            replica_index,
+            Some(identity),
+        )
     }
 
     async fn cleanup(&self, deployment: &ServiceDeployment) -> Result<()> {

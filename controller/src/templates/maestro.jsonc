@@ -2,15 +2,32 @@
   "$schema": "https://raw.githubusercontent.com/poudels14/maestro-cloud/release/controller/maestro.start.schema.json",
   "cluster": {
     "name": "my-cluster"
+    // For multi-node mode, add a comma after "my-cluster", then uncomment the
+    // same ordered voter list and subnet list on every original node. The first
+    // voter is the one-time bootstrap seed.
+    // "nodes": ["10.20.0.11", "10.20.0.12", "10.20.0.13"],
+    // To run nodes on one host, use non-overlapping four-port blocks and set
+    // api-port per local config: ["10.20.0.11:3001", "10.20.0.11:3101", "10.20.0.11:3201"].
+    // "api-port": 3001,
+    // "control-allow-cidrs": ["10.20.0.0/24"],
+    // "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
+    // "gateway-port": 3002,
+    // "role": "voter",
+    // "scheduling": true,
+    // "shared-registry": "ghcr.io/acme",
+    // "ca-sha256": "replace-with-the-fingerprint-printed-by-cluster-init-ca",
+    // "join-secret": "replace-with-at-least-32-characters"
   },
   "ingress": {
     "port": 8080
   },
-  "subnet": "172.22.0.0/16",
+  "subnet": "172.22.1.0/24",
   "egress": {
     "deny": []
   },
   "encryption-key": "$CHANGE_ME",
+  // Tailscale is optional and is not used for cluster replica traffic.
+  // "tailscale": { "auth-key": "$CHANGE_ME" },
   "runtime": "docker",
   "tags": [],
   "allow-cli-deployment": false

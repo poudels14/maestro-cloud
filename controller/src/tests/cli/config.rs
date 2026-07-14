@@ -53,6 +53,28 @@ fn cluster_template_does_not_enable_optional_integrations() {
 }
 
 #[test]
+fn legacy_single_node_config_stays_on_the_legacy_path() {
+    let config: crate::config::StartConfig = json5::from_str(
+        r#"{
+            cluster: { name: "legacy" },
+            ingress: { port: 8080 },
+            subnet: "172.22.0.0/16",
+            "encryption-key": "existing-key",
+            runtime: "docker"
+        }"#,
+    )
+    .expect("parse legacy start config");
+
+    assert!(config.cluster.nodes.is_empty());
+    assert!(config.cluster.subnets.is_empty());
+    assert!(!config.cluster.scheduling);
+    assert!(config.cluster.ca_sha256.is_none());
+    assert_eq!(config.subnet.as_deref(), Some("172.22.0.0/16"));
+    crate::cluster::network::validate_cluster_config(&config.cluster, config.subnet.as_deref())
+        .expect("legacy config remains valid");
+}
+
+#[test]
 fn datadog_healthcheck_filter_is_opt_in() {
     let existing: crate::config::DatadogConfig =
         serde_json::from_value(serde_json::json!({ "api-key": "test" }))
@@ -132,6 +154,7 @@ fn start_schema_matches_serialized_config_fields() {
     let config = crate::config::StartConfig {
         cluster: crate::config::ClusterConfig {
             name: "test".to_string(),
+            ..Default::default()
         },
         ingress: crate::config::IngressConfig {
             port: Some(80),
@@ -308,11 +331,21 @@ fn services_schema_matches_serialized_config_fields() {
                     gid: Some(1000),
                 }),
             }],
+            node_affinity: Some(crate::cluster::NodeAffinity {
+                node_id: Some("worker000001".to_string()),
+                labels: std::collections::BTreeMap::from([(
+                    "zone".to_string(),
+                    "west".to_string(),
+                )]),
+            }),
         },
         ingress: Some(IngressConfig {
             host: Some("api.example.test".to_string()),
             hosts: vec!["api.internal.test".to_string()],
             port: Some(8080),
+            session_affinity: Some(crate::deployment::types::SessionAffinityConfig {
+                header: "X-Session-Node".to_string(),
+            }),
         }),
     };
     let mut model = serde_json::to_value(service).expect("serialize service config");
@@ -325,6 +358,7 @@ fn services_schema_matches_serialized_config_fields() {
 
     assert_object_keys(&model, &definitions["service"], &[], &[]);
     assert_object_keys(&model["build"], &definitions["build"], &[], &[]);
+    assert!(model["ingress"].get("blockedIps").is_none());
     assert_object_keys(
         &model["build"]["depot"],
         &definitions["build"]["properties"]["depot"],
@@ -333,6 +367,12 @@ fn services_schema_matches_serialized_config_fields() {
     );
     assert_object_keys(&model["build"]["env"], &definitions["envConfig"], &[], &[]);
     assert_object_keys(&model["deploy"], &definitions["deploy"], &[], &[]);
+    assert_object_keys(
+        &model["deploy"]["nodeAffinity"],
+        &definitions["deploy"]["properties"]["nodeAffinity"],
+        &[],
+        &[],
+    );
     assert_object_keys(
         &model["deploy"]["command"],
         &definitions["command"],
@@ -358,6 +398,12 @@ fn services_schema_matches_serialized_config_fields() {
         &[],
     );
     assert_object_keys(&model["ingress"], &definitions["ingress"], &[], &[]);
+    assert_object_keys(
+        &model["ingress"]["sessionAffinity"],
+        &definitions["sessionAffinity"],
+        &[],
+        &[],
+    );
 }
 
 fn assert_object_keys(

@@ -88,8 +88,7 @@ pub async fn run_up(host: &str, config_path: &Path, context_dir: &Path) -> Resul
         archive_size,
     );
 
-    let response = client
-        .post(&endpoint)
+    let response = crate::cli::idempotent(client.post(&endpoint))
         .multipart(form)
         .send()
         .await

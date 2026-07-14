@@ -27,6 +27,17 @@ fn entry(ts: i64, source: &str, origin: LogOrigin, text: &str) -> LogEntry {
     }
 }
 
+fn ingress_entry(ts: i64, router: &str, ip: &str, path: &str, status: u16) -> LogEntry {
+    let mut entry = entry(ts, "maestro-ingress", LogOrigin::System, "access");
+    entry.attrs = vec![
+        ("RouterName".into(), router.into()),
+        ("maestro.client_ip".into(), ip.into()),
+        ("RequestPath".into(), path.into()),
+        ("DownstreamStatus".into(), status.to_string()),
+    ];
+    entry
+}
+
 #[test]
 fn ingest_wire_format_is_backward_compatible() {
     let legacy = serde_json::to_value(entry(
@@ -59,6 +70,120 @@ fn missing_offsets_default_to_zero_but_other_database_errors_propagate() {
         0
     );
     assert!(duckdb_i64_or_zero(Err(duckdb::Error::InvalidQuery)).is_err());
+}
+
+#[tokio::test]
+async fn ingress_traffic_groups_ip_path_and_status() {
+    let root = temp_root("ingress-traffic");
+    let store = DuckLogStore::open(&root).expect("open");
+    store
+        .append(&[
+            ingress_entry(
+                1_700_000_000_000,
+                "api@etcd",
+                "203.0.113.9",
+                "/login?token=secret",
+                200,
+            ),
+            ingress_entry(
+                1_700_000_000_100,
+                "api-aff-node1@etcd",
+                "203.0.113.9",
+                "/login?token=other",
+                401,
+            ),
+            ingress_entry(1_700_000_000_200, "api@etcd", "198.51.100.8", "/.env", 403),
+            ingress_entry(
+                1_700_000_000_250,
+                "maestro.internal-blocked-deadbeef-0@etcd",
+                "2001:db8::9",
+                "/wp-admin?probe=1",
+                403,
+            ),
+            ingress_entry(
+                1_700_000_000_300,
+                "other@etcd",
+                "192.0.2.1",
+                "/ignored",
+                404,
+            ),
+        ])
+        .await
+        .expect("append");
+
+    let traffic = store
+        .read_ingress_traffic("api", 1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("traffic query");
+    assert_eq!(
+        traffic.by_ip,
+        vec![
+            crate::logs::TrafficBreakdownEntry {
+                value: "203.0.113.9".into(),
+                status_code: 200,
+                requests: 1,
+                last_seen_at_ms: 1_700_000_000_000,
+            },
+            crate::logs::TrafficBreakdownEntry {
+                value: "203.0.113.9".into(),
+                status_code: 401,
+                requests: 1,
+                last_seen_at_ms: 1_700_000_000_100,
+            },
+            crate::logs::TrafficBreakdownEntry {
+                value: "198.51.100.8".into(),
+                status_code: 403,
+                requests: 1,
+                last_seen_at_ms: 1_700_000_000_200,
+            },
+        ]
+    );
+    assert_eq!(traffic.by_path[0].value, "/login");
+    assert_eq!(traffic.by_path[0].status_code, 200);
+    assert_eq!(traffic.by_path[1].value, "/login");
+    assert_eq!(traffic.by_path[1].status_code, 401);
+    assert_eq!(traffic.by_path[2].value, "/.env");
+    let blocked = store
+        .read_blocked_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("blocked traffic query");
+    assert_eq!(
+        blocked.by_ip,
+        vec![crate::logs::TrafficBreakdownEntry {
+            value: "2001:db8::9".into(),
+            status_code: 403,
+            requests: 1,
+            last_seen_at_ms: 1_700_000_000_250,
+        }]
+    );
+    assert_eq!(blocked.by_path[0].value, "/wp-admin");
+    assert!(
+        store
+            .read_tail("maestro-ingress", 10)
+            .await
+            .expect("read raw ingress logs")
+            .is_empty(),
+        "access records should be discarded after aggregation"
+    );
+    store
+        .append(&[entry(
+            1_700_000_000_400,
+            "maestro-ingress",
+            LogOrigin::System,
+            "provider configuration reloaded",
+        )])
+        .await
+        .expect("append ingress diagnostic");
+    assert_eq!(
+        store
+            .read_tail("maestro-ingress", 10)
+            .await
+            .expect("read ingress diagnostic")[0]
+            .text,
+        "provider configuration reloaded"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[tokio::test]

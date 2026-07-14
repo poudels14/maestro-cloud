@@ -123,9 +123,33 @@ pub(crate) struct ReplicasResponse {
     pub(crate) replicas_override: Option<u32>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct BlockedIpRequest {
+    pub(crate) ip: String,
+    pub(crate) blocked: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BlockedIpsResponse {
+    pub(crate) blocked_ips: Vec<String>,
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct UpgradeSystemRequest {
     pub(crate) version: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClusterUpgradeRequest {
+    pub(crate) target_version: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClusterUnfreezeRequest {
+    pub(crate) upgrade_run_id: String,
 }
 
 #[derive(Debug, serde::Serialize)]

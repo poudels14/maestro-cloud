@@ -14,6 +14,7 @@ import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
 import { SlackWebhooks } from "../SlackWebhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
+import { NodesSection } from "./NodesSection";
 
 function HomeShell(props: { tab: HomeTab }) {
   const navigate = useNavigate();
@@ -81,6 +82,9 @@ function HomeShell(props: { tab: HomeTab }) {
                 </Match>
                 <Match when={props.tab === "services"}>
                   <ServicesGrid />
+                </Match>
+                <Match when={props.tab === "nodes"}>
+                  <NodesSection />
                 </Match>
               </Switch>
             </ClientOnly>

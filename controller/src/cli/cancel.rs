@@ -24,11 +24,11 @@ pub async fn run_cancel(host: &str, service_id: &str, deployment_id: &str) -> Re
     }
 
     let endpoint = cancel_endpoint(host, service_id, deployment_id)?;
-    let response = reqwest::Client::new()
-        .patch(&endpoint)
-        .send()
-        .await
-        .map_err(|err| Error::external(format!("failed to call cancel endpoint: {err}")))?;
+    let response =
+        crate::cli::idempotent(crate::cli::contexts::build_http_client()?.patch(&endpoint))
+            .send()
+            .await
+            .map_err(|err| Error::external(format!("failed to call cancel endpoint: {err}")))?;
 
     if !response.status().is_success() {
         let status = response.status();

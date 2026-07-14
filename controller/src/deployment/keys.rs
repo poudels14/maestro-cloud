@@ -10,6 +10,12 @@ pub fn service_info_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/info")
 }
 
+pub const INGRESS_BLOCKLIST_PREFIX: &str = "/maetro/cluster/ingress-blocklist/";
+
+pub fn ingress_blocklist_ip_key(address: &str) -> String {
+    format!("{INGRESS_BLOCKLIST_PREFIX}{address}")
+}
+
 #[allow(dead_code)]
 pub fn service_active_deployment_key(service_id: &str) -> String {
     format!("{SERVICES_ROOT}/{service_id}/deployments/active")
@@ -63,8 +69,24 @@ pub fn deployment_deploy_secrets_key(service_id: &str, deployment_id: &str) -> S
 
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
 pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
+pub const CLUSTER_FREEZE_KEY: &str = "/maetro/system/cluster-freeze";
+pub const CLUSTER_UPGRADE_KEY: &str = "/maetro/cluster/upgrade/current";
 pub const SYSTEM_LOG_MIGRATION_ROOT: &str = "/maetro/system/log-migration";
 pub const SLACK_WEBHOOKS_KEY: &str = "/maetro/cluster/config/webhooks/slack";
+
+pub fn system_upgrade_request_key(node_id: Option<&str>) -> String {
+    node_id.map_or_else(
+        || SYSTEM_UPGRADE_REQUEST_KEY.to_string(),
+        |node_id| format!("{SYSTEM_UPGRADE_REQUEST_KEY}/{node_id}"),
+    )
+}
+
+pub fn system_restart_request_key(node_id: Option<&str>) -> String {
+    node_id.map_or_else(
+        || SYSTEM_RESTART_REQUEST_KEY.to_string(),
+        |node_id| format!("{SYSTEM_RESTART_REQUEST_KEY}/{node_id}"),
+    )
+}
 
 pub fn log_migration_key(archive_hash: &str) -> String {
     format!("{SYSTEM_LOG_MIGRATION_ROOT}/{archive_hash}")
@@ -77,5 +99,31 @@ pub fn service_id_from_info_key(key: &str) -> Option<String> {
         Some(service_id.to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_requests_are_node_local_in_cluster_mode() {
+        assert_eq!(
+            system_upgrade_request_key(Some("node-a")),
+            "/maetro/system/upgrade-request/node-a"
+        );
+        assert_eq!(
+            system_restart_request_key(Some("node-b")),
+            "/maetro/system/restart-request/node-b"
+        );
+        assert_eq!(system_upgrade_request_key(None), SYSTEM_UPGRADE_REQUEST_KEY);
+    }
+
+    #[test]
+    fn ingress_blocklist_is_cluster_runtime_state() {
+        assert_eq!(
+            ingress_blocklist_ip_key("203.0.113.9"),
+            "/maetro/cluster/ingress-blocklist/203.0.113.9"
+        );
     }
 }

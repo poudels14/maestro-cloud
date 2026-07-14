@@ -145,19 +145,32 @@ def fetch_tailscale_status():
 
 
 def extract_cluster_peers(status, my_cluster):
-    peers = {}
+    candidates = {}
     for node in (status.get("Peer") or {}).values():
         hostname = node.get("HostName", "")
-        if not hostname.startswith("maestro-tailscale-"):
-            continue
-        cluster = hostname[len("maestro-tailscale-"):]
-        if cluster == my_cluster:
+        cluster = cluster_from_tailnet_hostname(hostname)
+        if not cluster or cluster == my_cluster:
             continue
         tailscale_ips = node.get("TailscaleIPs", [])
         ipv4 = next((ip for ip in tailscale_ips if "." in ip), None)
         if ipv4 and verify_peer(ipv4):
-            peers[cluster] = ipv4
-    return peers
+            candidates.setdefault(cluster, []).append((hostname, ipv4))
+    return {
+        cluster: sorted(routers)[0][1]
+        for cluster, routers in candidates.items()
+    }
+
+
+def cluster_from_tailnet_hostname(hostname):
+    prefix = "maestro-tailscale-"
+    if not hostname.startswith(prefix):
+        return None
+    value = hostname[len(prefix):]
+    if "-" in value:
+        cluster, node_suffix = value.rsplit("-", 1)
+        if len(node_suffix) == 12 and all(ch in "0123456789abcdefghijklmnopqrstuvwxyz" for ch in node_suffix):
+            return cluster
+    return value
 
 
 def audit_peer_changes(status, last_peers):

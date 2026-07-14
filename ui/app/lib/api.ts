@@ -1,6 +1,9 @@
 import type {
+  ClusterNode,
   Deployment,
   DiskInfo,
+  IngressBlocklist,
+  IngressTrafficBreakdown,
   IngressRouting,
   LogEntry,
   MaskedConfig,
@@ -10,16 +13,68 @@ import type {
   SlackCategory,
   SlackWebhook,
   StatsMetricPoint,
-  TrafficPoint
+  TrafficPoint,
+  UnschedulableReplica,
+  UpgradeRun
 } from "./types";
 
 export interface ClusterInfo {
+  clusterId?: string | null;
+  thisNodeId?: string | null;
+  leader?: string | null;
   clusterName: string;
   clusterAlias: string;
   canonicalDomain: string;
   aliasDomain: string;
   version?: string;
   upgrading?: boolean;
+  nodes?: ClusterNode[];
+}
+
+export async function getClusterNodes(): Promise<ClusterNode[]> {
+  const res = await fetch("/api/cluster/nodes");
+  if (!res.ok) throw new Error(`Failed to fetch cluster nodes: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]> {
+  const res = await fetch("/api/cluster/unschedulable");
+  if (!res.ok) throw new Error(`Failed to fetch scheduling errors: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setNodeDrain(nodeId: string, drain: boolean): Promise<void> {
+  const operation = drain ? "drain" : "restore";
+  const res = await fetch(`/api/cluster/nodes/${encodeURIComponent(nodeId)}/${operation}`, {
+    method: "POST"
+  });
+  if (!res.ok) throw new Error((await res.text()) || `Failed to ${operation} node`);
+}
+
+export async function getClusterUpgrade(): Promise<UpgradeRun | null> {
+  const res = await fetch("/api/cluster/upgrade");
+  if (!res.ok) throw new Error(`Failed to fetch cluster upgrade: ${res.statusText}`);
+  return res.json();
+}
+
+export async function startClusterUpgrade(targetVersion: string): Promise<UpgradeRun> {
+  const res = await fetch("/api/cluster/upgrade", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetVersion })
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to start cluster upgrade");
+  return res.json();
+}
+
+export async function unfreezeClusterUpgrade(upgradeRunId: string): Promise<UpgradeRun> {
+  const res = await fetch("/api/cluster/upgrade/unfreeze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upgradeRunId })
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to unfreeze cluster");
+  return res.json();
 }
 
 export async function getClusterInfo(): Promise<ClusterInfo> {
@@ -243,6 +298,59 @@ export async function getServiceTraffic(
   const res = await fetch(url);
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(`Failed to fetch traffic: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getServiceTrafficBreakdown(
+  serviceId: string,
+  from: number,
+  to: number,
+  nodeId?: string
+): Promise<IngressTrafficBreakdown> {
+  const url = new URL(
+    `/api/services/${encodeURIComponent(serviceId)}/traffic/breakdown`,
+    location.origin
+  );
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("to", String(to));
+  url.searchParams.set("limit", "200");
+  if (nodeId) url.searchParams.set("nodeId", nodeId);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch traffic details: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getBlockedIngressTraffic(
+  from: number,
+  to: number,
+  nodeId?: string
+): Promise<IngressTrafficBreakdown> {
+  const url = new URL("/api/ingress/blocked-traffic", location.origin);
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("to", String(to));
+  url.searchParams.set("limit", "200");
+  if (nodeId) url.searchParams.set("nodeId", nodeId);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch blocked ingress traffic: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setBlockedIngressIp(ip: string, blocked: boolean) {
+  const res = await fetch("/api/ingress/blocked-ips", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ip, blocked })
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to update blocked IPs: ${res.statusText}`);
+  }
+  return res.json() as Promise<IngressBlocklist>;
+}
+
+export async function getIngressBlocklist(): Promise<IngressBlocklist> {
+  const res = await fetch("/api/ingress/blocked-ips");
+  if (!res.ok) throw new Error(`Failed to fetch ingress blocklist: ${res.statusText}`);
   return res.json();
 }
 

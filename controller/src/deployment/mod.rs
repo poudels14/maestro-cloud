@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use base64::Engine;
 
+use crate::cluster::bootstrap::BootstrapAction;
 use crate::deployment::dns::DnsManager;
 use crate::logs::{LogConfig, LogEntry, LogOrigin, Logger};
 use crate::runtime::{BuildSpec, RunSpec, RuntimeProvider};
@@ -14,6 +15,7 @@ use crate::utils::certs::EtcdCerts;
 pub mod controller;
 pub mod dns;
 pub mod etcd;
+pub mod ingress_blocklist;
 pub mod keys;
 pub mod provider;
 pub mod store;
@@ -23,6 +25,7 @@ pub use types::ControllerConfig;
 
 pub const ETCD_IMAGE_TAG: &str = "quay.io/coreos/etcd:v3.6.8";
 pub const INGRESS_IMAGE_TAG: &str = "traefik:v3.6";
+pub const DNS_IMAGE_TAG: &str = "coredns/coredns:1.12.1";
 const PROBE_IMAGE_NAME: &str = "maestro-probe";
 const ADMIN_IMAGE_NAME: &str = "maestro-admin";
 const TAILSCALE_IMAGE_NAME: &str = "maestro-tailscale";
@@ -49,6 +52,16 @@ pub const SYSTEM_SERVICES: &[SystemService] = &[
         image: INGRESS_IMAGE_TAG,
     },
     SystemService {
+        id: "maestro-gateway",
+        name: "gateway",
+        image: INGRESS_IMAGE_TAG,
+    },
+    SystemService {
+        id: "maestro-dns",
+        name: "dns",
+        image: DNS_IMAGE_TAG,
+    },
+    SystemService {
         id: "maestro-probe",
         name: "controller",
         image: PROBE_IMAGE_TAG,
@@ -70,14 +83,33 @@ pub const SYSTEM_SERVICES: &[SystemService] = &[
     },
 ];
 
+fn write_private_file(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 pub struct SystemStartupInfo {
     pub dns_manager: Arc<DnsManager>,
     pub nameserver_ip: Option<String>,
+    pub ingress_ip: Option<String>,
+    pub leader_elector: Option<Arc<crate::cluster::elector::EtcdLeaderElector>>,
+    pub cluster_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 fn system_log_tags(config: &ControllerConfig) -> Vec<String> {
     let mut tags = config.tags.clone();
     tags.push(format!("cluster:{}", config.cluster_name));
+    if let Some(cluster) = &config.cluster {
+        tags.push(format!("node:{}", cluster.node_id));
+    }
     tags
 }
 
@@ -87,7 +119,10 @@ pub async fn start_system_jobs(
     log_sender: &flume::Sender<LogEntry>,
     logger: &Logger,
     supervisor: &mut JobSupervisor,
+    shutdown: tokio::sync::broadcast::Receiver<crate::signal::ShutdownEvent>,
 ) -> SystemStartupInfo {
+    let mut leader_elector = None;
+    let mut cluster_handles = Vec::new();
     let secrets_dir = config.data_dir.join("secrets");
     if secrets_dir.exists() {
         let _ = std::fs::remove_dir_all(&secrets_dir);
@@ -112,6 +147,11 @@ pub async fn start_system_jobs(
             "etcd mTLS disabled (--disable-etcd-cert); etcd traffic is unencrypted",
         );
         None
+    } else if config.cluster.is_some() {
+        Some(
+            crate::utils::certs::read_etcd_certs(&config.certs_dir())
+                .expect("failed to read cluster node certificates"),
+        )
     } else {
         let certs_dir = config.certs_dir();
         if certs_dir.exists() {
@@ -125,17 +165,46 @@ pub async fn start_system_jobs(
         Some(certs)
     };
 
-    let suffix = &config.cluster_name;
-    let dns_domain = format!("{suffix}.maestro.internal");
+    let mut bootstrap_action =
+        crate::cluster::bootstrap::decide(config.cluster.as_ref(), &config.data_dir)
+            .expect("failed to determine etcd bootstrap action");
+    if let (Some(cluster), BootstrapAction::WaitForAdmission, Some(certs)) =
+        (&config.cluster, &bootstrap_action, &etcd_certs)
+    {
+        let tls = build_etcd_tls_options(Some(certs)).expect("cluster TLS options");
+        let join_info =
+            crate::cluster::bootstrap::wait_for_admission(cluster, &config.data_dir, tls, logger)
+                .await
+                .expect("failed while waiting for etcd learner admission");
+        bootstrap_action = BootstrapAction::JoinExisting(join_info);
+    }
+    if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+        let tls = build_etcd_tls_options(etcd_certs.as_ref()).expect("cluster TLS options");
+        crate::cluster::bootstrap::ensure_seed_is_fresh(
+            config.cluster.as_ref().expect("cluster runtime"),
+            tls,
+        )
+        .await
+        .expect("fresh cluster safety check failed");
+        crate::cluster::bootstrap::mark_seed_starting(&config.data_dir)
+            .expect("failed to consume bootstrap permit");
+    }
+
+    let suffix = config.system_name();
+    let dns_domain = format!("{}.maestro.internal", config.cluster_name);
     let etcd_container = format!("maestro-etcd-{suffix}");
     let probe_container = format!("maestro-probe-{suffix}");
     let ingress_container = format!("maestro-ingress-{suffix}");
+    let gateway_container = format!("maestro-gateway-{suffix}");
+    let dns_container = format!("maestro-dns-{suffix}");
     let admin_container = format!("maestro-admin-{suffix}");
     let tailscale_container = format!("maestro-tailscale-{suffix}");
     let cloudflared_container_prefix = format!("maestro-cloudflared-{suffix}");
     let _ = runtime.remove_container(&etcd_container).await;
     let _ = runtime.remove_container(&probe_container).await;
     let _ = runtime.remove_container(&ingress_container).await;
+    let _ = runtime.remove_container(&gateway_container).await;
+    let _ = runtime.remove_container(&dns_container).await;
     let _ = runtime.remove_container(&admin_container).await;
     let _ = runtime.remove_container(&tailscale_container).await;
     let _ = runtime
@@ -151,13 +220,27 @@ pub async fn start_system_jobs(
             .subnet
             .as_deref()
             .and_then(system_ips_from_cidr)
-            .map(|ips| vec![ips.etcd, ips.probe, ips.ingress, ips.admin, ips.tailscale])
+            .map(|ips| {
+                vec![
+                    ips.etcd,
+                    ips.probe,
+                    ips.ingress,
+                    ips.gateway,
+                    ips.admin,
+                    ips.dns,
+                ]
+            })
             .unwrap_or_default();
         let no_names: Vec<String> = Vec::new();
         let _ = runtime
             .remove_conflicting_containers(&config.network, &no_names, &static_ips)
             .await;
-        let _ = runtime.remove_network(&config.network).await;
+        if let Err(error) = runtime.remove_network(&config.network).await {
+            panic!(
+                "[maestro]: failed to replace container network `{}`: {error}",
+                config.network
+            );
+        }
     }
     if let Err(err) = runtime
         .ensure_network(&config.network, config.subnet.as_deref())
@@ -168,9 +251,30 @@ pub async fn start_system_jobs(
 
     let dns_dir = config.data_dir.join("system/dns");
     let dns_manager = Arc::new(DnsManager::new(dns_dir.clone()));
-    DnsManager::write_corefile(&dns_dir);
+    DnsManager::write_corefile(
+        &dns_dir,
+        if config.tailscale_authkey.is_some() {
+            5353
+        } else {
+            53
+        },
+    );
 
     let network_cidr = runtime.inspect_network_cidr(&config.network).await;
+    if crate::cluster::migration::network_reconfiguration_required(&config.data_dir) {
+        let expected = config
+            .subnet
+            .as_deref()
+            .expect("cluster migration requires a configured subnet");
+        if network_cidr.as_deref() != Some(expected) {
+            panic!(
+                "[maestro]: migrated cluster network `{}` has subnet {:?}, expected `{expected}`; the legacy network was not safely replaced",
+                config.network, network_cidr
+            );
+        }
+        crate::cluster::migration::complete_network_reconfiguration(&config.data_dir)
+            .expect("failed to finalize legacy network migration");
+    }
     let system_ips = network_cidr.as_deref().and_then(system_ips_from_cidr);
 
     if let Some(ips) = &system_ips {
@@ -182,7 +286,7 @@ pub async fn start_system_jobs(
             dns_manager.set_record(
                 "admin",
                 &format!("{}.maestro.internal", config.cluster_alias),
-                &ips.tailscale,
+                &ips.dns,
             );
         }
         let _ = dns_manager.flush();
@@ -190,27 +294,16 @@ pub async fn start_system_jobs(
 
     let ip_flag = |ip: &str| vec!["--ip".to_string(), ip.to_string()];
 
-    init_etcd(
-        &etcd_container,
-        &dns_domain,
-        system_ips
-            .as_ref()
-            .map(|ips| ip_flag(&ips.etcd))
-            .unwrap_or_default(),
-        etcd_certs.as_ref(),
-        config,
-        runtime,
-        log_sender,
-        supervisor,
-    )
-    .await;
-
-    if config.tailscale_authkey.is_some() {
-        init_tailnet(
-            &tailscale_container,
+    if !matches!(bootstrap_action, BootstrapAction::Worker) {
+        init_etcd(
+            &etcd_container,
             &dns_domain,
-            logger,
-            system_ips.as_ref().map(|ips| ips.tailscale.as_str()),
+            system_ips
+                .as_ref()
+                .map(|ips| ip_flag(&ips.etcd))
+                .unwrap_or_default(),
+            etcd_certs.as_ref(),
+            &bootstrap_action,
             config,
             runtime,
             log_sender,
@@ -219,8 +312,139 @@ pub async fn start_system_jobs(
         .await;
     }
 
-    let nameserver_ip = if config.tailscale_authkey.is_some() {
-        system_ips.as_ref().map(|ips| ips.tailscale.clone())
+    if let (Some(cluster), Some(certs), BootstrapAction::Restart) =
+        (&config.cluster, &etcd_certs, &bootstrap_action)
+    {
+        crate::cluster::bootstrap::reconcile_legacy_migration(
+            cluster,
+            &config.data_dir,
+            build_etcd_tls_options(Some(certs)).expect("cluster TLS options"),
+        )
+        .await
+        .expect("failed to reconcile legacy single-member cluster migration");
+    }
+
+    if let (Some(cluster), Some(certs)) = (&config.cluster, &etcd_certs)
+        && cluster.role == crate::cluster::NodeRole::Voter
+        && cluster.is_seed()
+    {
+        let elector = Arc::new(
+            crate::cluster::elector::EtcdLeaderElector::connect(
+                &config.etcd_endpoints,
+                build_etcd_tls_options(Some(certs)),
+                cluster.node_id.clone(),
+                true,
+            )
+            .await
+            .expect("failed to connect cluster leader elector"),
+        );
+        cluster_handles.extend(
+            elector
+                .clone()
+                .spawn(shutdown.resubscribe(), logger.clone()),
+        );
+        if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+            elector
+                .wait_until_leading(std::time::Duration::from_secs(30))
+                .await
+                .expect("bootstrap seed failed to acquire initial Maestro leadership");
+        }
+        leader_elector = Some(elector);
+    }
+
+    if let (Some(cluster), Some(certs)) = (&config.cluster, &etcd_certs) {
+        let tls = build_etcd_tls_options(Some(certs)).expect("cluster TLS options");
+        if let BootstrapAction::JoinExisting(join_info) = &bootstrap_action {
+            crate::cluster::bootstrap::promote_when_ready(
+                cluster,
+                join_info.member_id,
+                tls.clone(),
+                logger,
+            )
+            .await
+            .expect("failed to promote etcd learner");
+        }
+        if cluster.role == crate::cluster::NodeRole::Voter {
+            crate::cluster::bootstrap::write_cluster_meta(
+                cluster,
+                &config.cluster_alias,
+                tls.clone(),
+            )
+            .await
+            .expect("failed to initialize or validate cluster metadata");
+            if cluster.is_seed() {
+                crate::cluster::auth::bootstrap_initial(
+                    cluster,
+                    build_etcd_tls_options(Some(certs)).expect("cluster TLS options"),
+                )
+                .await
+                .expect("failed to initialize etcd RBAC");
+            }
+            crate::cluster::auth::provision_local_voter_users(
+                &config.etcd_endpoints,
+                build_etcd_tls_options(Some(certs)).expect("cluster TLS options"),
+                cluster.host_ip,
+                cluster.identity_api_port,
+                &cluster.node_id,
+            )
+            .await
+            .expect("failed to provision local least-privilege etcd users");
+        } else {
+            crate::cluster::bootstrap::validate_cluster_meta(cluster, &config.cluster_alias, tls)
+                .await
+                .expect("failed to validate cluster metadata");
+        }
+        if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+            crate::cluster::bootstrap::mark_seed_joined(&config.data_dir)
+                .expect("failed to finalize bootstrap permit");
+        }
+        if leader_elector.is_none() {
+            let elector = Arc::new(
+                crate::cluster::elector::EtcdLeaderElector::connect(
+                    &config.etcd_endpoints,
+                    build_etcd_tls_options(Some(certs)),
+                    cluster.node_id.clone(),
+                    cluster.role == crate::cluster::NodeRole::Voter,
+                )
+                .await
+                .expect("failed to connect cluster leader observer"),
+            );
+            cluster_handles.extend(
+                elector
+                    .clone()
+                    .spawn(shutdown.resubscribe(), logger.clone()),
+            );
+            leader_elector = Some(elector);
+        }
+    }
+
+    if config.tailscale_authkey.is_some() {
+        init_tailnet(
+            &tailscale_container,
+            &dns_domain,
+            logger,
+            system_ips.as_ref().map(|ips| ips.dns.as_str()),
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    } else if config.cluster.is_some() {
+        init_dns(
+            &dns_container,
+            &dns_domain,
+            system_ips.as_ref().map(|ips| ips.dns.as_str()),
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    }
+
+    let nameserver_ip = if config.tailscale_authkey.is_some() || config.cluster.is_some() {
+        system_ips.as_ref().map(|ips| ips.dns.clone())
     } else {
         None
     };
@@ -243,6 +467,27 @@ pub async fn start_system_jobs(
         supervisor,
     )
     .await;
+
+    if config.cluster.is_some() {
+        init_gateway(
+            &gateway_container,
+            &dns_domain,
+            &dns_flag,
+            system_ips
+                .as_ref()
+                .map(|ips| ip_flag(&ips.gateway))
+                .unwrap_or_default(),
+            etcd_certs
+                .as_ref()
+                .expect("cluster gateway requires node certificates"),
+            logger,
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    }
 
     init_probe(
         &probe_container,
@@ -294,6 +539,9 @@ pub async fn start_system_jobs(
     SystemStartupInfo {
         dns_manager,
         nameserver_ip,
+        ingress_ip: system_ips.map(|ips| ips.ingress),
+        leader_elector,
+        cluster_handles,
     }
 }
 
@@ -310,6 +558,7 @@ async fn init_etcd(
     dns_domain: &str,
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
+    bootstrap_action: &BootstrapAction,
     config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
@@ -319,12 +568,17 @@ async fn init_etcd(
     std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
     let etcd_data_path =
         std::fs::canonicalize(&etcd_data_dir).expect("error canonicalizing etcd data dir");
-    let mut extra_flags = vec![
-        "-p".into(),
-        format!("127.0.0.1:{}:2379", config.etcd_port),
-        "-v".into(),
-        format!("{}:/data", etcd_data_path.display()),
-    ];
+    let mut extra_flags = vec!["-v".into(), format!("{}:/data", etcd_data_path.display())];
+    if let Some(cluster) = &config.cluster {
+        extra_flags.extend([
+            "-p".into(),
+            format!("{}:{}:2379", cluster.host_ip, cluster.etcd_client_port),
+            "-p".into(),
+            format!("{}:{}:2380", cluster.host_ip, cluster.etcd_peer_port),
+        ]);
+    } else {
+        extra_flags.extend(["-p".into(), format!("127.0.0.1:{}:2379", config.etcd_port)]);
+    }
     if etcd_certs.is_some() {
         let certs_abs =
             std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
@@ -340,11 +594,59 @@ async fn init_etcd(
     let mut image_and_args = vec![
         ETCD_IMAGE_TAG.into(),
         "etcd".into(),
-        format!("--name=maestro-{}", config.cluster_name),
         "--data-dir=/data".into(),
-        format!("--listen-client-urls={scheme}://0.0.0.0:2379"),
-        format!("--advertise-client-urls={scheme}://127.0.0.1:6479"),
     ];
+    if let Some(cluster) = &config.cluster {
+        let member_name =
+            crate::cluster::bootstrap::member_name_for_start(cluster, &config.data_dir)
+                .expect("failed to resolve clustered etcd member name");
+        let initial_cluster = match bootstrap_action {
+            BootstrapAction::BootstrapSeed => format!("{member_name}={}", cluster.peer_url()),
+            BootstrapAction::JoinExisting(join_info) => join_info.initial_cluster.clone(),
+            BootstrapAction::Restart => cluster
+                .initial_voters
+                .iter()
+                .map(|node| {
+                    let name = if *node == cluster.local_endpoint() {
+                        member_name.clone()
+                    } else {
+                        node.member_name()
+                    };
+                    format!("{name}={}", node.peer_url())
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+            _ => unreachable!("invalid clustered voter bootstrap action"),
+        };
+        let state = if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+            "new"
+        } else {
+            "existing"
+        };
+        image_and_args.extend([
+            format!("--name={member_name}"),
+            "--listen-client-urls=https://0.0.0.0:2379".into(),
+            "--listen-peer-urls=https://0.0.0.0:2380".into(),
+            format!(
+                "--advertise-client-urls=https://{}:{}",
+                cluster.host_ip, cluster.etcd_client_port
+            ),
+            format!("--initial-advertise-peer-urls={}", cluster.peer_url()),
+            format!("--initial-cluster={initial_cluster}"),
+            format!("--initial-cluster-state={state}"),
+            format!("--initial-cluster-token=maestro-{}", cluster.cluster_id),
+            "--strict-reconfig-check=true".into(),
+            "--auto-compaction-mode=periodic".into(),
+            "--auto-compaction-retention=1h".into(),
+            "--quota-backend-bytes=8589934592".into(),
+        ]);
+    } else {
+        image_and_args.extend([
+            format!("--name=maestro-{}", config.cluster_name),
+            format!("--listen-client-urls={scheme}://0.0.0.0:2379"),
+            format!("--advertise-client-urls={scheme}://127.0.0.1:6479"),
+        ]);
+    }
     if etcd_certs.is_some() {
         image_and_args.extend([
             "--cert-file=/certs/server.pem".into(),
@@ -352,6 +654,14 @@ async fn init_etcd(
             "--trusted-ca-file=/certs/ca.pem".into(),
             "--client-cert-auth=true".into(),
         ]);
+        if config.cluster.is_some() {
+            image_and_args.extend([
+                "--peer-cert-file=/certs/peer.pem".into(),
+                "--peer-key-file=/certs/peer-key.pem".into(),
+                "--peer-trusted-ca-file=/certs/ca.pem".into(),
+                "--peer-client-cert-auth=true".into(),
+            ]);
+        }
     }
 
     let etcd_job_config = SupervisedJobConfig {
@@ -397,14 +707,10 @@ async fn init_ingress(
     supervisor: &mut JobSupervisor,
 ) {
     let tls = build_etcd_tls_options(etcd_certs);
-    let scheme = if etcd_certs.is_some() {
-        "https"
-    } else {
-        "http"
-    };
-    let endpoint = format!("{scheme}://127.0.0.1:{}", config.etcd_port);
     let connect_options = tls.map(|tls_opts| etcd_client::ConnectOptions::new().with_tls(tls_opts));
-    if let Ok(mut client) = etcd_client::Client::connect([&endpoint], connect_options).await {
+    if let Ok(mut client) =
+        etcd_client::Client::connect(config.etcd_endpoints.iter(), connect_options).await
+    {
         let _ = client.put("traefik", "", None).await;
     }
 
@@ -417,14 +723,40 @@ async fn init_ingress(
             std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
         extra_flags.extend(["-v".into(), format!("{}:/certs:ro", certs_abs.display())]);
     }
+    if config.cluster.is_some() {
+        let gateway_config =
+            write_gateway_dynamic_config(config, etcd_certs.expect("cluster certs"))
+                .expect("failed to write cluster gateway TLS configuration");
+        let gateway_dir = gateway_config
+            .parent()
+            .expect("gateway config parent directory");
+        extra_flags.extend([
+            "-v".into(),
+            format!("{}:/gateway:ro", gateway_dir.display()),
+        ]);
+    }
     extra_flags.extend_from_slice(dns_flag);
     extra_flags.extend(ip_flags);
 
+    let provider_endpoints = if config.etcd_endpoints.is_empty() {
+        "maestro-etcd:2379".to_string()
+    } else {
+        config
+            .etcd_endpoints
+            .iter()
+            .map(|endpoint| {
+                endpoint
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     let mut image_and_args = vec![
         INGRESS_IMAGE_TAG.into(),
         "--providers.etcd=true".into(),
         "--providers.etcd.rootKey=traefik".into(),
-        "--providers.etcd.endpoints=maestro-etcd:2379".into(),
+        format!("--providers.etcd.endpoints={provider_endpoints}"),
         "--entrypoints.web.address=:8888".into(),
         "--entrypoints.metrics.address=:9100".into(),
         "--metrics.prometheus=true".into(),
@@ -434,6 +766,17 @@ async fn init_ingress(
         "--metrics.prometheus.addServicesLabels=true".into(),
         "--metrics.prometheus.buckets=1.0,5.0,10.0".into(),
     ];
+    if config.cluster.is_some() {
+        image_and_args.extend([
+            "--providers.file.filename=/gateway/dynamic.yml".into(),
+            "--entrypoints.internal.address=:80".into(),
+            "--entrypoints.gateway.address=:8443".into(),
+            "--entrypoints.gateway.http.tls=true".into(),
+            "--entrypoints.gateway.http.tls.options=cluster-gateway@file".into(),
+            "--ping=true".into(),
+            "--ping.manualrouting=true".into(),
+        ]);
+    }
     if let Some(cidr) = network_cidr {
         image_and_args.push(format!(
             "--entrypoints.web.forwardedHeaders.trustedIPs={cidr}"
@@ -444,14 +787,17 @@ async fn init_ingress(
             "--accesslog=true".into(),
             "--accesslog.format=json".into(),
             "--accesslog.fields.defaultmode=keep".into(),
+            "--accesslog.fields.queryParameters.defaultMode=drop".into(),
+            "--accesslog.fields.headers.defaultMode=drop".into(),
             "--accesslog.fields.headers.names.X-Forwarded-For=keep".into(),
+            "--accesslog.fields.headers.names.X-Real-IP=keep".into(),
             "--accesslog.fields.headers.names.CF-Connecting-IP=keep".into(),
         ]);
     }
     if etcd_certs.is_some() {
         image_and_args.extend([
-            "--providers.etcd.tls.cert=/certs/client.pem".into(),
-            "--providers.etcd.tls.key=/certs/client-key.pem".into(),
+            "--providers.etcd.tls.cert=/certs/traefik-client.pem".into(),
+            "--providers.etcd.tls.key=/certs/traefik-client-key.pem".into(),
             "--providers.etcd.tls.ca=/certs/ca.pem".into(),
         ]);
     }
@@ -489,6 +835,158 @@ async fn init_ingress(
             &format!("ingress listening on http://0.0.0.0:{port}"),
         );
     }
+}
+
+fn write_gateway_dynamic_config(
+    config: &ControllerConfig,
+    certs: &EtcdCerts,
+) -> std::io::Result<std::path::PathBuf> {
+    let directory = config.data_dir.join("system/gateway");
+    std::fs::create_dir_all(&directory)?;
+    let identity_path = directory.join("traefik-client-identity.pem");
+    write_private_file(
+        &identity_path,
+        &format!(
+            "{}\n{}",
+            certs.traefik_client_cert_pem, certs.traefik_client_key_pem
+        ),
+    )?;
+    let dynamic_path = directory.join("dynamic.yml");
+    write_private_file(
+        &dynamic_path,
+        &format!(
+            r#"http:
+  routers:
+    maestro-gateway-health:
+      entryPoints:
+        - gateway
+      rule: Path(`{}`)
+      service: ping@internal
+      priority: 10000
+      tls:
+        options: cluster-gateway
+  serversTransports:
+    cluster-gateway:
+      rootCAs:
+        - /certs/ca.pem
+      certificates:
+        - /gateway/traefik-client-identity.pem
+      minVersion: VersionTLS13
+tls:
+  certificates:
+    - certFile: /certs/api.pem
+      keyFile: /certs/api-key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/api.pem
+        keyFile: /certs/api-key.pem
+  options:
+    cluster-gateway:
+      minVersion: VersionTLS13
+      clientAuth:
+        caFiles:
+          - /certs/ca.pem
+        clientAuthType: RequireAndVerifyClientCert
+"#,
+            crate::cluster::traefik::GATEWAY_HEALTH_PATH
+        ),
+    )?;
+    Ok(dynamic_path)
+}
+
+async fn init_gateway(
+    container_name: &str,
+    dns_domain: &str,
+    dns_flag: &[String],
+    ip_flags: Vec<String>,
+    etcd_certs: &EtcdCerts,
+    logger: &Logger,
+    config: &ControllerConfig,
+    runtime: &Arc<dyn RuntimeProvider>,
+    log_sender: &flume::Sender<LogEntry>,
+    supervisor: &mut JobSupervisor,
+) {
+    let cluster = config.cluster.as_ref().expect("cluster gateway runtime");
+    let config_path = write_gateway_dynamic_config(config, etcd_certs)
+        .expect("failed to write cluster gateway TLS configuration");
+    let gateway_dir = config_path.parent().expect("gateway config directory");
+    let certs_abs =
+        std::fs::canonicalize(config.certs_dir()).expect("failed to canonicalize certs dir");
+    let mut extra_flags = vec![
+        "-p".to_string(),
+        format!("{}:{}:8443", cluster.host_ip, cluster.gateway_port),
+        "-v".to_string(),
+        format!("{}:/certs:ro", certs_abs.display()),
+        "-v".to_string(),
+        format!("{}:/gateway:ro", gateway_dir.display()),
+    ];
+    extra_flags.extend_from_slice(dns_flag);
+    extra_flags.extend(ip_flags);
+
+    let provider_endpoints = config
+        .etcd_endpoints
+        .iter()
+        .map(|endpoint| {
+            endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let root_key = format!("maestro-gateway/{}", cluster.node_id);
+    let image_and_args = vec![
+        INGRESS_IMAGE_TAG.into(),
+        "--providers.etcd=true".into(),
+        format!("--providers.etcd.rootKey={root_key}"),
+        format!("--providers.etcd.endpoints={provider_endpoints}"),
+        "--providers.etcd.tls.cert=/certs/traefik-client.pem".into(),
+        "--providers.etcd.tls.key=/certs/traefik-client-key.pem".into(),
+        "--providers.etcd.tls.ca=/certs/ca.pem".into(),
+        "--providers.file.filename=/gateway/dynamic.yml".into(),
+        "--entrypoints.gateway.address=:8443".into(),
+        "--entrypoints.gateway.http.tls=true".into(),
+        "--entrypoints.gateway.http.tls.options=cluster-gateway@file".into(),
+        "--ping=true".into(),
+        "--ping.manualrouting=true".into(),
+    ];
+    await_job_running(
+        supervisor,
+        SupervisedJobConfig {
+            id: "maestro-gateway".to_string(),
+            command: runtime.run_command(&RunSpec {
+                container_name: container_name.to_string(),
+                hostname: "maestro-gateway".to_string(),
+                dns_domain: Some(dns_domain.to_string()),
+                network: config.network.clone(),
+                extra_flags,
+                image_and_args,
+            }),
+            name: "maestro-gateway".to_string(),
+            max_restarts: None,
+            restart_delay_ms: 1_000,
+            max_restart_delay_ms: Some(15_000),
+            shutdown_grace_period_ms: 10_000,
+            container: Some(ContainerRef {
+                name: container_name.to_string(),
+                runtime_cli: runtime.cli_name().to_string(),
+            }),
+            secrets_mount: None,
+            log_config: Some(LogConfig {
+                sender: log_sender.clone(),
+                tags: system_log_tags(config),
+                origin: LogOrigin::System,
+            }),
+        },
+    )
+    .await;
+    logger.emit(
+        "info",
+        &format!(
+            "cluster node gateway listening on https://{}:{}",
+            cluster.host_ip, cluster.gateway_port
+        ),
+    );
 }
 
 async fn init_admin(
@@ -532,6 +1030,18 @@ async fn init_admin(
         .map(|ip| format!("http://{ip}:3001"))
         .unwrap_or_else(|| "http://maestro-probe:3001".to_string());
     admin_flags.extend(["-e".to_string(), format!("MAESTRO_API_HOST={api_host}")]);
+    let service_jwt_key_path = config.data_dir.join("system/admin/service-jwt-key");
+    if config.jwt_secret_key.is_some() {
+        admin_flags.extend([
+            "-v".to_string(),
+            format!(
+                "{}:/run/secrets/service-jwt-key:ro",
+                service_jwt_key_path.display()
+            ),
+            "-e".to_string(),
+            "MAESTRO_SERVICE_JWT_KEY_FILE=/run/secrets/service-jwt-key".to_string(),
+        ]);
+    }
     admin_flags.extend_from_slice(dns_flag);
     admin_flags.extend(ip_flags);
 
@@ -554,7 +1064,13 @@ async fn init_admin(
             name: container_name.to_string(),
             runtime_cli: runtime.cli_name().to_string(),
         }),
-        secrets_mount: None,
+        secrets_mount: config.jwt_secret_key.as_ref().map(|secret| {
+            crate::supervisor::SecretsMount {
+                host_path: service_jwt_key_path,
+                container_path: "/run/secrets/service-jwt-key".to_string(),
+                content: secret.clone(),
+            }
+        }),
         log_config: Some(LogConfig {
             sender: log_sender.clone(),
             tags: system_log_tags(config),
@@ -621,6 +1137,28 @@ async fn init_probe(
     let encryption_key_abs = std::fs::canonicalize(&probe_dir)
         .expect("failed to canonicalize probe dir")
         .join("encryption-key");
+    let ingestion_token_abs = std::fs::canonicalize(&probe_dir)
+        .expect("failed to canonicalize probe dir")
+        .join("ingestion-token");
+    let jwt_key_path = probe_dir.join("jwt-key");
+    if let Some(secret) = &config.jwt_secret_key {
+        write_private_file(&jwt_key_path, secret).expect("failed to write probe JWT key");
+    }
+    let control_dir = config.data_dir.join("system/control");
+    if config.cluster.is_some() {
+        std::fs::create_dir_all(&control_dir).expect("failed to create control directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&control_dir, std::fs::Permissions::from_mode(0o700))
+                .expect("failed to protect control directory");
+        }
+        write_private_file(
+            &control_dir.join("control-token"),
+            config.internal_control_token.as_str(),
+        )
+        .expect("failed to write internal control token");
+    }
     let probe_host_port = config.probe_port.expect("probe_port should be resolved");
     let etcd_scheme = if etcd_certs.is_some() {
         "https"
@@ -630,24 +1168,34 @@ async fn init_probe(
     let probe_job_config = SupervisedJobConfig {
         id: "maestro-probe".to_string(),
         command: {
+            let etcd_endpoint = config
+                .etcd_endpoints
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{etcd_scheme}://maestro-etcd:2379"));
             let mut probe_flags: Vec<String> = vec![
                 "-p".into(),
                 format!("127.0.0.1:{probe_host_port}:3001"),
                 "-v".into(),
                 format!("{}:/data", probe_data_abs.display()),
                 "-v".into(),
-                "/:/host/root:ro".into(),
-                "-v".into(),
                 format!(
                     "{}:/run/secrets/encryption-key:ro",
                     encryption_key_abs.display()
                 ),
+                "-v".into(),
+                format!(
+                    "{}:/run/secrets/ingestion-token:ro",
+                    ingestion_token_abs.display()
+                ),
                 "-e".into(),
-                format!("ETCD_ENDPOINT={etcd_scheme}://maestro-etcd:2379"),
+                format!("ETCD_ENDPOINT={etcd_endpoint}"),
                 "-e".into(),
-                "MAESTRO_HOST_ROOT=/host/root".into(),
+                format!("ETCD_ENDPOINTS={}", config.etcd_endpoints.join(",")),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
+                "-e".into(),
+                "MAESTRO_INGESTION_TOKEN_FILE=/run/secrets/ingestion-token".into(),
                 "-e".into(),
                 "PORT=3001".into(),
                 "-e".into(),
@@ -662,6 +1210,42 @@ async fn init_probe(
                     base64::engine::general_purpose::STANDARD.encode(&config.maestro_config)
                 ),
             ];
+            if config.cluster.is_none() {
+                probe_flags.extend([
+                    "-v".into(),
+                    "/:/host/root:ro".into(),
+                    "-e".into(),
+                    "MAESTRO_HOST_ROOT=/host/root".into(),
+                ]);
+            }
+            if let Some(cluster) = &config.cluster {
+                probe_flags.extend([
+                    "-v".into(),
+                    format!("{}:/run/maestro-control", control_dir.display()),
+                    "-e".into(),
+                    "MAESTRO_CONTROL_SOCKET=/run/maestro-control/control.sock".into(),
+                    "-e".into(),
+                    "MAESTRO_CONTROL_TOKEN_FILE=/run/maestro-control/control-token".into(),
+                    "-p".into(),
+                    format!("{}:{probe_host_port}:3002", cluster.host_ip),
+                    "-e".into(),
+                    "MAESTRO_TLS_PORT=3002".into(),
+                    "-e".into(),
+                    "MAESTRO_API_CERT_FILE=/certs/api.pem".into(),
+                    "-e".into(),
+                    "MAESTRO_API_KEY_FILE=/certs/api-key.pem".into(),
+                    "-e".into(),
+                    format!("MAESTRO_NODE_ID={}", cluster.node_id),
+                ]);
+            }
+            if config.jwt_secret_key.is_some() {
+                probe_flags.extend([
+                    "-v".into(),
+                    format!("{}:/run/secrets/jwt-key:ro", jwt_key_path.display()),
+                    "-e".into(),
+                    "MAESTRO_JWT_SECRET_KEY_FILE=/run/secrets/jwt-key".into(),
+                ]);
+            }
             if etcd_certs.is_some() {
                 let certs_abs = std::fs::canonicalize(config.certs_dir())
                     .expect("failed to canonicalize certs dir");
@@ -671,13 +1255,10 @@ async fn init_probe(
                     "-e".into(),
                     "ETCD_CA_FILE=/certs/ca.pem".into(),
                     "-e".into(),
-                    "ETCD_CERT_FILE=/certs/client.pem".into(),
+                    "ETCD_CERT_FILE=/certs/probe-client.pem".into(),
                     "-e".into(),
-                    "ETCD_KEY_FILE=/certs/client-key.pem".into(),
+                    "ETCD_KEY_FILE=/certs/probe-client-key.pem".into(),
                 ]);
-            }
-            if let Some(secret) = &config.jwt_secret_key {
-                probe_flags.extend(["-e".into(), format!("MAESTRO_JWT_SECRET_KEY={secret}")]);
             }
             if let Some(system_type) = &config.system_type {
                 probe_flags.extend(["-e".into(), format!("MAESTRO_SYSTEM_TYPE={system_type}")]);
@@ -744,6 +1325,60 @@ async fn init_probe(
     }
 }
 
+async fn init_dns(
+    container_name: &str,
+    dns_domain: &str,
+    static_ip: Option<&str>,
+    config: &ControllerConfig,
+    runtime: &Arc<dyn RuntimeProvider>,
+    log_sender: &flume::Sender<LogEntry>,
+    supervisor: &mut JobSupervisor,
+) {
+    let dns_dir = std::fs::canonicalize(config.data_dir.join("system/dns"))
+        .expect("failed to canonicalize dns dir");
+    let mut extra_flags = vec![
+        "-v".to_string(),
+        format!("{}:/data/dns:ro", dns_dir.display()),
+    ];
+    if let Some(ip) = static_ip {
+        extra_flags.extend(["--ip".to_string(), ip.to_string()]);
+    }
+    await_job_running(
+        supervisor,
+        SupervisedJobConfig {
+            id: "maestro-dns".to_string(),
+            command: runtime.run_command(&RunSpec {
+                container_name: container_name.to_string(),
+                hostname: "maestro-dns".to_string(),
+                dns_domain: Some(dns_domain.to_string()),
+                network: config.network.clone(),
+                extra_flags,
+                image_and_args: vec![
+                    DNS_IMAGE_TAG.to_string(),
+                    "-conf".to_string(),
+                    "/data/dns/Corefile".to_string(),
+                ],
+            }),
+            name: "maestro-dns".to_string(),
+            max_restarts: None,
+            restart_delay_ms: 1_000,
+            max_restart_delay_ms: Some(15_000),
+            shutdown_grace_period_ms: 10_000,
+            container: Some(ContainerRef {
+                name: container_name.to_string(),
+                runtime_cli: runtime.cli_name().to_string(),
+            }),
+            secrets_mount: None,
+            log_config: Some(LogConfig {
+                sender: log_sender.clone(),
+                tags: system_log_tags(config),
+                origin: LogOrigin::System,
+            }),
+        },
+    )
+    .await;
+}
+
 async fn init_tailnet(
     container_name: &str,
     dns_domain: &str,
@@ -768,9 +1403,11 @@ async fn init_tailnet(
         }
     };
     let mut routes = vec![network_cidr.clone()];
-    for route in &config.tailscale_advertise_routes {
-        if !routes.contains(route) {
-            routes.push(route.clone());
+    if config.cluster.is_none() {
+        for route in &config.tailscale_advertise_routes {
+            if !routes.contains(route) {
+                routes.push(route.clone());
+            }
         }
     }
     let advertise_routes = routes.join(",");
@@ -808,7 +1445,17 @@ async fn init_tailnet(
         SupervisedJobConfig {
             id: "maestro-tailscale".to_string(),
             command: {
-                let ts_hostname = format!("maestro-tailscale-{}", config.cluster_name);
+                let ts_hostname = config
+                    .cluster
+                    .as_ref()
+                    .map(|cluster| {
+                        format!(
+                            "maestro-tailscale-{}-{}",
+                            config.cluster_name,
+                            &cluster.node_id[..12]
+                        )
+                    })
+                    .unwrap_or_else(|| format!("maestro-tailscale-{}", config.cluster_name));
                 let dns_dir_abs = std::fs::canonicalize(config.data_dir.join("system/dns"))
                     .expect("failed to canonicalize dns dir");
                 let mut flags: Vec<String> = vec![
@@ -821,16 +1468,31 @@ async fn init_tailnet(
                     "-e".to_string(),
                     format!("TS_ROUTES={advertise_routes}"),
                     "-e".to_string(),
-                    "TS_USERSPACE=true".to_string(),
+                    format!(
+                        "TS_USERSPACE={}",
+                        if config.cluster.is_some() {
+                            "false"
+                        } else {
+                            "true"
+                        }
+                    ),
                     "-e".to_string(),
                     "TS_STATE_DIR=/var/lib/tailscale".to_string(),
                     "-e".to_string(),
-                    format!("TS_HOSTNAME=maestro-tailscale-{}", config.cluster_name),
+                    format!("TS_HOSTNAME={ts_hostname}"),
                     "-e".to_string(),
                     "TS_EXTRA_ARGS=--accept-dns=false".to_string(),
                     "-e".to_string(),
                     "MAESTRO_DNS_UPSTREAM=coredns".to_string(),
                 ];
+                if config.cluster.is_some() {
+                    flags.extend([
+                        "--device=/dev/net/tun".to_string(),
+                        "--cap-add=NET_ADMIN".to_string(),
+                        "--sysctl=net.ipv4.ip_forward=1".to_string(),
+                        "--sysctl=net.ipv4.conf.all.src_valid_mark=1".to_string(),
+                    ]);
+                }
                 if let Some(ip) = static_ip {
                     flags.extend(["--ip".to_string(), ip.to_string()]);
                 }
@@ -871,9 +1533,8 @@ async fn init_tailnet(
     .await;
 
     let routes_arg = format!("--advertise-routes={advertise_routes}");
-    let _ = runtime
-        .exec_in_container(container_name, &["tailscale", "set", &routes_arg])
-        .await;
+    let set_args = vec!["tailscale", "set", &routes_arg];
+    let _ = runtime.exec_in_container(container_name, &set_args).await;
 
     logger.emit(
         "info",
@@ -924,6 +1585,12 @@ async fn init_cloudflared(
 
     let mut flags: Vec<String> = vec!["-e".to_string(), format!("TUNNEL_TOKEN={}", token.as_str())];
     flags.extend_from_slice(dns_flag);
+    let gate_on_data_plane = config.cluster.is_some();
+    let initial_network = if gate_on_data_plane && runtime.supports_dynamic_network_attachment() {
+        "none".to_string()
+    } else {
+        config.network.clone()
+    };
 
     for replica in 1..=config.cloudflare_tunnel_replicas {
         let container_name = format!("{container_name_prefix}-{replica}");
@@ -938,7 +1605,7 @@ async fn init_cloudflared(
                     container_name: container_name.clone(),
                     hostname,
                     dns_domain: Some(dns_domain.to_string()),
-                    network: config.network.clone(),
+                    network: initial_network.clone(),
                     extra_flags: flags.clone(),
                     image_and_args: vec![
                         CLOUDFLARED_IMAGE_TAG.to_string(),
@@ -953,7 +1620,7 @@ async fn init_cloudflared(
                 max_restart_delay_ms: Some(15_000),
                 shutdown_grace_period_ms: 10_000,
                 container: Some(ContainerRef {
-                    name: container_name,
+                    name: container_name.clone(),
                     runtime_cli: runtime.cli_name().to_string(),
                 }),
                 secrets_mount: None,
@@ -965,6 +1632,12 @@ async fn init_cloudflared(
             },
         )
         .await;
+        if gate_on_data_plane {
+            runtime
+                .set_container_network_access(&container_name, &config.network, false)
+                .await
+                .expect("failed to disable cloudflared before data-plane validation");
+        }
     }
 
     logger.emit(
@@ -984,9 +1657,10 @@ async fn init_cloudflared(
 struct SystemIps {
     etcd: String,
     ingress: String,
+    gateway: String,
     probe: String,
     admin: String,
-    tailscale: String,
+    dns: String,
 }
 
 fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
@@ -999,7 +1673,8 @@ fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
             etcd: format!("{prefix}.251"),
             ingress: format!("{prefix}.252"),
             probe: format!("{prefix}.253"),
-            tailscale: format!("{prefix}.254"),
+            gateway: format!("{prefix}.249"),
+            dns: format!("{prefix}.254"),
         })
     } else {
         None

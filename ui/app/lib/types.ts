@@ -23,6 +23,11 @@ export interface Ingress {
   host?: string | null;
   hosts?: string[];
   port?: number | null;
+  sessionAffinity?: { header: string } | null;
+}
+
+export interface IngressBlocklist {
+  blockedIps: string[];
 }
 
 export interface IngressRouting {
@@ -98,6 +103,84 @@ export interface ReplicaState {
   status: string;
   healthcheckFailures: number;
   restartAttempts: number;
+  nodeId?: string | null;
+  assignmentId?: string | null;
+  endpoint?: {
+    containerIp: string;
+    containerHostname: string;
+    ingressContainerPort: number;
+  } | null;
+  error?: string | null;
+}
+
+export interface ClusterNode {
+  nodeId: string;
+  hostname: string;
+  role: "voter" | "worker";
+  scheduling: boolean;
+  clusterHostIp: string;
+  clusterApiPort: number;
+  subnet: string;
+  dataPlaneReady: boolean;
+  dataPlaneError?: string | null;
+  version: string;
+  alive: boolean;
+  lastSeenAtMs: number;
+  lostAtMs?: number | null;
+  state: {
+    unschedulable: boolean;
+    drainedAtMs?: number | null;
+    reason?: string | null;
+  };
+}
+
+export interface UnschedulableReplica {
+  serviceId: string;
+  deploymentId: string;
+  replicaIndex: number;
+  reason: string;
+}
+
+export type UpgradePhase =
+  | "draining"
+  | "awaiting-leadership-transfer"
+  | "upgrade-requested"
+  | "self-restart-pending"
+  | "verifying"
+  | "restoring"
+  | "succeeded"
+  | "failed";
+
+export interface UpgradeNodeStep {
+  nodeId: string;
+  hostname: string;
+  role: "voter" | "worker";
+  fromVersion: string;
+  status: "pending" | "draining" | "upgrading" | "verifying" | "restoring" | "succeeded" | "failed";
+  startedAtMs?: number | null;
+  completedAtMs?: number | null;
+  upgradeStartedAtMs?: number | null;
+  error?: string | null;
+}
+
+export interface UpgradeEvent {
+  atMs: number;
+  phase: UpgradePhase;
+  nodeId?: string | null;
+  message: string;
+}
+
+export interface UpgradeRun {
+  runId: string;
+  targetVersion: string;
+  requestedAtMs: number;
+  updatedAtMs: number;
+  requestedByNodeId: string;
+  phase: UpgradePhase;
+  currentNodeIndex: number;
+  nodes: UpgradeNodeStep[];
+  history: UpgradeEvent[];
+  failure?: string | null;
 }
 
 export interface GitCommitInfo {
@@ -145,6 +228,20 @@ export interface TrafficPoint {
   latLe5s: number;
   latLe10s: number;
   latTotal: number;
+}
+
+export interface TrafficBreakdownEntry {
+  value: string;
+  statusCode: number;
+  requests: number;
+  lastSeenAtMs: number;
+}
+
+export interface IngressTrafficBreakdown {
+  byIp: TrafficBreakdownEntry[];
+  byPath: TrafficBreakdownEntry[];
+  partial?: boolean;
+  unavailableNodes?: number;
 }
 
 export interface DiskInfo {

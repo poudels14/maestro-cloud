@@ -39,7 +39,10 @@ pub async fn read_pipe_to_collector(
 
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
-        let parsed = parse_log_line(&line);
+        let mut parsed = parse_log_line(&line);
+        if source.as_ref() == "maestro-ingress" {
+            normalize_ingress_access_log_attrs(&mut parsed.attrs);
+        }
         if is_tailscale && is_tailscale_noise(&parsed.text) {
             continue;
         }
@@ -300,6 +303,51 @@ fn json_attr_value(value: &serde_json::Value) -> String {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Null => "null".to_string(),
         _ => value.to_string(),
+    }
+}
+
+fn normalize_ingress_access_log_attrs(attrs: &mut Vec<(String, String)>) {
+    let direct = find_attr(attrs, "ClientHost").and_then(parse_ip);
+    let forwarded = direct
+        .filter(|address| is_internal_proxy_address(*address))
+        .and_then(|_| {
+            ["request_CF-Connecting-IP", "request_X-Real-IP"]
+                .into_iter()
+                .find_map(|name| find_attr(attrs, name).and_then(parse_ip))
+                .or_else(|| {
+                    find_attr(attrs, "request_X-Forwarded-For")
+                        .and_then(|value| value.split(',').find_map(parse_ip))
+                })
+        });
+    if let Some(address) = forwarded.or(direct) {
+        attrs.retain(|(name, _)| name != "maestro.client_ip");
+        attrs.push(("maestro.client_ip".to_string(), address.to_string()));
+    }
+}
+
+fn find_attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn parse_ip(value: &str) -> Option<std::net::IpAddr> {
+    value.trim().parse().ok()
+}
+
+fn is_internal_proxy_address(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.octets()[0] == 100 && address.octets()[1] & 0xc0 == 0x40
+        }
+        std::net::IpAddr::V6(address) => {
+            let first = address.segments()[0];
+            address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
+        }
     }
 }
 
