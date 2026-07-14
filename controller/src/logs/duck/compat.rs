@@ -3,7 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::{DuckLogStore, IngestLogEntry};
-use crate::logs::{LogEntry, LogReadQuery, LogReadScope, LogStore};
+use crate::logs::{
+    LogEntry, LogHistogramBucket, LogHistogramQuery, LogReadQuery, LogReadScope, LogStore,
+};
 
 /// Lets existing controller SQLite storage and probe DuckDB storage share the API surface.
 pub enum TelemetryStore {
@@ -49,6 +51,16 @@ impl TelemetryStore {
         match self {
             Self::Sqlite(store) => store.read_logs(query).await,
             Self::Duck(store) => store.read_logs(query).await,
+        }
+    }
+
+    pub async fn read_log_histogram(
+        &self,
+        query: LogHistogramQuery,
+    ) -> Result<Vec<LogHistogramBucket>> {
+        match self {
+            Self::Sqlite(store) => store.read_log_histogram(query).await,
+            Self::Duck(store) => store.read_log_histogram(query).await,
         }
     }
 

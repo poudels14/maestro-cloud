@@ -85,12 +85,19 @@ async fn sqlite_log_query_filters_before_pagination_and_aliases_status() {
     let mut failed = sample_entry();
     failed.text = "upstream request failed".to_string();
     failed.attrs = vec![("DownstreamStatus".into(), "503".into())];
+    let failed_ts = failed.ts;
+    let mut older_failed = failed.clone();
+    older_failed.ts -= 1;
+    older_failed.text = "older upstream request failed".to_string();
     let mut success = sample_entry();
     success.ts += 1;
     success.text = "newer successful request".to_string();
     success.attrs = vec![("http.response.status_code".into(), "200".into())];
-    store.append(&[failed, success]).await.expect("append");
-    assert_eq!(store.latest_log_seq().await.expect("cursor"), 2);
+    store
+        .append(&[older_failed, failed, success])
+        .await
+        .expect("append");
+    assert_eq!(store.latest_log_seq().await.expect("cursor"), 3);
 
     let entries = store
         .read_logs(crate::logs::LogReadQuery {
@@ -101,6 +108,8 @@ async fn sqlite_log_query_filters_before_pagination_and_aliases_status() {
                     .parse()
                     .expect("query"),
             ),
+            from: Some(failed_ts),
+            to: Some(failed_ts + 1),
             after: None,
             before: None,
             limit: 1,
@@ -110,6 +119,49 @@ async fn sqlite_log_query_filters_before_pagination_and_aliases_status() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].text, "upstream request failed");
 
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn sqlite_log_histogram_applies_time_scope_and_search_before_counting() {
+    let path = temp_db_path("histogram");
+    let store = LogStore::open(&path).expect("open store");
+    let bucket_ms = 60_000;
+    let from = 1_700_000_040_000;
+    let mut first = sample_entry();
+    first.ts = from + 1_000;
+    first.text = "failed first".into();
+    first.attrs = vec![("DownstreamStatus".into(), "503".into())];
+    let mut second = first.clone();
+    second.ts = from + bucket_ms + 1_000;
+    second.text = "failed second".into();
+    let mut success = second.clone();
+    success.ts += 1_000;
+    success.text = "successful".into();
+    success.attrs = vec![("DownstreamStatus".into(), "200".into())];
+    let mut other_service = first.clone();
+    other_service.source = Arc::from("other/abc/replica0");
+    store
+        .append(&[first, second, success, other_service])
+        .await
+        .expect("append");
+
+    let buckets = store
+        .read_log_histogram(crate::logs::LogHistogramQuery {
+            scope: crate::logs::LogReadScope::Prefix("app/".into()),
+            origin: Some(LogOrigin::Service),
+            search: Some("@http.status_code:[500 TO 599]".parse().expect("query")),
+            from,
+            to: from + 2 * bucket_ms,
+            bucket_ms,
+        })
+        .await
+        .expect("histogram");
+
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets.iter().map(|bucket| bucket.count).sum::<u64>(), 2);
+    assert_eq!(buckets[0].ts, from);
+    assert_eq!(buckets[1].ts, from + bucket_ms);
     let _ = std::fs::remove_file(path);
 }
 

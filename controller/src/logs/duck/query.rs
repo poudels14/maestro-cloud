@@ -6,7 +6,8 @@ use duckdb::{params, params_from_iter, types::Value};
 
 use super::{Db, contains_parquet, hive_component, sql_lit};
 use crate::logs::{
-    LogEntry, LogOrigin, LogSearchQuery, LogSearchValue, SqlDialect, sql_like_prefix,
+    LogEntry, LogHistogramBucket, LogOrigin, LogSearchQuery, LogSearchValue, SqlDialect,
+    sql_like_prefix,
 };
 
 pub(super) fn query_ingress_traffic(
@@ -110,11 +111,12 @@ pub(super) fn query_logs(
     sources: Option<&[String]>,
     origin: Option<LogOrigin>,
     search: Option<&LogSearchQuery>,
+    time_range: Option<(i64, i64)>,
     after: Option<i64>,
     before: Option<i64>,
     limit: usize,
     descending: bool,
-    cold_glob: Option<&Path>,
+    cold_globs: &[PathBuf],
 ) -> Result<Vec<LogEntry>> {
     let projection = if service {
         r#"
@@ -147,17 +149,25 @@ pub(super) fn query_logs(
             FROM logs
         "#
     )];
-    if let Some(glob) = cold_glob {
+    if !cold_globs.is_empty() {
+        let parquet_sources = cold_globs
+            .iter()
+            .map(|glob| sql_lit(&glob.to_string_lossy()))
+            .collect::<Vec<_>>();
+        let parquet_sources = if parquet_sources.len() == 1 {
+            parquet_sources[0].clone()
+        } else {
+            format!("[{}]", parquet_sources.join(", "))
+        };
         arms.push(format!(
             r#"
                 SELECT {projection}
                 FROM read_parquet(
-                    {},
+                    {parquet_sources},
                     hive_partitioning = true,
                     union_by_name = true
                 )
             "#,
-            sql_lit(&glob.to_string_lossy())
         ));
     }
     let mut sql = format!("SELECT * FROM ({}) q WHERE true", arms.join(" UNION ALL "));
@@ -186,6 +196,10 @@ pub(super) fn query_logs(
             LogSearchValue::Number(value) => Value::Double(value),
         }));
     }
+    if let Some((from, to)) = time_range {
+        sql.push_str(" AND ts >= ? AND ts < ?");
+        vals.extend([Value::BigInt(from), Value::BigInt(to)]);
+    }
     if let Some(a) = after {
         sql.push_str(" AND seq>?");
         vals.push(Value::BigInt(a));
@@ -209,6 +223,116 @@ pub(super) fn query_logs(
         out.reverse();
     }
     Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn query_log_histogram(
+    db: &Db,
+    service: bool,
+    prefix: Option<&str>,
+    sources: Option<&[String]>,
+    origin: Option<LogOrigin>,
+    search: Option<&LogSearchQuery>,
+    from: i64,
+    to: i64,
+    bucket_ms: i64,
+    cold_globs: &[PathBuf],
+) -> Result<Vec<LogHistogramBucket>> {
+    if bucket_ms <= 0 {
+        return Err(anyhow::anyhow!("log histogram bucket must be positive"));
+    }
+    let projection = if service {
+        r#"
+            ts,
+            level,
+            text,
+            service_id || '/' || deployment_id || '/' || unit AS source,
+            origin,
+            to_json(tags)::VARCHAR AS tags_json,
+            to_json(attributes)::VARCHAR AS attributes_json
+        "#
+    } else {
+        r#"
+            ts,
+            level,
+            text,
+            source,
+            origin,
+            to_json(tags)::VARCHAR AS tags_json,
+            to_json(attributes)::VARCHAR AS attributes_json
+        "#
+    };
+    let mut arms = vec![format!("SELECT {projection} FROM logs")];
+    if !cold_globs.is_empty() {
+        let parquet_sources = cold_globs
+            .iter()
+            .map(|glob| sql_lit(&glob.to_string_lossy()))
+            .collect::<Vec<_>>();
+        let parquet_sources = if parquet_sources.len() == 1 {
+            parquet_sources[0].clone()
+        } else {
+            format!("[{}]", parquet_sources.join(", "))
+        };
+        arms.push(format!(
+            r#"
+                SELECT {projection}
+                FROM read_parquet(
+                    {parquet_sources},
+                    hive_partitioning = true,
+                    union_by_name = true
+                )
+            "#,
+        ));
+    }
+    let mut sql = format!(
+        "SELECT ts - (ts % ?) AS bucket_at_ms, count(*)::BIGINT AS count
+         FROM ({}) q WHERE true",
+        arms.join(" UNION ALL ")
+    );
+    let mut values = vec![Value::BigInt(bucket_ms)];
+    if let Some(prefix) = prefix {
+        sql.push_str(" AND source LIKE ? ESCAPE '\\'");
+        values.push(Value::Text(sql_like_prefix(prefix)));
+    }
+    if let Some(sources) = sources {
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+        sql.push_str(&format!(
+            " AND source IN ({})",
+            vec!["?"; sources.len()].join(",")
+        ));
+        values.extend(sources.iter().cloned().map(Value::Text));
+    }
+    if let Some(origin) = origin {
+        sql.push_str(" AND origin = ?");
+        values.push(Value::Text(origin.as_str().into()));
+    }
+    if let Some(search) = search {
+        let compiled = search.compile(SqlDialect::DuckDb);
+        sql.push_str(" AND ");
+        sql.push_str(&compiled.sql);
+        values.extend(compiled.values.into_iter().map(|value| match value {
+            LogSearchValue::Text(value) => Value::Text(value),
+            LogSearchValue::Number(value) => Value::Double(value),
+        }));
+    }
+    sql.push_str(
+        " AND ts >= ? AND ts < ?
+         GROUP BY bucket_at_ms ORDER BY bucket_at_ms",
+    );
+    values.extend([Value::BigInt(from), Value::BigInt(to)]);
+
+    let conn = db.reader()?;
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values.iter()), |row| {
+        let count = row.get::<_, i64>(1)?;
+        Ok(LogHistogramBucket {
+            ts: row.get(0)?,
+            count: u64::try_from(count).unwrap_or_default(),
+        })
+    })?;
+    Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
 }
 
 fn row_to_entry(row: &duckdb::Row<'_>) -> duckdb::Result<LogEntry> {
@@ -262,6 +386,83 @@ pub(super) fn service_glob(root: &Path, prefix: &str) -> Option<PathBuf> {
     };
     parquet_glob_if_present(&base, suffix)
 }
+
+pub(super) fn service_globs_for_range(
+    root: &Path,
+    prefix: &str,
+    from: i64,
+    to: i64,
+) -> Vec<PathBuf> {
+    let dates = log_date_keys(from, to);
+    let parts = prefix.trim_end_matches('/').split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [service_id, deployment_id] => {
+            let base = root
+                .join(format!("service_id={}", hive_component(service_id)))
+                .join(format!("deployment_id={}", hive_component(deployment_id)));
+            dates
+                .into_iter()
+                .filter_map(|date| {
+                    parquet_glob_if_present(&base.join(format!("date={date}")), "part-*.parquet")
+                })
+                .collect()
+        }
+        [service_id] => {
+            let base = root.join(format!("service_id={}", hive_component(service_id)));
+            dates
+                .into_iter()
+                .filter(|date| service_date_has_parquet(&base, date))
+                .map(|date| {
+                    base.join("deployment_id=*")
+                        .join(format!("date={date}"))
+                        .join("part-*.parquet")
+                })
+                .collect()
+        }
+        _ => service_glob(root, prefix).into_iter().collect(),
+    }
+}
+
+pub(super) fn system_globs_for_range(root: &Path, from: i64, to: i64) -> Vec<PathBuf> {
+    log_date_keys(from, to)
+        .into_iter()
+        .filter_map(|date| {
+            parquet_glob_if_present(&root.join(format!("date={date}")), "part-*.parquet")
+        })
+        .collect()
+}
+
+fn service_date_has_parquet(service_root: &Path, date: &str) -> bool {
+    std::fs::read_dir(service_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| contains_parquet(&entry.path().join(format!("date={date}"))))
+}
+
+fn log_date_keys(from: i64, to: i64) -> Vec<String> {
+    let Some(mut date) =
+        chrono::DateTime::from_timestamp_millis(from).map(|value| value.date_naive())
+    else {
+        return Vec::new();
+    };
+    let Some(last) = chrono::DateTime::from_timestamp_millis(to.saturating_sub(1))
+        .map(|value| value.date_naive())
+    else {
+        return Vec::new();
+    };
+    let mut dates = Vec::new();
+    while date <= last {
+        dates.push(date.format("%Y-%m-%d").to_string());
+        let Some(next) = date.succ_opt() else {
+            break;
+        };
+        date = next;
+    }
+    dates
+}
+
 pub(super) fn parquet_glob_if_present(root: &Path, suffix: &str) -> Option<PathBuf> {
     if contains_parquet(root) {
         Some(root.join(suffix))

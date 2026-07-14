@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use duckdb::{params, params_from_iter, types::Value};
 
 use super::store::{LogEntry, LogOrigin};
-use super::{LogReadQuery, LogReadScope};
+use super::{LogHistogramBucket, LogHistogramQuery, LogReadQuery, LogReadScope};
 
 mod compat;
 mod db;
@@ -20,7 +20,8 @@ use ingestion::{append_log_batch, parse_service_source};
 use migration::migrate_sqlite_inner;
 use query::{
     cold_tier_has_seq_after, parquet_glob_if_present, query_blocked_ingress_traffic,
-    query_ingress_traffic, query_logs, service_glob,
+    query_ingress_traffic, query_log_histogram, query_logs, service_glob, service_globs_for_range,
+    system_globs_for_range,
 };
 use rollover::{remove_stale_exports, rollover_service, rollover_system, write_partition_manifest};
 
@@ -318,6 +319,8 @@ impl DuckLogStore {
             scope,
             origin,
             search,
+            from,
+            to,
             after,
             before,
             limit,
@@ -329,9 +332,14 @@ impl DuckLogStore {
                 let parts = self.parts_root.join("service-logs");
                 tokio::task::spawn_blocking(move || {
                     let _visibility = db.read_parquet()?;
-                    let cold_glob = match after {
-                        Some(cursor) if !cold_tier_has_seq_after(&db, "service", cursor)? => None,
-                        _ => service_glob(&parts, &prefix),
+                    let cold_globs = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "service", cursor)? => {
+                            Vec::new()
+                        }
+                        _ if from.is_some() && to.is_some() => {
+                            service_globs_for_range(&parts, &prefix, from.unwrap(), to.unwrap())
+                        }
+                        _ => service_glob(&parts, &prefix).into_iter().collect(),
                     };
                     query_logs(
                         &db,
@@ -340,11 +348,12 @@ impl DuckLogStore {
                         None,
                         origin,
                         search.as_ref(),
+                        from.zip(to),
                         after,
                         before,
                         limit,
                         descending,
-                        cold_glob.as_deref(),
+                        &cold_globs,
                     )
                 })
                 .await?
@@ -357,9 +366,16 @@ impl DuckLogStore {
                 let parts = self.parts_root.join("system-logs");
                 tokio::task::spawn_blocking(move || {
                     let _visibility = db.read_parquet()?;
-                    let cold_glob = match after {
-                        Some(cursor) if !cold_tier_has_seq_after(&db, "system", cursor)? => None,
-                        _ => parquet_glob_if_present(&parts, "date=*/part-*.parquet"),
+                    let cold_globs = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "system", cursor)? => {
+                            Vec::new()
+                        }
+                        _ if from.is_some() && to.is_some() => {
+                            system_globs_for_range(&parts, from.unwrap(), to.unwrap())
+                        }
+                        _ => parquet_glob_if_present(&parts, "date=*/part-*.parquet")
+                            .into_iter()
+                            .collect(),
                     };
                     query_logs(
                         &db,
@@ -368,11 +384,73 @@ impl DuckLogStore {
                         Some(&sources),
                         origin,
                         search.as_ref(),
+                        from.zip(to),
                         after,
                         before,
                         limit,
                         descending,
-                        cold_glob.as_deref(),
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
+        }
+    }
+
+    pub async fn read_log_histogram(
+        &self,
+        query: LogHistogramQuery,
+    ) -> Result<Vec<LogHistogramBucket>> {
+        let LogHistogramQuery {
+            scope,
+            origin,
+            search,
+            from,
+            to,
+            bucket_ms,
+        } = query;
+        match scope {
+            LogReadScope::Prefix(prefix) => {
+                let db = self.service.clone();
+                let parts = self.parts_root.join("service-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = service_globs_for_range(&parts, &prefix, from, to);
+                    query_log_histogram(
+                        &db,
+                        true,
+                        Some(&prefix),
+                        None,
+                        origin,
+                        search.as_ref(),
+                        from,
+                        to,
+                        bucket_ms,
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
+            LogReadScope::Sources(sources) => {
+                if sources.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let db = self.system.clone();
+                let parts = self.parts_root.join("system-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = system_globs_for_range(&parts, from, to);
+                    query_log_histogram(
+                        &db,
+                        false,
+                        None,
+                        Some(&sources),
+                        origin,
+                        search.as_ref(),
+                        from,
+                        to,
+                        bucket_ms,
+                        &cold_globs,
                     )
                 })
                 .await?
@@ -410,6 +488,8 @@ impl DuckLogStore {
             scope: LogReadScope::Prefix(prefix.to_string()),
             origin,
             search: None,
+            from: None,
+            to: None,
             after: None,
             before: None,
             limit,
@@ -423,6 +503,8 @@ impl DuckLogStore {
             scope: LogReadScope::Sources(vec![source.to_string()]),
             origin: None,
             search: None,
+            from: None,
+            to: None,
             after: None,
             before: None,
             limit,

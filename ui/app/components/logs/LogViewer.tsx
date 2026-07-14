@@ -2,9 +2,17 @@ import { createEffect, createSignal, For, Show, Switch, Match, on, onCleanup } f
 import { ChevronUp, ListFilter, Search, X, Loader2 } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
-import { getLogs, getServiceLogs, getSystemLogs } from "../../lib/api";
+import {
+  getLogs,
+  getServiceLogHistogram,
+  getServiceLogs,
+  getSystemLogHistogram,
+  getSystemLogs,
+  type LogHistogram,
+  type LogHistogramBucket
+} from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { logLevelColors, httpFields } from "../../lib/logFormat";
+import { logLevelColors, httpFields, tsFormatter } from "../../lib/logFormat";
 import {
   TimeCell,
   ExpanderCell,
@@ -16,6 +24,7 @@ import {
   PathCell
 } from "./cells";
 import { LogDetailPanel } from "./LogDetailPanel";
+import { LogHistogramChart } from "./LogHistogram";
 
 const COL = {
   time: "sm:w-[118px]",
@@ -27,8 +36,21 @@ const COL = {
 
 const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
+const HISTOGRAM_POLL_INTERVAL_MS = 30_000;
 const ALWAYS_SHOW_LEVELS = ["error", "warn", "info"];
 const OPTIONAL_LEVELS = ["debug", "trace"];
+const TIME_RANGES = [
+  { label: "1h", ms: 3_600_000 },
+  { label: "6h", ms: 21_600_000 },
+  { label: "24h", ms: 86_400_000 },
+  { label: "7d", ms: 604_800_000 }
+];
+
+type SelectedLogBucket = {
+  ts: number;
+  from: number;
+  to: number;
+};
 
 function LogViewer(props: {
   serviceId: string;
@@ -37,6 +59,7 @@ function LogViewer(props: {
   hasBuild: boolean;
   phase?: "build" | "deploy";
   embedded?: boolean;
+  showHistogram?: boolean;
 }) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -48,7 +71,14 @@ function LogViewer(props: {
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
   const [pollCursor, setPollCursor] = createSignal(0);
+  const [rangeMs, setRangeMs] = createSignal(TIME_RANGES[0].ms);
+  const [histogram, setHistogram] = createSignal<LogHistogram | null>(null);
+  const [histogramLoading, setHistogramLoading] = createSignal(false);
+  const [histogramError, setHistogramError] = createSignal<string | null>(null);
+  const [histogramRefresh, setHistogramRefresh] = createSignal(0);
+  const [selectedBucket, setSelectedBucket] = createSignal<SelectedLogBucket | null>(null);
   let fetchGeneration = 0;
+  let histogramGeneration = 0;
 
   const hasBuildLogs = () => lines().some((line) => line.source?.endsWith("/build"));
 
@@ -74,6 +104,62 @@ function LogViewer(props: {
   };
 
   const applyQuery = () => setQuery(queryDraft().trim());
+
+  const rowRequestContext = () =>
+    `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`;
+
+  const activeTimeRange = () => {
+    if (!props.showHistogram) return { from: undefined, to: undefined };
+    const selected = selectedBucket();
+    if (selected) return { from: selected.from, to: selected.to };
+    const to = Date.now() + 1;
+    return { from: to - rangeMs(), to };
+  };
+
+  const selectRange = (nextRangeMs: number) => {
+    if (nextRangeMs === rangeMs() && selectedBucket() == null) return;
+    setRangeMs(nextRangeMs);
+    setSelectedBucket(null);
+    setHistogram(null);
+  };
+
+  const selectHistogramBucket = (bucket: LogHistogramBucket) => {
+    const current = selectedBucket();
+    if (current?.ts === bucket.ts) {
+      setSelectedBucket(null);
+      return;
+    }
+    const value = histogram();
+    if (!value) return;
+    setSelectedBucket({
+      ts: bucket.ts,
+      from: Math.max(value.from, bucket.ts),
+      to: Math.min(value.to, bucket.ts + value.bucketMs)
+    });
+  };
+
+  const histogramTotal = () =>
+    histogram()?.buckets.reduce((total, bucket) => total + bucket.count, 0) ?? 0;
+
+  const selectedBucketCount = () => {
+    const selected = selectedBucket();
+    if (!selected) return 0;
+    return histogram()?.buckets.find((bucket) => bucket.ts === selected.ts)?.count ?? 0;
+  };
+
+  const histogramBucketLabel = () => {
+    const bucketMs = histogram()?.bucketMs;
+    if (bucketMs === 60_000) return "1 minute buckets";
+    if (bucketMs === 300_000) return "5 minute buckets";
+    if (bucketMs === 1_800_000) return "30 minute buckets";
+    return "time buckets";
+  };
+
+  const selectedIntervalLabel = () => {
+    const selected = selectedBucket();
+    if (!selected) return "";
+    return `${tsFormatter.format(new Date(selected.from))} – ${tsFormatter.format(new Date(selected.to))}`;
+  };
 
   const showHost = () => {
     const seen = new Set<string>();
@@ -130,13 +216,16 @@ function LogViewer(props: {
   };
 
   const fetchTail = async (searchQuery: string) => {
+    const { from, to } = activeTimeRange();
     if (props.isSystem)
       return getSystemLogs(
         props.serviceId,
         PAGE_SIZE,
         undefined,
         undefined,
-        searchQuery || undefined
+        searchQuery || undefined,
+        from,
+        to
       );
     if (props.deploymentId)
       return getLogs(
@@ -146,7 +235,9 @@ function LogViewer(props: {
         undefined,
         undefined,
         props.phase,
-        searchQuery || undefined
+        searchQuery || undefined,
+        from,
+        to
       );
     return getServiceLogs(
       props.serviceId,
@@ -154,13 +245,24 @@ function LogViewer(props: {
       undefined,
       undefined,
       props.phase,
-      searchQuery || undefined
+      searchQuery || undefined,
+      from,
+      to
     );
   };
 
   const fetchAfter = async (after: number, searchQuery: string) => {
+    const { from, to } = activeTimeRange();
     if (props.isSystem)
-      return getSystemLogs(props.serviceId, PAGE_SIZE, after, undefined, searchQuery || undefined);
+      return getSystemLogs(
+        props.serviceId,
+        PAGE_SIZE,
+        after,
+        undefined,
+        searchQuery || undefined,
+        from,
+        to
+      );
     if (props.deploymentId)
       return getLogs(
         props.serviceId,
@@ -169,7 +271,9 @@ function LogViewer(props: {
         after,
         undefined,
         props.phase,
-        searchQuery || undefined
+        searchQuery || undefined,
+        from,
+        to
       );
     return getServiceLogs(
       props.serviceId,
@@ -177,13 +281,24 @@ function LogViewer(props: {
       after,
       undefined,
       props.phase,
-      searchQuery || undefined
+      searchQuery || undefined,
+      from,
+      to
     );
   };
 
   const fetchBefore = async (before: number, searchQuery: string) => {
+    const { from, to } = activeTimeRange();
     if (props.isSystem)
-      return getSystemLogs(props.serviceId, PAGE_SIZE, undefined, before, searchQuery || undefined);
+      return getSystemLogs(
+        props.serviceId,
+        PAGE_SIZE,
+        undefined,
+        before,
+        searchQuery || undefined,
+        from,
+        to
+      );
     if (props.deploymentId)
       return getLogs(
         props.serviceId,
@@ -192,7 +307,9 @@ function LogViewer(props: {
         undefined,
         before,
         props.phase,
-        searchQuery || undefined
+        searchQuery || undefined,
+        from,
+        to
       );
     return getServiceLogs(
       props.serviceId,
@@ -200,8 +317,45 @@ function LogViewer(props: {
       undefined,
       before,
       props.phase,
-      searchQuery || undefined
+      searchQuery || undefined,
+      from,
+      to
     );
+  };
+
+  const fetchHistogram = async () => {
+    if (!props.showHistogram || props.deploymentId) return;
+    const generation = ++histogramGeneration;
+    const requestedRangeMs = rangeMs();
+    const to = Date.now() + 1;
+    const from = to - requestedRangeMs;
+    const searchQuery = requestQuery();
+    setHistogramLoading(true);
+    setHistogramError(null);
+    try {
+      const result = props.isSystem
+        ? await getSystemLogHistogram(props.serviceId, from, to, searchQuery || undefined)
+        : await getServiceLogHistogram(
+            props.serviceId,
+            from,
+            to,
+            props.phase,
+            searchQuery || undefined
+          );
+      if (
+        generation !== histogramGeneration ||
+        searchQuery !== requestQuery() ||
+        requestedRangeMs !== rangeMs()
+      )
+        return;
+      setHistogram(result);
+      setHistogramError(null);
+    } catch (err) {
+      if (generation !== histogramGeneration) return;
+      setHistogramError(err instanceof Error ? err.message : "Failed to load log counts");
+    } finally {
+      if (generation === histogramGeneration) setHistogramLoading(false);
+    }
   };
 
   const fetchInitialLogs = async (searchQuery: string, generation: number) => {
@@ -221,13 +375,19 @@ function LogViewer(props: {
   };
 
   const pollLogs = async () => {
+    if (selectedBucket()) return;
     const searchQuery = requestQuery();
+    const requestContext = rowRequestContext();
     try {
       const page = await fetchAfter(pollCursor(), searchQuery);
-      if (searchQuery !== requestQuery()) return;
+      if (requestContext !== rowRequestContext()) return;
       setPollCursor(page.cursor);
-      if (page.entries.length === 0) return;
-      setLines((prev) => [...prev, ...page.entries]);
+      const { from, to } = activeTimeRange();
+      setLines((prev) =>
+        [...prev, ...page.entries].filter(
+          (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
+        )
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
@@ -242,9 +402,10 @@ function LogViewer(props: {
       const prevHeight = scrollRef?.scrollHeight ?? 0;
       const prevTop = scrollRef?.scrollTop ?? 0;
       const searchQuery = requestQuery();
+      const requestContext = rowRequestContext();
       try {
         const page = await fetchBefore(oldestSeq, searchQuery);
-        if (searchQuery !== requestQuery()) return;
+        if (requestContext !== rowRequestContext()) return;
         setHasMore(page.entries.length >= PAGE_SIZE);
         wasAtBottom = false;
         setLines((prev) => [...page.entries, ...prev]);
@@ -253,6 +414,10 @@ function LogViewer(props: {
           scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
           updateScrollFlags();
         });
+      } catch (err) {
+        if (requestContext === rowRequestContext()) {
+          setError(err instanceof Error ? err.message : "Failed to load earlier logs");
+        }
       } finally {
         setLoadingMore(false);
       }
@@ -260,22 +425,35 @@ function LogViewer(props: {
   };
 
   createEffect(
+    on(rowRequestContext, () => {
+      setLines([]);
+      setHasMore(false);
+      setPollCursor(0);
+      setExpanded(new Set<number>());
+      setLoading(true);
+      const generation = ++fetchGeneration;
+      fetchInitialLogs(requestQuery(), generation);
+    })
+  );
+
+  createEffect(
     on(
       () =>
-        `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}`,
+        `${props.serviceId}\0${props.phase ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
       () => {
-        setLines([]);
-        setPollCursor(0);
-        setExpanded(new Set<number>());
-        setLoading(true);
-        const generation = ++fetchGeneration;
-        fetchInitialLogs(requestQuery(), generation);
+        void fetchHistogram();
       }
     )
   );
 
   const pollTimer = setInterval(pollLogs, POLL_INTERVAL_MS);
-  onCleanup(() => clearInterval(pollTimer));
+  const histogramTimer = props.showHistogram
+    ? setInterval(() => setHistogramRefresh((value) => value + 1), HISTOGRAM_POLL_INTERVAL_MS)
+    : undefined;
+  onCleanup(() => {
+    clearInterval(pollTimer);
+    if (histogramTimer != null) clearInterval(histogramTimer);
+  });
 
   let scrollRef: HTMLDivElement | undefined;
   let wasAtBottom = true;
@@ -300,7 +478,12 @@ function LogViewer(props: {
     })
   );
 
-  const onScroll = () => updateScrollFlags();
+  const onScroll = () => {
+    updateScrollFlags();
+    if (scrollRef?.scrollTop != null && scrollRef.scrollTop < 80 && hasMore() && !loadingMore()) {
+      void loadMore();
+    }
+  };
 
   createEffect(() => {
     if (props.phase !== "build") return;
@@ -316,6 +499,90 @@ function LogViewer(props: {
         "bg-white rounded-lg border border-gray-200": !props.embedded
       })}
     >
+      <Show when={props.showHistogram}>
+        <div class="border-b border-gray-100 px-3 pt-3 pb-1.5">
+          <div class="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-xs font-semibold text-gray-700">Logs over time</span>
+              <Show when={histogram()}>
+                <span class="text-[10px] text-gray-400 whitespace-nowrap">
+                  {histogramTotal().toLocaleString()} logs · {histogramBucketLabel()}
+                </span>
+              </Show>
+              <Show when={histogramLoading() && histogram()}>
+                <Loader2 class="size-3 animate-spin text-gray-400" />
+              </Show>
+            </div>
+            <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
+              <For each={TIME_RANGES}>
+                {(range) => (
+                  <button
+                    type="button"
+                    onClick={() => selectRange(range.ms)}
+                    class={clsx(
+                      "text-[11px] px-2.5 py-1 rounded outline-none tabular-nums transition-[transform,color,background-color,box-shadow] duration-150 ease-out-strong active:scale-[0.96]",
+                      {
+                        "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
+                        "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
+                      }
+                    )}
+                  >
+                    {range.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+          <Show when={selectedBucket()}>
+            <div class="mt-2 mx-1 flex items-center justify-between gap-3 rounded-md bg-indigo-50 px-2.5 py-1.5 text-[11px] text-indigo-700">
+              <span class="truncate">
+                {selectedBucketCount().toLocaleString()} matching logs from{" "}
+                {selectedIntervalLabel()}
+                {" · "}rows load {PAGE_SIZE.toLocaleString()} at a time
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedBucket(null)}
+                class="shrink-0 font-medium hover:text-indigo-900 outline-none"
+              >
+                Clear interval
+              </button>
+            </div>
+          </Show>
+          <Show when={histogramError()}>
+            <div
+              class={clsx("flex items-center justify-center gap-2 text-xs text-red-500", {
+                "h-28": !histogram(),
+                "pt-2": histogram()
+              })}
+            >
+              <span>{histogramError()}</span>
+              <button
+                type="button"
+                onClick={() => setHistogramRefresh((value) => value + 1)}
+                class="font-medium hover:text-red-700 outline-none"
+              >
+                Retry
+              </button>
+            </div>
+          </Show>
+          <Show when={!histogramError() && histogramLoading() && !histogram()}>
+            <div class="h-28 flex items-center justify-center text-gray-400">
+              <Loader2 class="size-4 animate-spin" />
+            </div>
+          </Show>
+          <Show when={histogram()}>
+            <LogHistogramChart
+              data={histogram()!.buckets}
+              from={histogram()!.from}
+              to={histogram()!.to}
+              bucketMs={histogram()!.bucketMs}
+              selectedTs={selectedBucket()?.ts}
+              onSelect={selectHistogramBucket}
+            />
+          </Show>
+        </div>
+      </Show>
       <Show when={error()}>
         <div class="p-3">
           <ErrorBanner

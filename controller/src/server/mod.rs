@@ -37,13 +37,21 @@ use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment,
 };
-use crate::logs::{LogEntry, LogOrigin, LogReadQuery, LogReadScope, LogSearchQuery};
+use crate::logs::{
+    LogEntry, LogHistogram, LogHistogramBucket, LogHistogramQuery, LogOrigin, LogReadQuery,
+    LogReadScope, LogSearchQuery,
+};
 use crate::signal::ShutdownEvent;
 
 mod types;
 
 const DEFAULT_LOG_LIMIT: usize = 1000;
 const MAX_LOG_LIMIT: usize = 2000;
+const DEFAULT_LOG_RANGE_MS: i64 = 3_600_000;
+const MAX_LOG_RANGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+const ONE_MINUTE_MS: i64 = 60_000;
+const FIVE_MINUTES_MS: i64 = 5 * ONE_MINUTE_MS;
+const THIRTY_MINUTES_MS: i64 = 30 * ONE_MINUTE_MS;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
 const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const INGESTION_TOKEN_HEADER: &str = "x-maestro-ingestion-token";
@@ -289,7 +297,15 @@ impl Server {
                 "/api/services/{serviceId}/logs",
                 get(Self::get_service_logs),
             )
+            .route(
+                "/api/services/{serviceId}/logs/histogram",
+                get(Self::get_service_log_histogram),
+            )
             .route("/api/system/{name}/logs", get(Self::get_system_logs))
+            .route(
+                "/api/system/{name}/logs/histogram",
+                get(Self::get_system_log_histogram),
+            )
             .route("/api/metrics/node", get(Self::get_node_metrics))
             .route("/api/metrics/cluster", get(Self::get_cluster_metrics))
             .route("/api/metrics/stats", get(Self::get_stats_metrics))
@@ -1972,6 +1988,30 @@ impl Server {
         Ok(logs_response(Vec::new(), 0))
     }
 
+    async fn get_service_log_histogram(
+        Path(service_id): Path<String>,
+        Query(query): Query<LogHistogramHttpQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<LogHistogram>, (StatusCode, String)> {
+        let service_id = service_id.trim();
+        crate::validation::validate_service_id(service_id, "serviceId")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let origin = parse_phase(query.phase.as_deref())?;
+        let request = build_log_histogram_query(
+            LogReadScope::Prefix(format!("{service_id}/")),
+            origin,
+            &query,
+        )?;
+        let buckets = match &state.log_store {
+            Some(log_store) => log_store
+                .read_log_histogram(request.clone())
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?,
+            None => Vec::new(),
+        };
+        Ok(Json(complete_log_histogram(&request, buckets)))
+    }
+
     async fn get_system_logs(
         Path(name): Path<String>,
         Query(query): Query<LogsQuery>,
@@ -1985,14 +2025,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(logs_response(Vec::new(), 0));
         };
-        let sources = if name == "maestro-probe" {
-            vec![
-                "maestro-probe".to_string(),
-                "maestro-controller".to_string(),
-            ]
-        } else {
-            vec![name.to_string()]
-        };
+        let sources = system_log_sources(name);
         let read = build_log_read_query(LogReadScope::Sources(sources), None, &query, tail)?;
         let cursor = log_store
             .latest_log_seq(&read.scope)
@@ -2003,6 +2036,29 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         Ok(logs_response(entries, cursor))
+    }
+
+    async fn get_system_log_histogram(
+        Path(name): Path<String>,
+        Query(query): Query<LogHistogramHttpQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<LogHistogram>, (StatusCode, String)> {
+        let name = name.trim();
+        crate::validation::validate_service_id(name, "name")
+            .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
+        let request = build_log_histogram_query(
+            LogReadScope::Sources(system_log_sources(name)),
+            None,
+            &query,
+        )?;
+        let buckets = match &state.log_store {
+            Some(log_store) => log_store
+                .read_log_histogram(request.clone())
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?,
+            None => Vec::new(),
+        };
+        Ok(Json(complete_log_histogram(&request, buckets)))
     }
 
     async fn ingest_logs(
@@ -2677,6 +2733,16 @@ struct LogsQuery {
     tail: Option<usize>,
     after: Option<i64>,
     before: Option<i64>,
+    from: Option<i64>,
+    to: Option<i64>,
+    phase: Option<String>,
+    query: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct LogHistogramHttpQuery {
+    from: Option<i64>,
+    to: Option<i64>,
     phase: Option<String>,
     query: Option<String>,
 }
@@ -2948,9 +3014,52 @@ fn build_log_read_query(
     query: &LogsQuery,
     limit: usize,
 ) -> Result<LogReadQuery, (StatusCode, String)> {
-    let search = query
-        .query
-        .as_deref()
+    let search = parse_log_search(query.query.as_deref())?;
+    validate_log_time_range(query.from, query.to)?;
+    Ok(LogReadQuery {
+        scope,
+        origin,
+        search,
+        from: query.from,
+        to: query.to,
+        after: query.before.is_none().then_some(query.after).flatten(),
+        before: query.before,
+        limit,
+    })
+}
+
+fn build_log_histogram_query(
+    scope: LogReadScope,
+    origin: Option<LogOrigin>,
+    query: &LogHistogramHttpQuery,
+) -> Result<LogHistogramQuery, (StatusCode, String)> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let to = query.to.unwrap_or(now);
+    let from = query.from.unwrap_or(to - DEFAULT_LOG_RANGE_MS);
+    validate_log_time_range(Some(from), Some(to))?;
+    let range = to - from;
+    let bucket_ms = if range <= DEFAULT_LOG_RANGE_MS {
+        ONE_MINUTE_MS
+    } else if range <= 24 * 60 * 60 * 1000 {
+        FIVE_MINUTES_MS
+    } else {
+        THIRTY_MINUTES_MS
+    };
+    Ok(LogHistogramQuery {
+        scope,
+        origin,
+        search: parse_log_search(query.query.as_deref())?,
+        from,
+        to,
+        bucket_ms,
+    })
+}
+
+fn parse_log_search(query: Option<&str>) -> Result<Option<LogSearchQuery>, (StatusCode, String)> {
+    query
         .map(str::trim)
         .filter(|query| !query.is_empty())
         .map(str::parse::<LogSearchQuery>)
@@ -2960,15 +3069,77 @@ fn build_log_read_query(
                 StatusCode::BAD_REQUEST,
                 format!("invalid log query: {error}"),
             )
-        })?;
-    Ok(LogReadQuery {
-        scope,
-        origin,
-        search,
-        after: query.before.is_none().then_some(query.after).flatten(),
-        before: query.before,
-        limit,
-    })
+        })
+}
+
+fn validate_log_time_range(from: Option<i64>, to: Option<i64>) -> Result<(), (StatusCode, String)> {
+    if from.is_some() != to.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "log time range requires both `from` and `to`".to_string(),
+        ));
+    }
+    if from.is_some_and(|value| value < 0) || to.is_some_and(|value| value < 0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "log time range cannot be negative".to_string(),
+        ));
+    }
+    if let (Some(from), Some(to)) = (from, to) {
+        if from >= to {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "log time range `from` must be before `to`".to_string(),
+            ));
+        }
+        if to - from > MAX_LOG_RANGE_MS {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "log time range cannot exceed 7 days".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn complete_log_histogram(
+    query: &LogHistogramQuery,
+    buckets: Vec<LogHistogramBucket>,
+) -> LogHistogram {
+    let counts = buckets
+        .into_iter()
+        .map(|bucket| (bucket.ts, bucket.count))
+        .collect::<BTreeMap<_, _>>();
+    let mut ts = query.from - query.from.rem_euclid(query.bucket_ms);
+    let mut completed = Vec::new();
+    while ts < query.to {
+        completed.push(LogHistogramBucket {
+            ts,
+            count: counts.get(&ts).copied().unwrap_or_default(),
+        });
+        let next = ts.saturating_add(query.bucket_ms);
+        if next <= ts {
+            break;
+        }
+        ts = next;
+    }
+    LogHistogram {
+        from: query.from,
+        to: query.to,
+        bucket_ms: query.bucket_ms,
+        buckets: completed,
+    }
+}
+
+fn system_log_sources(name: &str) -> Vec<String> {
+    if name == "maestro-probe" {
+        vec![
+            "maestro-probe".to_string(),
+            "maestro-controller".to_string(),
+        ]
+    } else {
+        vec![name.to_string()]
+    }
 }
 
 fn logs_response(entries: Vec<LogEntry>, cursor: i64) -> Response {
