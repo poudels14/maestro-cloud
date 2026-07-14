@@ -99,6 +99,31 @@ fn cloudflare_tunnel_access_log_keeps_the_normalized_visitor_ip() {
 }
 
 #[test]
+fn traefik_access_log_exposes_structured_request_fields() {
+    let line = r#"{"ClientHost":"10.100.0.255","DownstreamStatus":200,"Duration":186492218,"RequestHost":"app.example.com","RequestMethod":"GET","RequestPath":"/api/users?page=2","RequestScheme":"https","RouterName":"app@etcd","ServiceName":"app@etcd","entryPointName":"web","level":"info","msg":"","request_CF-Connecting-IP":"203.0.113.9","time":"2026-07-14T00:01:12Z"}"#;
+    let mut parsed = parse_log_line(line);
+    normalize_ingress_access_log_attrs(&mut parsed.attrs);
+
+    assert_eq!(parsed.text, line);
+    assert_eq!(parsed.level.as_deref(), Some("info"));
+    assert_eq!(find_attr(&parsed.attrs, "RequestMethod"), Some("GET"));
+    assert_eq!(
+        find_attr(&parsed.attrs, "RequestPath"),
+        Some("/api/users?page=2")
+    );
+    assert_eq!(find_attr(&parsed.attrs, "DownstreamStatus"), Some("200"));
+    assert_eq!(
+        find_attr(&parsed.attrs, "RequestHost"),
+        Some("app.example.com")
+    );
+    assert_eq!(find_attr(&parsed.attrs, "RouterName"), Some("app@etcd"));
+    assert_eq!(
+        find_attr(&parsed.attrs, "maestro.client_ip"),
+        Some("203.0.113.9")
+    );
+}
+
+#[test]
 fn json_attrs_serialize_nested_values() {
     let line = r#"{"msg":"x","obj":{"a":1},"arr":[1,2],"flag":true,"nothing":null}"#;
     let parsed = parse_log_line(line);

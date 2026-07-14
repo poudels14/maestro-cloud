@@ -34,7 +34,14 @@ function logLevelPill(level: string) {
   return "bg-blue-50 text-blue-600 border border-blue-100";
 }
 
-const HTTP_METHOD_KEYS = ["http.method", "method", "req.method", "request.method"];
+const HTTP_METHOD_KEYS = [
+  "http.method",
+  "http.request.method",
+  "method",
+  "req.method",
+  "request.method",
+  "requestmethod"
+];
 const HTTP_STATUS_KEYS = [
   "http.status_code",
   "status_code",
@@ -48,26 +55,55 @@ const HTTP_STATUS_KEYS = [
 const HTTP_PATH_KEYS = [
   "http.url_details.path",
   "http.path",
+  "http.route",
+  "url.path",
   "path",
   "url",
   "route",
   "uri",
   "request.path",
+  "requestpath",
   "target"
 ];
 const HTTP_DURATION_KEYS = ["duration", "duration_ns"];
+const HTTP_HOST_KEYS = [
+  "http.host",
+  "http.request.host",
+  "server.address",
+  "request.host",
+  "requesthost"
+];
+const HTTP_CLIENT_IP_KEYS = [
+  "maestro.client_ip",
+  "client.address",
+  "http.client_ip",
+  "client_ip",
+  "clienthost"
+];
+const TRAEFIK_ROUTER_KEYS = ["routername"];
+const TRAEFIK_SERVICE_KEYS = ["servicename"];
+const TRAEFIK_ENTRYPOINT_KEYS = ["entrypointname"];
+const TRAEFIK_SCHEME_KEYS = ["requestscheme"];
 
 type HttpFields = {
   method?: string;
   status?: string;
   path?: string;
   durationLabel?: string;
+  requestHost?: string;
+  clientIp?: string;
+  router?: string;
+  service?: string;
+  entryPoint?: string;
+  scheme?: string;
+  isTraefikAccessLog: boolean;
 };
 
 function attrLookup(attrs: [string, string][] | undefined, keys: string[]): string | undefined {
   if (!attrs) return undefined;
-  for (const [key, value] of attrs) {
-    if (keys.includes(key.toLowerCase())) return value;
+  for (const key of keys) {
+    const match = attrs.find(([candidate]) => candidate.toLowerCase() === key);
+    if (match) return match[1];
   }
   return undefined;
 }
@@ -75,12 +111,25 @@ function attrLookup(attrs: [string, string][] | undefined, keys: string[]): stri
 function httpFields(attrs: [string, string][] | undefined): HttpFields {
   const durationRaw = attrLookup(attrs, HTTP_DURATION_KEYS);
   const durationNs = durationRaw == null ? NaN : Number(durationRaw);
+  const method = attrLookup(attrs, HTTP_METHOD_KEYS);
+  const status = attrLookup(attrs, HTTP_STATUS_KEYS);
+  const path = attrLookup(attrs, HTTP_PATH_KEYS);
+  const traefikMethod = attrLookup(attrs, ["requestmethod"]);
+  const traefikStatus = attrLookup(attrs, ["downstreamstatus"]);
+  const traefikPath = attrLookup(attrs, ["requestpath"]);
   return {
-    method: attrLookup(attrs, HTTP_METHOD_KEYS),
-    status: attrLookup(attrs, HTTP_STATUS_KEYS),
-    path: attrLookup(attrs, HTTP_PATH_KEYS),
+    method,
+    status,
+    path,
     durationLabel:
-      Number.isFinite(durationNs) && durationNs > 0 ? formatDurationNs(durationNs) : undefined
+      Number.isFinite(durationNs) && durationNs >= 0 ? formatDurationNs(durationNs) : undefined,
+    requestHost: attrLookup(attrs, HTTP_HOST_KEYS),
+    clientIp: attrLookup(attrs, HTTP_CLIENT_IP_KEYS),
+    router: attrLookup(attrs, TRAEFIK_ROUTER_KEYS),
+    service: attrLookup(attrs, TRAEFIK_SERVICE_KEYS),
+    entryPoint: attrLookup(attrs, TRAEFIK_ENTRYPOINT_KEYS),
+    scheme: attrLookup(attrs, TRAEFIK_SCHEME_KEYS),
+    isTraefikAccessLog: Boolean(traefikMethod && traefikStatus && traefikPath)
   };
 }
 
