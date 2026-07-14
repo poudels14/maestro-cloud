@@ -348,3 +348,41 @@ fn cluster_request_spool_cleanup_preserves_deployment_archives() {
     assert!(archive.exists());
     std::fs::remove_dir_all(spool_dir).expect("remove spool directory");
 }
+
+#[test]
+fn log_query_is_validated_before_store_access() {
+    let query = LogsQuery {
+        tail: Some(25),
+        after: Some(10),
+        before: Some(20),
+        phase: None,
+        query: Some("@http.status_code:[400 TO 499] AND -message:health".into()),
+    };
+    let read = build_log_read_query(
+        LogReadScope::Prefix("api/".into()),
+        Some(LogOrigin::Service),
+        &query,
+        25,
+    )
+    .expect("valid query");
+    assert!(read.search.is_some());
+    assert_eq!(read.before, Some(20));
+    assert_eq!(read.after, None, "before keeps its existing precedence");
+
+    let invalid = LogsQuery {
+        query: Some("@http.status_code:[500 599]".into()),
+        ..query
+    };
+    let error = build_log_read_query(LogReadScope::Prefix("api/".into()), None, &invalid, 25)
+        .expect_err("invalid query");
+    assert_eq!(error.0, StatusCode::BAD_REQUEST);
+
+    let response = logs_response(Vec::new(), 42);
+    assert_eq!(
+        response
+            .headers()
+            .get(LOG_CURSOR_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("42")
+    );
+}

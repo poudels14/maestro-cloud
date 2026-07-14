@@ -41,7 +41,9 @@ const HTTP_STATUS_KEYS = [
   "statuscode",
   "status",
   "http.status",
-  "response.status_code"
+  "response.status_code",
+  "http.response.status_code",
+  "downstreamstatus"
 ];
 const HTTP_PATH_KEYS = [
   "http.url_details.path",

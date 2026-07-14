@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::{DuckLogStore, IngestLogEntry};
-use crate::logs::{LogEntry, LogOrigin, LogStore};
+use crate::logs::{LogEntry, LogReadQuery, LogReadScope, LogStore};
 
 /// Lets existing controller SQLite storage and probe DuckDB storage share the API surface.
 pub enum TelemetryStore {
@@ -45,43 +45,18 @@ impl TelemetryStore {
         }
     }
 
-    pub async fn read_tail_by_prefix_origin(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_tail_by_prefix_origin(prefix, origin, limit))
+    pub async fn read_logs(&self, query: LogReadQuery) -> Result<Vec<LogEntry>> {
+        match self {
+            Self::Sqlite(store) => store.read_logs(query).await,
+            Self::Duck(store) => store.read_logs(query).await,
+        }
     }
 
-    pub async fn read_after_by_prefix_origin(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(
-            self,
-            read_after_by_prefix_origin(prefix, origin, after, limit)
-        )
-    }
-
-    pub async fn read_before_by_prefix_origin(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(
-            self,
-            read_before_by_prefix_origin(prefix, origin, before, limit)
-        )
-    }
-
-    pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_tail(source, limit))
+    pub async fn latest_log_seq(&self, scope: &LogReadScope) -> Result<i64> {
+        match self {
+            Self::Sqlite(store) => store.latest_log_seq().await,
+            Self::Duck(store) => store.latest_log_seq(scope).await,
+        }
     }
 
     pub async fn read_ingress_traffic(
@@ -101,46 +76,6 @@ impl TelemetryStore {
         limit: usize,
     ) -> Result<crate::logs::IngressTrafficBreakdown> {
         delegate!(self, read_blocked_ingress_traffic(from, to, limit))
-    }
-
-    pub async fn read_after_for_source(
-        &self,
-        source: &str,
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_after_for_source(source, after, limit))
-    }
-
-    pub async fn read_before_for_source(
-        &self,
-        source: &str,
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_before_for_source(source, before, limit))
-    }
-
-    pub async fn read_tail_sources(&self, sources: &[&str], limit: usize) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_tail_sources(sources, limit))
-    }
-
-    pub async fn read_after_sources(
-        &self,
-        sources: &[&str],
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_after_sources(sources, after, limit))
-    }
-
-    pub async fn read_before_sources(
-        &self,
-        sources: &[&str],
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        delegate!(self, read_before_sources(sources, before, limit))
     }
 
     pub async fn append_metrics(&self, entries: &[crate::metrics::MetricPoint]) -> Result<()> {

@@ -3,6 +3,7 @@ pub mod datadog_sink;
 pub mod duck;
 mod filter;
 pub mod http_sink;
+mod search;
 pub mod sink;
 pub mod store;
 
@@ -11,8 +12,26 @@ pub use datadog_sink::DatadogSink;
 pub use duck::{BackupPartition, DuckLogStore, IngestLogEntry, TelemetryStore};
 pub(crate) use filter::healthcheck_path_tag;
 pub use http_sink::HttpSink;
+pub use search::LogSearchQuery;
+pub(crate) use search::{LogSearchValue, SqlDialect, sql_like_prefix};
 pub use sink::SinkWorker;
 pub use store::{LogEntry, LogOrigin, LogStore, Logger};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogReadScope {
+    Prefix(String),
+    Sources(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogReadQuery {
+    pub scope: LogReadScope,
+    pub origin: Option<LogOrigin>,
+    pub search: Option<LogSearchQuery>,
+    pub after: Option<i64>,
+    pub before: Option<i64>,
+    pub limit: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

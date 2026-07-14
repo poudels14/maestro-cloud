@@ -30,6 +30,11 @@ pub struct RemoteLogsArgs {
     include_system: bool,
     #[arg(long = "system", help = "Only stream a Maestro system service")]
     system: Option<String>,
+    #[arg(
+        long = "query",
+        help = "Datadog-style server-side filter, such as @http.status_code:[500 TO 599]"
+    )]
+    query: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,13 +75,23 @@ struct LogCursor {
 struct TargetEntries {
     index: usize,
     entries: Vec<RemoteLogEntry>,
+    cursor: i64,
 }
 
 pub async fn run_logs(host: &str, args: RemoteLogsArgs) -> Result<()> {
     let base = normalize_base_url(host)?;
     let client = reqwest::Client::new();
     let targets = discover_targets(&client, &base, &args).await?;
-    run_targets(&client, &base, targets, args.tail, !args.no_follow, None).await
+    run_targets(
+        &client,
+        &base,
+        targets,
+        args.tail,
+        !args.no_follow,
+        None,
+        args.query.as_deref(),
+    )
+    .await
 }
 
 pub async fn run_daemon_logs(
@@ -103,11 +118,21 @@ pub async fn run_daemon_logs(
                 no_follow: !follow,
                 include_system: true,
                 system: None,
+                query: None,
             },
         )
         .await?
     };
-    run_targets(&client, &base, targets, tail, follow, source.as_deref()).await
+    run_targets(
+        &client,
+        &base,
+        targets,
+        tail,
+        follow,
+        source.as_deref(),
+        None,
+    )
+    .await
 }
 
 async fn run_targets(
@@ -117,6 +142,7 @@ async fn run_targets(
     tail: usize,
     follow: bool,
     source_filter: Option<&str>,
+    query: Option<&str>,
 ) -> Result<()> {
     if targets.is_empty() {
         println!("[maestro]: no log targets found");
@@ -124,7 +150,7 @@ async fn run_targets(
     }
 
     let initial_entries =
-        fetch_all_targets(client, base, &mut targets, tail, source_filter).await?;
+        fetch_all_targets(client, base, &mut targets, tail, source_filter, query).await?;
     print_entries(initial_entries);
 
     if !follow {
@@ -133,7 +159,8 @@ async fn run_targets(
 
     loop {
         tokio::time::sleep(Duration::from_millis(DEFAULT_POLL_INTERVAL_MS)).await;
-        let entries = fetch_all_targets(client, base, &mut targets, 500, source_filter).await?;
+        let entries =
+            fetch_all_targets(client, base, &mut targets, 500, source_filter, query).await?;
         print_entries(entries);
     }
 }
@@ -274,16 +301,27 @@ async fn fetch_all_targets(
     targets: &mut [LogCursor],
     tail: usize,
     source_filter: Option<&str>,
+    query: Option<&str>,
 ) -> Result<Vec<RemoteLogEntry>> {
     let mut all_entries = Vec::new();
 
     for (index, target) in targets.iter().enumerate() {
-        let entries = fetch_target_logs(client, base, target, tail).await?;
-        all_entries.push(TargetEntries { index, entries });
+        let (entries, cursor) = fetch_target_logs(client, base, target, tail, query).await?;
+        all_entries.push(TargetEntries {
+            index,
+            entries,
+            cursor,
+        });
     }
 
     let mut merged = Vec::new();
-    for TargetEntries { index, entries } in all_entries {
+    for TargetEntries {
+        index,
+        entries,
+        cursor,
+    } in all_entries
+    {
+        targets[index].after = targets[index].after.max(cursor);
         for entry in entries {
             targets[index].after = targets[index].after.max(entry.seq);
             if source_filter.is_none_or(|source| entry.source == source) {
@@ -300,16 +338,30 @@ async fn fetch_target_logs(
     base: &str,
     cursor: &LogCursor,
     tail: usize,
-) -> Result<Vec<RemoteLogEntry>> {
-    let endpoint = log_endpoint(base, &cursor.target, cursor.after, tail);
+    query: Option<&str>,
+) -> Result<(Vec<RemoteLogEntry>, i64)> {
+    let endpoint = log_endpoint(base, &cursor.target, cursor.after, tail, query)?;
     let response = client.get(&endpoint).send().await.map_err(|err| {
         Error::external(format!("failed to call logs endpoint `{endpoint}`: {err}"))
     })?;
 
-    decode_response(response, "logs").await
+    let cursor = response
+        .headers()
+        .get("x-maestro-log-cursor")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(cursor.after);
+    let entries = decode_response(response, "logs").await?;
+    Ok((entries, cursor))
 }
 
-fn log_endpoint(base: &str, target: &LogTarget, after: i64, tail: usize) -> String {
+fn log_endpoint(
+    base: &str,
+    target: &LogTarget,
+    after: i64,
+    tail: usize,
+    query: Option<&str>,
+) -> Result<String> {
     let path = match target {
         LogTarget::Deployment {
             service_id,
@@ -318,11 +370,19 @@ fn log_endpoint(base: &str, target: &LogTarget, after: i64, tail: usize) -> Stri
         LogTarget::System { name } => format!("/api/system/{name}/logs"),
     };
 
-    if after > 0 {
-        format!("{base}{path}?after={after}&tail={tail}")
-    } else {
-        format!("{base}{path}?tail={tail}")
+    let mut endpoint = reqwest::Url::parse(&format!("{base}{path}"))
+        .map_err(|error| Error::invalid_input(format!("invalid logs endpoint: {error}")))?;
+    {
+        let mut pairs = endpoint.query_pairs_mut();
+        if after > 0 {
+            pairs.append_pair("after", &after.to_string());
+        }
+        pairs.append_pair("tail", &tail.to_string());
+        if let Some(query) = query.filter(|query| !query.trim().is_empty()) {
+            pairs.append_pair("query", query);
+        }
     }
+    Ok(endpoint.into())
 }
 
 async fn decode_response<T: serde::de::DeserializeOwned>(
@@ -388,11 +448,11 @@ mod tests {
         };
 
         assert_eq!(
-            log_endpoint("http://host", &target, 0, 25),
+            log_endpoint("http://host", &target, 0, 25, None).expect("endpoint"),
             "http://host/api/services/svc/deployments/dep/logs?tail=25"
         );
         assert_eq!(
-            log_endpoint("http://host", &target, 42, 500),
+            log_endpoint("http://host", &target, 42, 500, None).expect("endpoint"),
             "http://host/api/services/svc/deployments/dep/logs?after=42&tail=500"
         );
     }
@@ -404,8 +464,27 @@ mod tests {
         };
 
         assert_eq!(
-            log_endpoint("http://host", &target, 0, 10),
+            log_endpoint("http://host", &target, 0, 10, None).expect("endpoint"),
             "http://host/api/system/maestro-admin/logs?tail=10"
+        );
+    }
+
+    #[test]
+    fn log_endpoint_encodes_search_query() {
+        let target = LogTarget::System {
+            name: "maestro-ingress".to_string(),
+        };
+        let endpoint = log_endpoint(
+            "http://host",
+            &target,
+            0,
+            100,
+            Some("@http.status_code:[500 TO 599]"),
+        )
+        .expect("endpoint");
+        assert_eq!(
+            endpoint,
+            "http://host/api/system/maestro-ingress/logs?tail=100&query=%40http.status_code%3A%5B500+TO+599%5D"
         );
     }
 

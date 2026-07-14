@@ -189,8 +189,9 @@ export async function getLogs(
   tail?: number,
   afterSeq?: number,
   beforeSeq?: number,
-  phase?: "build" | "deploy"
-): Promise<LogEntry[]> {
+  phase?: "build" | "deploy",
+  query?: string
+): Promise<LogPage> {
   const url = new URL(
     `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
     location.origin
@@ -199,10 +200,14 @@ export async function getLogs(
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
+  if (query) url.searchParams.set("query", query);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch logs: ${res.statusText}`);
+  }
   const raw = await res.json();
-  return mapLogEntries(raw);
+  return mapLogPage(res, raw);
 }
 
 export async function getServiceLogs(
@@ -210,33 +215,58 @@ export async function getServiceLogs(
   tail?: number,
   afterSeq?: number,
   beforeSeq?: number,
-  phase?: "build" | "deploy"
-): Promise<LogEntry[]> {
+  phase?: "build" | "deploy",
+  query?: string
+): Promise<LogPage> {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
+  if (query) url.searchParams.set("query", query);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch service logs: ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch service logs: ${res.statusText}`);
+  }
   const raw = await res.json();
-  return mapLogEntries(raw);
+  return mapLogPage(res, raw);
 }
 
 export async function getSystemLogs(
   name: string,
   tail?: number,
   afterSeq?: number,
-  beforeSeq?: number
-): Promise<LogEntry[]> {
+  beforeSeq?: number,
+  query?: string
+): Promise<LogPage> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
+  if (query) url.searchParams.set("query", query);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch system logs: ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch system logs: ${res.statusText}`);
+  }
   const raw = await res.json();
-  return mapLogEntries(raw);
+  return mapLogPage(res, raw);
+}
+
+export interface LogPage {
+  entries: LogEntry[];
+  cursor: number;
+}
+
+function mapLogPage(res: Response, raw: Record<string, unknown>[]): LogPage {
+  const entries = mapLogEntries(raw);
+  const header = Number(res.headers.get("x-maestro-log-cursor"));
+  const lastEntry = entries.at(-1)?.seq ?? 0;
+  return {
+    entries,
+    cursor: Number.isSafeInteger(header) && header >= 0 ? Math.max(header, lastEntry) : lastEntry
+  };
 }
 
 function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {

@@ -79,6 +79,41 @@ async fn entry_without_attrs_round_trips_with_empty_vec() {
 }
 
 #[tokio::test]
+async fn sqlite_log_query_filters_before_pagination_and_aliases_status() {
+    let path = temp_db_path("query-status");
+    let store = LogStore::open(&path).expect("open store");
+    let mut failed = sample_entry();
+    failed.text = "upstream request failed".to_string();
+    failed.attrs = vec![("DownstreamStatus".into(), "503".into())];
+    let mut success = sample_entry();
+    success.ts += 1;
+    success.text = "newer successful request".to_string();
+    success.attrs = vec![("http.response.status_code".into(), "200".into())];
+    store.append(&[failed, success]).await.expect("append");
+    assert_eq!(store.latest_log_seq().await.expect("cursor"), 2);
+
+    let entries = store
+        .read_logs(crate::logs::LogReadQuery {
+            scope: crate::logs::LogReadScope::Prefix("app/".into()),
+            origin: Some(LogOrigin::Service),
+            search: Some(
+                "failed AND @http.status_code:[500 TO 599]"
+                    .parse()
+                    .expect("query"),
+            ),
+            after: None,
+            before: None,
+            limit: 1,
+        })
+        .await
+        .expect("filtered logs");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].text, "upstream request failed");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn sqlite_ingress_traffic_fallback_groups_access_logs() {
     let path = temp_db_path("ingress-traffic");
     let store = LogStore::open(&path).expect("open store");

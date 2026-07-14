@@ -42,11 +42,13 @@ function LogViewer(props: {
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [hasMore, setHasMore] = createSignal(false);
-  const [search, setSearch] = createSignal("");
+  const [queryDraft, setQueryDraft] = createSignal("");
+  const [query, setQuery] = createSignal("");
   const [levelFilter, setLevelFilter] = createSignal<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
-  const lastSeq = () => lines().at(-1)?.seq ?? 0;
+  const [pollCursor, setPollCursor] = createSignal(0);
+  let fetchGeneration = 0;
 
   const hasBuildLogs = () => lines().some((line) => line.source?.endsWith("/build"));
 
@@ -58,14 +60,20 @@ function LogViewer(props: {
   };
 
   const filteredLines = () => {
-    const query = search().trim().toLowerCase();
-    const levels = levelFilter();
-    return phaseLines().filter((line) => {
-      if (levels.size > 0 && !levels.has(line.level.toLowerCase())) return false;
-      if (query.length > 0 && !line.text.toLowerCase().includes(query)) return false;
-      return true;
-    });
+    return phaseLines();
   };
+
+  const requestQuery = () => {
+    const terms: string[] = [];
+    const entered = query().trim();
+    if (entered) terms.push(`(${entered})`);
+    const levels = Array.from(levelFilter()).sort();
+    if (levels.length === 1) terms.push(`level:${levels[0]}`);
+    if (levels.length > 1) terms.push(`(${levels.map((level) => `level:${level}`).join(" OR ")})`);
+    return terms.join(" AND ");
+  };
+
+  const applyQuery = () => setQuery(queryDraft().trim());
 
   const showHost = () => {
     const seen = new Set<string>();
@@ -121,8 +129,15 @@ function LogViewer(props: {
     setExpanded(next);
   };
 
-  const fetchTail = async () => {
-    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE);
+  const fetchTail = async (searchQuery: string) => {
+    if (props.isSystem)
+      return getSystemLogs(
+        props.serviceId,
+        PAGE_SIZE,
+        undefined,
+        undefined,
+        searchQuery || undefined
+      );
     if (props.deploymentId)
       return getLogs(
         props.serviceId,
@@ -130,20 +145,45 @@ function LogViewer(props: {
         PAGE_SIZE,
         undefined,
         undefined,
-        props.phase
+        props.phase,
+        searchQuery || undefined
       );
-    return getServiceLogs(props.serviceId, PAGE_SIZE, undefined, undefined, props.phase);
+    return getServiceLogs(
+      props.serviceId,
+      PAGE_SIZE,
+      undefined,
+      undefined,
+      props.phase,
+      searchQuery || undefined
+    );
   };
 
-  const fetchAfter = async (after: number) => {
-    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE, after);
+  const fetchAfter = async (after: number, searchQuery: string) => {
+    if (props.isSystem)
+      return getSystemLogs(props.serviceId, PAGE_SIZE, after, undefined, searchQuery || undefined);
     if (props.deploymentId)
-      return getLogs(props.serviceId, props.deploymentId, PAGE_SIZE, after, undefined, props.phase);
-    return getServiceLogs(props.serviceId, PAGE_SIZE, after, undefined, props.phase);
+      return getLogs(
+        props.serviceId,
+        props.deploymentId,
+        PAGE_SIZE,
+        after,
+        undefined,
+        props.phase,
+        searchQuery || undefined
+      );
+    return getServiceLogs(
+      props.serviceId,
+      PAGE_SIZE,
+      after,
+      undefined,
+      props.phase,
+      searchQuery || undefined
+    );
   };
 
-  const fetchBefore = async (before: number) => {
-    if (props.isSystem) return getSystemLogs(props.serviceId, PAGE_SIZE, undefined, before);
+  const fetchBefore = async (before: number, searchQuery: string) => {
+    if (props.isSystem)
+      return getSystemLogs(props.serviceId, PAGE_SIZE, undefined, before, searchQuery || undefined);
     if (props.deploymentId)
       return getLogs(
         props.serviceId,
@@ -151,29 +191,43 @@ function LogViewer(props: {
         PAGE_SIZE,
         undefined,
         before,
-        props.phase
+        props.phase,
+        searchQuery || undefined
       );
-    return getServiceLogs(props.serviceId, PAGE_SIZE, undefined, before, props.phase);
+    return getServiceLogs(
+      props.serviceId,
+      PAGE_SIZE,
+      undefined,
+      before,
+      props.phase,
+      searchQuery || undefined
+    );
   };
 
-  const fetchInitialLogs = async () => {
+  const fetchInitialLogs = async (searchQuery: string, generation: number) => {
     try {
-      const fetched = await fetchTail();
-      setHasMore(fetched.length >= PAGE_SIZE);
-      setLines(fetched);
+      const page = await fetchTail(searchQuery);
+      if (generation !== fetchGeneration) return;
+      setHasMore(page.entries.length >= PAGE_SIZE);
+      setLines(page.entries);
+      setPollCursor(page.cursor);
       setError(null);
     } catch (err) {
+      if (generation !== fetchGeneration) return;
       setError(err instanceof Error ? err.message : "Failed to load logs");
     } finally {
-      setLoading(false);
+      if (generation === fetchGeneration) setLoading(false);
     }
   };
 
   const pollLogs = async () => {
+    const searchQuery = requestQuery();
     try {
-      const fetched = await fetchAfter(lastSeq());
-      if (fetched.length === 0) return;
-      setLines((prev) => [...prev, ...fetched]);
+      const page = await fetchAfter(pollCursor(), searchQuery);
+      if (searchQuery !== requestQuery()) return;
+      setPollCursor(page.cursor);
+      if (page.entries.length === 0) return;
+      setLines((prev) => [...prev, ...page.entries]);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
@@ -187,11 +241,13 @@ function LogViewer(props: {
       setLoadingMore(true);
       const prevHeight = scrollRef?.scrollHeight ?? 0;
       const prevTop = scrollRef?.scrollTop ?? 0;
+      const searchQuery = requestQuery();
       try {
-        const fetched = await fetchBefore(oldestSeq);
-        setHasMore(fetched.length >= PAGE_SIZE);
+        const page = await fetchBefore(oldestSeq, searchQuery);
+        if (searchQuery !== requestQuery()) return;
+        setHasMore(page.entries.length >= PAGE_SIZE);
         wasAtBottom = false;
-        setLines((prev) => [...fetched, ...prev]);
+        setLines((prev) => [...page.entries, ...prev]);
         requestAnimationFrame(() => {
           if (!scrollRef) return;
           scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
@@ -205,12 +261,15 @@ function LogViewer(props: {
 
   createEffect(
     on(
-      () => props.deploymentId,
+      () =>
+        `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}`,
       () => {
         setLines([]);
+        setPollCursor(0);
         setExpanded(new Set<number>());
         setLoading(true);
-        fetchInitialLogs();
+        const generation = ++fetchGeneration;
+        fetchInitialLogs(requestQuery(), generation);
       }
     )
   );
@@ -259,23 +318,44 @@ function LogViewer(props: {
     >
       <Show when={error()}>
         <div class="p-3">
-          <ErrorBanner message={error()!} onRetry={fetchInitialLogs} />
+          <ErrorBanner
+            message={error()!}
+            onRetry={() => {
+              setLoading(true);
+              const generation = ++fetchGeneration;
+              fetchInitialLogs(requestQuery(), generation);
+            }}
+          />
         </div>
       </Show>
       <div class="px-3 py-2 border-b border-gray-100 flex items-center gap-3">
         <div class="relative flex-1 min-w-0">
-          <Search class="size-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <button
+            type="button"
+            onClick={applyQuery}
+            title="Apply log query"
+            class="absolute left-1.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-indigo-600 outline-none rounded hover:bg-indigo-50"
+          >
+            <Search class="size-3.5" />
+          </button>
           <input
             type="text"
-            value={search()}
-            onInput={(ev) => setSearch(ev.currentTarget.value)}
-            placeholder="Search logs…"
+            value={queryDraft()}
+            onInput={(ev) => setQueryDraft(ev.currentTarget.value)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter") applyQuery();
+            }}
+            placeholder="Filter logs… e.g. @http.status_code:[500 TO 599]"
+            title="Datadog-style query; press Enter to apply"
             class="w-full text-sm pl-8 pr-8 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
           />
-          <Show when={search().length > 0}>
+          <Show when={queryDraft().length > 0}>
             <button
               type="button"
-              onClick={() => setSearch("")}
+              onClick={() => {
+                setQueryDraft("");
+                setQuery("");
+              }}
               title="Clear"
               class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
             >
