@@ -28,9 +28,37 @@ pub struct LogReadQuery {
     pub scope: LogReadScope,
     pub origin: Option<LogOrigin>,
     pub search: Option<LogSearchQuery>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
     pub after: Option<i64>,
     pub before: Option<i64>,
     pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogHistogramQuery {
+    pub scope: LogReadScope,
+    pub origin: Option<LogOrigin>,
+    pub search: Option<LogSearchQuery>,
+    pub from: i64,
+    pub to: i64,
+    pub bucket_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogHistogramBucket {
+    pub ts: i64,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogHistogram {
+    pub from: i64,
+    pub to: i64,
+    pub bucket_ms: i64,
+    pub buckets: Vec<LogHistogramBucket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

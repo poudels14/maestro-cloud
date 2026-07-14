@@ -190,7 +190,9 @@ export async function getLogs(
   afterSeq?: number,
   beforeSeq?: number,
   phase?: "build" | "deploy",
-  query?: string
+  query?: string,
+  from?: number,
+  to?: number
 ): Promise<LogPage> {
   const url = new URL(
     `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
@@ -201,6 +203,8 @@ export async function getLogs(
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
   if (query) url.searchParams.set("query", query);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();
@@ -216,7 +220,9 @@ export async function getServiceLogs(
   afterSeq?: number,
   beforeSeq?: number,
   phase?: "build" | "deploy",
-  query?: string
+  query?: string,
+  from?: number,
+  to?: number
 ): Promise<LogPage> {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
@@ -224,6 +230,8 @@ export async function getServiceLogs(
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (phase != null) url.searchParams.set("phase", phase);
   if (query) url.searchParams.set("query", query);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();
@@ -238,13 +246,17 @@ export async function getSystemLogs(
   tail?: number,
   afterSeq?: number,
   beforeSeq?: number,
-  query?: string
+  query?: string,
+  from?: number,
+  to?: number
 ): Promise<LogPage> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
   if (tail != null) url.searchParams.set("tail", String(tail));
   if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
   if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
   if (query) url.searchParams.set("query", query);
+  if (from != null) url.searchParams.set("from", String(from));
+  if (to != null) url.searchParams.set("to", String(to));
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();
@@ -252,6 +264,59 @@ export async function getSystemLogs(
   }
   const raw = await res.json();
   return mapLogPage(res, raw);
+}
+
+export interface LogHistogramBucket {
+  ts: number;
+  count: number;
+}
+
+export interface LogHistogram {
+  from: number;
+  to: number;
+  bucketMs: number;
+  buckets: LogHistogramBucket[];
+}
+
+export async function getServiceLogHistogram(
+  serviceId: string,
+  from: number,
+  to: number,
+  phase?: "build" | "deploy",
+  query?: string
+): Promise<LogHistogram> {
+  const url = new URL(
+    `/api/services/${encodeURIComponent(serviceId)}/logs/histogram`,
+    location.origin
+  );
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("to", String(to));
+  if (phase != null) url.searchParams.set("phase", phase);
+  if (query) url.searchParams.set("query", query);
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getSystemLogHistogram(
+  name: string,
+  from: number,
+  to: number,
+  query?: string
+): Promise<LogHistogram> {
+  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs/histogram`, location.origin);
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("to", String(to));
+  if (query) url.searchParams.set("query", query);
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 export interface LogPage {

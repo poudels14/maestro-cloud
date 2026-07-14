@@ -372,6 +372,8 @@ async fn log_query_filters_hot_and_cold_rows_with_status_aliases() {
                     .parse()
                     .expect("query"),
             ),
+            from: None,
+            to: None,
             after: None,
             before: None,
             limit: 1,
@@ -380,6 +382,53 @@ async fn log_query_filters_hot_and_cold_rows_with_status_aliases() {
         .expect("filtered logs");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].text, "upstream request failed");
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn log_histogram_counts_filtered_hot_and_cold_rows() {
+    let root = temp_root("histogram");
+    let store = DuckLogStore::open(&root).expect("open");
+    let bucket_ms = 60_000;
+    let from = 1_700_000_040_000;
+    let mut cold = entry(
+        from + 1_000,
+        "api/dep/replica0",
+        LogOrigin::Service,
+        "cold failure",
+    );
+    cold.attrs = vec![("DownstreamStatus".into(), "503".into())];
+    store.append(&[cold]).await.expect("append cold");
+    assert_eq!(store.rollover().await.expect("rollover"), 1);
+
+    let mut hot = entry(
+        from + bucket_ms + 1_000,
+        "api/dep/replica0",
+        LogOrigin::Service,
+        "hot failure",
+    );
+    hot.attrs = vec![("http.status_code".into(), "500".into())];
+    let mut success = hot.clone();
+    success.ts += 1_000;
+    success.text = "hot success".into();
+    success.attrs = vec![("http.status_code".into(), "200".into())];
+    store.append(&[hot, success]).await.expect("append hot");
+
+    let buckets = store
+        .read_log_histogram(crate::logs::LogHistogramQuery {
+            scope: crate::logs::LogReadScope::Prefix("api/".into()),
+            origin: Some(LogOrigin::Service),
+            search: Some("@http.status_code:[500 TO 599]".parse().expect("query")),
+            from,
+            to: from + 2 * bucket_ms,
+            bucket_ms,
+        })
+        .await
+        .expect("histogram");
+
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0].count, 1);
+    assert_eq!(buckets[1].count, 1);
     std::fs::remove_dir_all(root).ok();
 }
 

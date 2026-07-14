@@ -28,6 +28,7 @@ function LogsTab(props: { service: Service }) {
         isSystem={isSystem()}
         hasBuild={!!props.service.build}
         phase="deploy"
+        showHistogram
       />
     </Show>
   );

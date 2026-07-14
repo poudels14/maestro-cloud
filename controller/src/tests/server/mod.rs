@@ -355,6 +355,8 @@ fn log_query_is_validated_before_store_access() {
         tail: Some(25),
         after: Some(10),
         before: Some(20),
+        from: Some(1_700_000_000_000),
+        to: Some(1_700_000_060_000),
         phase: None,
         query: Some("@http.status_code:[400 TO 499] AND -message:health".into()),
     };
@@ -366,6 +368,8 @@ fn log_query_is_validated_before_store_access() {
     )
     .expect("valid query");
     assert!(read.search.is_some());
+    assert_eq!(read.from, Some(1_700_000_000_000));
+    assert_eq!(read.to, Some(1_700_000_060_000));
     assert_eq!(read.before, Some(20));
     assert_eq!(read.after, None, "before keeps its existing precedence");
 
@@ -384,5 +388,87 @@ fn log_query_is_validated_before_store_access() {
             .get(LOG_CURSOR_HEADER)
             .and_then(|value| value.to_str().ok()),
         Some("42")
+    );
+}
+
+#[test]
+fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
+    let to = 1_700_000_400_000;
+    let one_hour = build_log_histogram_query(
+        LogReadScope::Prefix("api/".into()),
+        Some(LogOrigin::Service),
+        &LogHistogramHttpQuery {
+            from: Some(to - DEFAULT_LOG_RANGE_MS),
+            to: Some(to),
+            phase: None,
+            query: Some("level:error".into()),
+        },
+    )
+    .expect("one hour");
+    assert_eq!(one_hour.bucket_ms, ONE_MINUTE_MS);
+    assert!(one_hour.search.is_some());
+
+    let six_hours = build_log_histogram_query(
+        LogReadScope::Prefix("api/".into()),
+        None,
+        &LogHistogramHttpQuery {
+            from: Some(to - 6 * DEFAULT_LOG_RANGE_MS),
+            to: Some(to),
+            phase: None,
+            query: None,
+        },
+    )
+    .expect("six hours");
+    assert_eq!(six_hours.bucket_ms, FIVE_MINUTES_MS);
+
+    let seven_days = build_log_histogram_query(
+        LogReadScope::Prefix("api/".into()),
+        None,
+        &LogHistogramHttpQuery {
+            from: Some(to - MAX_LOG_RANGE_MS),
+            to: Some(to),
+            phase: None,
+            query: None,
+        },
+    )
+    .expect("seven days");
+    assert_eq!(seven_days.bucket_ms, THIRTY_MINUTES_MS);
+
+    let first_bucket = one_hour.from - one_hour.from.rem_euclid(one_hour.bucket_ms);
+    let complete = complete_log_histogram(
+        &one_hour,
+        vec![LogHistogramBucket {
+            ts: first_bucket + ONE_MINUTE_MS,
+            count: 7,
+        }],
+    );
+    assert_eq!(complete.bucket_ms, ONE_MINUTE_MS);
+    assert_eq!(complete.buckets[0].count, 0);
+    assert_eq!(complete.buckets[1].count, 7);
+    assert!(complete.buckets.len() <= 61);
+    let json = serde_json::to_value(&complete).expect("serialize histogram");
+    assert_eq!(json["bucketMs"], ONE_MINUTE_MS);
+
+    let too_wide = LogHistogramHttpQuery {
+        from: Some(to - MAX_LOG_RANGE_MS - 1),
+        to: Some(to),
+        phase: None,
+        query: None,
+    };
+    assert!(
+        build_log_histogram_query(LogReadScope::Prefix("api/".into()), None, &too_wide).is_err()
+    );
+
+    let incomplete = LogsQuery {
+        tail: Some(25),
+        after: None,
+        before: None,
+        from: Some(to - DEFAULT_LOG_RANGE_MS),
+        to: None,
+        phase: None,
+        query: None,
+    };
+    assert!(
+        build_log_read_query(LogReadScope::Prefix("api/".into()), None, &incomplete, 25).is_err()
     );
 }

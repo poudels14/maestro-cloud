@@ -7,7 +7,10 @@ use rusqlite::OptionalExtension;
 use tokio::sync::Notify;
 use tokio::task;
 
-use super::{LogReadQuery, LogReadScope, LogSearchValue, SqlDialect, sql_like_prefix};
+use super::{
+    LogHistogramBucket, LogHistogramQuery, LogReadQuery, LogReadScope, LogSearchValue, SqlDialect,
+    sql_like_prefix,
+};
 
 type ConnPool = r2d2::Pool<SqliteConnectionManager>;
 pub const MAX_SINK_DEAD_LETTERS: i64 = 100_000;
@@ -215,6 +218,7 @@ impl LogStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_logs_source_seq ON logs (source, seq);
+            CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs (ts);
 
             CREATE TABLE IF NOT EXISTS ingress_traffic (
                 bucket_at_ms INTEGER NOT NULL,
@@ -455,6 +459,14 @@ impl LogStore {
                     LogSearchValue::Number(value) => Value::Real(value),
                 }));
             }
+            if let Some(from) = query.from {
+                sql.push_str(" AND ts >= ?");
+                values.push(Value::Integer(from));
+            }
+            if let Some(to) = query.to {
+                sql.push_str(" AND ts < ?");
+                values.push(Value::Integer(to));
+            }
             if let Some(after) = query.after {
                 sql.push_str(" AND seq > ?");
                 values.push(Value::Integer(after));
@@ -482,6 +494,75 @@ impl LogStore {
                 entries.reverse();
             }
             Ok(entries)
+        })
+        .await?
+    }
+
+    pub async fn read_log_histogram(
+        &self,
+        query: LogHistogramQuery,
+    ) -> Result<Vec<LogHistogramBucket>> {
+        if query.bucket_ms <= 0 {
+            return Err(anyhow::anyhow!("log histogram bucket must be positive"));
+        }
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<Vec<LogHistogramBucket>> {
+            use rusqlite::types::Value;
+
+            let mut sql = String::from(
+                "SELECT ts - (ts % ?) AS bucket_at_ms, count(*) AS count
+                 FROM (
+                    SELECT ts, level, text, source, origin,
+                           tags AS tags_json, attributes AS attributes_json
+                    FROM logs
+                 ) q WHERE true",
+            );
+            let mut values = vec![Value::Integer(query.bucket_ms)];
+            match query.scope {
+                LogReadScope::Prefix(prefix) => {
+                    sql.push_str(" AND source LIKE ? ESCAPE '\\'");
+                    values.push(Value::Text(sql_like_prefix(&prefix)));
+                }
+                LogReadScope::Sources(sources) => {
+                    if sources.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    sql.push_str(&format!(
+                        " AND source IN ({})",
+                        vec!["?"; sources.len()].join(",")
+                    ));
+                    values.extend(sources.into_iter().map(Value::Text));
+                }
+            }
+            if let Some(origin) = query.origin {
+                sql.push_str(" AND origin = ?");
+                values.push(Value::Text(origin.as_str().to_string()));
+            }
+            if let Some(search) = query.search {
+                let compiled = search.compile(SqlDialect::Sqlite);
+                sql.push_str(" AND ");
+                sql.push_str(&compiled.sql);
+                values.extend(compiled.values.into_iter().map(|value| match value {
+                    LogSearchValue::Text(value) => Value::Text(value),
+                    LogSearchValue::Number(value) => Value::Real(value),
+                }));
+            }
+            sql.push_str(
+                " AND ts >= ? AND ts < ?
+                 GROUP BY bucket_at_ms ORDER BY bucket_at_ms",
+            );
+            values.extend([Value::Integer(query.from), Value::Integer(query.to)]);
+
+            let conn = pool.get()?;
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                let count = row.get::<_, i64>(1)?;
+                Ok(LogHistogramBucket {
+                    ts: row.get(0)?,
+                    count: u64::try_from(count).unwrap_or_default(),
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await?
     }
@@ -524,6 +605,8 @@ impl LogStore {
             scope: LogReadScope::Sources(vec![source.to_string()]),
             origin: None,
             search: None,
+            from: None,
+            to: None,
             after: None,
             before: None,
             limit,
