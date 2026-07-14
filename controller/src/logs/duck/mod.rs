@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use duckdb::{params, params_from_iter, types::Value};
 
 use super::store::{LogEntry, LogOrigin};
+use super::{LogReadQuery, LogReadScope};
 
 mod compat;
 mod db;
@@ -312,74 +313,121 @@ impl DuckLogStore {
         .await?
     }
 
+    pub async fn read_logs(&self, query: LogReadQuery) -> Result<Vec<LogEntry>> {
+        let LogReadQuery {
+            scope,
+            origin,
+            search,
+            after,
+            before,
+            limit,
+        } = query;
+        let descending = after.is_none();
+        match scope {
+            LogReadScope::Prefix(prefix) => {
+                let db = self.service.clone();
+                let parts = self.parts_root.join("service-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_glob = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "service", cursor)? => None,
+                        _ => service_glob(&parts, &prefix),
+                    };
+                    query_logs(
+                        &db,
+                        true,
+                        Some(&prefix),
+                        None,
+                        origin,
+                        search.as_ref(),
+                        after,
+                        before,
+                        limit,
+                        descending,
+                        cold_glob.as_deref(),
+                    )
+                })
+                .await?
+            }
+            LogReadScope::Sources(sources) => {
+                if sources.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let db = self.system.clone();
+                let parts = self.parts_root.join("system-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_glob = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "system", cursor)? => None,
+                        _ => parquet_glob_if_present(&parts, "date=*/part-*.parquet"),
+                    };
+                    query_logs(
+                        &db,
+                        false,
+                        None,
+                        Some(&sources),
+                        origin,
+                        search.as_ref(),
+                        after,
+                        before,
+                        limit,
+                        descending,
+                        cold_glob.as_deref(),
+                    )
+                })
+                .await?
+            }
+        }
+    }
+
+    pub async fn latest_log_seq(&self, scope: &LogReadScope) -> Result<i64> {
+        let db = match scope {
+            LogReadScope::Prefix(_) => self.service.clone(),
+            LogReadScope::Sources(_) => self.system.clone(),
+        };
+        tokio::task::spawn_blocking(move || -> Result<i64> {
+            let conn = db.reader()?;
+            Ok(conn.query_row(
+                "SELECT greatest(
+                    coalesce((SELECT max(seq) FROM logs), 0),
+                    coalesce((SELECT max(seq_hi) FROM partition_state), 0)
+                 )",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await?
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn read_tail_by_prefix_origin(
         &self,
         prefix: &str,
         origin: Option<LogOrigin>,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
-        self.read_service(prefix, origin, None, None, limit, true)
-            .await
-    }
-
-    pub async fn read_after_by_prefix_origin(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_service(prefix, origin, Some(after), None, limit, false)
-            .await
-    }
-
-    pub async fn read_before_by_prefix_origin(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_service(prefix, origin, None, Some(before), limit, true)
-            .await
-    }
-
-    async fn read_service(
-        &self,
-        prefix: &str,
-        origin: Option<LogOrigin>,
-        after: Option<i64>,
-        before: Option<i64>,
-        limit: usize,
-        descending: bool,
-    ) -> Result<Vec<LogEntry>> {
-        let db = self.service.clone();
-        let parts = self.parts_root.join("service-logs");
-        let prefix = prefix.to_string();
-        tokio::task::spawn_blocking(move || {
-            let _visibility = db.read_parquet()?;
-            let cold_glob = match after {
-                Some(cursor) if !cold_tier_has_seq_after(&db, "service", cursor)? => None,
-                _ => service_glob(&parts, &prefix),
-            };
-            query_logs(
-                &db,
-                true,
-                Some(&prefix),
-                None,
-                origin,
-                after,
-                before,
-                limit,
-                descending,
-                cold_glob.as_deref(),
-            )
+        self.read_logs(LogReadQuery {
+            scope: LogReadScope::Prefix(prefix.to_string()),
+            origin,
+            search: None,
+            after: None,
+            before: None,
+            limit,
         })
-        .await?
+        .await
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn read_tail(&self, source: &str, limit: usize) -> Result<Vec<LogEntry>> {
-        self.read_system(&[source], None, None, limit, true).await
+        self.read_logs(LogReadQuery {
+            scope: LogReadScope::Sources(vec![source.to_string()]),
+            origin: None,
+            search: None,
+            after: None,
+            before: None,
+            limit,
+        })
+        .await
     }
 
     pub async fn read_ingress_traffic(
@@ -408,83 +456,6 @@ impl DuckLogStore {
         tokio::task::spawn_blocking(move || {
             let _visibility = db.read_parquet()?;
             query_blocked_ingress_traffic(&db, from, to, limit)
-        })
-        .await?
-    }
-
-    pub async fn read_after_for_source(
-        &self,
-        source: &str,
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_system(&[source], Some(after), None, limit, false)
-            .await
-    }
-
-    pub async fn read_before_for_source(
-        &self,
-        source: &str,
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_system(&[source], None, Some(before), limit, true)
-            .await
-    }
-
-    pub async fn read_tail_sources(&self, sources: &[&str], limit: usize) -> Result<Vec<LogEntry>> {
-        self.read_system(sources, None, None, limit, true).await
-    }
-
-    pub async fn read_after_sources(
-        &self,
-        sources: &[&str],
-        after: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_system(sources, Some(after), None, limit, false)
-            .await
-    }
-
-    pub async fn read_before_sources(
-        &self,
-        sources: &[&str],
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<LogEntry>> {
-        self.read_system(sources, None, Some(before), limit, true)
-            .await
-    }
-
-    async fn read_system(
-        &self,
-        sources: &[&str],
-        after: Option<i64>,
-        before: Option<i64>,
-        limit: usize,
-        descending: bool,
-    ) -> Result<Vec<LogEntry>> {
-        let db = self.system.clone();
-        let sources = sources.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        let parts = self.parts_root.join("system-logs");
-        tokio::task::spawn_blocking(move || {
-            let _visibility = db.read_parquet()?;
-            let glob = match after {
-                Some(cursor) if !cold_tier_has_seq_after(&db, "system", cursor)? => None,
-                _ => parquet_glob_if_present(&parts, "date=*/part-*.parquet"),
-            };
-            query_logs(
-                &db,
-                false,
-                None,
-                Some(&sources),
-                None,
-                after,
-                before,
-                limit,
-                descending,
-                glob.as_deref(),
-            )
         })
         .await?
     }

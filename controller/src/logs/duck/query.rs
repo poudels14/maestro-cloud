@@ -5,7 +5,9 @@ use anyhow::Result;
 use duckdb::{params, params_from_iter, types::Value};
 
 use super::{Db, contains_parquet, hive_component, sql_lit};
-use crate::logs::{LogEntry, LogOrigin};
+use crate::logs::{
+    LogEntry, LogOrigin, LogSearchQuery, LogSearchValue, SqlDialect, sql_like_prefix,
+};
 
 pub(super) fn query_ingress_traffic(
     db: &Db,
@@ -107,6 +109,7 @@ pub(super) fn query_logs(
     prefix: Option<&str>,
     sources: Option<&[String]>,
     origin: Option<LogOrigin>,
+    search: Option<&LogSearchQuery>,
     after: Option<i64>,
     before: Option<i64>,
     limit: usize,
@@ -122,8 +125,8 @@ pub(super) fn query_logs(
             text,
             service_id || '/' || deployment_id || '/' || unit AS source,
             origin,
-            to_json(tags)::VARCHAR,
-            to_json(attributes)::VARCHAR
+            to_json(tags)::VARCHAR AS tags_json,
+            to_json(attributes)::VARCHAR AS attributes_json
         "#
     } else {
         r#"
@@ -134,8 +137,8 @@ pub(super) fn query_logs(
             text,
             source,
             origin,
-            to_json(tags)::VARCHAR,
-            to_json(attributes)::VARCHAR
+            to_json(tags)::VARCHAR AS tags_json,
+            to_json(attributes)::VARCHAR AS attributes_json
         "#
     };
     let mut arms = vec![format!(
@@ -160,8 +163,8 @@ pub(super) fn query_logs(
     let mut sql = format!("SELECT * FROM ({}) q WHERE true", arms.join(" UNION ALL "));
     let mut vals: Vec<Value> = Vec::new();
     if let Some(p) = prefix {
-        sql.push_str(" AND source LIKE ?");
-        vals.push(Value::Text(format!("{p}%")));
+        sql.push_str(" AND source LIKE ? ESCAPE '\\'");
+        vals.push(Value::Text(sql_like_prefix(p)));
     }
     if let Some(s) = sources {
         sql.push_str(&format!(
@@ -173,6 +176,15 @@ pub(super) fn query_logs(
     if let Some(o) = origin {
         sql.push_str(" AND origin=?");
         vals.push(Value::Text(o.as_str().into()));
+    }
+    if let Some(search) = search {
+        let compiled = search.compile(SqlDialect::DuckDb);
+        sql.push_str(" AND ");
+        sql.push_str(&compiled.sql);
+        vals.extend(compiled.values.into_iter().map(|value| match value {
+            LogSearchValue::Text(value) => Value::Text(value),
+            LogSearchValue::Number(value) => Value::Double(value),
+        }));
     }
     if let Some(a) = after {
         sql.push_str(" AND seq>?");

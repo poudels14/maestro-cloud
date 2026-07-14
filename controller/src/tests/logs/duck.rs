@@ -329,6 +329,61 @@ async fn routes_and_reads_service_and_system_logs() {
 }
 
 #[tokio::test]
+async fn log_query_filters_hot_and_cold_rows_with_status_aliases() {
+    let root = temp_root("query-status");
+    let store = DuckLogStore::open(&root).expect("open");
+    let mut failed = entry(
+        1_700_000_000_000,
+        "api/dep/replica0",
+        LogOrigin::Service,
+        "upstream request failed",
+    );
+    failed.attrs = vec![("DownstreamStatus".into(), "503".into())];
+    store.append(&[failed]).await.expect("append cold row");
+    assert_eq!(store.rollover().await.expect("rollover"), 1);
+    let cold_cursor = store
+        .latest_log_seq(&crate::logs::LogReadScope::Prefix("api/".into()))
+        .await
+        .expect("cold cursor");
+    assert!(cold_cursor > 0);
+
+    let mut success = entry(
+        now_ms(),
+        "api/dep/replica0",
+        LogOrigin::Service,
+        "newer successful request",
+    );
+    success.attrs = vec![("http.response.status_code".into(), "200".into())];
+    store.append(&[success]).await.expect("append hot row");
+    assert!(
+        store
+            .latest_log_seq(&crate::logs::LogReadScope::Prefix("api/".into()))
+            .await
+            .expect("hot cursor")
+            > cold_cursor
+    );
+
+    let rows = store
+        .read_logs(crate::logs::LogReadQuery {
+            scope: crate::logs::LogReadScope::Prefix("api/".into()),
+            origin: Some(LogOrigin::Service),
+            search: Some(
+                "failed AND @http.status_code:[500 TO 599]"
+                    .parse()
+                    .expect("query"),
+            ),
+            after: None,
+            before: None,
+            limit: 1,
+        })
+        .await
+        .expect("filtered logs");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, "upstream request failed");
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
 async fn duplicate_origin_sequence_is_a_noop() {
     let root = temp_root("dedup");
     let store = DuckLogStore::open(&root).expect("open");

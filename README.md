@@ -90,6 +90,29 @@ maestro services rollout --apply  # apply it
 maestro services redeploy my-app
 ```
 
+## Log queries
+
+The log viewer search bar and `maestro logs --query` use the same server-side
+query. Press Enter or click the search icon in the UI to apply it. Supported
+Datadog-style syntax includes:
+
+- Free text and quoted phrases: `connection refused`, `"upstream timeout"`
+- Reserved fields: `level:error`, `status:warn`, `source:maestro-probe`,
+  `service:my-app`, and `message:*timeout*`
+- Log attributes: `@request_id:abc123` or `@http.url_details.path:/api/*`
+- Numeric comparisons and ranges: `@duration:>1000000` and
+  `@http.status_code:[400 TO 499]`
+- `AND`, `OR`, `NOT`, `-`, parentheses, and `*`/`?` wildcards
+
+`@http.status_code` is a canonical alias that also matches common application
+status fields and Traefik's `DownstreamStatus` field. Queries run before limits
+and cursors are applied, including against rolled-over Parquet logs.
+
+```bash
+maestro logs --service my-app \
+  --query '@http.status_code:[500 TO 599] AND -message:*health*'
+```
+
 ## Config file
 
 The config file (`maestro.jsonc`) supports:

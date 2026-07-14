@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
     extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, Query, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, delete, get, patch, post},
@@ -37,8 +37,7 @@ use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment,
 };
-use crate::logs::LogEntry;
-use crate::logs::store::LogOrigin;
+use crate::logs::{LogEntry, LogOrigin, LogReadQuery, LogReadScope, LogSearchQuery};
 use crate::signal::ShutdownEvent;
 
 mod types;
@@ -49,6 +48,7 @@ const MAX_REPLICAS_OVERRIDE: u32 = 25;
 const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const INGESTION_TOKEN_HEADER: &str = "x-maestro-ingestion-token";
 const MAX_CLUSTER_WRITE_BODY_BYTES: u64 = 1024 * 1024 * 1024;
+const LOG_CURSOR_HEADER: &str = "x-maestro-log-cursor";
 
 #[derive(Debug)]
 enum UpgradeVersionError {
@@ -1911,7 +1911,7 @@ impl Server {
         Path((service_id, deployment_id)): Path<(String, String)>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
+    ) -> Result<Response, (StatusCode, String)> {
         let service_id = service_id.trim();
         let deployment_id = deployment_id.trim();
         crate::validation::validate_service_id(service_id, "serviceId")
@@ -1928,31 +1928,26 @@ impl Server {
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/{deployment_id}/");
-            let entries = if let Some(before) = query.before {
-                log_store
-                    .read_before_by_prefix_origin(&prefix, origin, before, tail)
-                    .await
-            } else if let Some(after) = query.after {
-                log_store
-                    .read_after_by_prefix_origin(&prefix, origin, after, tail)
-                    .await
-            } else {
-                log_store
-                    .read_tail_by_prefix_origin(&prefix, origin, tail)
-                    .await
-            }
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-            return Ok(Json(entries));
+            let read = build_log_read_query(LogReadScope::Prefix(prefix), origin, &query, tail)?;
+            let cursor = log_store
+                .latest_log_seq(&read.scope)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let entries = log_store
+                .read_logs(read)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            return Ok(logs_response(entries, cursor));
         }
 
-        Ok(Json(Vec::new()))
+        Ok(logs_response(Vec::new(), 0))
     }
 
     async fn get_service_logs(
         Path(service_id): Path<String>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
+    ) -> Result<Response, (StatusCode, String)> {
         let service_id = service_id.trim();
         crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1962,64 +1957,52 @@ impl Server {
 
         if let Some(log_store) = &state.log_store {
             let prefix = format!("{service_id}/");
-            let entries = if let Some(before) = query.before {
-                log_store
-                    .read_before_by_prefix_origin(&prefix, origin, before, tail)
-                    .await
-            } else if let Some(after) = query.after {
-                log_store
-                    .read_after_by_prefix_origin(&prefix, origin, after, tail)
-                    .await
-            } else {
-                log_store
-                    .read_tail_by_prefix_origin(&prefix, origin, tail)
-                    .await
-            }
-            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-            return Ok(Json(entries));
+            let read = build_log_read_query(LogReadScope::Prefix(prefix), origin, &query, tail)?;
+            let cursor = log_store
+                .latest_log_seq(&read.scope)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            let entries = log_store
+                .read_logs(read)
+                .await
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+            return Ok(logs_response(entries, cursor));
         }
 
-        Ok(Json(Vec::new()))
+        Ok(logs_response(Vec::new(), 0))
     }
 
     async fn get_system_logs(
         Path(name): Path<String>,
         Query(query): Query<LogsQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<LogEntry>>, (StatusCode, String)> {
+    ) -> Result<Response, (StatusCode, String)> {
         let name = name.trim();
         crate::validation::validate_service_id(name, "name")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
         let tail = query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT);
 
         let Some(log_store) = &state.log_store else {
-            return Ok(Json(Vec::new()));
+            return Ok(logs_response(Vec::new(), 0));
         };
-        let entries = if name == "maestro-probe" {
-            if let Some(before) = query.before {
-                log_store
-                    .read_before_sources(&["maestro-probe", "maestro-controller"], before, tail)
-                    .await
-            } else if let Some(after) = query.after {
-                log_store
-                    .read_after_sources(&["maestro-probe", "maestro-controller"], after, tail)
-                    .await
-            } else {
-                log_store
-                    .read_tail_sources(&["maestro-probe", "maestro-controller"], tail)
-                    .await
-            }
+        let sources = if name == "maestro-probe" {
+            vec![
+                "maestro-probe".to_string(),
+                "maestro-controller".to_string(),
+            ]
         } else {
-            if let Some(before) = query.before {
-                log_store.read_before_for_source(name, before, tail).await
-            } else if let Some(after) = query.after {
-                log_store.read_after_for_source(name, after, tail).await
-            } else {
-                log_store.read_tail(name, tail).await
-            }
-        }
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-        Ok(Json(entries))
+            vec![name.to_string()]
+        };
+        let read = build_log_read_query(LogReadScope::Sources(sources), None, &query, tail)?;
+        let cursor = log_store
+            .latest_log_seq(&read.scope)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let entries = log_store
+            .read_logs(read)
+            .await
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        Ok(logs_response(entries, cursor))
     }
 
     async fn ingest_logs(
@@ -2695,6 +2678,7 @@ struct LogsQuery {
     after: Option<i64>,
     before: Option<i64>,
     phase: Option<String>,
+    query: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2956,6 +2940,43 @@ fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, St
             format!("invalid phase '{other}', expected one of: build, deploy, system"),
         )),
     }
+}
+
+fn build_log_read_query(
+    scope: LogReadScope,
+    origin: Option<LogOrigin>,
+    query: &LogsQuery,
+    limit: usize,
+) -> Result<LogReadQuery, (StatusCode, String)> {
+    let search = query
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(str::parse::<LogSearchQuery>)
+        .transpose()
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid log query: {error}"),
+            )
+        })?;
+    Ok(LogReadQuery {
+        scope,
+        origin,
+        search,
+        after: query.before.is_none().then_some(query.after).flatten(),
+        before: query.before,
+        limit,
+    })
+}
+
+fn logs_response(entries: Vec<LogEntry>, cursor: i64) -> Response {
+    let mut response = Json(entries).into_response();
+    if let Ok(cursor) = HeaderValue::from_str(&cursor.to_string()) {
+        response.headers_mut().insert(LOG_CURSOR_HEADER, cursor);
+    }
+    response
 }
 
 async fn require_jwt(
