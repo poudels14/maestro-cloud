@@ -50,11 +50,11 @@ impl SecretString {
 
     pub fn masked(&self) -> String {
         let chars: Vec<char> = self.inner.chars().collect();
-        if chars.len() <= 4 {
-            return self.inner.clone();
+        if chars.len() <= 6 {
+            return "***".to_string();
         }
         let first: String = chars.iter().take(2).collect();
-        let last: String = chars.iter().skip(chars.len() - 2).collect();
+        let last: String = chars.iter().skip(chars.len() - 4).collect();
         format!("{first}*****{last}")
     }
 }
@@ -169,4 +169,20 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SecretString;
+
+    #[test]
+    fn masking_never_reveals_a_complete_short_value() {
+        for value in ["", "a", "ab", "abc", "abcd", "abcde", "abcdef"] {
+            assert_eq!(SecretString::new(value.to_string()).masked(), "***");
+        }
+        assert_eq!(
+            SecretString::new("abcdefg".to_string()).masked(),
+            "ab*****defg"
+        );
+    }
 }

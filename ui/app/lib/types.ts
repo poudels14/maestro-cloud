@@ -38,7 +38,7 @@ export interface IngressRouting {
 }
 
 export interface SecretKeyMeta {
-  hash: string;
+  hash?: string;
   changed: boolean;
 }
 

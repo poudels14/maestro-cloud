@@ -27,7 +27,7 @@ use tokio_util::io::ReaderStream;
 
 use self::types::{
     BlockedIpRequest, BlockedIpsResponse, CancelDeploymentResponse, ClusterRestartRequest,
-    ClusterUnfreezeRequest, ClusterUpgradeRequest, CreateSlackWebhookRequest,
+    ClusterUnfreezeRequest, ClusterUpgradeRequest, CreateSlackWebhookRequest, DeploymentListItem,
     RemoveDeploymentResponse, ReplicasOverrideRequest, ReplicasResponse, RolloutChange,
     RolloutDiffResponse, RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse,
     ServiceListItem, SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest,
@@ -1316,13 +1316,13 @@ impl Server {
                 .get_service_status(&info.config.id)
                 .await
                 .unwrap_or(None);
-            items.push(ServiceListItem {
-                deploy_frozen: info.deploy_frozen,
-                replicas_override: info.replicas_override,
-                service: info.config,
+            items.push(ServiceListItem::new(
+                info.config,
                 status,
-                system: false,
-            });
+                false,
+                info.deploy_frozen,
+                info.replicas_override,
+            ));
         }
 
         let cloudflared_replicas = state
@@ -1338,8 +1338,8 @@ impl Server {
                 "maestro-cloudflared" => cloudflared_replicas,
                 _ => 1,
             };
-            items.push(ServiceListItem {
-                service: ServiceConfig {
+            items.push(ServiceListItem::new(
+                ServiceConfig {
                     id: system_service.id.to_string(),
                     name: system_service.name.to_string(),
                     version: String::new(),
@@ -1361,11 +1361,11 @@ impl Server {
                     },
                     ingress: None,
                 },
-                status: Some(crate::deployment::types::DeploymentStatus::Ready),
-                system: true,
-                deploy_frozen: false,
-                replicas_override: None,
-            });
+                Some(crate::deployment::types::DeploymentStatus::Ready),
+                true,
+                false,
+                None,
+            ));
         }
 
         Ok(Json(items))
@@ -1374,8 +1374,7 @@ impl Server {
     async fn list_deployments(
         Path(service_id): Path<String>,
         State(state): State<AppState>,
-    ) -> Result<Json<Vec<crate::deployment::types::DeploymentWithReplicas>>, (StatusCode, String)>
-    {
+    ) -> Result<Json<Vec<DeploymentListItem>>, (StatusCode, String)> {
         let service_id = service_id.trim();
         crate::validation::validate_service_id(service_id, "serviceId")
             .map_err(|err| (StatusCode::BAD_REQUEST, err))?;
@@ -1393,11 +1392,12 @@ impl Server {
                 .then_with(|| b.deployment.id.cmp(&a.deployment.id))
         });
 
-        for item in &mut deployments {
-            item.deployment.config = item.deployment.config.mask_secrets();
-        }
-
-        Ok(Json(deployments))
+        Ok(Json(
+            deployments
+                .into_iter()
+                .map(DeploymentListItem::new)
+                .collect(),
+        ))
     }
 
     async fn cancel_deployment(
@@ -4153,32 +4153,7 @@ async fn compute_rollout_diff(
         });
     }
 
-    for (key, new_val) in &new_config.deploy.env.items {
-        if let Some(old_val) = old.deploy.env.items.get(key) {
-            if old_val != new_val {
-                changes.push(RolloutChange {
-                    field: format!("env.{key}"),
-                    from: Some(old_val.as_str().to_string()),
-                    to: Some(new_val.as_str().to_string()),
-                });
-            }
-        } else {
-            changes.push(RolloutChange {
-                field: format!("env.{key}"),
-                from: None,
-                to: Some(new_val.as_str().to_string()),
-            });
-        }
-    }
-    for key in old.deploy.env.items.keys() {
-        if !new_config.deploy.env.items.contains_key(key) {
-            changes.push(RolloutChange {
-                field: format!("env.{key}"),
-                from: Some(old.deploy.env.items[key].as_str().to_string()),
-                to: None,
-            });
-        }
-    }
+    diff_env(&old.deploy.env, &new_config.deploy.env, &mut changes);
 
     diff_secrets(
         &old.deploy.secrets,
@@ -4197,6 +4172,39 @@ async fn compute_rollout_diff(
         status,
         changes,
     })
+}
+
+fn diff_env(
+    old: &crate::deployment::types::EnvConfig,
+    new: &crate::deployment::types::EnvConfig,
+    changes: &mut Vec<RolloutChange>,
+) {
+    for (key, new_val) in &new.items {
+        if let Some(old_val) = old.items.get(key) {
+            if old_val != new_val {
+                changes.push(RolloutChange {
+                    field: format!("env.{key}"),
+                    from: Some(old_val.masked()),
+                    to: Some(new_val.masked()),
+                });
+            }
+        } else {
+            changes.push(RolloutChange {
+                field: format!("env.{key}"),
+                from: None,
+                to: Some(new_val.masked()),
+            });
+        }
+    }
+    for key in old.items.keys() {
+        if !new.items.contains_key(key) {
+            changes.push(RolloutChange {
+                field: format!("env.{key}"),
+                from: Some(old.items[key].masked()),
+                to: None,
+            });
+        }
+    }
 }
 
 fn diff_secrets(
