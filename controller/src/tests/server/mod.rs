@@ -164,6 +164,25 @@ fn upgrade_rejects_a_malformed_semantic_version() {
 }
 
 #[test]
+fn hs256_service_tokens_use_an_installed_crypto_provider() {
+    let secret = "service-jwt-test-secret";
+    let claims = serde_json::json!({
+        "sub": "maestro-admin",
+        "scope": "operator",
+        "iat": 1_700_000_000_u64,
+        "exp": 4_000_000_000_u64,
+    });
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("HS256 encoding should have a crypto provider");
+
+    validate_jwt(&token, secret).expect("HS256 verification should have a crypto provider");
+}
+
+#[test]
 fn cluster_write_scope_excludes_node_local_and_read_routes() {
     assert!(is_cluster_write(
         &axum::http::Method::POST,
