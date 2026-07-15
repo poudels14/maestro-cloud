@@ -293,12 +293,18 @@ Then generate an auth key tagged with `tag:maestro`.
 
 In Tailscale admin > DNS > Add nameserver > Custom:
 
-- Nameserver: the `.255` IP of your subnet (for example, `172.22.0.255` for
-  `172.22.0.0/16`), shown in Maestro's log output
+- Nameserver: the `.254` IP in the subnet's first `/24` (for example,
+  `172.22.0.254` for `172.22.0.0/16`), shown in Maestro's log output
 - Restrict to domain: `maestro.internal`
 
 You only need **one** split DNS entry. The DNS proxy discovers peer clusters via
 Tailscale and forwards queries across clusters.
+
+Maestro preserves the fixed system addresses in that first `/24` for existing
+single-node installations. Cluster scheduling assigns `.2` through `.199` to
+workloads and reserves `.200` through `.254` for system use. Legacy standalone
+runtime allocation continues using its configured subnet; fixed system
+containers start before workloads and are reserved as active IPAM leases.
 
 ### 4. Access your services
 

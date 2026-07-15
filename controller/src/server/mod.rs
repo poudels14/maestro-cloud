@@ -3301,15 +3301,19 @@ async fn require_jwt(
                 "missing or invalid Authorization header".to_string(),
             )
         })?;
-    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
-    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).map_err(|err| {
+    validate_jwt(token, secret).map_err(|err| {
         (
             StatusCode::UNAUTHORIZED,
             format!("invalid auth token: {err}"),
         )
     })?;
     Ok(next.run(request).await)
+}
+
+fn validate_jwt(token: &str, secret: &str) -> jsonwebtoken::errors::Result<()> {
+    let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+    let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).map(|_| ())
 }
 
 struct SpooledClusterRequest {

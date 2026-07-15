@@ -15,8 +15,9 @@ fi
 python3 /dns-proxy.py "$CLUSTER_NAME" "$CLUSTER_ALIAS" &
 DNS_PID=$!
 
-# Watchdog: if tailscale goes offline (e.g. node identity dropped after sleep/wake),
-# wipe stale node state and kill containerboot so the supervisor restarts with a fresh registration.
+# Watchdog: if Tailscale stays offline, restart containerboot while preserving
+# the node identity and its approved subnet routes. Clearing state here would
+# turn an ordinary reboot or transient outage into a new, unapproved router.
 (
     sleep 60
     FAIL_COUNT=0
@@ -28,8 +29,7 @@ DNS_PID=$!
         else
             FAIL_COUNT=$((FAIL_COUNT + 1))
             if [ "$FAIL_COUNT" -ge 4 ]; then
-                echo "tailscale offline for 60s+, clearing state for re-auth..." >&2
-                rm -rf /var/lib/tailscale/*
+                echo "tailscale offline for 60s+, restarting with preserved state..." >&2
                 kill 1
             fi
         fi

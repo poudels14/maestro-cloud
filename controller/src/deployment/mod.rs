@@ -33,8 +33,7 @@ pub const PROBE_IMAGE_TAG: &str = concat!("maestro-probe:", env!("CARGO_PKG_VERS
 pub const ADMIN_IMAGE_TAG: &str = concat!("maestro-admin:", env!("CARGO_PKG_VERSION"));
 pub const TAILSCALE_IMAGE_TAG: &str = concat!("maestro-tailscale:", env!("CARGO_PKG_VERSION"));
 pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
-pub const MAX_CLOUDFLARED_REPLICAS: u32 =
-    crate::cluster::network::Ipv4Cidr::SYSTEM_RESERVED_HOSTS - 6;
+pub const MAX_CLOUDFLARED_REPLICAS: u32 = 25;
 
 pub(crate) fn container_etcd_endpoints(
     cluster: Option<&crate::cluster::ClusterRuntime>,
@@ -1831,12 +1830,12 @@ struct SystemIps {
 fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
     let subnet = crate::cluster::network::Ipv4Cidr::parse(network_cidr).ok()?;
     Some(SystemIps {
-        dns: subnet.host_address_from_end(1)?.to_string(),
-        probe: subnet.host_address_from_end(2)?.to_string(),
-        ingress: subnet.host_address_from_end(3)?.to_string(),
-        etcd: subnet.host_address_from_end(4)?.to_string(),
-        admin: subnet.host_address_from_end(5)?.to_string(),
-        gateway: subnet.host_address_from_end(6)?.to_string(),
+        dns: subnet.system_address_from_end(1)?.to_string(),
+        etcd: subnet.system_address_from_end(2)?.to_string(),
+        ingress: subnet.system_address_from_end(3)?.to_string(),
+        probe: subnet.system_address_from_end(4)?.to_string(),
+        admin: subnet.system_address_from_end(5)?.to_string(),
+        gateway: subnet.system_address_from_end(6)?.to_string(),
     })
 }
 
@@ -1844,7 +1843,7 @@ pub(crate) fn cloudflared_ip_from_cidr(network_cidr: &str, replica: u32) -> Opti
     let subnet = crate::cluster::network::Ipv4Cidr::parse(network_cidr).ok()?;
     let offset = 6_u32.checked_add(replica)?;
     (replica <= MAX_CLOUDFLARED_REPLICAS)
-        .then(|| subnet.host_address_from_end(offset))
+        .then(|| subnet.system_address_from_end(offset))
         .flatten()
         .map(|address| address.to_string())
 }
@@ -2005,24 +2004,38 @@ mod tests {
     }
 
     #[test]
-    fn system_addresses_use_the_actual_end_of_the_subnet() {
+    fn system_addresses_preserve_the_first_24_address_block() {
         let legacy = system_ips_from_cidr("10.100.0.0/16").unwrap();
-        assert_eq!(legacy.dns, "10.100.255.254");
-        assert_eq!(legacy.admin, "10.100.255.250");
-        assert_eq!(legacy.gateway, "10.100.255.249");
+        assert_eq!(legacy.dns, "10.100.0.254");
+        assert_eq!(legacy.etcd, "10.100.0.253");
+        assert_eq!(legacy.ingress, "10.100.0.252");
+        assert_eq!(legacy.probe, "10.100.0.251");
+        assert_eq!(legacy.admin, "10.100.0.250");
+        assert_eq!(legacy.gateway, "10.100.0.249");
         assert_eq!(
             cloudflared_ip_from_cidr("10.100.0.0/16", 1).as_deref(),
-            Some("10.100.255.248")
+            Some("10.100.0.248")
         );
 
         let cluster = system_ips_from_cidr("172.22.1.0/24").unwrap();
         assert_eq!(cluster.dns, "172.22.1.254");
+        assert_eq!(cluster.etcd, "172.22.1.253");
+        assert_eq!(cluster.ingress, "172.22.1.252");
+        assert_eq!(cluster.probe, "172.22.1.251");
         assert_eq!(cluster.admin, "172.22.1.250");
+        assert_eq!(cluster.gateway, "172.22.1.249");
         assert_eq!(
             cloudflared_ip_from_cidr("172.22.1.0/24", 2).as_deref(),
             Some("172.22.1.247")
         );
         assert!(cloudflared_ip_from_cidr("172.22.1.0/24", 26).is_none());
+    }
+
+    #[test]
+    fn tailscale_watchdog_never_discards_the_persisted_node_identity() {
+        let entrypoint = include_str!("../../../dns/tailscale-entrypoint.sh");
+        assert!(!entrypoint.contains("rm -rf /var/lib/tailscale"));
+        assert!(entrypoint.contains("kill 1"));
     }
 
     #[test]

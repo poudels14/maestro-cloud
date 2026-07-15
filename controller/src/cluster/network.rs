@@ -17,7 +17,7 @@ pub struct Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
-    pub const SYSTEM_RESERVED_HOSTS: u32 = 31;
+    pub const SYSTEM_RESERVED_HOSTS: u32 = 55;
 
     pub fn parse(value: &str) -> Result<Self> {
         let (ip, prefix) = value
@@ -67,6 +67,20 @@ impl Ipv4Cidr {
         let network = u32::from(self.network);
         let broadcast = u32::from(self.broadcast_address());
         let address = broadcast.checked_sub(offset)?;
+        (address > network).then(|| Ipv4Addr::from(address))
+    }
+
+    /// Returns a fixed system address from the end of the first `/24` in a
+    /// larger subnet. This preserves the original Maestro addresses when a
+    /// single-node installation uses a `/16`, while `/24` cluster subnets use
+    /// their normal highest addresses.
+    pub fn system_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
+        if self.prefix >= 24 {
+            return self.host_address_from_end(offset);
+        }
+        let network = u32::from(self.network);
+        let system_block_end = network.checked_add(255)?;
+        let address = system_block_end.checked_sub(offset)?;
         (address > network).then(|| Ipv4Addr::from(address))
     }
 
@@ -509,6 +523,28 @@ mod tests {
         let second = Ipv4Cidr::parse("172.22.1.0/24").expect("second");
         assert!(first.overlaps(second));
         assert!(second.overlaps(first));
+    }
+
+    #[test]
+    fn system_addresses_stay_in_the_first_24_for_larger_subnets() {
+        let subnet = Ipv4Cidr::parse("10.100.0.0/16").expect("subnet");
+        assert_eq!(
+            subnet.system_address_from_end(1),
+            Some(Ipv4Addr::new(10, 100, 0, 254))
+        );
+        assert_eq!(
+            subnet.system_address_from_end(6),
+            Some(Ipv4Addr::new(10, 100, 0, 249))
+        );
+    }
+
+    #[test]
+    fn cluster_workload_addresses_end_before_the_system_block() {
+        let cluster = Ipv4Cidr::parse("172.22.1.0/24").unwrap();
+        let workloads = cluster.workload_addresses().collect::<Vec<_>>();
+        assert_eq!(workloads.first(), Some(&Ipv4Addr::new(172, 22, 1, 2)));
+        assert_eq!(workloads.last(), Some(&Ipv4Addr::new(172, 22, 1, 199)));
+        assert_eq!(workloads.len(), 198);
     }
 
     #[test]
