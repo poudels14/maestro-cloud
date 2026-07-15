@@ -261,6 +261,23 @@ pub struct ClusterFreeze {
     pub at_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClusterMaintenanceKind {
+    #[default]
+    Upgrade,
+    Restart,
+}
+
+impl std::fmt::Display for ClusterMaintenanceKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Upgrade => "upgrade",
+            Self::Restart => "restart",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UpgradePhase {
@@ -299,6 +316,8 @@ pub struct UpgradeNodeStep {
     pub hostname: String,
     pub role: NodeRole,
     pub from_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_instance_id: Option<String>,
     pub status: UpgradeNodeStatus,
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
@@ -322,6 +341,8 @@ pub struct UpgradeEvent {
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeRun {
     pub run_id: String,
+    #[serde(default)]
+    pub kind: ClusterMaintenanceKind,
     pub target_version: String,
     pub requested_at_ms: i64,
     pub updated_at_ms: i64,
@@ -341,6 +362,13 @@ impl UpgradeRun {
 
     pub fn current_node_mut(&mut self) -> Option<&mut UpgradeNodeStep> {
         self.nodes.get_mut(self.current_node_index)
+    }
+
+    pub fn operation_name(&self) -> &'static str {
+        match self.kind {
+            ClusterMaintenanceKind::Upgrade => "upgrade",
+            ClusterMaintenanceKind::Restart => "restart",
+        }
     }
 }
 

@@ -488,6 +488,46 @@ operation in this release: issue new node identities and migrate every remaining
 node in a planned window. Removing a member alone does not revoke a certificate
 that was already issued by the old CA.
 
+## Rolling restarts
+
+Restart one node through the safe maintenance workflow with either an interactive
+picker or an explicit node ID:
+
+```bash
+maestro cluster restart
+maestro cluster restart <node-id>
+```
+
+Restart the entire cluster serially with:
+
+```bash
+maestro cluster restart --all
+```
+
+Selected-node and all-node runs freeze deployment mutations, require every durable
+node to be live, and refuse to start during an active rollout. Maestro drains each
+selected node, transfers leadership when necessary, requests the node-local
+restart, verifies that a new controller process is healthy, restores scheduling,
+and then advances. Whole-cluster restarts process workers first, follower voters
+next, and the current leader last. The durable run resumes after leadership
+changes.
+
+This is the recommended way to load a changed host configuration. Publish a
+compatible config to every selected host before starting the run. Membership,
+identity, control-address, and subnet changes still require the corresponding
+cluster lifecycle operation; do not use a rolling restart to silently change those
+identities.
+
+For break-glass local maintenance only, bypass orchestration explicitly:
+
+```bash
+maestro cluster restart --local
+```
+
+`--local` stops the containers on whichever node receives the request without
+draining assignments, transferring leadership, or verifying recovery. Do not use
+it for routine clustered configuration changes.
+
 ## Rolling upgrades
 
 Before upgrading, ensure all durable nodes are online, no rollout is active, every
@@ -495,11 +535,15 @@ node can fetch the target system source/images, and movable services have enough
 spare capacity. Workloads must handle graceful shutdown for zero-request-loss
 rolls.
 
-Start a serial, resumable fleet upgrade with a strictly newer semantic version:
+Start a serial, resumable fleet upgrade to the version embedded in the CLI:
 
 ```bash
-maestro cluster upgrade --version 0.3.0
+maestro cluster upgrade
 ```
+
+The CLI sends its own Cargo package version, matching the existing node-local
+upgrade behavior. `--version <version>` remains available as an explicit override
+for release testing.
 
 Maestro freezes new deployment mutations, upgrades workers first, then follower
 voters, and the current leader last. Each node is drained, upgraded idempotently,
@@ -561,21 +605,37 @@ back to Docker. Set `MAESTRO_TEST_RUNTIME=nerdctl` or
 Run it on an isolated Linux container host. It creates and destroys three
 host-networked etcd containers using separate controller-derived four-port blocks,
 runs two real Maestro leader electors, verifies a semantic write before and after
-leader failover, rejects the stale leader's write, and confirms writes stop after
-two etcd members are removed. It also creates three isolated logical node networks
-on one host, starts a private echo replica and node gateway on each, and fronts the
-gateways with a health-checked public Traefik instance. That test verifies traffic
-distribution, replica address changes, replica and gateway failure, complete
-gateway outage, and recovery without publishing replica ports. A scaling scenario
-uses the production scheduler and reconciler diff to move a live echo service from
-one replica to five and back to two. It verifies even placement, stable surviving
-assignment identities, externally reachable routes, and removal of scaled-down
-containers. An affinity scenario verifies that the first response contains an
-opaque node token and both proxy-layer cookies, cookie replay stays on the same
-replica, and header replay can explicitly select another node without exposing its
-ID. The normal test suite compiles these tests but leaves them ignored because
-they are destructive and require a container daemon. They complement rather than
-replace the remaining multi-host drills below.
+leader failover, resumes a production assignment-manifest write from its durable
+generation, rejects the stale leader's writes, and confirms writes stop after two
+etcd members are removed. A formation scenario starts only the designated seed,
+admits the other configured voters as learners (including a later-listed voter
+while the middle voter is absent), generates their production-shaped join state,
+waits for catch-up, and promotes them into one writable three-voter cluster. It
+also proves a consumed seed permit cannot authorize fallback bootstrap. A serial
+restart scenario stops one logical node at a time, verifies that the remaining
+etcd members still accept writes and public ingress keeps serving through the
+other gateways, then proves the restarted member, gateway, and workload rejoin
+before proceeding. A coordinated restart scenario uses real etcd fencing and two
+real electors to exercise all-node and selected-node maintenance runs, including
+worker/follower/leader ordering, leadership handoff, new-process verification,
+scheduling restoration, and freeze cleanup. The suite also creates three isolated
+logical node networks on one host, starts a private echo replica and node gateway
+on each, and fronts the gateways with a health-checked public Traefik instance.
+That test verifies traffic distribution, replica address changes, individual
+replica and gateway failures, complete gateway outage, and recovery without
+publishing replica ports. A scaling scenario uses the production scheduler and
+reconciler diff to move a live echo service from one replica to five and back to
+two. It verifies even placement,
+stable surviving assignment identities, externally reachable routes, and removal
+of scaled-down containers. A rollout scenario starts two real workload versions,
+holds the new version out of Traefik until every replica is ready, asserts public
+traffic has no failed requests during cutover, and verifies SIGTERM waits for an
+in-flight request on the old version. An affinity scenario verifies that the first
+response contains an opaque node token and both proxy-layer cookies, cookie replay
+stays on the same replica, and header replay can explicitly select another node
+without exposing its ID. The normal test suite compiles these tests but leaves them
+ignored because they are destructive and require a container daemon. They
+complement rather than replace the remaining multi-host drills below.
 
 Run this checklist on a real private network before production and after network,
 runtime, or membership changes:

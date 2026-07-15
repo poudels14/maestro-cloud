@@ -156,6 +156,7 @@ export interface UpgradeNodeStep {
   hostname: string;
   role: "voter" | "worker";
   fromVersion: string;
+  fromInstanceId?: string | null;
   status: "pending" | "draining" | "upgrading" | "verifying" | "restoring" | "succeeded" | "failed";
   startedAtMs?: number | null;
   completedAtMs?: number | null;
@@ -172,6 +173,7 @@ export interface UpgradeEvent {
 
 export interface UpgradeRun {
   runId: string;
+  kind?: "upgrade" | "restart";
   targetVersion: string;
   requestedAtMs: number;
   updatedAtMs: number;

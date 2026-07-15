@@ -47,7 +47,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <RootDocument>
         <ClientOnly>
-          <UpgradeBanner />
+          <MaintenanceBanner />
           <SchedulingBanner />
         </ClientOnly>
         <Outlet />
@@ -71,20 +71,23 @@ function SchedulingBanner() {
   );
 }
 
-function UpgradeBanner() {
-  const cluster = useQuery(() => clusterInfoQuery({ pollWhenUpgrading: true }));
+function MaintenanceBanner() {
+  const cluster = useQuery(() => clusterInfoQuery({ pollWhenMaintaining: true }));
   const isUpgrading = () => cluster.data?.upgrading ?? false;
+  const isRestarting = () => cluster.data?.restarting ?? false;
+  const isMaintaining = () => isUpgrading() || isRestarting();
   const [dismissed, setDismissed] = createSignal(false);
 
   createEffect(() => {
-    if (!isUpgrading()) setDismissed(false);
+    if (!isMaintaining()) setDismissed(false);
   });
 
   return (
-    <Show when={isUpgrading() && !dismissed()}>
+    <Show when={isMaintaining() && !dismissed()}>
       <div class="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-center">
         <span class="text-xs font-medium text-amber-700">
-          Rolling cluster upgrade in progress — deploys are frozen while nodes drain and restart
+          Rolling cluster {isRestarting() ? "restart" : "upgrade"} in progress — deploys are frozen
+          while nodes drain and restart
         </span>
         <button
           type="button"

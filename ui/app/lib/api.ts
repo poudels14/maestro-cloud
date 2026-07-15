@@ -28,6 +28,7 @@ export interface ClusterInfo {
   aliasDomain: string;
   version?: string;
   upgrading?: boolean;
+  restarting?: boolean;
   nodes?: ClusterNode[];
 }
 

@@ -42,6 +42,9 @@ pub enum ControlCommand {
     StartUpgrade {
         target_version: String,
     },
+    StartRestart {
+        node_id: Option<String>,
+    },
     UnfreezeUpgrade {
         run_id: String,
     },
@@ -264,6 +267,15 @@ impl ControlServer {
                     .as_ref()
                     .ok_or_else(|| anyhow!("cluster upgrade service is unavailable"))?
                     .create_run(&token, &target_version)
+                    .await?;
+                Some(serde_json::to_value(run)?)
+            }
+            ControlCommand::StartRestart { node_id } => {
+                let run = self
+                    .upgrade
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("cluster maintenance service is unavailable"))?
+                    .create_restart_run(&token, node_id.as_deref())
                     .await?;
                 Some(serde_json::to_value(run)?)
             }
