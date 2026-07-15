@@ -190,8 +190,16 @@ async fn sqlite_ingress_traffic_fallback_groups_access_logs() {
         ("RequestPath".into(), "/wp-admin?probe=1".into()),
         ("DownstreamStatus".into(), "403".into()),
     ];
+    let mut other_entry = entry.clone();
+    other_entry.ts = 1_700_000_000_050;
+    other_entry.attrs = vec![
+        ("RouterName".into(), "other@etcd".into()),
+        ("maestro.client_ip".into(), "192.0.2.1".into()),
+        ("RequestPath".into(), "/other".into()),
+        ("DownstreamStatus".into(), "200".into()),
+    ];
     store
-        .append_telemetry(&[entry, blocked_entry])
+        .append_telemetry(&[entry, other_entry, blocked_entry])
         .await
         .expect("append telemetry");
 
@@ -202,6 +210,25 @@ async fn sqlite_ingress_traffic_fallback_groups_access_logs() {
     assert_eq!(traffic.by_ip[0].value, "203.0.113.9");
     assert_eq!(traffic.by_ip[0].status_code, 401);
     assert_eq!(traffic.by_path[0].value, "/login");
+    let cluster_traffic = store
+        .read_cluster_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("cluster traffic query");
+    assert_eq!(
+        cluster_traffic
+            .by_ip
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["192.0.2.1", "203.0.113.9"])
+    );
+    assert!(
+        cluster_traffic
+            .by_ip
+            .iter()
+            .all(|entry| entry.value != "2001:db8::9"),
+        "blocked requests are reported separately"
+    );
     let blocked = store
         .read_blocked_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
         .await

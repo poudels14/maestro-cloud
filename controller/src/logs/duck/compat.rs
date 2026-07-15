@@ -81,6 +81,15 @@ impl TelemetryStore {
         delegate!(self, read_ingress_traffic(service_id, from, to, limit))
     }
 
+    pub async fn read_cluster_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        delegate!(self, read_cluster_ingress_traffic(from, to, limit))
+    }
+
     pub async fn read_blocked_ingress_traffic(
         &self,
         from: i64,

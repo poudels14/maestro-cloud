@@ -16,13 +16,13 @@ import {
   getDeployments,
   getDisks,
   getIngressRoutes,
+  getIngressTraffic,
   getBlockedIngressTraffic,
   getNodeMetrics,
   getClusterStats,
   getIngressBlocklist,
   getServiceMetrics,
   getServiceTraffic,
-  getServiceTrafficBreakdown,
   getServices,
   getUnschedulableReplicas,
   listSlackWebhooks
@@ -51,8 +51,7 @@ const queryKeys = {
     ["metrics", "service", serviceId, range] as const,
   serviceTraffic: (serviceId: string, range: number) =>
     ["traffic", "service", serviceId, range] as const,
-  serviceTrafficBreakdown: (serviceId: string, range: number) =>
-    ["traffic", "breakdown", serviceId, range] as const,
+  ingressTraffic: (range: number) => ["traffic", "ingress", range] as const,
   blockedIngressTraffic: (range: number) => ["traffic", "blocked", range] as const,
   ingressBlocklist: ["ingress", "blocklist"] as const,
   containerMetrics: (serviceId: string, range: number) =>
@@ -164,15 +163,12 @@ const serviceTrafficQuery = (serviceId: string, rangeMs: number) => ({
   refetchInterval: 10_000
 });
 
-const serviceTrafficBreakdownQuery = (serviceId: string, rangeMs: number) => ({
-  queryKey: queryKeys.serviceTrafficBreakdown(serviceId, rangeMs),
-  queryFn: ssrSafe(
-    () =>
-      queryTrafficAcrossNodes(rangeMs, (from, to, nodeId) =>
-        getServiceTrafficBreakdown(serviceId, from, to, nodeId)
-      ),
-    { byIp: [], byPath: [] }
-  ),
+const ingressTrafficQuery = (rangeMs: number) => ({
+  queryKey: queryKeys.ingressTraffic(rangeMs),
+  queryFn: ssrSafe(() => queryTrafficAcrossNodes(rangeMs, getIngressTraffic), {
+    byIp: [],
+    byPath: []
+  }),
   placeholderData: keepPreviousData,
   refetchInterval: 15_000
 });
@@ -314,7 +310,7 @@ export {
   clusterMetricsQuery,
   serviceMetricsQuery,
   serviceTrafficQuery,
-  serviceTrafficBreakdownQuery,
+  ingressTrafficQuery,
   blockedIngressTrafficQuery,
   ingressBlocklistQuery,
   containerMetricsQuery,

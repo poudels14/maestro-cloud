@@ -143,6 +143,25 @@ async fn ingress_traffic_groups_ip_path_and_status() {
     assert_eq!(traffic.by_path[1].value, "/login");
     assert_eq!(traffic.by_path[1].status_code, 401);
     assert_eq!(traffic.by_path[2].value, "/.env");
+    let cluster_traffic = store
+        .read_cluster_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
+        .await
+        .expect("cluster traffic query");
+    assert_eq!(
+        cluster_traffic
+            .by_ip
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["203.0.113.9", "203.0.113.9", "192.0.2.1", "198.51.100.8"]
+    );
+    assert!(
+        cluster_traffic
+            .by_ip
+            .iter()
+            .all(|entry| entry.value != "2001:db8::9"),
+        "blocked requests are reported separately"
+    );
     let blocked = store
         .read_blocked_ingress_traffic(1_699_999_999_000, 1_700_000_001_000, 100)
         .await

@@ -5,11 +5,11 @@ import clsx from "clsx";
 import { setBlockedIngressIp } from "../../lib/api";
 import {
   blockedIngressTrafficQuery,
+  ingressTrafficQuery,
   queryKeys,
-  ingressBlocklistQuery,
-  serviceTrafficBreakdownQuery
+  ingressBlocklistQuery
 } from "../../lib/queries";
-import type { Service, TrafficBreakdownEntry } from "../../lib/types";
+import type { TrafficBreakdownEntry } from "../../lib/types";
 import { Card, ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
 
 const TIME_RANGES = [
@@ -26,11 +26,11 @@ interface TrafficGroup {
   statuses: { statusCode: number; requests: number }[];
 }
 
-function TrafficTab(props: { service: Service }) {
+function IngressTrafficTab() {
   const queryClient = useQueryClient();
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
   const [pendingIp, setPendingIp] = createSignal<string | null>(null);
-  const traffic = useQuery(() => serviceTrafficBreakdownQuery(props.service.id, rangeMs()));
+  const traffic = useQuery(() => ingressTrafficQuery(rangeMs()));
   const blockedTraffic = useQuery(() => blockedIngressTrafficQuery(rangeMs()));
   const blocklist = useQuery(ingressBlocklistQuery);
 
@@ -40,7 +40,7 @@ function TrafficTab(props: { service: Service }) {
     onSuccess: (response) => {
       queryClient.setQueryData(queryKeys.ingressBlocklist, response);
       queryClient.invalidateQueries({
-        queryKey: queryKeys.serviceTrafficBreakdown(props.service.id, rangeMs())
+        queryKey: queryKeys.ingressTraffic(rangeMs())
       });
       queryClient.invalidateQueries({
         queryKey: queryKeys.blockedIngressTraffic(rangeMs())
@@ -192,7 +192,7 @@ function TrafficTab(props: { service: Service }) {
       />
 
       <TrafficTable
-        title="Service traffic by IP"
+        title="Ingress traffic by IP — cluster-wide"
         groups={byIp()}
         loading={traffic.isLoading}
         empty="No ingress requests recorded for this period."
@@ -200,7 +200,7 @@ function TrafficTab(props: { service: Service }) {
       />
 
       <TrafficTable
-        title="Service traffic by path"
+        title="Ingress traffic by path — cluster-wide"
         groups={byPath()}
         loading={traffic.isLoading}
         empty="No ingress paths recorded for this period."
@@ -321,4 +321,4 @@ function statusColor(status: number): string {
   return "bg-gray-100 text-gray-600";
 }
 
-export { TrafficTab };
+export { IngressTrafficTab };
