@@ -1,3 +1,4 @@
+use super::is_missing_election_leader_message;
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity};
@@ -21,6 +22,16 @@ use tokio::{
     sync::broadcast,
     time::{Instant, sleep},
 };
+
+#[test]
+fn missing_election_leader_is_an_empty_optional_value() {
+    assert!(is_missing_election_leader_message("election: no leader"));
+}
+
+#[test]
+fn other_etcd_errors_are_not_hidden_as_a_missing_leader() {
+    assert!(!is_missing_election_leader_message("etcd unavailable"));
+}
 
 fn deployment_with_source(
     build: Option<ServiceBuildConfig>,
