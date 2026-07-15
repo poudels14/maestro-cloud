@@ -427,6 +427,14 @@ pub async fn start_system_jobs(
             )
             .await
             .expect("failed to provision local least-privilege etcd users");
+            if matches!(bootstrap_action, BootstrapAction::ForceNewCluster) {
+                crate::cluster::bootstrap::complete_force_new_cluster(&config.data_dir)
+                    .expect("failed to finalize automatic etcd quorum recovery");
+                logger.emit(
+                    "info",
+                    "recovered etcd quorum from the surviving voter state",
+                );
+            }
         } else {
             crate::cluster::bootstrap::validate_cluster_meta(cluster, &config.cluster_alias, tls)
                 .await
@@ -649,7 +657,7 @@ async fn init_etcd(
         let initial_cluster = match bootstrap_action {
             BootstrapAction::BootstrapSeed => format!("{member_name}={}", cluster.peer_url()),
             BootstrapAction::JoinExisting(join_info) => join_info.initial_cluster.clone(),
-            BootstrapAction::Restart => cluster
+            BootstrapAction::Restart | BootstrapAction::ForceNewCluster => cluster
                 .initial_voters
                 .iter()
                 .map(|node| {
@@ -686,6 +694,9 @@ async fn init_etcd(
             "--auto-compaction-retention=1h".into(),
             "--quota-backend-bytes=8589934592".into(),
         ]);
+        if matches!(bootstrap_action, BootstrapAction::ForceNewCluster) {
+            image_and_args.push("--force-new-cluster=true".into());
+        }
     } else {
         image_and_args.extend([
             format!("--name=maestro-{}", config.cluster_name),

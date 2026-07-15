@@ -112,7 +112,9 @@ impl MetricsCollector {
             tokio::select! {
                 signal = self.signal_rx.recv() => {
                     match signal {
-                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
+                        Ok(ShutdownEvent::Graceful)
+                            | Ok(ShutdownEvent::Force)
+                            | Ok(ShutdownEvent::Restart)
                         | Err(broadcast::error::RecvError::Closed) => {
                             self.logger.emit("info", "metrics collector shutting down");
                             return;

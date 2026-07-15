@@ -12,6 +12,7 @@ use crate::logs::Logger;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootstrapAction {
     Restart,
+    ForceNewCluster,
     SingleNode,
     BootstrapSeed,
     WaitForAdmission,
@@ -36,6 +37,13 @@ pub struct BootstrapPermit {
     pub bootstrap_host_ip: std::net::Ipv4Addr,
     pub attempt_id: String,
     pub state: BootstrapPermitState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForceNewClusterMarker {
+    cluster_id: String,
+    attempt_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +96,39 @@ pub fn ensure_seed_armed(
         }
         Some(_) => bail!("existing bootstrap permit cannot authorize automatic seed recovery"),
     }
+}
+
+pub fn seed_is_armed(data_dir: &Path) -> Result<bool> {
+    Ok(load_permit(data_dir)?.is_some_and(|permit| permit.state == BootstrapPermitState::Armed))
+}
+
+/// Re-arms the designated seed only after the recovery rendezvous has authenticated an empty
+/// status from every configured voter. This is deliberately separate from normal provisioning:
+/// an unreachable peer can never authorize a clean replacement cluster.
+pub fn rearm_seed_after_empty_consensus(
+    data_dir: &Path,
+    cluster_id: &str,
+    bootstrap_host_ip: std::net::Ipv4Addr,
+) -> Result<()> {
+    if data_dir.join("system/etcd/data/member").exists() {
+        bail!("cannot re-arm an empty cluster while local etcd member data exists");
+    }
+    let path = bootstrap_state_path(data_dir);
+    let permit = load_permit(data_dir)?
+        .ok_or_else(|| anyhow!("missing etcd bootstrap permit {}", path.display()))?;
+    if permit.cluster_id != cluster_id || permit.bootstrap_host_ip != bootstrap_host_ip {
+        bail!("bootstrap permit does not match the authenticated empty-cluster consensus");
+    }
+    persist_json(
+        &path,
+        &BootstrapPermit {
+            cluster_id: cluster_id.to_string(),
+            bootstrap_host_ip,
+            attempt_id: identity::new_instance_id(),
+            state: BootstrapPermitState::Armed,
+        },
+        false,
+    )
 }
 
 pub fn prepare_legacy_migration(
@@ -183,23 +224,61 @@ pub fn decide(runtime: Option<&ClusterRuntime>, data_dir: &Path) -> Result<Boots
         return Ok(BootstrapAction::Worker);
     }
     if data_dir.join("system/etcd/data/member").exists() {
-        return Ok(BootstrapAction::Restart);
-    }
-    if let Some(join_info) = load_join_info(data_dir)? {
-        return Ok(BootstrapAction::JoinExisting(join_info));
+        return match read_json::<ForceNewClusterMarker>(force_new_cluster_path(data_dir))? {
+            Some(marker) if marker.cluster_id == runtime.cluster_id => {
+                Ok(BootstrapAction::ForceNewCluster)
+            }
+            Some(_) => bail!("force-new-cluster recovery marker belongs to a different cluster"),
+            None => Ok(BootstrapAction::Restart),
+        };
     }
     if runtime.is_seed() {
         let permit = load_permit(data_dir)?
             .ok_or_else(|| anyhow!("bootstrap seed was not armed during automatic provisioning"))?;
-        if permit.cluster_id != runtime.cluster_id
-            || permit.bootstrap_host_ip != runtime.host_ip
-            || permit.state != BootstrapPermitState::Armed
+        if permit.cluster_id == runtime.cluster_id
+            && permit.bootstrap_host_ip == runtime.host_ip
+            && permit.state == BootstrapPermitState::Armed
         {
-            bail!("bootstrap permit does not authorize a fresh etcd cluster on this node");
+            return Ok(BootstrapAction::BootstrapSeed);
         }
-        Ok(BootstrapAction::BootstrapSeed)
-    } else {
-        Ok(BootstrapAction::WaitForAdmission)
+    }
+    Ok(BootstrapAction::WaitForAdmission)
+}
+
+pub fn mark_force_new_cluster(data_dir: &Path, cluster_id: &str) -> Result<()> {
+    if !data_dir.join("system/etcd/data/member").exists() {
+        bail!("force-new-cluster recovery requires surviving etcd member data");
+    }
+    let path = force_new_cluster_path(data_dir);
+    if let Some(existing) = read_json::<ForceNewClusterMarker>(path.clone())? {
+        if existing.cluster_id == cluster_id {
+            return Ok(());
+        }
+        bail!("existing force-new-cluster marker belongs to a different cluster");
+    }
+    persist_json(
+        &path,
+        &ForceNewClusterMarker {
+            cluster_id: cluster_id.to_string(),
+            attempt_id: identity::new_instance_id(),
+        },
+        true,
+    )
+}
+
+pub fn force_new_cluster_is_pending(data_dir: &Path, cluster_id: &str) -> Result<bool> {
+    match read_json::<ForceNewClusterMarker>(force_new_cluster_path(data_dir))? {
+        Some(marker) if marker.cluster_id == cluster_id => Ok(true),
+        Some(_) => bail!("force-new-cluster recovery marker belongs to a different cluster"),
+        None => Ok(false),
+    }
+}
+
+pub fn complete_force_new_cluster(data_dir: &Path) -> Result<()> {
+    match std::fs::remove_file(force_new_cluster_path(data_dir)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -275,9 +354,37 @@ pub async fn wait_for_admission(
                 .find(|member| member.peer_urls().iter().any(|url| url == &peer_url))
             {
                 if !member.is_learner() || !member.client_urls().is_empty() {
-                    bail!(
-                        "etcd member for `{peer_url}` was previously started or promoted; use explicit remove/re-add recovery"
+                    logger.emit(
+                        "warn",
+                        &format!(
+                            "local etcd data for member {} is missing; replacing it as a learner",
+                            member.id()
+                        ),
                     );
+                    client.member_remove(member.id()).await?;
+                    let response = client
+                        .member_add(
+                            [peer_url.clone()],
+                            Some(MemberAddOptions::new().with_is_learner()),
+                        )
+                        .await?;
+                    let replacement = response.member().ok_or_else(|| {
+                        anyhow!("etcd MemberAdd response omitted the replacement learner")
+                    })?;
+                    let join_info = JoinInfo {
+                        cluster_id: runtime.cluster_id.clone(),
+                        member_id: replacement.id(),
+                        member_name: member_name.clone(),
+                        peer_url: peer_url.clone(),
+                        initial_cluster: format_initial_cluster(
+                            response.member_list(),
+                            replacement.id(),
+                            &member_name,
+                            runtime.identity_api_port.is_some(),
+                        )?,
+                    };
+                    replace_join_info(data_dir, &join_info)?;
+                    return Ok(join_info);
                 }
                 let join_info = JoinInfo {
                     cluster_id: runtime.cluster_id.clone(),
@@ -291,7 +398,7 @@ pub async fn wait_for_admission(
                         runtime.identity_api_port.is_some(),
                     )?,
                 };
-                persist_join_info(data_dir, &join_info)?;
+                replace_join_info(data_dir, &join_info)?;
                 return Ok(join_info);
             }
             let added = client
@@ -316,7 +423,7 @@ pub async fn wait_for_admission(
                         runtime.identity_api_port.is_some(),
                     )?,
                 };
-                persist_join_info(data_dir, &join_info)?;
+                replace_join_info(data_dir, &join_info)?;
                 logger.emit("info", &format!("admitted etcd learner {}", member.id()));
                 return Ok(join_info);
             }
@@ -659,10 +766,6 @@ fn load_permit(data_dir: &Path) -> Result<Option<BootstrapPermit>> {
     read_json(bootstrap_state_path(data_dir))
 }
 
-fn load_join_info(data_dir: &Path) -> Result<Option<JoinInfo>> {
-    read_json(join_info_path(data_dir))
-}
-
 pub(crate) fn persist_join_info(data_dir: &Path, join_info: &JoinInfo) -> Result<()> {
     let path = join_info_path(data_dir);
     if let Some(existing) = read_json::<JoinInfo>(path.clone())? {
@@ -673,6 +776,18 @@ pub(crate) fn persist_join_info(data_dir: &Path, join_info: &JoinInfo) -> Result
     } else {
         persist_json(&path, join_info, true)
     }
+}
+
+fn replace_join_info(data_dir: &Path, join_info: &JoinInfo) -> Result<()> {
+    let path = join_info_path(data_dir);
+    if let Some(existing) = read_json::<JoinInfo>(path.clone())?
+        && (existing.cluster_id != join_info.cluster_id
+            || existing.member_name != join_info.member_name
+            || existing.peer_url != join_info.peer_url)
+    {
+        bail!("replacement etcd join information conflicts with the local voter identity");
+    }
+    persist_json(&path, join_info, false)
 }
 
 fn transition_permit(
@@ -692,6 +807,10 @@ fn transition_permit(
     }
     permit.state = next;
     persist_json(&path, &permit, false)
+}
+
+fn force_new_cluster_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("system/etcd-force-new-cluster.json")
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: PathBuf) -> Result<Option<T>> {

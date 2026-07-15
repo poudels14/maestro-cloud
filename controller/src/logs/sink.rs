@@ -97,7 +97,9 @@ impl SinkWorker {
                 _ = sleep(FLUSH_INTERVAL) => {}
                 signal = self.signal_rx.recv() => {
                     match signal {
-                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
+                        Ok(ShutdownEvent::Graceful)
+                            | Ok(ShutdownEvent::Force)
+                            | Ok(ShutdownEvent::Restart)
                         | Err(broadcast::error::RecvError::Closed) => break,
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }
@@ -170,7 +172,9 @@ impl SinkWorker {
                 _ = sleep(FLUSH_INTERVAL) => {}
                 signal = self.signal_rx.recv() => {
                     match signal {
-                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
+                        Ok(ShutdownEvent::Graceful)
+                            | Ok(ShutdownEvent::Force)
+                            | Ok(ShutdownEvent::Restart)
                         | Err(broadcast::error::RecvError::Closed) => return None,
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }

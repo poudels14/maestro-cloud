@@ -321,7 +321,9 @@ impl ClusterStatsReporter {
                 }
                 signal = self.signal_rx.recv() => {
                     match signal {
-                        Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force)
+                        Ok(ShutdownEvent::Graceful)
+                            | Ok(ShutdownEvent::Force)
+                            | Ok(ShutdownEvent::Restart)
                         | Err(broadcast::error::RecvError::Closed) => return,
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                     }

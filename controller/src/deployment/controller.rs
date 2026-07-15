@@ -422,6 +422,13 @@ impl DeploymentController {
                                 shutdown_started = true;
                             }
                         }
+                        Ok(ShutdownEvent::Restart) => {
+                            exit_reason = ControllerExitReason::Restart;
+                            if !shutdown_started {
+                                self.shutdown_all(ShutdownRequest::Graceful).await;
+                                shutdown_started = true;
+                            }
+                        }
                         Ok(ShutdownEvent::Force) | Err(broadcast::error::RecvError::Closed)=> {
                             self.shutdown_all(ShutdownRequest::Force).await;
                             return Ok(exit_reason);
@@ -484,6 +491,13 @@ impl DeploymentController {
                 signal = signal_rx.recv() => {
                     match signal {
                         Ok(ShutdownEvent::Graceful) => {
+                            if !shutdown_started {
+                                self.shutdown_all(ShutdownRequest::Graceful).await;
+                                shutdown_started = true;
+                            }
+                        }
+                        Ok(ShutdownEvent::Restart) => {
+                            exit_reason = ControllerExitReason::Restart;
                             if !shutdown_started {
                                 self.shutdown_all(ShutdownRequest::Graceful).await;
                                 shutdown_started = true;

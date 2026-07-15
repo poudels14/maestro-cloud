@@ -12,6 +12,7 @@ pub mod migration;
 pub mod network;
 pub mod provision;
 pub mod reconciler;
+pub mod recovery;
 pub mod registry;
 pub mod scheduler;
 pub mod telemetry;
