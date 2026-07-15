@@ -397,22 +397,18 @@ export async function getServiceTraffic(
   return res.json();
 }
 
-export async function getServiceTrafficBreakdown(
-  serviceId: string,
+export async function getIngressTraffic(
   from: number,
   to: number,
   nodeId?: string
 ): Promise<IngressTrafficBreakdown> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/traffic/breakdown`,
-    location.origin
-  );
+  const url = new URL("/api/ingress/traffic", location.origin);
   url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
   url.searchParams.set("limit", "200");
   if (nodeId) url.searchParams.set("nodeId", nodeId);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch traffic details: ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to fetch ingress traffic: ${res.statusText}`);
   return res.json();
 }
 

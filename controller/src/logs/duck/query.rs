@@ -10,6 +10,13 @@ use crate::logs::{
     sql_like_prefix,
 };
 
+#[derive(Clone, Copy)]
+enum IngressTrafficScope<'a> {
+    Service(&'a str),
+    Cluster,
+    Blocked,
+}
+
 pub(super) fn query_ingress_traffic(
     db: &Db,
     service_id: &str,
@@ -17,9 +24,29 @@ pub(super) fn query_ingress_traffic(
     to: i64,
     limit: usize,
 ) -> Result<crate::logs::IngressTrafficBreakdown> {
+    let scope = IngressTrafficScope::Service(service_id);
     Ok(crate::logs::IngressTrafficBreakdown {
-        by_ip: query_ingress_dimension(db, Some(service_id), from, to, limit, "ip")?,
-        by_path: query_ingress_dimension(db, Some(service_id), from, to, limit, "path")?,
+        by_ip: query_ingress_dimension(db, scope, from, to, limit, "ip")?,
+        by_path: query_ingress_dimension(db, scope, from, to, limit, "path")?,
+    })
+}
+
+pub(super) fn query_cluster_ingress_traffic(
+    db: &Db,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<crate::logs::IngressTrafficBreakdown> {
+    Ok(crate::logs::IngressTrafficBreakdown {
+        by_ip: query_ingress_dimension(db, IngressTrafficScope::Cluster, from, to, limit, "ip")?,
+        by_path: query_ingress_dimension(
+            db,
+            IngressTrafficScope::Cluster,
+            from,
+            to,
+            limit,
+            "path",
+        )?,
     })
 }
 
@@ -30,23 +57,32 @@ pub(super) fn query_blocked_ingress_traffic(
     limit: usize,
 ) -> Result<crate::logs::IngressTrafficBreakdown> {
     Ok(crate::logs::IngressTrafficBreakdown {
-        by_ip: query_ingress_dimension(db, None, from, to, limit, "ip")?,
-        by_path: query_ingress_dimension(db, None, from, to, limit, "path")?,
+        by_ip: query_ingress_dimension(db, IngressTrafficScope::Blocked, from, to, limit, "ip")?,
+        by_path: query_ingress_dimension(
+            db,
+            IngressTrafficScope::Blocked,
+            from,
+            to,
+            limit,
+            "path",
+        )?,
     })
 }
 
 fn query_ingress_dimension(
     db: &Db,
-    service_id: Option<&str>,
+    scope: IngressTrafficScope<'_>,
     from: i64,
     to: i64,
     limit: usize,
     dimension: &str,
 ) -> Result<Vec<crate::logs::TrafficBreakdownEntry>> {
-    let router_filter = if service_id.is_some() {
-        "router = ? OR (starts_with(router, ?) AND ends_with(router, '@etcd'))"
-    } else {
-        "starts_with(router, ?) AND ends_with(router, '@etcd')"
+    let router_filter = match scope {
+        IngressTrafficScope::Service(_) => {
+            "router = ? OR (starts_with(router, ?) AND ends_with(router, '@etcd'))"
+        }
+        IngressTrafficScope::Cluster => "NOT starts_with(router, ?)",
+        IngressTrafficScope::Blocked => "starts_with(router, ?) AND ends_with(router, '@etcd')",
     };
     let sql = format!(
         r#"
@@ -78,15 +114,16 @@ fn query_ingress_dimension(
         Value::BigInt(to),
         Value::Text(dimension.to_string()),
     ];
-    if let Some(service_id) = service_id {
-        values.extend([
+    match scope {
+        IngressTrafficScope::Service(service_id) => values.extend([
             Value::Text(format!("{service_id}@etcd")),
             Value::Text(format!("{service_id}-aff-")),
-        ]);
-    } else {
-        values.push(Value::Text(
-            crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
-        ));
+        ]),
+        IngressTrafficScope::Cluster | IngressTrafficScope::Blocked => {
+            values.push(Value::Text(
+                crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
+            ));
+        }
     }
     values.push(Value::BigInt(i64::try_from(limit).unwrap_or(i64::MAX)));
     let conn = db.reader()?;

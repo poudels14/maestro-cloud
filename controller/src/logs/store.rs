@@ -380,7 +380,7 @@ impl LogStore {
             Ok(crate::logs::IngressTrafficBreakdown {
                 by_ip: read_compact_traffic_dimension(
                     &conn,
-                    Some(&service_id),
+                    IngressTrafficScope::Service(&service_id),
                     "ip",
                     from,
                     to,
@@ -388,7 +388,38 @@ impl LogStore {
                 )?,
                 by_path: read_compact_traffic_dimension(
                     &conn,
-                    Some(&service_id),
+                    IngressTrafficScope::Service(&service_id),
+                    "path",
+                    from,
+                    to,
+                    limit,
+                )?,
+            })
+        })
+        .await?
+    }
+
+    pub async fn read_cluster_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || -> Result<crate::logs::IngressTrafficBreakdown> {
+            let conn = pool.get()?;
+            Ok(crate::logs::IngressTrafficBreakdown {
+                by_ip: read_compact_traffic_dimension(
+                    &conn,
+                    IngressTrafficScope::Cluster,
+                    "ip",
+                    from,
+                    to,
+                    limit,
+                )?,
+                by_path: read_compact_traffic_dimension(
+                    &conn,
+                    IngressTrafficScope::Cluster,
                     "path",
                     from,
                     to,
@@ -409,8 +440,22 @@ impl LogStore {
         task::spawn_blocking(move || -> Result<crate::logs::IngressTrafficBreakdown> {
             let conn = pool.get()?;
             Ok(crate::logs::IngressTrafficBreakdown {
-                by_ip: read_compact_traffic_dimension(&conn, None, "ip", from, to, limit)?,
-                by_path: read_compact_traffic_dimension(&conn, None, "path", from, to, limit)?,
+                by_ip: read_compact_traffic_dimension(
+                    &conn,
+                    IngressTrafficScope::Blocked,
+                    "ip",
+                    from,
+                    to,
+                    limit,
+                )?,
+                by_path: read_compact_traffic_dimension(
+                    &conn,
+                    IngressTrafficScope::Blocked,
+                    "path",
+                    from,
+                    to,
+                    limit,
+                )?,
             })
         })
         .await?
@@ -1353,18 +1398,27 @@ impl LogStore {
     }
 }
 
+#[derive(Clone, Copy)]
+enum IngressTrafficScope<'a> {
+    Service(&'a str),
+    Cluster,
+    Blocked,
+}
+
 fn read_compact_traffic_dimension(
     conn: &rusqlite::Connection,
-    service_id: Option<&str>,
+    scope: IngressTrafficScope<'_>,
     dimension: &str,
     from: i64,
     to: i64,
     limit: usize,
 ) -> Result<Vec<crate::logs::TrafficBreakdownEntry>> {
-    let router_filter = if service_id.is_some() {
-        "router = ? OR (instr(router, ?) = 1 AND substr(router, -5) = '@etcd')"
-    } else {
-        "instr(router, ?) = 1 AND substr(router, -5) = '@etcd'"
+    let router_filter = match scope {
+        IngressTrafficScope::Service(_) => {
+            "router = ? OR (instr(router, ?) = 1 AND substr(router, -5) = '@etcd')"
+        }
+        IngressTrafficScope::Cluster => "instr(router, ?) != 1",
+        IngressTrafficScope::Blocked => "instr(router, ?) = 1 AND substr(router, -5) = '@etcd'",
     };
     let sql = format!(
         "SELECT value, status_code, sum(requests), max(last_seen_at_ms)
@@ -1378,15 +1432,16 @@ fn read_compact_traffic_dimension(
         rusqlite::types::Value::Integer(to),
         rusqlite::types::Value::Text(dimension.to_string()),
     ];
-    if let Some(service_id) = service_id {
-        values.extend([
+    match scope {
+        IngressTrafficScope::Service(service_id) => values.extend([
             rusqlite::types::Value::Text(format!("{service_id}@etcd")),
             rusqlite::types::Value::Text(format!("{service_id}-aff-")),
-        ]);
-    } else {
-        values.push(rusqlite::types::Value::Text(
-            crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
-        ));
+        ]),
+        IngressTrafficScope::Cluster | IngressTrafficScope::Blocked => {
+            values.push(rusqlite::types::Value::Text(
+                crate::deployment::ingress_blocklist::ROUTER_LABEL_PREFIX.to_string(),
+            ));
+        }
     }
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {

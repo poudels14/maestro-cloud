@@ -329,6 +329,7 @@ impl Server {
             .route("/api/disks", get(Self::get_disks))
             .route("/api/disks/nodes", get(Self::get_node_disks))
             .route("/api/ingress/routes", get(Self::list_ingress_routes))
+            .route("/api/ingress/traffic", get(Self::get_ingress_traffic))
             .route(
                 "/api/ingress/blocked-ips",
                 get(Self::get_blocked_ingress_ips).patch(Self::set_blocked_ingress_ip),
@@ -1603,6 +1604,28 @@ impl Server {
             .await
             .map_err(internal_error)?;
         Ok(Json(BlockedIpsResponse { blocked_ips }))
+    }
+
+    async fn get_ingress_traffic(
+        Query(query): Query<TrafficBreakdownQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<crate::logs::IngressTrafficBreakdown>, (StatusCode, String)> {
+        let Some(log_store) = &state.log_store else {
+            return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
+        };
+        let (from, to) = metrics_time_range(&query.range);
+        if from > to {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "traffic range `from` cannot be after `to`".to_string(),
+            ));
+        }
+        let limit = query.limit.unwrap_or(100).clamp(1, 500);
+        log_store
+            .read_cluster_ingress_traffic(from, to, limit)
+            .await
+            .map(Json)
+            .map_err(internal_error)
     }
 
     async fn get_blocked_ingress_traffic(

@@ -12,7 +12,7 @@ import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
 import { MetricsTab } from "../components/service-detail/MetricsTab";
 import { LogsTab } from "../components/service-detail/LogsTab";
-import { TrafficTab } from "../components/service-detail/TrafficTab";
+import { IngressTrafficTab } from "../components/ingress/TrafficTab";
 
 const VALID_TABS = new Set(["overview", "deployments", "metrics", "traffic", "logs"]);
 type DetailTab = "overview" | "deployments" | "metrics" | "traffic" | "logs";
@@ -98,7 +98,9 @@ function ServiceDetailPanel(props: {
   onOpenDrawer: () => void;
 }) {
   createEffect(() => {
-    if (props.service.system && props.tab === "deployments") {
+    if (props.tab === "traffic" && props.service.id !== "maestro-ingress") {
+      props.navigateTab("overview");
+    } else if (props.service.system && props.tab === "deployments") {
       props.navigateTab("logs");
     }
   });
@@ -137,7 +139,7 @@ function ServiceDetailPanel(props: {
               active={props.tab === "metrics"}
               onClick={() => props.navigateTab("metrics")}
             />
-            <Show when={!props.service.system && !!props.service.ingress}>
+            <Show when={props.service.id === "maestro-ingress"}>
               <TabButton
                 label="Traffic"
                 active={props.tab === "traffic"}
@@ -174,8 +176,8 @@ function ServiceDetailPanel(props: {
           <Show when={props.tab === "metrics"}>
             <MetricsTab service={props.service} />
           </Show>
-          <Show when={props.tab === "traffic"}>
-            <TrafficTab service={props.service} />
+          <Show when={props.tab === "traffic" && props.service.id === "maestro-ingress"}>
+            <IngressTrafficTab />
           </Show>
           <Show when={props.tab === "logs"}>
             <LogsTab service={props.service} />

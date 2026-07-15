@@ -20,8 +20,8 @@ use ingestion::{append_log_batch, parse_service_source};
 use migration::migrate_sqlite_inner;
 use query::{
     cold_tier_has_seq_after, parquet_glob_if_present, query_blocked_ingress_traffic,
-    query_ingress_traffic, query_log_histogram, query_logs, service_glob, service_globs_for_range,
-    system_globs_for_range,
+    query_cluster_ingress_traffic, query_ingress_traffic, query_log_histogram, query_logs,
+    service_glob, service_globs_for_range, system_globs_for_range,
 };
 use rollover::{remove_stale_exports, rollover_service, rollover_system, write_partition_manifest};
 
@@ -524,6 +524,20 @@ impl DuckLogStore {
         tokio::task::spawn_blocking(move || {
             let _visibility = db.read_parquet()?;
             query_ingress_traffic(&db, &service_id, from, to, limit)
+        })
+        .await?
+    }
+
+    pub async fn read_cluster_ingress_traffic(
+        &self,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<crate::logs::IngressTrafficBreakdown> {
+        let db = self.system.clone();
+        tokio::task::spawn_blocking(move || {
+            let _visibility = db.read_parquet()?;
+            query_cluster_ingress_traffic(&db, from, to, limit)
         })
         .await?
     }
