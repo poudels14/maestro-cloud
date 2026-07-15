@@ -12,7 +12,7 @@ use crate::{
         Assignment, AssignmentManifest,
         assignment_store::{AssignmentStore, ReplaceOutcome},
         elector::{EtcdLeaderElector, LeaderElector},
-        registry::NodeRegistry,
+        registry::{NodeAvailabilityEvent, NodeRegistry},
         scheduler::{self, ScheduleInput},
         traefik::{EtcdTrafficManager, RoutingTarget},
         types::{
@@ -26,6 +26,7 @@ use crate::{
     },
     logs::Logger,
     signal::ShutdownEvent,
+    slack::SlackNotifier,
 };
 
 pub struct LeaderLoop {
@@ -37,6 +38,7 @@ pub struct LeaderLoop {
     store: Arc<dyn ClusterStore>,
     traffic: Arc<EtcdTrafficManager>,
     logger: Logger,
+    slack: SlackNotifier,
 }
 
 impl LeaderLoop {
@@ -49,6 +51,7 @@ impl LeaderLoop {
         store: Arc<dyn ClusterStore>,
         traffic: Arc<EtcdTrafficManager>,
         logger: Logger,
+        slack: SlackNotifier,
     ) -> Self {
         Self {
             cluster_id,
@@ -59,6 +62,7 @@ impl LeaderLoop {
             store,
             traffic,
             logger,
+            slack,
         }
     }
 
@@ -92,16 +96,11 @@ impl LeaderLoop {
         let now_ms = i64::try_from(crate::utils::time::current_time_millis()?)
             .map_err(|_| anyhow!("current time does not fit i64"))?;
         let nodes = self.registry.list_nodes().await?;
-        self.registry
-            .reconcile_liveness(
-                token,
-                &nodes
-                    .iter()
-                    .map(|node| node.node_id.clone())
-                    .collect::<Vec<_>>(),
-                now_ms,
-            )
+        let availability_events = self
+            .registry
+            .reconcile_liveness(token, &nodes, now_ms)
             .await?;
+        self.notify_availability_events(availability_events, now_ms);
         self.store.sweep_cluster_state(token, now_ms).await?;
         let node_records = self
             .store
@@ -270,6 +269,61 @@ impl LeaderLoop {
         )
         .await?;
         Ok(())
+    }
+
+    fn notify_availability_events(&self, events: Vec<NodeAvailabilityEvent>, now_ms: i64) {
+        for event in events {
+            match event {
+                NodeAvailabilityEvent::Down { node, .. } => {
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "cluster node `{}` ({}) is down: control-plane heartbeat expired",
+                            node.node_id, node.hostname
+                        ),
+                    );
+                    self.slack.notify_node_down(&node);
+                }
+                NodeAvailabilityEvent::Recovered { node, since_ms } => {
+                    let unavailable_for_ms = now_ms.saturating_sub(since_ms);
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "cluster node `{}` ({}) recovered after {} ms",
+                            node.node_id, node.hostname, unavailable_for_ms
+                        ),
+                    );
+                    self.slack.notify_node_recovered(&node, unavailable_for_ms);
+                }
+                NodeAvailabilityEvent::DataPlaneUnavailable {
+                    node,
+                    since_ms,
+                    reason,
+                } => {
+                    let unavailable_for_ms = now_ms.saturating_sub(since_ms);
+                    self.logger.emit(
+                        "error",
+                        &format!(
+                            "cluster node `{}` ({}) data plane is unavailable after {} ms: {reason}",
+                            node.node_id, node.hostname, unavailable_for_ms
+                        ),
+                    );
+                    self.slack
+                        .notify_node_unavailable(&node, &reason, unavailable_for_ms);
+                }
+                NodeAvailabilityEvent::DataPlaneRecovered { node, since_ms } => {
+                    let unavailable_for_ms = now_ms.saturating_sub(since_ms);
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "cluster node `{}` ({}) data plane recovered after {} ms",
+                            node.node_id, node.hostname, unavailable_for_ms
+                        ),
+                    );
+                    self.slack.notify_node_available(&node, unavailable_for_ms);
+                }
+            }
+        }
     }
 
     async fn schedule_specs(

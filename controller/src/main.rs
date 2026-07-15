@@ -1641,6 +1641,12 @@ async fn run() -> crate::error::Result<bool> {
                     && let (Some(elector), Some(registry)) =
                         (leader_elector.clone(), cluster_registry.clone())
                 {
+                    let slack = slack::SlackNotifier::new(
+                        deployment_config.slack_webhook_url.clone(),
+                        Some(store.clone()),
+                        deployment_config.cluster_name.clone(),
+                        logger.clone(),
+                    );
                     let leader_loop = cluster::leader_loop::LeaderLoop::new(
                         cluster.cluster_id.clone(),
                         deployment_config.cluster_name.clone(),
@@ -1650,6 +1656,7 @@ async fn run() -> crate::error::Result<bool> {
                         store.clone(),
                         traffic_manager,
                         logger.clone(),
+                        slack,
                     );
                     background_handles.push(tokio::spawn(leader_loop.run(signal_tx.subscribe())));
                 }
