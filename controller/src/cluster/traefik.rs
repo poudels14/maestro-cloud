@@ -30,6 +30,7 @@ const SERVICE_MAP_PREFIX: &str = "/maetro/cluster/traefik-service-map/";
 const GATEWAY_PREFIX: &str = "maestro-gateway/";
 const GATEWAY_TRANSPORT: &str = "cluster-gateway@file";
 pub const GATEWAY_HEALTH_PATH: &str = "/_maestro/gateway-ready";
+const AFFINITY_TOKEN_DOMAIN: &[u8] = b"maestro-node-affinity-v1\0";
 const MAX_ATOMIC_CUTOVER_OPS: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +279,10 @@ impl EtcdTrafficManager {
                     put(format!("{gateway_router}/tls"), "true"),
                     put(format!("{gateway_router}/tls/options"), GATEWAY_TRANSPORT),
                     put(format!("{gateway_router}/priority"), "10"),
+                    put(
+                        format!("{gateway_router}/middlewares/0"),
+                        service_label.clone(),
+                    ),
                 ]);
             }
         }
@@ -450,7 +455,7 @@ impl EtcdTrafficManager {
             }
             let matches = match parts[3] {
                 "routers" => exact_service_label.is_none() && parts[4] == service_id,
-                "services" => exact_service_label.map_or_else(
+                "services" | "middlewares" => exact_service_label.map_or_else(
                     || parts[4].starts_with(&generation_prefix),
                     |label| parts[4] == label,
                 ),
@@ -708,6 +713,18 @@ fn stage_generation(
                 container_url(endpoint).into_bytes(),
             );
         }
+
+        let affinity_token = affinity_token(cluster_name, node_id);
+        let middleware_prefix = format!("{GATEWAY_PREFIX}{node_id}/http/middlewares/{label}");
+        for direction in ["customRequestHeaders", "customResponseHeaders"] {
+            values.insert(
+                format!(
+                    "{middleware_prefix}/headers/{direction}/{}",
+                    ingress.session_affinity_header()
+                ),
+                affinity_token.as_bytes().to_vec(),
+            );
+        }
     }
     let identity = TraefikServiceIdentity {
         service_id: service_id.to_string(),
@@ -794,11 +811,21 @@ fn affinity_rule(
     ingress: &IngressConfig,
     node_id: &str,
 ) -> Result<String> {
+    let token = affinity_token(cluster_name, node_id);
     Ok(format!(
-        "({}) && Header(`{}`, `{node_id}`)",
+        "({}) && Header(`{}`, `{token}`)",
         ingress_rule(cluster_name, service_id, ingress)?,
         ingress.session_affinity_header()
     ))
+}
+
+pub(super) fn affinity_token(cluster_name: &str, node_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(AFFINITY_TOKEN_DOMAIN);
+    hasher.update(cluster_name.as_bytes());
+    hasher.update([0]);
+    hasher.update(node_id.as_bytes());
+    format!("{:x}", hasher.finalize())[..32].to_string()
 }
 
 fn routing_fingerprint(ingress: Option<&IngressConfig>) -> Result<String> {
@@ -954,10 +981,19 @@ mod tests {
                 .any(|value| value == b"maestro-node-affinity")
         );
         assert!(staged.values().any(|value| value == b"maestro-affinity"));
+        let node_a_token = affinity_token("cluster-abcd", "node-a").into_bytes();
+        for direction in ["customRequestHeaders", "customResponseHeaders"] {
+            assert_eq!(
+                staged.get(&format!(
+                    "maestro-gateway/node-a/http/middlewares/web-g-generation/headers/{direction}/X-Session-Affinity"
+                )),
+                Some(&node_a_token)
+            );
+        }
     }
 
     #[test]
-    fn affinity_rule_uses_the_configured_header_and_defaults_compatibly() {
+    fn affinity_rule_uses_an_opaque_stable_token_and_configured_header() {
         let mut ingress = IngressConfig {
             host: Some("web.example.com".to_string()),
             hosts: Vec::new(),
@@ -966,7 +1002,7 @@ mod tests {
         };
         assert_eq!(
             affinity_rule("cluster-abcd", "web", &ingress, "node00000001").unwrap(),
-            "(Host(`web.cluster-abcd.maestro.internal`) || Host(`web.example.com`)) && Header(`X-Maestro-Affinity`, `node00000001`)"
+            "(Host(`web.cluster-abcd.maestro.internal`) || Host(`web.example.com`)) && Header(`X-Session-Affinity`, `35db6715ce01a73669cb3e4293d52ca1`)"
         );
 
         ingress.session_affinity = Some(crate::deployment::types::SessionAffinityConfig {
@@ -974,8 +1010,19 @@ mod tests {
         });
         assert_eq!(
             affinity_rule("cluster-abcd", "web", &ingress, "node00000001").unwrap(),
-            "(Host(`web.cluster-abcd.maestro.internal`) || Host(`web.example.com`)) && Header(`X-Session-Node`, `node00000001`)"
+            "(Host(`web.cluster-abcd.maestro.internal`) || Host(`web.example.com`)) && Header(`X-Session-Node`, `35db6715ce01a73669cb3e4293d52ca1`)"
         );
+    }
+
+    #[test]
+    fn affinity_tokens_are_cluster_scoped_and_do_not_expose_node_ids() {
+        let token = affinity_token("cluster-abcd", "node00000001");
+        assert_eq!(token, "35db6715ce01a73669cb3e4293d52ca1");
+        assert_eq!(token.len(), 32);
+        assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+        assert!(!token.contains("node00000001"));
+        assert_ne!(token, affinity_token("cluster-abcd", "node00000002"));
+        assert_ne!(token, affinity_token("other-cluster", "node00000001"));
     }
 
     #[test]

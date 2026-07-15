@@ -380,10 +380,11 @@ silently violate these constraints. A rollout or drain remains blocked when no
 eligible node exists. Writable host volumes require an exact `node-id` because
 their data cannot be relocated safely.
 
-Request affinity is separate and soft. By default, sending
-`X-Maestro-Affinity: <node-id>` selects that node's ready replicas when available.
-The header name can be changed per service without changing this node-ID value
-contract:
+Request affinity is separate and soft. Every response includes an opaque, stable
+node token in `X-Session-Affinity`. API clients can echo that header on later
+requests to select the same node's ready replicas when available. The token is
+derived from the cluster and node identities, but it does not reveal the node ID.
+The header name can be changed per service:
 
 ```jsonc
 "ingress": {
@@ -395,14 +396,20 @@ contract:
 }
 ```
 
-With that configuration, clients send `X-Session-Node: <node-id>`. An unknown node
-ID falls through to the normal service router. If a known node disappears, its
-affinity router is removed and requests also fall through after Traefik receives
-the update. The header is a routing preference, not an authentication mechanism.
-The public load balancer independently uses `maestro-node-affinity` to keep a
-client on a healthy node gateway. That gateway uses `maestro-affinity` to keep the
-client on one of its local replicas. These cookies and the configured header are
-separate preferences; none is a durability guarantee.
+With that configuration, Maestro returns `X-Session-Node: <opaque-token>` and
+clients may send the same header back. An unknown token falls through to the
+normal service router. If its node disappears, the affinity router is removed and
+requests also fall through after Traefik receives the update. The header is a
+routing preference, not an authentication mechanism. The node gateway overwrites
+the header before it reaches the workload and on the response so applications see
+the node that actually handled the request.
+
+The public load balancer independently sets `maestro-node-affinity` to keep a
+cookie-aware client on a healthy node gateway with no application changes. That
+gateway sets the separate `maestro-affinity` cookie to keep the client on one of
+its local replicas. These cookies provide out-of-the-box browser affinity; the
+header supports non-browser clients and explicit affinity propagation. None is a
+durability guarantee.
 
 ## Ingress traffic and IP blocking
 
@@ -563,9 +570,12 @@ gateway outage, and recovery without publishing replica ports. A scaling scenari
 uses the production scheduler and reconciler diff to move a live echo service from
 one replica to five and back to two. It verifies even placement, stable surviving
 assignment identities, externally reachable routes, and removal of scaled-down
-containers. The normal test suite compiles these tests but leaves them ignored
-because they are destructive and require a container daemon. They complement
-rather than replace the remaining multi-host drills below.
+containers. An affinity scenario verifies that the first response contains an
+opaque node token and both proxy-layer cookies, cookie replay stays on the same
+replica, and header replay can explicitly select another node without exposing its
+ID. The normal test suite compiles these tests but leaves them ignored because
+they are destructive and require a container daemon. They complement rather than
+replace the remaining multi-host drills below.
 
 Run this checklist on a real private network before production and after network,
 runtime, or membership changes:
@@ -577,9 +587,10 @@ runtime, or membership changes:
    responses reach all eligible nodes. Confirm the public Traefik servers are the
    node gateway addresses, each gateway contains only its local replica IPs, and
    no replica port is published on a host.
-3. Send the service's configured affinity header (or `X-Maestro-Affinity` by
-   default) for one node, stop that node, and confirm requests fall through to
-   ready replicas without an early or partial router cutover.
+3. Capture the service's configured affinity response header (or
+   `X-Session-Affinity` by default), echo it on later requests, and confirm they
+   select the same node without exposing its node ID. Stop that node and confirm
+   requests fall through to ready replicas after the routing cutover.
 4. Generate 2xx, 4xx, and 5xx requests from multiple client addresses and paths.
    Confirm the Traffic tab totals and status breakdowns, block one address, and
    confirm it receives 403 without reaching the workload on any node.

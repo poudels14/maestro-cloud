@@ -185,7 +185,7 @@ impl IngressConfig {
         self.session_affinity
             .as_ref()
             .map(|affinity| affinity.header.as_str())
-            .unwrap_or("X-Maestro-Affinity")
+            .unwrap_or("X-Session-Affinity")
     }
 }
 

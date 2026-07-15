@@ -273,7 +273,7 @@
         "header": {
           "type": "string",
           "minLength": 1,
-          "description": "HTTP request header used for node-level session affinity. Its value must be the target Maestro node ID."
+          "description": "HTTP request and response header used for node-level session affinity. Maestro supplies an opaque node token in this header; clients may echo it on later requests."
         }
       }
     }

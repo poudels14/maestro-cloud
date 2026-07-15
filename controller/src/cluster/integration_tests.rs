@@ -21,6 +21,9 @@ use crate::deployment::store::{ClusterMutation, ClusterStore};
 use crate::logs::Logger;
 use crate::signal::ShutdownEvent;
 
+const TEST_CLUSTER_NAME: &str = "single-host-integration";
+const TEST_AFFINITY_HEADER: &str = "X-Session-Affinity";
+
 struct ContainerEtcdCluster {
     runtime_cli: String,
     container_names: Vec<String>,
@@ -180,7 +183,7 @@ impl SingleHostHttpCluster {
         let runtime_cli = test_runtime_cli()?;
         command_output(&runtime_cli, &["info"])
             .context("the HTTP cluster test requires a working container daemon")?;
-        ensure_image(&runtime_cli, "alpine:3.21")?;
+        ensure_image(&runtime_cli, "busybox:1.37")?;
         ensure_image(&runtime_cli, "traefik:v3.6")?;
 
         let host_ip = test_host_ip()?;
@@ -241,7 +244,7 @@ impl SingleHostHttpCluster {
         let network = self.network_name(index);
         let body = format!("node-{}", index + 1);
         let command = format!(
-            "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 6\\r\\nConnection: close\\r\\n\\r\\n{body}' | nc -l -p 8080; done"
+            "mkdir -p /www && printf '%s' '{body}' > /www/index.html && exec httpd -f -p 8080 -h /www"
         );
         self.run_container(
             &name,
@@ -252,7 +255,7 @@ impl SingleHostHttpCluster {
                 &network,
                 "--name",
                 &name,
-                "alpine:3.21",
+                "busybox:1.37",
                 "sh",
                 "-c",
                 &command,
@@ -303,8 +306,11 @@ impl SingleHostHttpCluster {
     ) -> Result<()> {
         let config_path = self.root.join(format!("gateway-{}.yml", index + 1));
         let config = if backend_names.is_empty() {
-            "http:\n  routers: {}\n  services: {}\n".to_string()
+            "http:\n  routers: {}\n  middlewares: {}\n  services: {}\n".to_string()
         } else {
+            let node_id = format!("node-{}", index + 1);
+            let affinity_token =
+                super::traefik::affinity_token(TEST_CLUSTER_NAME, node_id.as_str());
             let servers = backend_names
                 .iter()
                 .map(|name| {
@@ -314,7 +320,7 @@ impl SingleHostHttpCluster {
                 .collect::<Result<Vec<_>>>()?
                 .join("\n");
             format!(
-                "http:\n  routers:\n    local:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: local\n  services:\n    local:\n      loadBalancer:\n        servers:\n{servers}\n"
+                "http:\n  routers:\n    local:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: local\n      middlewares: [affinity]\n  middlewares:\n    affinity:\n      headers:\n        customRequestHeaders:\n          {TEST_AFFINITY_HEADER}: \"{affinity_token}\"\n        customResponseHeaders:\n          {TEST_AFFINITY_HEADER}: \"{affinity_token}\"\n  services:\n    local:\n      loadBalancer:\n        sticky:\n          cookie:\n            name: maestro-affinity\n            httpOnly: true\n        servers:\n{servers}\n"
             )
         };
         std::fs::write(&config_path, config)?;
@@ -333,11 +339,40 @@ impl SingleHostHttpCluster {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let affinity_routers = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let node_id = format!("node-{}", index + 1);
+                let token = super::traefik::affinity_token(TEST_CLUSTER_NAME, &node_id);
+                format!(
+                    "    affinity-{}:\n      entryPoints: [web]\n      rule: Header(`{TEST_AFFINITY_HEADER}`, `{token}`)\n      priority: 100\n      service: affinity-{}",
+                    index + 1,
+                    index + 1
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let affinity_services = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                format!(
+                    "    affinity-{}:\n      loadBalancer:\n        healthCheck:\n          path: /\n          interval: 500ms\n          timeout: 300ms\n        servers:\n          - url: http://{}:{}",
+                    index + 1,
+                    self.host_ip,
+                    node.gateway_port
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let config_path = self.root.join("public.yml");
         std::fs::write(
             &config_path,
             format!(
-                "http:\n  routers:\n    public:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: cluster\n  services:\n    cluster:\n      loadBalancer:\n        healthCheck:\n          path: /\n          interval: 500ms\n          timeout: 300ms\n        servers:\n{servers}\n"
+                "http:\n  routers:\n    public:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: cluster\n{affinity_routers}\n  services:\n    cluster:\n      loadBalancer:\n        sticky:\n          cookie:\n            name: maestro-node-affinity\n            httpOnly: true\n        healthCheck:\n          path: /\n          interval: 500ms\n          timeout: 300ms\n        servers:\n{servers}\n{affinity_services}\n"
             ),
         )?;
         let name = self.public_name();
@@ -455,8 +490,7 @@ impl SingleHostHttpCluster {
         let network = self.network_name(node_index);
         let body = assignment_body(assignment.replica_index);
         let command = format!(
-            "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: {}\\r\\nConnection: close\\r\\n\\r\\n{body}' | nc -l -p 8080; done",
-            body.len()
+            "mkdir -p /www && printf '%s' '{body}' > /www/index.html && exec httpd -f -p 8080 -h /www"
         );
         self.run_container(
             &name,
@@ -467,7 +501,7 @@ impl SingleHostHttpCluster {
                 &network,
                 "--name",
                 &name,
-                "alpine:3.21",
+                "busybox:1.37",
                 "sh",
                 "-c",
                 &command,
@@ -784,6 +818,26 @@ async fn wait_for_body(
         );
     }
     Ok(())
+}
+
+async fn wait_for_affinity_response(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+) -> Result<reqwest::Response> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            if let Ok(response) = client.get(url).send().await
+                && response.status().is_success()
+                && response.headers().contains_key(TEST_AFFINITY_HEADER)
+            {
+                return response;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("`{url}` did not return an affinity-enabled response"))
 }
 
 async fn wait_until_unavailable(
@@ -1160,6 +1214,114 @@ async fn scheduler_scales_live_replicas_across_logical_nodes() -> Result<()> {
             .all(|name| !cluster.container_exists(name))
     );
     assert_eq!(actual.len(), 2);
+    Ok(())
+}
+
+/// Verifies production-shaped affinity at both proxy layers. A first request receives opaque
+/// affinity identity and both sticky cookies, cookie replay remains on the same replica, and an
+/// explicitly replayed response header overrides the cookie to select another logical node.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn node_affinity_is_automatic_opaque_and_replayable() -> Result<()> {
+    let cluster = SingleHostHttpCluster::start()?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    for index in 0..cluster.nodes.len() {
+        wait_for_body(
+            &client,
+            &cluster.gateway_url(index),
+            &format!("node-{}", index + 1),
+            Duration::from_secs(20),
+        )
+        .await?;
+    }
+
+    let first =
+        wait_for_affinity_response(&client, &cluster.public_url(), Duration::from_secs(20)).await?;
+    let response_token = first
+        .headers()
+        .get(TEST_AFFINITY_HEADER)
+        .ok_or_else(|| anyhow!("gateway did not return `{TEST_AFFINITY_HEADER}`"))?
+        .to_str()?
+        .to_string();
+    let cookies = first
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok()?.split(';').next())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let selected_body = first.text().await?.trim().to_string();
+    let selected_index = selected_body
+        .strip_prefix("node-")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| anyhow!("unexpected affinity response body `{selected_body}`"))?;
+    let selected_node_id = format!("node-{}", selected_index + 1);
+    assert_eq!(
+        response_token,
+        super::traefik::affinity_token(TEST_CLUSTER_NAME, &selected_node_id)
+    );
+    assert!(!response_token.contains(&selected_node_id));
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("maestro-node-affinity="))
+    );
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("maestro-affinity="))
+    );
+
+    let cookie_header = cookies.join("; ");
+    for _ in 0..8 {
+        let response = client
+            .get(cluster.public_url())
+            .header(reqwest::header::COOKIE, &cookie_header)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!(
+                "sticky-cookie replay returned {status} with body {body:?}; cookies={cookies:?}; public={}; gateway={}",
+                cluster.container_diagnostics(&cluster.public_name()),
+                cluster.container_diagnostics(&cluster.gateway_name(selected_index))
+            );
+        }
+        assert_eq!(
+            response
+                .headers()
+                .get(TEST_AFFINITY_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(response_token.as_str())
+        );
+        assert_eq!(response.text().await?.trim(), selected_body);
+    }
+
+    let target_index = (selected_index + 1) % cluster.nodes.len();
+    let target_node_id = format!("node-{}", target_index + 1);
+    let target_token = super::traefik::affinity_token(TEST_CLUSTER_NAME, &target_node_id);
+    for _ in 0..4 {
+        let response = client
+            .get(cluster.public_url())
+            .header(reqwest::header::COOKIE, &cookie_header)
+            .header(TEST_AFFINITY_HEADER, &target_token)
+            .send()
+            .await?;
+        assert!(response.status().is_success());
+        assert_eq!(
+            response
+                .headers()
+                .get(TEST_AFFINITY_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(target_token.as_str())
+        );
+        assert_eq!(response.text().await?.trim(), target_node_id);
+    }
     Ok(())
 }
 
