@@ -5,12 +5,13 @@ import { AlertTriangle } from "lucide-solid";
 import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
 import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
-import { clusterStatsQuery } from "../../lib/queries";
+import { clusterConfigQuery, clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
 function ClusterStatsSection() {
   const stats = useQuery(() => clusterStatsQuery());
+  const config = useQuery(() => clusterConfigQuery());
   const errors = createMemo(() =>
     (stats.data?.warnings ?? []).filter((item) => item.severity === "error")
   );
@@ -79,6 +80,11 @@ function ClusterStatsSection() {
                   label="Datadog logs"
                   sink={datadogSink()}
                   controllerPresent={!!controller()}
+                  successfulHealthchecksFiltered={
+                    config.data?.datadog
+                      ? !config.data.datadog.logs["include-healthcheck"]
+                      : undefined
+                  }
                 />
                 <SpoolRow controller={controller()} />
                 <DeadLetterRow controller={controller()} />
@@ -117,7 +123,12 @@ function ClusterStatsSection() {
   );
 }
 
-function SinkRow(props: { label: string; sink?: SinkStats; controllerPresent: boolean }) {
+function SinkRow(props: {
+  label: string;
+  sink?: SinkStats;
+  controllerPresent: boolean;
+  successfulHealthchecksFiltered?: boolean;
+}) {
   return (
     <Show
       when={props.controllerPresent}
@@ -141,10 +152,17 @@ function SinkRow(props: { label: string; sink?: SinkStats; controllerPresent: bo
                 : sink().pendingEntries === 0
                   ? "No delivery required yet"
                   : "Waiting for first delivery";
+          const filterDetail = () => {
+            if (props.successfulHealthchecksFiltered === undefined) return undefined;
+            if (!props.successfulHealthchecksFiltered) {
+              return "successful health checks included";
+            }
+            return sink().filteredEntries > 0
+              ? `health-check filter active · ${sink().filteredEntries.toLocaleString()} filtered since restart`
+              : "health-check filter active · none filtered since restart";
+          };
           const detail = () =>
-            sink().filteredEntries > 0
-              ? `${deliveryDetail()} · ${sink().filteredEntries.toLocaleString()} filtered since restart`
-              : deliveryDetail();
+            [deliveryDetail(), filterDetail()].filter((item): item is string => !!item).join(" · ");
           return (
             <HealthRow
               label={props.label}

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::{LogEntry, LogOrigin};
 
 const HEALTHCHECK_PATH_TAG_PREFIX: &str = "maestro.internal.healthcheck-path:";
@@ -72,16 +74,41 @@ impl LogFilter for SuccessfulHealthcheckFilter {
 
         method.eq_ignore_ascii_case("GET")
             && status.trim() == "200"
-            && normalized_path(request_path) == normalized_path(healthcheck_path)
+            && normalized_path(request_path.as_ref()) == normalized_path(healthcheck_path)
     }
 }
 
-fn attr_value<'a>(entry: &'a LogEntry, keys: &[&str]) -> Option<&'a str> {
-    entry.attrs.iter().find_map(|(key, value)| {
-        keys.iter()
-            .any(|candidate| key.eq_ignore_ascii_case(candidate))
-            .then_some(value.as_str())
+fn attr_value<'a>(entry: &'a LogEntry, keys: &[&str]) -> Option<Cow<'a, str>> {
+    keys.iter().find_map(|candidate| {
+        entry
+            .attrs
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(candidate))
+            .map(|(_, value)| Cow::Borrowed(value.as_str()))
+            .or_else(|| nested_attr_value(&entry.attrs, candidate))
     })
+}
+
+fn nested_attr_value<'a>(attrs: &'a [(String, String)], path: &str) -> Option<Cow<'a, str>> {
+    let (root, remainder) = path.split_once('.')?;
+    let raw = attrs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(root))?
+        .1
+        .as_str();
+    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let value = remainder.split('.').try_fold(&parsed, |value, segment| {
+        value
+            .as_object()?
+            .iter()
+            .find_map(|(key, value)| key.eq_ignore_ascii_case(segment).then_some(value))
+    })?;
+    match value {
+        serde_json::Value::String(value) => Some(Cow::Owned(value.clone())),
+        serde_json::Value::Number(value) => Some(Cow::Owned(value.to_string())),
+        serde_json::Value::Bool(value) => Some(Cow::Owned(value.to_string())),
+        _ => None,
+    }
 }
 
 fn tag_value<'a>(tags: &'a serde_json::Value, prefix: &str) -> Option<&'a str> {
@@ -111,7 +138,12 @@ mod tests {
 
     use super::*;
 
-    fn access_log(method: &str, status: &str, path: &str) -> LogEntry {
+    fn access_log_for_healthcheck(
+        healthcheck_path: &str,
+        method: &str,
+        status: &str,
+        path: &str,
+    ) -> LogEntry {
         LogEntry {
             seq: 1,
             ts: 1_700_000_000_000,
@@ -122,7 +154,7 @@ mod tests {
             origin: LogOrigin::Service,
             tags: Arc::new(serde_json::json!([
                 "service:api",
-                healthcheck_path_tag("/health")
+                healthcheck_path_tag(healthcheck_path)
             ])),
             attrs: vec![
                 ("request.method".to_string(), method.to_string()),
@@ -130,6 +162,10 @@ mod tests {
                 ("http.url_details.path".to_string(), path.to_string()),
             ],
         }
+    }
+
+    fn access_log(method: &str, status: &str, path: &str) -> LogEntry {
+        access_log_for_healthcheck("/health", method, status, path)
     }
 
     #[test]
@@ -142,6 +178,17 @@ mod tests {
             "200",
             "http://api.internal/health?full=1"
         )));
+    }
+
+    #[test]
+    fn successful_healthcheck_filter_matches_nested_database_status_record() {
+        let filters = LogFilterSet::excluding_successful_healthchecks();
+        let parsed = crate::supervisor::logs::parse_log_line(
+            r#"{"hostname":"app-qXMETj","http":{"method":"GET","status_code":"200","url_details":{"path":"/api/_status/db"}},"service":"app","status":"info","duration":"130832638"}"#,
+        );
+        let mut entry = access_log_for_healthcheck("/api/_status/db", "", "", "");
+        entry.attrs = parsed.attrs;
+        assert!(filters.excludes(&entry));
     }
 
     #[test]

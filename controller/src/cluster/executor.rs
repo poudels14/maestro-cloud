@@ -32,9 +32,11 @@ pub struct RunningReplica {
 
 pub struct EngineReplicaExecutor {
     node_id: String,
+    cluster_name: String,
     cluster_host_ip: String,
     cluster_api_port: u16,
     cluster_gateway_port: u16,
+    log_tags: Vec<String>,
     runtime_suffix: Option<String>,
     runtime: Arc<dyn RuntimeProvider>,
     store: Arc<dyn ClusterStore>,
@@ -82,9 +84,11 @@ impl EngineReplicaExecutor {
         let supervisor = Arc::new(crate::engine::replica_supervisor::JobReplicaSupervisor::new());
         Ok(Self {
             node_id: cluster.node_id.clone(),
+            cluster_name: config.cluster_name.clone(),
             cluster_host_ip: cluster.host_ip.to_string(),
             cluster_api_port: cluster.api_port,
             cluster_gateway_port: cluster.gateway_port,
+            log_tags: config.tags.clone(),
             runtime_suffix: cluster.resource_suffix(),
             runtime,
             store,
@@ -227,14 +231,14 @@ impl EngineReplicaExecutor {
         );
         let log_config = self.log_sender.clone().map(|sender| LogConfig {
             sender,
-            tags: vec![
-                format!("service:{}", assignment.service_id),
-                format!("hostname:{container_hostname}"),
-                format!("deployment_id:{}", assignment.deployment_id),
-                format!("replica:{}", assignment.replica_index),
-                format!("node:{}", self.node_id),
-                format!("assignment_id:{}", assignment.assignment_id),
-            ],
+            tags: replica_log_tags(
+                &self.log_tags,
+                &self.cluster_name,
+                &self.node_id,
+                assignment,
+                &container_hostname,
+                deployment.config.deploy.healthcheck_path.as_deref(),
+            ),
             origin: LogOrigin::Service,
         });
         let handle = self
@@ -462,6 +466,33 @@ impl EngineReplicaExecutor {
     }
 }
 
+fn replica_log_tags(
+    configured_tags: &[String],
+    cluster_name: &str,
+    node_id: &str,
+    assignment: &Assignment,
+    container_hostname: &str,
+    healthcheck_path: Option<&str>,
+) -> Vec<String> {
+    let mut tags = configured_tags.to_vec();
+    tags.extend([
+        format!("service:{}", assignment.service_id),
+        format!("hostname:{container_hostname}"),
+        format!("deployment_id:{}", assignment.deployment_id),
+        format!("replica:{}", assignment.replica_index),
+        format!("cluster:{cluster_name}"),
+        format!("node:{node_id}"),
+        format!("assignment_id:{}", assignment.assignment_id),
+    ]);
+    if let Some(path) = healthcheck_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        tags.push(crate::logs::healthcheck_path_tag(path));
+    }
+    tags
+}
+
 fn labels_match_assignment(
     labels: &std::collections::HashMap<String, String>,
     assignment: &Assignment,
@@ -485,4 +516,45 @@ fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cluster_replica_logs_include_healthcheck_and_configured_tags() {
+        let assignment = Assignment {
+            assignment_id: "assignment-1".to_string(),
+            placement_epoch: 1,
+            service_id: "app".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            replica_index: 2,
+            node_id: "node00000001".to_string(),
+            replaces_assignment_id: None,
+            created_at_ms: 1,
+        };
+        let tags = replica_log_tags(
+            &["environment:staging".to_string()],
+            "cluster-a",
+            "node00000001",
+            &assignment,
+            "app-qXMETj",
+            Some(" /api/_status/db "),
+        );
+
+        for expected in [
+            "environment:staging",
+            "service:app",
+            "hostname:app-qXMETj",
+            "cluster:cluster-a",
+            "node:node00000001",
+            "maestro.internal.healthcheck-path:/api/_status/db",
+        ] {
+            assert!(
+                tags.iter().any(|tag| tag == expected),
+                "missing `{expected}`"
+            );
+        }
+    }
 }

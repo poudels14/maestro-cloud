@@ -347,7 +347,8 @@ health-check access logs out of Datadog. Maestro matches the service's configure
 `healthcheckPath` against common structured HTTP log attributes. Failures,
 non-health-check requests, and unstructured logs are still delivered. Filtered logs
 remain available in the probe, UI, and S3 and count as acknowledged by Datadog for
-controller spool retention.
+controller spool retention. The dashboard's Datadog delivery row shows whether the
+filter is active and how many entries it has excluded since the controller started.
 
 Dead letters are capped at 100,000 rows. Reaching the cap pins the Datadog cursor
 instead of growing the quarantine indefinitely. Inspect, export, and explicitly
