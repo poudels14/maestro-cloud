@@ -51,10 +51,8 @@ impl ControllerConfig {
             .unwrap_or_else(|| self.cluster_name.clone())
     }
 
-    pub fn scheduling_enabled(&self) -> bool {
-        self.cluster
-            .as_ref()
-            .is_some_and(|cluster| cluster.scheduling)
+    pub fn cluster_mode(&self) -> bool {
+        self.cluster.is_some()
     }
 
     #[inline]

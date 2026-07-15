@@ -16,10 +16,23 @@ voter.
 first Maestro leader while the cluster forms, but it is not a permanent master.
 After quorum forms, normal lease-based election determines leadership.
 
-Add workers when more workload capacity is needed without adding etcd members.
-Keep the voter count odd and change membership one voter at a time. For most
-installations, three scheduling voters plus any number of workers is the simplest
-topology.
+Nodes default to the `hybrid` role: they vote and run workloads. Add workers when
+more workload capacity is needed without adding etcd members, or set a node to
+`voter` when it should be control-plane-only. Keep the combined hybrid and voter
+count odd and change membership one voter at a time. Three hybrid nodes are the
+simplest general-purpose topology; larger installations can use three dedicated
+voters plus workers.
+
+Role-specific startup is explicit:
+
+- `hybrid` starts the consensus/control services and the workload ingress,
+  gateway, and assignment executor.
+- `voter` starts etcd, the node API/probe, DNS, and admin UI, but no public
+  ingress, Cloudflare connector, node gateway, or assignment executor.
+- `worker` starts the node API/probe, DNS, public ingress, node gateway, and
+  assignment executor, but no local etcd member or admin UI. The probe and DNS
+  remain local because node health, logs, coordinated maintenance, and workload
+  name resolution depend on them.
 
 ## Network model
 
@@ -40,12 +53,12 @@ is a per-host override and does not replace the shared `cluster.nodes` list.
 
 Allow these ports on the private network:
 
-| Port       | Source                                             | Destination      | Purpose                   |
-| ---------- | -------------------------------------------------- | ---------------- | ------------------------- |
-| `2379/tcp` | admitted nodes and authoritative cluster subnets   | voters           | etcd client mTLS          |
-| `2380/tcp` | voters and authoritative cluster subnets           | voters           | etcd peer mTLS            |
-| `3001/tcp` | admitted nodes, operators, and prospective joiners | all nodes        | cluster HTTPS API         |
-| `3002/tcp` | admitted nodes and authoritative cluster subnets   | scheduling nodes | node ingress gateway mTLS |
+| Port       | Source                                             | Destination    | Purpose                   |
+| ---------- | -------------------------------------------------- | -------------- | ------------------------- |
+| `2379/tcp` | admitted nodes and authoritative cluster subnets   | voters         | etcd client mTLS          |
+| `2380/tcp` | voters and authoritative cluster subnets           | voters         | etcd peer mTLS            |
+| `3001/tcp` | admitted nodes, operators, and prospective joiners | all nodes      | cluster HTTPS API         |
+| `3002/tcp` | admitted nodes and authoritative cluster subnets   | workload nodes | node ingress gateway mTLS |
 
 With bare-IP nodes, these port values are configurable through the existing
 cluster port fields. With `IP:controller-port` nodes, the listed API port is the
@@ -55,7 +68,8 @@ binds clustered etcd and the cluster API to the resolved private host IP rather
 than a wildcard address.
 
 Every workload remains addressed by its node-local container IP. In cluster mode,
-Maestro starts a private `maestro-gateway` Traefik on each node. Public ingress
+Maestro starts a private `maestro-gateway` Traefik on each hybrid or worker node.
+Public ingress
 selects a healthy node gateway at
 `https://<private-host-ip>:<gateway-port>`; that gateway then selects a local
 replica by container IP. Both hops are discovered through
@@ -82,9 +96,9 @@ arbitrary cross-node TCP/UDP service networking is outside this release.
 
 The original voters use the same ordered `cluster.nodes`, `cluster.subnets`,
 cluster name, CA fingerprint, join secret, JWT secret, and registry. The top-level
-`subnet` differs on each node. With bare-IP nodes the cluster port fields are also
-shared. With endpoint nodes, `cluster.api-port` selects the local entry and differs
-per node.
+`subnet` and optional `node.role` describe the local node and may differ. With
+bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
+`cluster.api-port` selects the local entry and differs per node.
 
 ```jsonc
 {
@@ -94,13 +108,12 @@ per node.
     "control-allow-cidrs": ["10.20.0.0/24"],
     "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
     "gateway-port": 3002,
-    "role": "voter",
-    "scheduling": true,
     "shared-registry": "ghcr.io/acme",
     "ca-sha256": "<64-character fingerprint from cluster init-ca>",
     "join-secret": "<at-least-32-character-join-secret>",
     "labels": { "zone": "us-west-2a" }
   },
+  "node": { "role": "hybrid" },
   "subnet": "172.22.1.0/24",
   "jwt-secret-key": "<at-least-32-character-jwt-secret>",
   "encryption-key": "<encryption-key>",
@@ -161,10 +174,10 @@ rewriting system packet-filter state.
 
 ## Registry requirements
 
-Cluster scheduling requires `cluster.shared-registry`. Every scheduling node must
-be able to resolve, authenticate to, push to, and pull from it before the first
-rollout. Configure the runtime's registry credentials on every host; Maestro does
-not distribute registry passwords.
+Multi-node mode requires `cluster.shared-registry`. Every hybrid or worker node
+must be able to pull from it, and every voter or hybrid that may lead builds must
+be able to push to it. Configure the runtime's registry credentials on every host;
+Maestro does not distribute registry passwords.
 
 The registry must provide read-after-write consistency for image manifests. Do not
 apply retention rules that can delete images referenced by active or draining
@@ -217,7 +230,7 @@ cluster under `/var/lib/maestro/prod` for a cluster named `prod`.
 6. Start the other original voters. They wait for admission, join one at a time as
    learners, catch up, and are promoted. They never fall back to creating a second
    cluster if the seed is unavailable.
-7. Wait for all voters and node gateways to become ready:
+7. Wait for all voters and workload-node gateways to become ready:
 
    ```bash
    maestro cluster info
@@ -231,10 +244,11 @@ voter is promoted, both existing voters are required for quorum.
 
 An existing single-node installation migrates automatically on the first start
 with a valid multi-node configuration. The local control address must be
-`cluster.nodes[0]`, the role must be `voter`, and the existing etcd member data must
-still be present. Use bare-IP `cluster.nodes` for this identity-preserving
-migration; endpoint form deliberately fails closed. Configure one or three initial voters and omit `ca-sha256` for
-this first start; Maestro generates the CA and persists its fingerprint locally.
+`cluster.nodes[0]`, `node.role` must be `hybrid` or `voter`, and the existing etcd
+member data must still be present. Use bare-IP `cluster.nodes` for this
+identity-preserving migration; endpoint form deliberately fails closed. Configure
+one or three initial voters and omit `ca-sha256` for this first start; Maestro
+generates the CA and persists its fingerprint locally.
 
 Before changing identity or certificates, Maestro takes the normal daemon lock,
 stops the detached legacy etcd container, and takes an exclusive lock on its
@@ -256,9 +270,9 @@ migrated cluster has been backed up and tested. Once a cluster identity has been
 installed, do not remove `cluster.nodes` or attempt to start the data directory
 with the old configuration.
 
-When cluster scheduling is enabled, startup also publishes every locally present
-legacy service image to `cluster.shared-registry` before starting the scheduler or
-assignment executors. Each push is pulled back for verification and the deployment
+On the first clustered startup, Maestro also publishes every locally present
+legacy service image to `cluster.shared-registry` before starting placement or
+assignment execution. Each push is pulled back for verification and the deployment
 record is updated with a leadership-fenced write. This step is crash-resumable via
 `system/cluster-image-migration-required`; the marker is cleared only after every
 runnable image is either published or independently pullable. A missing local image
@@ -302,7 +316,7 @@ authoritative voter and subnet cache.
 
 ### Worker
 
-Set `cluster.role` to `worker`, then run on the new host:
+Set `node.role` to `worker`, then run on the new host:
 
 ```bash
 maestro cluster join 10.20.0.11:3001 \
@@ -314,9 +328,11 @@ The join secret authorizes a worker identity. Start the daemon after the command
 installs the node certificate and cluster identity. Confirm `data-plane` readiness
 before relying on the worker for placements.
 
-### Voter
+### Voter or hybrid
 
-A voter changes quorum and requires explicit approval. On the joining host:
+A voter or hybrid changes quorum and requires explicit approval. `voter` is
+control-plane-only; `hybrid` also accepts workload assignments and is the default.
+On the joining host:
 
 ```bash
 maestro cluster join --prepare \
@@ -329,7 +345,7 @@ an authenticated operator context, approve that exact identity:
 
 ```bash
 maestro cluster approve-node \
-  --role voter \
+  --role hybrid \
   --node-id <node-id> \
   --host-ip <private-ip> \
   --api-port <controller-port> \
@@ -347,17 +363,18 @@ Omit `--api-port` for a cluster that still uses legacy bare-IP node identities.
 
 ## Scheduling and affinity contract
 
-The scheduler spreads replicas as evenly as possible across ready, schedulable
-nodes and preserves a healthy placement when possible. When the replica count is
+The scheduler spreads replicas as evenly as possible across ready hybrid and worker
+nodes and preserves a healthy placement when possible. A worker wins an otherwise
+equal placement choice, so dedicated workload capacity is used first without
+weakening load balancing. When the replica count is
 larger than the eligible node count, it places additional replicas on the nodes
 with the fewest replicas of that deployment, then the fewest total assignments.
 Assignments carry a placement epoch; a stale node cannot report health for a
 replacement assignment after a move.
 
-Only the currently elected Maestro leader computes and writes assignments. Each
-node advertises whether its local assignment executor is enabled through
-`cluster.scheduling`; nodes with scheduling disabled remain control-plane members
-but are never placement targets.
+Only the currently elected Maestro leader computes and writes assignments. Worker
+and hybrid nodes run assignment executors. Explicit voters remain control-plane
+members and are never placement targets.
 
 Scaling up preserves healthy placements and starts only the additional replica
 slots. Scaling down is traffic-first: the leader removes surplus replicas from the
@@ -507,10 +524,10 @@ maestro cluster restart --all
 Selected-node and all-node runs freeze deployment mutations, require every durable
 node to be live, and refuse to start during an active rollout. Maestro drains each
 selected node, transfers leadership when necessary, requests the node-local
-restart, verifies that a new controller process is healthy, restores scheduling,
-and then advances. Whole-cluster restarts process workers first, follower voters
-next, and the current leader last. The durable run resumes after leadership
-changes.
+restart, verifies that a new controller process is healthy, restores placement
+eligibility, and then advances. Whole-cluster restarts process workers first,
+follower consensus nodes next, and the current leader last. The durable run resumes
+after leadership changes.
 
 This is the recommended way to load a changed host configuration. Publish a
 compatible config to every selected host before starting the run. Membership,
@@ -618,7 +635,7 @@ other gateways, then proves the restarted member, gateway, and workload rejoin
 before proceeding. A coordinated restart scenario uses real etcd fencing and two
 real electors to exercise all-node and selected-node maintenance runs, including
 worker/follower/leader ordering, leadership handoff, new-process verification,
-scheduling restoration, and freeze cleanup. The suite also creates three isolated
+placement restoration, and freeze cleanup. The suite also creates three isolated
 logical node networks on one host, starts a private echo replica and node gateway
 on each, and fronts the gateways with a health-checked public Traefik instance.
 That test verifies traffic distribution, replica address changes, individual

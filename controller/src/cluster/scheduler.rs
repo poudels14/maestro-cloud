@@ -2,9 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
 
-use crate::cluster::types::{
-    Assignment, NodeId, NodeInfo, NodeState, SchedulePlan, ServiceScheduleSpec,
-    UnschedulableReplica,
+use crate::cluster::{
+    NodeRole,
+    types::{
+        Assignment, NodeId, NodeInfo, NodeState, SchedulePlan, ServiceScheduleSpec,
+        UnschedulableReplica,
+    },
 };
 
 const DATA_PLANE_FRESHNESS_MS: i64 = 15_000;
@@ -152,6 +155,7 @@ pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
                                 .copied()
                                 .unwrap_or(0),
                             load.get(&node.node_id).copied().unwrap_or(0),
+                            node.role != NodeRole::Worker,
                             node.node_id.as_str(),
                         )
                     });
@@ -237,7 +241,7 @@ fn eligible_nodes<'a>(
 ) -> Vec<&'a NodeInfo> {
     nodes
         .iter()
-        .filter(|node| node.scheduling)
+        .filter(|node| node.role.runs_workloads())
         .filter(|node| node.data_plane_ready)
         .filter(|node| {
             now_ms.saturating_sub(node.data_plane_checked_at_ms) <= DATA_PLANE_FRESHNESS_MS
@@ -333,7 +337,7 @@ pub(crate) fn assignment_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::{NodeRole, types::DeploymentGroup};
+    use crate::cluster::types::DeploymentGroup;
     use std::net::Ipv4Addr;
 
     fn node(id: &str, ready: bool, labels: &[(&str, &str)]) -> NodeInfo {
@@ -341,8 +345,7 @@ mod tests {
             node_id: id.to_string(),
             instance_id: format!("instance-{id}"),
             hostname: id.to_string(),
-            role: NodeRole::Worker,
-            scheduling: true,
+            role: NodeRole::Hybrid,
             cluster_host_ip: Ipv4Addr::new(10, 0, 0, 1),
             cluster_api_port: 3001,
             cluster_gateway_port: 3002,
@@ -491,25 +494,65 @@ mod tests {
     }
 
     #[test]
-    fn excludes_nodes_without_an_assignment_executor() {
+    fn prefers_workers_when_placement_load_is_equal() {
         let mut value = input(1);
-        value.nodes[0].scheduling = false;
-        value.nodes[1].scheduling = false;
+        value.nodes[1].role = NodeRole::Worker;
 
         let output = plan(value);
 
-        assert!(output.assignments.is_empty());
-        assert_eq!(output.unschedulable.len(), 1);
-        assert_eq!(output.unschedulable[0].reason, "no schedulable node");
+        assert_eq!(output.assignments[0].node_id, "node-a");
     }
 
     #[test]
-    fn legacy_node_records_remain_schedulable_during_rolling_upgrade() {
-        let mut value = serde_json::to_value(node("legacy", true, &[])).unwrap();
-        value.as_object_mut().unwrap().remove("scheduling");
+    fn worker_preference_does_not_weaken_replica_spreading() {
+        let mut value = input(2);
+        value.nodes[1].role = NodeRole::Worker;
 
-        let decoded: NodeInfo = serde_json::from_value(value).unwrap();
+        let output = plan(value);
 
-        assert!(decoded.scheduling);
+        assert_eq!(output.assignments.len(), 2);
+        assert!(
+            output
+                .assignments
+                .iter()
+                .any(|item| item.node_id == "node-a")
+        );
+        assert!(
+            output
+                .assignments
+                .iter()
+                .any(|item| item.node_id == "node-b")
+        );
+    }
+
+    #[test]
+    fn worker_preference_does_not_move_a_healthy_hybrid_assignment() {
+        let mut value = input(1);
+        value.nodes[1].role = NodeRole::Worker;
+        value.current = vec![Assignment {
+            assignment_id: "existing".to_string(),
+            placement_epoch: 1,
+            service_id: "web".to_string(),
+            deployment_id: "dep1".to_string(),
+            replica_index: 0,
+            node_id: "node-b".to_string(),
+            replaces_assignment_id: None,
+            created_at_ms: 0,
+        }];
+
+        let output = plan(value);
+
+        assert_eq!(output.assignments[0].assignment_id, "existing");
+        assert_eq!(output.assignments[0].node_id, "node-b");
+    }
+
+    #[test]
+    fn control_plane_only_voters_do_not_receive_workloads() {
+        let mut value = input(1);
+        value.nodes[1].role = NodeRole::Voter;
+
+        let output = plan(value);
+
+        assert_eq!(output.assignments[0].node_id, "node-b");
     }
 }

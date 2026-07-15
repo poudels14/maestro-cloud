@@ -116,8 +116,7 @@ export interface ReplicaState {
 export interface ClusterNode {
   nodeId: string;
   hostname: string;
-  role: "voter" | "worker";
-  scheduling: boolean;
+  role: "hybrid" | "voter" | "worker";
   clusterHostIp: string;
   clusterApiPort: number;
   subnet: string;
@@ -154,7 +153,7 @@ export type UpgradePhase =
 export interface UpgradeNodeStep {
   nodeId: string;
   hostname: string;
-  role: "voter" | "worker";
+  role: "hybrid" | "voter" | "worker";
   fromVersion: string;
   fromInstanceId?: string | null;
   status: "pending" | "draining" | "upgrading" | "verifying" | "restoring" | "succeeded" | "failed";
@@ -343,6 +342,7 @@ export interface LogEntry {
 
 export type MaskedConfig = {
   cluster: { name: string };
+  node: { role: "hybrid" | "voter" | "worker" };
   ingress: { ports: number[] };
   subnet?: string | null;
   egress: { deny: string[]; allow: string[] };

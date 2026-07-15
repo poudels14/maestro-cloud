@@ -67,11 +67,44 @@ fn legacy_single_node_config_stays_on_the_legacy_path() {
 
     assert!(config.cluster.nodes.is_empty());
     assert!(config.cluster.subnets.is_empty());
-    assert!(!config.cluster.scheduling);
+    assert_eq!(config.node.role, crate::cluster::NodeRole::Hybrid);
     assert!(config.cluster.ca_sha256.is_none());
     assert_eq!(config.subnet.as_deref(), Some("172.22.0.0/16"));
-    crate::cluster::network::validate_cluster_config(&config.cluster, config.subnet.as_deref())
-        .expect("legacy config remains valid");
+    crate::cluster::network::validate_cluster_config(
+        &config.cluster,
+        config.subnet.as_deref(),
+        config.node.role,
+    )
+    .expect("legacy config remains valid");
+}
+
+#[test]
+fn daemon_start_accepts_a_local_role_override() {
+    let cli = crate::Cli::try_parse_from([
+        "maestro",
+        "daemon",
+        "start",
+        "--cluster-name",
+        "test",
+        "--ingress-port",
+        "8080",
+        "--encryption-key",
+        "secret",
+        "--data-dir",
+        "/tmp/maestro-role-test",
+        "--project-dir",
+        ".",
+        "--role=worker",
+    ])
+    .expect("parse role override");
+
+    let Some(crate::CliCommand::Daemon {
+        command: crate::DaemonCommand::Start(args),
+    }) = cli.command
+    else {
+        panic!("expected daemon start");
+    };
+    assert_eq!(args.role, Some(crate::cluster::NodeRole::Worker));
 }
 
 #[test]
@@ -156,6 +189,7 @@ fn start_schema_matches_serialized_config_fields() {
             name: "test".to_string(),
             ..Default::default()
         },
+        node: Default::default(),
         ingress: crate::config::IngressConfig {
             port: Some(80),
             ports: vec![443],
@@ -220,6 +254,7 @@ fn start_schema_matches_serialized_config_fields() {
         &[],
         &[],
     );
+    assert_object_keys(&model["node"], &schema["properties"]["node"], &[], &[]);
     assert_object_keys(
         &model["ingress"],
         &schema["properties"]["ingress"],

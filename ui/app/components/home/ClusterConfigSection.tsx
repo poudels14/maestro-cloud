@@ -32,6 +32,7 @@ function ClusterConfigSection() {
 
 function configRows(config: MaskedConfig) {
   const items: { label: string; value: string }[] = [
+    { label: "Node role", value: config.node.role },
     { label: "Ingress ports", value: (config.ingress?.ports ?? []).join(", ") },
     { label: "Runtime", value: config.runtime },
     { label: "Builder", value: config.depot ? "depot" : "default" }

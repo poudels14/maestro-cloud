@@ -405,7 +405,7 @@ impl ClusterUpgradeOrchestrator {
                 .list_nodes()
                 .await?
                 .into_iter()
-                .any(|node| node.node_id != node_id && node.role == NodeRole::Voter);
+                .any(|node| node.node_id != node_id && node.role.is_voter());
             if another_voter {
                 transition(
                     &mut run,
@@ -755,7 +755,7 @@ impl ClusterUpgradeOrchestrator {
             at_ms: now_ms,
             phase: UpgradePhase::Restoring,
             node_id: Some(node_id),
-            message: "node restored to scheduling".to_string(),
+            message: "node restored to placement eligibility".to_string(),
         });
         run.current_node_index = run.current_node_index.saturating_add(1);
         if run.current_node().is_none() {
@@ -956,7 +956,6 @@ mod tests {
             instance_id: format!("instance-{id}"),
             hostname: id.to_string(),
             role,
-            scheduling: true,
             cluster_host_ip: Ipv4Addr::new(10, 20, 0, 11),
             cluster_api_port: 3001,
             cluster_gateway_port: 3002,
@@ -972,9 +971,10 @@ mod tests {
     }
 
     #[test]
-    fn workers_then_follower_voters_then_leader() {
+    fn workers_then_follower_consensus_nodes_then_leader() {
         let mut nodes = vec![
-            node("leader", NodeRole::Voter),
+            node("leader", NodeRole::Hybrid),
+            node("hybrid", NodeRole::Hybrid),
             node("voter", NodeRole::Voter),
             node("worker-b", NodeRole::Worker),
             node("worker-a", NodeRole::Worker),
@@ -985,7 +985,7 @@ mod tests {
                 .iter()
                 .map(|node| node.node_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["worker-a", "worker-b", "voter", "leader"]
+            vec!["worker-a", "worker-b", "hybrid", "voter", "leader"]
         );
     }
 

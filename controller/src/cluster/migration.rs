@@ -193,8 +193,9 @@ async fn ensure_registry_image(
     }
 }
 
-pub fn is_legacy_candidate(config: &ClusterConfig, data_dir: &Path) -> bool {
-    !config.nodes.is_empty()
+pub fn is_legacy_candidate(config: &ClusterConfig, role: NodeRole, data_dir: &Path) -> bool {
+    role.is_voter()
+        && !config.nodes.is_empty()
         && legacy_member_path(data_dir).exists()
         && !cluster_id_path(data_dir).exists()
 }
@@ -223,6 +224,7 @@ pub fn legacy_etcd_container_name(config: &ClusterConfig, data_dir: &Path) -> Re
 
 pub fn migrate(
     config: &ClusterConfig,
+    role: NodeRole,
     data_dir: &Path,
     host_ip: Ipv4Addr,
 ) -> Result<MigrationResult> {
@@ -232,7 +234,7 @@ pub fn migrate(
     let _offline_etcd = acquire_offline_etcd_lock(data_dir)?;
     let migration = match read_state(data_dir)? {
         Some(migration) => {
-            validate_state(&migration, config, data_dir, host_ip)?;
+            validate_state(&migration, config, role, data_dir, host_ip)?;
             ensure_etcd_backup(
                 config,
                 data_dir,
@@ -242,9 +244,9 @@ pub fn migrate(
             )?;
             migration
         }
-        None => prepare(config, data_dir, host_ip)?,
+        None => prepare(config, role, data_dir, host_ip)?,
     };
-    install(&migration, config, data_dir)?;
+    install(&migration, config, role, data_dir)?;
     Ok(MigrationResult {
         cluster_id: migration.cluster_id,
         ca_sha256: migration.ca_sha256,
@@ -255,10 +257,11 @@ pub fn migrate(
 
 fn prepare(
     config: &ClusterConfig,
+    role: NodeRole,
     data_dir: &Path,
     host_ip: Ipv4Addr,
 ) -> Result<AutomaticMigration> {
-    validate_candidate(config, data_dir, host_ip)?;
+    validate_candidate(config, role, data_dir, host_ip)?;
     let legacy_member_name = legacy_member_name(config, data_dir)?;
     let backup = ensure_etcd_backup(config, data_dir, host_ip, &legacy_member_name, None)?;
 
@@ -290,7 +293,12 @@ fn prepare(
     Ok(migration)
 }
 
-fn install(migration: &AutomaticMigration, config: &ClusterConfig, data_dir: &Path) -> Result<()> {
+fn install(
+    migration: &AutomaticMigration,
+    config: &ClusterConfig,
+    role: NodeRole,
+    data_dir: &Path,
+) -> Result<()> {
     crate::cluster::identity::persist_cluster_id(data_dir, &migration.cluster_id)?;
     crate::cluster::bootstrap::prepare_legacy_migration(
         data_dir,
@@ -312,17 +320,22 @@ fn install(migration: &AutomaticMigration, config: &ClusterConfig, data_dir: &Pa
         },
     )?;
     install_certificates(data_dir, &migration.ca_sha256)?;
-    validate_state(migration, config, data_dir, migration.host_ip)?;
+    validate_state(migration, config, role, data_dir, migration.host_ip)?;
     persist_network_marker(data_dir)?;
     persist_marker(
         &image_marker_path(data_dir),
-        b"publish locally built service images before enabling cluster scheduling\n",
+        b"publish locally built service images before starting clustered workloads\n",
     )?;
     remove_state(data_dir)
 }
 
-fn validate_candidate(config: &ClusterConfig, data_dir: &Path, host_ip: Ipv4Addr) -> Result<()> {
-    if config.role != NodeRole::Voter {
+fn validate_candidate(
+    config: &ClusterConfig,
+    role: NodeRole,
+    data_dir: &Path,
+    host_ip: Ipv4Addr,
+) -> Result<()> {
+    if !role.is_voter() {
         bail!("only a legacy voter can be migrated into cluster mode");
     }
     if config.uses_node_ports() {
@@ -347,10 +360,11 @@ fn validate_candidate(config: &ClusterConfig, data_dir: &Path, host_ip: Ipv4Addr
 fn validate_state(
     migration: &AutomaticMigration,
     config: &ClusterConfig,
+    role: NodeRole,
     data_dir: &Path,
     host_ip: Ipv4Addr,
 ) -> Result<()> {
-    if config.role != NodeRole::Voter
+    if !role.is_voter()
         || migration.host_ip != host_ip
         || migration.initial_voter_host_ips != configured_host_ips(config)
         || migration.subnets != config.subnets
@@ -981,7 +995,6 @@ mod tests {
                 "172.22.2.0/24".to_string(),
                 "172.22.3.0/24".to_string(),
             ],
-            role: NodeRole::Voter,
             ..ClusterConfig::default()
         }
     }
@@ -1016,7 +1029,7 @@ mod tests {
             "maestro-etcd-prod-a1b2"
         );
 
-        let result = migrate(&config, &root, host_ip).unwrap();
+        let result = migrate(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
 
         assert_eq!(
             fs::read(root.join("system/etcd/data/member/wal/0000000000000000.wal")).unwrap(),
@@ -1075,13 +1088,13 @@ mod tests {
         let root = legacy_data("resume");
         let config = config();
         let host_ip = config.nodes[0].host_ip();
-        let prepared = prepare(&config, &root, host_ip).unwrap();
+        let prepared = prepare(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
         assert!(is_in_progress(&root));
         assert!(!cluster_id_path(&root).exists());
         assert!(backup_path(&root).exists());
 
         crate::cluster::identity::persist_cluster_id(&root, &prepared.cluster_id).unwrap();
-        let result = migrate(&config, &root, host_ip).unwrap();
+        let result = migrate(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
 
         assert_eq!(result.cluster_id, prepared.cluster_id);
         assert_eq!(result.ca_sha256, prepared.ca_sha256);
@@ -1099,7 +1112,7 @@ mod tests {
         let root = legacy_data("cert-resume");
         let config = config();
         let host_ip = config.nodes[0].host_ip();
-        let prepared = prepare(&config, &root, host_ip).unwrap();
+        let prepared = prepare(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
 
         crate::cluster::identity::persist_cluster_id(&root, &prepared.cluster_id).unwrap();
         crate::cluster::bootstrap::prepare_legacy_migration(
@@ -1110,7 +1123,7 @@ mod tests {
         .unwrap();
         fs::rename(certs_path(&root), backup_certs_path(&root)).unwrap();
 
-        let result = migrate(&config, &root, host_ip).unwrap();
+        let result = migrate(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
 
         assert_eq!(result.cluster_id, prepared.cluster_id);
         assert_eq!(
@@ -1131,7 +1144,7 @@ mod tests {
             name: "prod".to_string(),
             ..ClusterConfig::default()
         };
-        assert!(!is_legacy_candidate(&legacy, &root));
+        assert!(!is_legacy_candidate(&legacy, NodeRole::Hybrid, &root));
         assert!(!is_in_progress(&root));
         assert!(!cluster_id_path(&root).exists());
         assert!(!backup_path(&root).exists());
@@ -1159,7 +1172,7 @@ mod tests {
             fs::read(backup_path(&root).join("member/wal/0000000000000000.wal")).unwrap(),
             backup_bytes
         );
-        let prepared = prepare(&config, &root, host_ip).unwrap();
+        let prepared = prepare(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
         assert_eq!(prepared.cluster_id, first.cluster_id);
         let _ = fs::remove_dir_all(root);
     }
@@ -1288,7 +1301,8 @@ mod tests {
         );
 
         let config = config();
-        let error = migrate(&config, &root, config.nodes[0].host_ip()).unwrap_err();
+        let error =
+            migrate(&config, NodeRole::Hybrid, &root, config.nodes[0].host_ip()).unwrap_err();
         assert!(error.to_string().contains("still in use"));
         assert!(!backup_path(&root).exists());
         assert!(!backup_manifest_path(&root).exists());

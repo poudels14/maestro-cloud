@@ -104,6 +104,37 @@ pub struct SystemStartupInfo {
     pub cluster_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SystemJobCapabilities {
+    local_etcd: bool,
+    ingress: bool,
+    gateway: bool,
+    admin: bool,
+}
+
+fn system_job_capabilities(role: Option<crate::cluster::NodeRole>) -> SystemJobCapabilities {
+    match role {
+        None | Some(crate::cluster::NodeRole::Hybrid) => SystemJobCapabilities {
+            local_etcd: true,
+            ingress: true,
+            gateway: role.is_some(),
+            admin: true,
+        },
+        Some(crate::cluster::NodeRole::Voter) => SystemJobCapabilities {
+            local_etcd: true,
+            ingress: false,
+            gateway: false,
+            admin: true,
+        },
+        Some(crate::cluster::NodeRole::Worker) => SystemJobCapabilities {
+            local_etcd: false,
+            ingress: true,
+            gateway: true,
+            admin: false,
+        },
+    }
+}
+
 fn system_log_tags(config: &ControllerConfig) -> Vec<String> {
     let mut tags = config.tags.clone();
     tags.push(format!("cluster:{}", config.cluster_name));
@@ -121,6 +152,7 @@ pub async fn start_system_jobs(
     supervisor: &mut JobSupervisor,
     shutdown: tokio::sync::broadcast::Receiver<crate::signal::ShutdownEvent>,
 ) -> SystemStartupInfo {
+    let capabilities = system_job_capabilities(config.cluster.as_ref().map(|cluster| cluster.role));
     let mut leader_elector = None;
     let mut cluster_handles = Vec::new();
     let secrets_dir = config.data_dir.join("secrets");
@@ -278,11 +310,17 @@ pub async fn start_system_jobs(
     let system_ips = network_cidr.as_deref().and_then(system_ips_from_cidr);
 
     if let Some(ips) = &system_ips {
-        dns_manager.set_record("maestro-etcd", &dns_domain, &ips.etcd);
-        dns_manager.set_record("web", &dns_domain, &ips.ingress);
+        if capabilities.local_etcd {
+            dns_manager.set_record("maestro-etcd", &dns_domain, &ips.etcd);
+        }
+        if capabilities.ingress {
+            dns_manager.set_record("web", &dns_domain, &ips.ingress);
+        }
         dns_manager.set_record("maestro-probe", &dns_domain, &ips.probe);
-        dns_manager.set_record("admin", &dns_domain, &ips.admin);
-        if config.tailscale_authkey.is_some() {
+        if capabilities.admin {
+            dns_manager.set_record("admin", &dns_domain, &ips.admin);
+        }
+        if capabilities.admin && config.tailscale_authkey.is_some() {
             dns_manager.set_record(
                 "admin",
                 &format!("{}.maestro.internal", config.cluster_alias),
@@ -294,7 +332,7 @@ pub async fn start_system_jobs(
 
     let ip_flag = |ip: &str| vec!["--ip".to_string(), ip.to_string()];
 
-    if !matches!(bootstrap_action, BootstrapAction::Worker) {
+    if capabilities.local_etcd {
         init_etcd(
             &etcd_container,
             &dns_domain,
@@ -325,7 +363,7 @@ pub async fn start_system_jobs(
     }
 
     if let (Some(cluster), Some(certs)) = (&config.cluster, &etcd_certs)
-        && cluster.role == crate::cluster::NodeRole::Voter
+        && cluster.role.is_voter()
         && cluster.is_seed()
     {
         let elector = Arc::new(
@@ -364,7 +402,7 @@ pub async fn start_system_jobs(
             .await
             .expect("failed to promote etcd learner");
         }
-        if cluster.role == crate::cluster::NodeRole::Voter {
+        if cluster.role.is_voter() {
             crate::cluster::bootstrap::write_cluster_meta(
                 cluster,
                 &config.cluster_alias,
@@ -404,7 +442,7 @@ pub async fn start_system_jobs(
                     &config.etcd_endpoints,
                     build_etcd_tls_options(Some(certs)),
                     cluster.node_id.clone(),
-                    cluster.role == crate::cluster::NodeRole::Voter,
+                    cluster.role.is_voter(),
                 )
                 .await
                 .expect("failed to connect cluster leader observer"),
@@ -450,25 +488,27 @@ pub async fn start_system_jobs(
     };
     let dns_flag = dns_flag_for_runtime(runtime.as_ref(), nameserver_ip.as_deref());
 
-    init_ingress(
-        &ingress_container,
-        &dns_domain,
-        &dns_flag,
-        system_ips
-            .as_ref()
-            .map(|ips| ip_flag(&ips.ingress))
-            .unwrap_or_default(),
-        network_cidr.as_deref(),
-        etcd_certs.as_ref(),
-        logger,
-        config,
-        runtime,
-        log_sender,
-        supervisor,
-    )
-    .await;
+    if capabilities.ingress {
+        init_ingress(
+            &ingress_container,
+            &dns_domain,
+            &dns_flag,
+            system_ips
+                .as_ref()
+                .map(|ips| ip_flag(&ips.ingress))
+                .unwrap_or_default(),
+            network_cidr.as_deref(),
+            etcd_certs.as_ref(),
+            logger,
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    }
 
-    if config.cluster.is_some() {
+    if capabilities.gateway {
         init_gateway(
             &gateway_container,
             &dns_domain,
@@ -505,24 +545,26 @@ pub async fn start_system_jobs(
     )
     .await;
 
-    init_admin(
-        &admin_container,
-        system_ips.as_ref().map(|ips| ips.probe.as_str()),
-        &dns_domain,
-        &dns_flag,
-        system_ips
-            .as_ref()
-            .map(|ips| ip_flag(&ips.admin))
-            .unwrap_or_default(),
-        logger,
-        config,
-        runtime,
-        log_sender,
-        supervisor,
-    )
-    .await;
+    if capabilities.admin {
+        init_admin(
+            &admin_container,
+            system_ips.as_ref().map(|ips| ips.probe.as_str()),
+            &dns_domain,
+            &dns_flag,
+            system_ips
+                .as_ref()
+                .map(|ips| ip_flag(&ips.admin))
+                .unwrap_or_default(),
+            logger,
+            config,
+            runtime,
+            log_sender,
+            supervisor,
+        )
+        .await;
+    }
 
-    if config.cloudflare_tunnel_token.is_some() {
+    if capabilities.ingress && config.cloudflare_tunnel_token.is_some() {
         init_cloudflared(
             &cloudflared_container_prefix,
             &dns_domain,
@@ -539,7 +581,11 @@ pub async fn start_system_jobs(
     SystemStartupInfo {
         dns_manager,
         nameserver_ip,
-        ingress_ip: system_ips.map(|ips| ips.ingress),
+        ingress_ip: if capabilities.ingress {
+            system_ips.map(|ips| ips.ingress)
+        } else {
+            None
+        },
         leader_elector,
         cluster_handles,
     }
@@ -1726,5 +1772,42 @@ async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJob
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::NodeRole;
+
+    #[test]
+    fn node_roles_select_only_required_system_jobs() {
+        assert_eq!(
+            system_job_capabilities(Some(NodeRole::Hybrid)),
+            SystemJobCapabilities {
+                local_etcd: true,
+                ingress: true,
+                gateway: true,
+                admin: true,
+            }
+        );
+        assert_eq!(
+            system_job_capabilities(Some(NodeRole::Voter)),
+            SystemJobCapabilities {
+                local_etcd: true,
+                ingress: false,
+                gateway: false,
+                admin: true,
+            }
+        );
+        assert_eq!(
+            system_job_capabilities(Some(NodeRole::Worker)),
+            SystemJobCapabilities {
+                local_etcd: false,
+                ingress: true,
+                gateway: true,
+                admin: false,
+            }
+        );
     }
 }

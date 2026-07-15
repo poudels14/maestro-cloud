@@ -250,9 +250,12 @@ impl ControlServer {
                     .remove_node(&token, &node_id)
                     .await?;
                 if outcome == crate::cluster::join::RemoveNodeOutcome::LeadershipTransferRequired {
-                    let other_voter_alive = self.registry.list_nodes().await?.iter().any(|node| {
-                        node.node_id != node_id && node.role == crate::cluster::NodeRole::Voter
-                    });
+                    let other_voter_alive = self
+                        .registry
+                        .list_nodes()
+                        .await?
+                        .iter()
+                        .any(|node| node.node_id != node_id && node.role.is_voter());
                     if !other_voter_alive {
                         bail!("cannot remove the leader without another live voter");
                     }
