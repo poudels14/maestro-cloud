@@ -191,8 +191,6 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub shared_registry: Option<String>,
     #[serde(default)]
-    pub ca_sha256: Option<String>,
-    #[serde(default)]
     pub join_secret: Option<String>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
@@ -453,8 +451,6 @@ pub struct ClusterView {
     pub etcd_peer_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_registry: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ca_sha256: Option<String>,
     pub join_secret: Option<String>,
     pub labels: BTreeMap<String, String>,
 }
@@ -552,7 +548,6 @@ impl StartConfig {
                 etcd_client_port: self.cluster.etcd_client_port,
                 etcd_peer_port: self.cluster.etcd_peer_port,
                 shared_registry: self.cluster.shared_registry.clone(),
-                ca_sha256: self.cluster.ca_sha256.clone(),
                 join_secret: self.cluster.join_secret.as_deref().and_then(mask),
                 labels: self.cluster.labels.clone(),
             },

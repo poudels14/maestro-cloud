@@ -72,6 +72,24 @@ pub fn arm_seed(
     persist_json(&path, &permit, true)
 }
 
+pub fn ensure_seed_armed(
+    data_dir: &Path,
+    cluster_id: &str,
+    bootstrap_host_ip: std::net::Ipv4Addr,
+) -> Result<()> {
+    match load_permit(data_dir)? {
+        None => arm_seed(data_dir, cluster_id, bootstrap_host_ip),
+        Some(permit)
+            if permit.cluster_id == cluster_id
+                && permit.bootstrap_host_ip == bootstrap_host_ip
+                && permit.state == BootstrapPermitState::Armed =>
+        {
+            Ok(())
+        }
+        Some(_) => bail!("existing bootstrap permit cannot authorize automatic seed recovery"),
+    }
+}
+
 pub fn prepare_legacy_migration(
     data_dir: &Path,
     cluster_id: &str,
@@ -172,7 +190,7 @@ pub fn decide(runtime: Option<&ClusterRuntime>, data_dir: &Path) -> Result<Boots
     }
     if runtime.is_seed() {
         let permit = load_permit(data_dir)?
-            .ok_or_else(|| anyhow!("bootstrap seed is not armed; run `maestro cluster init-ca`"))?;
+            .ok_or_else(|| anyhow!("bootstrap seed was not armed during automatic provisioning"))?;
         if permit.cluster_id != runtime.cluster_id
             || permit.bootstrap_host_ip != runtime.host_ip
             || permit.state != BootstrapPermitState::Armed

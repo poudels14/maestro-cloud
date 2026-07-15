@@ -72,25 +72,6 @@ pub fn validate_cluster_config(
     local_subnet: Option<&str>,
     role: NodeRole,
 ) -> Result<()> {
-    validate_cluster_config_inner(config, local_subnet, role, true)
-}
-
-/// Validate topology before the cluster CA exists. Provisioning still requires a
-/// join secret, but cannot require the fingerprint of the CA it is about to create.
-pub fn validate_cluster_provisioning_config(
-    config: &ClusterConfig,
-    local_subnet: Option<&str>,
-    role: NodeRole,
-) -> Result<()> {
-    validate_cluster_config_inner(config, local_subnet, role, false)
-}
-
-fn validate_cluster_config_inner(
-    config: &ClusterConfig,
-    local_subnet: Option<&str>,
-    role: NodeRole,
-    require_ca_fingerprint: bool,
-) -> Result<()> {
     if config.nodes.is_empty() {
         return Ok(());
     }
@@ -239,32 +220,9 @@ fn validate_cluster_config_inner(
     if config.shared_registry.is_none() {
         bail!("cluster.shared-registry is required in multi-node mode");
     }
-    if !config.nodes.is_empty() {
-        if require_ca_fingerprint {
-            match config.ca_sha256.as_deref() {
-                Some(fingerprint)
-                    if fingerprint
-                        .trim()
-                        .strip_prefix("sha256:")
-                        .unwrap_or(fingerprint.trim())
-                        .chars()
-                        .count()
-                        == 64
-                        && fingerprint
-                            .trim()
-                            .strip_prefix("sha256:")
-                            .unwrap_or(fingerprint.trim())
-                            .chars()
-                            .all(|character| character.is_ascii_hexdigit()) => {}
-                _ => {
-                    bail!("cluster.ca-sha256 must contain the 64-character public CA fingerprint")
-                }
-            }
-        }
-        match config.join_secret.as_deref() {
-            Some(secret) if secret.len() >= 32 => {}
-            _ => bail!("cluster.join-secret must contain at least 32 characters"),
-        }
+    match config.join_secret.as_deref() {
+        Some(secret) if secret.len() >= 32 => {}
+        _ => bail!("cluster.join-secret must contain at least 32 characters"),
     }
     Ok(())
 }
@@ -502,7 +460,6 @@ mod tests {
             gateway_port: 3002,
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
-            ca_sha256: Some("a".repeat(64)),
             join_secret: Some("x".repeat(32)),
             shared_registry: Some("registry.example.com/maestro".to_string()),
             ..ClusterConfig::default()
@@ -556,15 +513,6 @@ mod tests {
         assert!(
             validate_cluster_config(&incomplete, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err()
         );
-    }
-
-    #[test]
-    fn provisioning_does_not_require_the_not_yet_created_ca_fingerprint() {
-        let mut config = valid_cluster_config();
-        config.ca_sha256 = None;
-        validate_cluster_provisioning_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
-            .expect("provisioning topology");
-        assert!(validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err());
     }
 
     #[test]

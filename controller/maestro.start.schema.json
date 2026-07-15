@@ -80,13 +80,10 @@
         "shared-registry": {
           "type": "string"
         },
-        "ca-sha256": {
-          "type": "string",
-          "pattern": "^(sha256:)?[0-9A-Fa-f]{64}$"
-        },
         "join-secret": {
           "type": "string",
-          "minLength": 32
+          "minLength": 32,
+          "description": "High-entropy shared secret used to authenticate automatic CA discovery and node joins."
         },
         "labels": {
           "type": "object",

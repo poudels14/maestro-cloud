@@ -8,8 +8,12 @@ use crate::utils;
 
 pub fn load_cluster_id(data_dir: &Path) -> Result<String> {
     let path = data_dir.join("system/cluster-id");
-    let cluster_id = std::fs::read_to_string(&path)
-        .with_context(|| format!("missing cluster identity {}; run `maestro cluster init-ca` on cluster.nodes[0] and copy the cluster material to this voter", path.display()))?;
+    let cluster_id = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "missing cluster identity {} after automatic cluster provisioning",
+            path.display()
+        )
+    })?;
     let cluster_id = cluster_id.trim().to_string();
     if !is_lower_hex(&cluster_id, 32) {
         bail!("invalid cluster id in {}", path.display());

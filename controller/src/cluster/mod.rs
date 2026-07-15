@@ -10,6 +10,7 @@ pub mod join;
 pub mod leader_loop;
 pub mod migration;
 pub mod network;
+pub mod provision;
 pub mod reconciler;
 pub mod registry;
 pub mod scheduler;

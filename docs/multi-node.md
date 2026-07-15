@@ -95,7 +95,7 @@ arbitrary cross-node TCP/UDP service networking is outside this release.
 ## Shared configuration
 
 The original voters use the same ordered `cluster.nodes`, `cluster.subnets`,
-cluster name, CA fingerprint, join secret, JWT secret, and registry. The top-level
+cluster name, join secret, JWT secret, and registry. The top-level
 `subnet` and optional `node.role` describe the local node and may differ. With
 bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
 `cluster.api-port` selects the local entry and differs per node.
@@ -109,8 +109,7 @@ bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
     "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
     "gateway-port": 3002,
     "shared-registry": "ghcr.io/acme",
-    "ca-sha256": "<64-character fingerprint from cluster init-ca>",
-    "join-secret": "<at-least-32-character-join-secret>",
+    "join-secret": "<high-entropy-secret-of-at-least-32-characters>",
     "labels": { "zone": "us-west-2a" }
   },
   "node": { "role": "hybrid" },
@@ -198,39 +197,18 @@ Use the equivalent `docker` commands when Docker is the configured runtime.
 The examples use `/var/lib/maestro` as the base data directory. Maestro stores the
 cluster under `/var/lib/maestro/prod` for a cluster named `prod`.
 
-1. Put the shared configuration on all original voters, changing only the local
-   top-level `subnet` and host-specific labels. Initially omit `ca-sha256` or leave
-   it unset.
-2. On `cluster.nodes[0]`, initialize the identity, CA, host certificates, and
-   single-use bootstrap permit:
-
-   ```bash
-   maestro cluster init-ca --config /etc/maestro/maestro.jsonc \
-     --data-dir /var/lib/maestro
-   ```
-
-3. Record the printed cluster ID and CA SHA-256 fingerprint in a secure inventory.
-   Set the exact fingerprint as `cluster.ca-sha256` on every node.
-4. Before starting any daemon, copy the following material over an authenticated
-   out-of-band channel:
-   - `system/cluster-id` to every original voter.
-   - The matching `system/cluster-provision/<node-identity>/` contents to that
-     voter's `system/certs/` directory.
-   - `system/certs/cluster-ca/` into every original voter's
-     `system/certs/cluster-ca/` directory.
-
-   Only voters receive `cluster-ca/`, which contains the CA private key. Never copy
-   that directory to a worker. Preserve ownership and mode `0600` for private keys.
-   Do not copy `system/etcd-bootstrap-state.json` away from the seed.
-   Bare-IP identities are the eight-digit host-IP hex value. Endpoint identities
-   append the four-digit hex controller port, as printed in the provision path.
-
-5. Start Maestro on the seed. Confirm that the API becomes healthy and that it is
-   the sole voter and current leader.
-6. Start the other original voters. They wait for admission, join one at a time as
-   learners, catch up, and are promoted. They never fall back to creating a second
-   cluster if the seed is unavailable.
-7. Wait for all voters and workload-node gateways to become ready:
+1. Deploy the shared configuration to every original voter, changing only the
+   local top-level `subnet`, `cluster.api-port` in endpoint mode, and host-specific
+   labels.
+2. Start all Maestro daemons. No provisioning command or certificate copy is
+   required. On its first start, `cluster.nodes[0]` creates the cluster identity,
+   CA, seed certificates, and one-time bootstrap permit under the daemon lock.
+3. Every other unprovisioned voter waits for a configured voter API, authenticates
+   the advertised CA with an HMAC proof derived from `cluster.join-secret`, and
+   joins automatically. Original configured voters are admitted as learners and
+   promoted only after catching up. They never fall back to creating another
+   cluster when the seed is unavailable.
+4. Wait for all voters and workload-node gateways to become ready:
 
    ```bash
    maestro cluster info
@@ -247,8 +225,7 @@ with a valid multi-node configuration. The local control address must be
 `cluster.nodes[0]`, `node.role` must be `hybrid` or `voter`, and the existing etcd
 member data must still be present. Use bare-IP `cluster.nodes` for this
 identity-preserving migration; endpoint form deliberately fails closed. Configure
-one or three initial voters and omit `ca-sha256` for this first start; Maestro
-generates the CA and persists its fingerprint locally.
+one or three initial voters; Maestro generates and persists the CA automatically.
 
 Before changing identity or certificates, Maestro takes the normal daemon lock,
 stops the detached legacy etcd container, and takes an exclusive lock on its
@@ -302,64 +279,30 @@ maestro cluster enable --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro
 ```
 
-After the migrated voter is healthy, obtain the printed/logged public CA
-fingerprint for new-node configurations and use the normal approved join flow to
-add voters or workers.
+After the migrated voter is healthy, the other configured original voters and any
+new workers authenticate and join automatically when their daemons start.
 
 ## Add a node
 
-Give the joiner a stable private host IP, a new workload `/24`, the public CA
-fingerprint, and the shared join secret. Its `cluster.nodes` remains the immutable
-original bootstrap list. Its `cluster.subnets` must include its local top-level
-subnet so local validation can complete; the join response installs the current
-authoritative voter and subnet cache.
+Give the joiner a stable private host IP, a new workload `/24`, and the shared join
+secret. Its `cluster.nodes` remains the immutable original bootstrap list. Its
+`cluster.subnets` must include its local top-level subnet so local validation can
+complete; the join response installs the authenticated CA, node certificates,
+cluster identity, and current authoritative voter/subnet cache.
 
 ### Worker
 
-Set `node.role` to `worker`, then run on the new host:
-
-```bash
-maestro cluster join 10.20.0.11:3001 \
-  --config /etc/maestro/maestro.jsonc \
-  --data-dir /var/lib/maestro
-```
-
-The join secret authorizes a worker identity. Start the daemon after the command
-installs the node certificate and cluster identity. Confirm `data-plane` readiness
-before relying on the worker for placements.
+Set `node.role` to `worker` and deploy/start the daemon normally. It waits until a
+configured voter is reachable and then joins without a host-side command. Confirm
+`data-plane` readiness before relying on the worker for placements.
 
 ### Voter or hybrid
 
-A voter or hybrid changes quorum and requires explicit approval. `voter` is
-control-plane-only; `hybrid` also accepts workload assignments and is the default.
-On the joining host:
-
-```bash
-maestro cluster join --prepare \
-  --config /etc/maestro/maestro.jsonc \
-  --data-dir /var/lib/maestro
-```
-
-The command prints the node ID, host IP, subnet, and public-key fingerprint. From
-an authenticated operator context, approve that exact identity:
-
-```bash
-maestro cluster approve-node \
-  --role hybrid \
-  --node-id <node-id> \
-  --host-ip <private-ip> \
-  --api-port <controller-port> \
-  --subnet <unique-/24> \
-  --public-key-sha256 <fingerprint>
-```
-
-Then run `maestro cluster join <leader-private-ip>:<controller-port>` on the
-joining host. The leader adds it as a learner and promotion occurs only after it
-catches up. Never
-add a second voter until the first membership change is complete, and retain an odd
-final voter count.
-
-Omit `--api-port` for a cluster that still uses legacy bare-IP node identities.
+The one or three voter/hybrid identities in the initial `cluster.nodes` list join
+automatically during formation. `voter` is control-plane-only; `hybrid` also
+accepts workloads and is the default. Expanding or replacing the immutable voter
+set after formation is not an automatic operation in this release; do not change
+`cluster.nodes` on a live cluster.
 
 ## Scheduling and affinity contract
 
