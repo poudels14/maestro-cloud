@@ -33,6 +33,49 @@ pub const PROBE_IMAGE_TAG: &str = concat!("maestro-probe:", env!("CARGO_PKG_VERS
 pub const ADMIN_IMAGE_TAG: &str = concat!("maestro-admin:", env!("CARGO_PKG_VERSION"));
 pub const TAILSCALE_IMAGE_TAG: &str = concat!("maestro-tailscale:", env!("CARGO_PKG_VERSION"));
 pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
+pub const MAX_CLOUDFLARED_REPLICAS: u32 =
+    crate::cluster::network::Ipv4Cidr::SYSTEM_RESERVED_HOSTS - 6;
+
+pub(crate) fn container_etcd_endpoints(
+    cluster: Option<&crate::cluster::ClusterRuntime>,
+    host_endpoints: &[String],
+    disable_etcd_cert: bool,
+) -> Vec<String> {
+    let scheme = if disable_etcd_cert { "http" } else { "https" };
+    let Some(cluster) = cluster else {
+        return vec![format!("{scheme}://maestro-etcd:2379")];
+    };
+    if !cluster.role.is_voter() {
+        return host_endpoints.to_vec();
+    }
+
+    let local_host_address = format!("{}:{}", cluster.host_ip, cluster.etcd_client_port);
+    let mut endpoints = vec![format!("{scheme}://maestro-etcd:2379")];
+    endpoints.extend(
+        host_endpoints
+            .iter()
+            .filter(|endpoint| {
+                endpoint
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    != local_host_address
+            })
+            .cloned(),
+    );
+    endpoints
+}
+
+pub(crate) fn ingress_access_log_args() -> Vec<String> {
+    vec![
+        "--accesslog=true".into(),
+        "--accesslog.format=json".into(),
+        "--accesslog.fields.defaultmode=keep".into(),
+        "--accesslog.fields.headers.defaultMode=drop".into(),
+        "--accesslog.fields.headers.names.X-Forwarded-For=keep".into(),
+        "--accesslog.fields.headers.names.X-Real-IP=keep".into(),
+        "--accesslog.fields.headers.names.CF-Connecting-IP=keep".into(),
+    ]
+}
 
 pub struct SystemService {
     pub id: &'static str,
@@ -251,16 +294,21 @@ pub async fn start_system_jobs(
         let static_ips = config
             .subnet
             .as_deref()
-            .and_then(system_ips_from_cidr)
-            .map(|ips| {
-                vec![
+            .and_then(|cidr| {
+                let ips = system_ips_from_cidr(cidr)?;
+                let mut addresses = vec![
                     ips.etcd,
                     ips.probe,
                     ips.ingress,
                     ips.gateway,
                     ips.admin,
                     ips.dns,
-                ]
+                ];
+                addresses.extend(
+                    (1..=config.cloudflare_tunnel_replicas)
+                        .filter_map(|replica| cloudflared_ip_from_cidr(cidr, replica)),
+                );
+                Some(addresses)
             })
             .unwrap_or_default();
         let no_names: Vec<String> = Vec::new();
@@ -577,6 +625,7 @@ pub async fn start_system_jobs(
             &cloudflared_container_prefix,
             &dns_domain,
             &dns_flag,
+            network_cidr.as_deref(),
             logger,
             config,
             runtime,
@@ -618,6 +667,7 @@ async fn init_etcd(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
+    let static_ip = static_ip_from_flags(&ip_flags);
     let etcd_data_dir = config.etcd_dir().join("data");
     std::fs::create_dir_all(&etcd_data_dir).expect("Failed to create etcd data dir");
     let etcd_data_path =
@@ -748,6 +798,17 @@ async fn init_etcd(
         }),
     };
     await_job_running(supervisor, etcd_job_config).await;
+    let readiness_address = config.cluster.as_ref().map_or_else(
+        || format!("127.0.0.1:{}", config.etcd_port),
+        |cluster| format!("{}:{}", cluster.host_ip, cluster.etcd_client_port),
+    );
+    await_container_ready(
+        runtime.as_ref(),
+        container_name,
+        static_ip.as_deref(),
+        Some(&readiness_address),
+    )
+    .await;
 }
 
 async fn init_ingress(
@@ -763,6 +824,7 @@ async fn init_ingress(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
+    let static_ip = static_ip_from_flags(&ip_flags);
     let tls = build_etcd_tls_options(etcd_certs);
     let connect_options = tls.map(|tls_opts| etcd_client::ConnectOptions::new().with_tls(tls_opts));
     if let Ok(mut client) =
@@ -795,11 +857,11 @@ async fn init_ingress(
     extra_flags.extend_from_slice(dns_flag);
     extra_flags.extend(ip_flags);
 
-    let provider_endpoints = if config.etcd_endpoints.is_empty() {
+    let provider_endpoints = if config.container_etcd_endpoints.is_empty() {
         "maestro-etcd:2379".to_string()
     } else {
         config
-            .etcd_endpoints
+            .container_etcd_endpoints
             .iter()
             .map(|endpoint| {
                 endpoint
@@ -840,16 +902,7 @@ async fn init_ingress(
         ));
     }
     if config.enable_ingress_access_logs {
-        image_and_args.extend([
-            "--accesslog=true".into(),
-            "--accesslog.format=json".into(),
-            "--accesslog.fields.defaultmode=keep".into(),
-            "--accesslog.fields.queryParameters.defaultMode=drop".into(),
-            "--accesslog.fields.headers.defaultMode=drop".into(),
-            "--accesslog.fields.headers.names.X-Forwarded-For=keep".into(),
-            "--accesslog.fields.headers.names.X-Real-IP=keep".into(),
-            "--accesslog.fields.headers.names.CF-Connecting-IP=keep".into(),
-        ]);
+        image_and_args.extend(ingress_access_log_args());
     }
     if etcd_certs.is_some() {
         image_and_args.extend([
@@ -886,6 +939,14 @@ async fn init_ingress(
         }),
     };
     await_job_running(supervisor, ingress_job_config).await;
+    let readiness_address = format!("127.0.0.1:{}", config.ingress_ports[0]);
+    await_container_ready(
+        runtime.as_ref(),
+        container_name,
+        static_ip.as_deref(),
+        Some(&readiness_address),
+    )
+    .await;
     for port in &config.ingress_ports {
         logger.emit(
             "info",
@@ -964,6 +1025,7 @@ async fn init_gateway(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
+    let static_ip = static_ip_from_flags(&ip_flags);
     let cluster = config.cluster.as_ref().expect("cluster gateway runtime");
     let config_path = write_gateway_dynamic_config(config, etcd_certs)
         .expect("failed to write cluster gateway TLS configuration");
@@ -982,7 +1044,7 @@ async fn init_gateway(
     extra_flags.extend(ip_flags);
 
     let provider_endpoints = config
-        .etcd_endpoints
+        .container_etcd_endpoints
         .iter()
         .map(|endpoint| {
             endpoint
@@ -1037,6 +1099,14 @@ async fn init_gateway(
         },
     )
     .await;
+    let readiness_address = format!("{}:{}", cluster.host_ip, cluster.gateway_port);
+    await_container_ready(
+        runtime.as_ref(),
+        container_name,
+        static_ip.as_deref(),
+        Some(&readiness_address),
+    )
+    .await;
     logger.emit(
         "info",
         &format!(
@@ -1058,6 +1128,7 @@ async fn init_admin(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
+    let static_ip = static_ip_from_flags(&ip_flags);
     runtime
         .build_image(
             &BuildSpec {
@@ -1135,6 +1206,14 @@ async fn init_admin(
         }),
     };
     await_job_running(supervisor, admin_job_config).await;
+    let readiness_address = config.admin_port.map(|port| format!("127.0.0.1:{port}"));
+    await_container_ready(
+        runtime.as_ref(),
+        container_name,
+        static_ip.as_deref(),
+        readiness_address.as_deref(),
+    )
+    .await;
     if let Some(port) = config.probe_port {
         logger.emit(
             "info",
@@ -1164,6 +1243,7 @@ async fn init_probe(
     log_sender: &flume::Sender<LogEntry>,
     supervisor: &mut JobSupervisor,
 ) {
+    let static_ip = static_ip_from_flags(&ip_flags);
     runtime
         .build_image(
             &BuildSpec {
@@ -1226,7 +1306,7 @@ async fn init_probe(
         id: "maestro-probe".to_string(),
         command: {
             let etcd_endpoint = config
-                .etcd_endpoints
+                .container_etcd_endpoints
                 .first()
                 .cloned()
                 .unwrap_or_else(|| format!("{etcd_scheme}://maestro-etcd:2379"));
@@ -1248,7 +1328,10 @@ async fn init_probe(
                 "-e".into(),
                 format!("ETCD_ENDPOINT={etcd_endpoint}"),
                 "-e".into(),
-                format!("ETCD_ENDPOINTS={}", config.etcd_endpoints.join(",")),
+                format!(
+                    "ETCD_ENDPOINTS={}",
+                    config.container_etcd_endpoints.join(",")
+                ),
                 "-e".into(),
                 "MAESTRO_ENCRYPTION_KEY_FILE=/run/secrets/encryption-key".into(),
                 "-e".into(),
@@ -1369,6 +1452,14 @@ async fn init_probe(
         }),
     };
     await_job_running(supervisor, probe_job_config).await;
+    let readiness_address = format!("127.0.0.1:{probe_host_port}");
+    await_container_ready(
+        runtime.as_ref(),
+        container_name,
+        static_ip.as_deref(),
+        Some(&readiness_address),
+    )
+    .await;
     let port_path = probe_dir.join("api-port");
     let temp_port_path = probe_dir.join(format!("api-port.tmp-{}", std::process::id()));
     std::fs::write(&temp_port_path, probe_host_port.to_string())
@@ -1629,6 +1720,7 @@ async fn init_cloudflared(
     container_name_prefix: &str,
     dns_domain: &str,
     dns_flag: &[String],
+    network_cidr: Option<&str>,
     logger: &Logger,
     config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
@@ -1653,6 +1745,17 @@ async fn init_cloudflared(
         let container_name = format!("{container_name_prefix}-{replica}");
         let hostname = format!("maestro-cloudflared-{replica}");
         let job_id = format!("maestro-cloudflared-{replica}");
+        let static_ip = network_cidr
+            .and_then(|cidr| cloudflared_ip_from_cidr(cidr, replica))
+            .unwrap_or_else(|| {
+                panic!(
+                    "[maestro]: cloudflared replica {replica} exceeds the reserved system address capacity"
+                )
+            });
+        let mut replica_flags = flags.clone();
+        if initial_network != "none" {
+            replica_flags.extend(["--ip".to_string(), static_ip.clone()]);
+        }
 
         await_job_running(
             supervisor,
@@ -1663,7 +1766,7 @@ async fn init_cloudflared(
                     hostname,
                     dns_domain: Some(dns_domain.to_string()),
                     network: initial_network.clone(),
-                    extra_flags: flags.clone(),
+                    extra_flags: replica_flags,
                     image_and_args: vec![
                         CLOUDFLARED_IMAGE_TAG.to_string(),
                         "tunnel".to_string(),
@@ -1691,7 +1794,12 @@ async fn init_cloudflared(
         .await;
         if gate_on_data_plane {
             runtime
-                .set_container_network_access(&container_name, &config.network, false)
+                .set_container_network_access(
+                    &container_name,
+                    &config.network,
+                    false,
+                    Some(&static_ip),
+                )
                 .await
                 .expect("failed to disable cloudflared before data-plane validation");
         }
@@ -1721,21 +1829,24 @@ struct SystemIps {
 }
 
 fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
-    let base = network_cidr.split('/').next()?;
-    let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() == 4 {
-        let prefix = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
-        Some(SystemIps {
-            admin: format!("{prefix}.250"),
-            etcd: format!("{prefix}.251"),
-            ingress: format!("{prefix}.252"),
-            probe: format!("{prefix}.253"),
-            gateway: format!("{prefix}.249"),
-            dns: format!("{prefix}.254"),
-        })
-    } else {
-        None
-    }
+    let subnet = crate::cluster::network::Ipv4Cidr::parse(network_cidr).ok()?;
+    Some(SystemIps {
+        dns: subnet.host_address_from_end(1)?.to_string(),
+        probe: subnet.host_address_from_end(2)?.to_string(),
+        ingress: subnet.host_address_from_end(3)?.to_string(),
+        etcd: subnet.host_address_from_end(4)?.to_string(),
+        admin: subnet.host_address_from_end(5)?.to_string(),
+        gateway: subnet.host_address_from_end(6)?.to_string(),
+    })
+}
+
+pub(crate) fn cloudflared_ip_from_cidr(network_cidr: &str, replica: u32) -> Option<String> {
+    let subnet = crate::cluster::network::Ipv4Cidr::parse(network_cidr).ok()?;
+    let offset = 6_u32.checked_add(replica)?;
+    (replica <= MAX_CLOUDFLARED_REPLICAS)
+        .then(|| subnet.host_address_from_end(offset))
+        .flatten()
+        .map(|address| address.to_string())
 }
 
 pub fn build_etcd_tls_options(certs: Option<&EtcdCerts>) -> Option<etcd_client::TlsOptions> {
@@ -1769,20 +1880,67 @@ pub fn build_etcd_tls_from_files(
 }
 
 async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJobConfig) {
+    let name = config.name.clone();
     let job_id = supervisor.start_job(config);
     if let Some(job_id) = job_id {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let status = supervisor.job_status(&job_id).await;
             match status {
-                Some(s) => {
-                    if s.finished() || s == SupervisedJobStatus::Running {
-                        break;
-                    }
+                Some(SupervisedJobStatus::Running) => break,
+                Some(SupervisedJobStatus::Crashed | SupervisedJobStatus::Completed) | None => {
+                    panic!("[maestro]: system job `{name}` stopped during startup")
                 }
-                None => break,
+                Some(SupervisedJobStatus::Pending | SupervisedJobStatus::Stopped) => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("[maestro]: system job `{name}` did not start within 30 seconds");
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+}
+
+fn static_ip_from_flags(flags: &[String]) -> Option<String> {
+    flags
+        .windows(2)
+        .find(|pair| pair[0] == "--ip")
+        .map(|pair| pair[1].clone())
+}
+
+async fn await_container_ready(
+    runtime: &dyn RuntimeProvider,
+    container_name: &str,
+    expected_ip: Option<&str>,
+    readiness_address: Option<&str>,
+) {
+    let discovered_ip = runtime.inspect_container_ip(container_name).await;
+    match (expected_ip, discovered_ip.as_deref()) {
+        (Some(expected), Some(actual)) if expected != actual => panic!(
+            "[maestro]: system container `{container_name}` received `{actual}`, expected `{expected}`"
+        ),
+        (Some(_), Some(_)) | (None, Some(_)) => {}
+        (None, None) => panic!(
+            "[maestro]: system container `{container_name}` has no network address after startup"
+        ),
+        (Some(expected), None) => panic!(
+            "[maestro]: system container `{container_name}` did not acquire expected address `{expected}`"
+        ),
+    }
+    let Some(address) = readiness_address else {
+        return;
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if tokio::net::TcpStream::connect(&address).await.is_ok() {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "[maestro]: system container `{container_name}` did not accept TCP connections at `{address}` within 30 seconds"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -1790,6 +1948,89 @@ async fn await_job_running(supervisor: &mut JobSupervisor, config: SupervisedJob
 mod tests {
     use super::*;
     use crate::cluster::NodeRole;
+
+    fn cluster_runtime(role: NodeRole) -> crate::cluster::ClusterRuntime {
+        crate::cluster::ClusterRuntime {
+            cluster_id: "cluster-id".to_string(),
+            node_id: "node-a".to_string(),
+            instance_id: "instance-a".to_string(),
+            host_ip: "10.20.0.11".parse().unwrap(),
+            role,
+            initial_voters: vec![
+                "10.20.0.11:3001".parse().unwrap(),
+                "10.20.0.12:3101".parse().unwrap(),
+                "10.20.0.13:3201".parse().unwrap(),
+            ],
+            subnets: vec!["172.22.1.0/24".to_string()],
+            control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
+            api_port: 3001,
+            gateway_port: 3002,
+            etcd_client_port: 3003,
+            etcd_peer_port: 3004,
+            shared_registry: Some("registry.example.com/maestro".to_string()),
+            labels: Default::default(),
+            identity_api_port: Some(3001),
+        }
+    }
+
+    #[test]
+    fn containers_never_receive_the_host_loopback_etcd_endpoint() {
+        assert_eq!(
+            container_etcd_endpoints(None, &["https://127.0.0.1:35487".to_string()], false),
+            vec!["https://maestro-etcd:2379"]
+        );
+
+        let hybrid = cluster_runtime(NodeRole::Hybrid);
+        assert_eq!(
+            container_etcd_endpoints(
+                Some(&hybrid),
+                &[
+                    "https://10.20.0.11:3003".to_string(),
+                    "https://10.20.0.12:3103".to_string(),
+                ],
+                false,
+            ),
+            vec!["https://maestro-etcd:2379", "https://10.20.0.12:3103"]
+        );
+
+        let worker = cluster_runtime(NodeRole::Worker);
+        assert_eq!(
+            container_etcd_endpoints(
+                Some(&worker),
+                &["https://10.20.0.11:3003".to_string()],
+                false,
+            ),
+            vec!["https://10.20.0.11:3003"]
+        );
+    }
+
+    #[test]
+    fn system_addresses_use_the_actual_end_of_the_subnet() {
+        let legacy = system_ips_from_cidr("10.100.0.0/16").unwrap();
+        assert_eq!(legacy.dns, "10.100.255.254");
+        assert_eq!(legacy.admin, "10.100.255.250");
+        assert_eq!(legacy.gateway, "10.100.255.249");
+        assert_eq!(
+            cloudflared_ip_from_cidr("10.100.0.0/16", 1).as_deref(),
+            Some("10.100.255.248")
+        );
+
+        let cluster = system_ips_from_cidr("172.22.1.0/24").unwrap();
+        assert_eq!(cluster.dns, "172.22.1.254");
+        assert_eq!(cluster.admin, "172.22.1.250");
+        assert_eq!(
+            cloudflared_ip_from_cidr("172.22.1.0/24", 2).as_deref(),
+            Some("172.22.1.247")
+        );
+        assert!(cloudflared_ip_from_cidr("172.22.1.0/24", 26).is_none());
+    }
+
+    #[test]
+    fn production_access_log_flags_are_supported_by_the_pinned_config_shape() {
+        let flags = ingress_access_log_args();
+        assert!(flags.iter().any(|flag| flag == "--accesslog.format=json"));
+        assert!(!flags.iter().any(|flag| flag.contains("queryParameters")));
+    }
 
     #[test]
     fn node_roles_select_only_required_system_jobs() {

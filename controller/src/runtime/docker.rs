@@ -79,13 +79,19 @@ impl RuntimeProvider for DockerRuntimeProvider {
         name: &str,
         network: &str,
         enabled: bool,
+        static_ip: Option<&str>,
     ) -> Result<()> {
         let attached = docker_network_attached(name, network).await?;
         if attached == enabled {
             return Ok(());
         }
         if enabled {
-            cmd::run("docker", &["network", "connect", network, name]).await?;
+            let mut args = vec!["network", "connect"];
+            if let Some(ip) = static_ip {
+                args.extend(["--ip", ip]);
+            }
+            args.extend([network, name]);
+            cmd::run("docker", &args).await?;
         } else {
             cmd::run("docker", &["network", "disconnect", "-f", network, name]).await?;
         }

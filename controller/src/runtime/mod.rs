@@ -64,6 +64,7 @@ pub trait RuntimeProvider: Send + Sync {
         name: &str,
         _network: &str,
         enabled: bool,
+        _static_ip: Option<&str>,
     ) -> Result<()> {
         bail!(
             "runtime `{}` cannot {} container `{name}`",

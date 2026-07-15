@@ -1429,6 +1429,113 @@ async fn wait_for_leader(
     .map_err(|_| anyhow!("exactly one Maestro leader was not elected"))
 }
 
+/// Verifies the exact access-log flags used by production against the pinned Traefik image.
+/// Included in `cargo test-multi-node` because it requires a container daemon.
+#[test]
+#[ignore = "requires an isolated Linux container daemon"]
+fn production_traefik_access_log_config_starts() -> Result<()> {
+    let runtime_cli = test_runtime_cli()?;
+    ensure_image(&runtime_cli, crate::deployment::INGRESS_IMAGE_TAG)?;
+    let name = format!(
+        "maestro-traefik-config-test-{}",
+        crate::utils::nanoid::unique_id(10).to_ascii_lowercase()
+    );
+    let port = reserve_port_excluding(Ipv4Addr::LOCALHOST, &BTreeSet::new())?;
+    let publish = format!("127.0.0.1:{port}:8888");
+    let mut arguments = vec![
+        "run".to_string(),
+        "--detach".to_string(),
+        "--name".to_string(),
+        name.clone(),
+        "--publish".to_string(),
+        publish,
+        crate::deployment::INGRESS_IMAGE_TAG.to_string(),
+        "--entrypoints.web.address=:8888".to_string(),
+    ];
+    arguments.extend(crate::deployment::ingress_access_log_args());
+    let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let started = command_output(&runtime_cli, &references);
+    let result = started.and_then(|_| {
+        std::thread::sleep(Duration::from_secs(1));
+        let running = command_output(
+            &runtime_cli,
+            &["inspect", "--format", "{{.State.Running}}", &name],
+        )?;
+        if running.trim() != "true" {
+            bail!("pinned Traefik exited after parsing production access-log flags");
+        }
+        let socket = format!("127.0.0.1:{port}").parse()?;
+        std::net::TcpStream::connect_timeout(&socket, Duration::from_secs(2))
+            .context("the host could not reach Traefik on its published ingress port")?;
+        Ok(())
+    });
+    let _ = command_output(&runtime_cli, &["rm", "--force", &name]);
+    result
+}
+
+/// Exercises the single-node endpoint from a separate container, where host
+/// loopback would point at the caller rather than the etcd container.
+#[test]
+#[ignore = "requires an isolated Linux container daemon"]
+fn single_node_container_etcd_endpoint_is_reachable() -> Result<()> {
+    let runtime_cli = test_runtime_cli()?;
+    ensure_image(&runtime_cli, crate::deployment::ETCD_IMAGE_TAG)?;
+    let suffix = crate::utils::nanoid::unique_id(10).to_ascii_lowercase();
+    let network = format!("maestro-etcd-endpoint-test-{suffix}");
+    let etcd = format!("maestro-etcd-endpoint-{suffix}");
+    command_output(&runtime_cli, &["network", "create", &network])?;
+    let started = command_output(
+        &runtime_cli,
+        &[
+            "run",
+            "--detach",
+            "--network",
+            &network,
+            "--hostname",
+            "maestro-etcd",
+            "--name",
+            &etcd,
+            crate::deployment::ETCD_IMAGE_TAG,
+            "etcd",
+            "--listen-client-urls=http://0.0.0.0:2379",
+            "--advertise-client-urls=http://maestro-etcd:2379",
+        ],
+    );
+    let result = started.and_then(|_| {
+        let endpoint = crate::deployment::container_etcd_endpoints(
+            None,
+            &["http://127.0.0.1:39999".to_string()],
+            true,
+        )
+        .remove(0);
+        for _ in 0..30 {
+            let health = command_output(
+                &runtime_cli,
+                &[
+                    "run",
+                    "--rm",
+                    "--network",
+                    &network,
+                    crate::deployment::ETCD_IMAGE_TAG,
+                    "etcdctl",
+                    "--endpoints",
+                    &endpoint,
+                    "endpoint",
+                    "health",
+                ],
+            );
+            if health.is_ok() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        bail!("container-local etcd endpoint `{endpoint}` never became healthy")
+    });
+    let _ = command_output(&runtime_cli, &["rm", "--force", &etcd]);
+    let _ = command_output(&runtime_cli, &["network", "rm", &network]);
+    result
+}
+
 async fn fetch_body(client: &reqwest::Client, url: &str) -> Option<String> {
     let response = client.get(url).send().await.ok()?;
     if !response.status().is_success() {
@@ -2578,6 +2685,7 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
         deployment_id: "deployment-v1".to_string(),
         replica_index: 0,
         node_id: "workload-node".to_string(),
+        container_ip: None,
         replaces_assignment_id: None,
         created_at_ms: 1,
     };

@@ -17,6 +17,9 @@ pub struct ControllerConfig {
     pub data_dir: PathBuf,
     pub etcd_port: u16,
     pub etcd_endpoints: Vec<String>,
+    /// Etcd endpoints as seen from containers on the Maestro network. Host
+    /// loopback endpoints are deliberately never valid here.
+    pub container_etcd_endpoints: Vec<String>,
     pub probe_port: Option<u16>,
     pub admin_port: Option<u16>,
     pub ingress_ports: Vec<u16>,

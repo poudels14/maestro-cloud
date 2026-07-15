@@ -202,6 +202,11 @@ impl LeaderLoop {
             &traffic_by_service,
             now_ms,
         );
+        validation_errors.extend(scheduler::ensure_workload_addresses(
+            &mut planned.assignments,
+            &nodes,
+            &current_for_drains,
+        ));
 
         let planned_assignments = planned.assignments;
         let mut desired_by_node = BTreeMap::<String, Vec<Assignment>>::new();
@@ -564,6 +569,7 @@ impl LeaderLoop {
                 deployment_id: source.deployment_id.clone(),
                 replica_index: source.replica_index,
                 node_id: target.node_id.clone(),
+                container_ip: None,
                 replaces_assignment_id: Some(source.assignment_id.clone()),
                 created_at_ms: now_ms,
             });
@@ -1023,6 +1029,7 @@ mod tests {
             deployment_id: "dep1".to_string(),
             replica_index: index,
             node_id: format!("node-{index}"),
+            container_ip: None,
             replaces_assignment_id: None,
             created_at_ms: 1,
         }

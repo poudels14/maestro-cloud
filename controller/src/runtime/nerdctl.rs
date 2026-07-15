@@ -82,6 +82,7 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         name: &str,
         _network: &str,
         enabled: bool,
+        _static_ip: Option<&str>,
     ) -> Result<()> {
         let paused = nerdctl_container_paused(name).await?;
         if paused != enabled {

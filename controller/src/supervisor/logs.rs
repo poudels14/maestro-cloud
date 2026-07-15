@@ -40,14 +40,16 @@ pub async fn read_pipe_to_collector(
     while let Ok(Some(raw_line)) = lines.next_line().await {
         let line = strip_ansi(&raw_line);
         let mut parsed = parse_log_line(&line);
+        let mut emitted_line = line.clone();
         if source.as_ref() == "maestro-ingress" {
             normalize_ingress_access_log_attrs(&mut parsed.attrs);
+            emitted_line = sanitize_ingress_request_path(&line, &mut parsed);
         }
         if is_tailscale && is_tailscale_noise(&parsed.text) {
             continue;
         }
         if tee_to_stderr {
-            eprintln!("[{source}]: {line}");
+            eprintln!("[{source}]: {emitted_line}");
         }
 
         let entry = crate::logs::LogEntry {
@@ -323,6 +325,41 @@ fn normalize_ingress_access_log_attrs(attrs: &mut Vec<(String, String)>) {
         attrs.retain(|(name, _)| name != "maestro.client_ip");
         attrs.push(("maestro.client_ip".to_string(), address.to_string()));
     }
+}
+
+fn sanitize_ingress_request_path(line: &str, parsed: &mut ParsedLine) -> String {
+    let path = parsed
+        .attrs
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case("RequestPath"));
+    let Some((_, path)) = path else {
+        return line.to_string();
+    };
+    let sanitized_path = path.split('?').next().unwrap_or("/");
+    *path = if sanitized_path.is_empty() {
+        "/".to_string()
+    } else {
+        sanitized_path.to_string()
+    };
+
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return line.to_string();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return line.to_string();
+    };
+    let Some((_, request_path)) = object
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case("RequestPath"))
+    else {
+        return line.to_string();
+    };
+    *request_path = serde_json::Value::String(path.clone());
+    let sanitized = serde_json::to_string(&value).unwrap_or_else(|_| line.to_string());
+    if parsed.text == line {
+        parsed.text.clone_from(&sanitized);
+    }
+    sanitized
 }
 
 fn find_attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {

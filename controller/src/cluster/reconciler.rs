@@ -173,6 +173,7 @@ mod tests {
             deployment_id: "dep".to_string(),
             replica_index: replica,
             node_id: "node".to_string(),
+            container_ip: None,
             replaces_assignment_id: None,
             created_at_ms: 1,
         }

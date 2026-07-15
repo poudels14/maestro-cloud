@@ -1,6 +1,6 @@
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
-use crate::deployment::provider::ContainerDeploymentProvider;
+use crate::deployment::provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity};
 use crate::deployment::store::ClusterStore;
 use crate::deployment::types::{
     Command, ControllerConfig, Deployment, DeploymentBuildInfo, DeploymentStatus, QueuedDeployment,
@@ -105,6 +105,38 @@ fn command_planner_uses_image_for_deploy_when_present() {
             .collect(),
         }
     );
+}
+
+#[test]
+fn clustered_deploy_command_uses_the_reserved_assignment_address() {
+    let deployment = deployment_with_source(None, Some("traefik/whoami"), None);
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Nerdctl),
+        build_command_env: Default::default(),
+        shared_registry: None,
+        network: "test-net".to_string(),
+        dns_domain: None,
+        dns_server: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+    };
+    let identity = ReplicaRuntimeIdentity {
+        node_id: "node-a".to_string(),
+        service_id: "svc-1".to_string(),
+        deployment_id: deployment.id.clone(),
+        replica_index: 0,
+        assignment_id: "assignment-a".to_string(),
+        container_ip: "172.22.1.2".parse().unwrap(),
+        runtime_suffix: Some("node-3001".to_string()),
+    };
+
+    let deploy = planner
+        .deploy_with_identity(&deployment, 0, Some(&identity))
+        .expect("clustered deploy command");
+    let JobCommand::Exec { args, .. } = deploy.command else {
+        panic!("container deployment must use an exec command");
+    };
+    assert!(args.windows(2).any(|pair| pair == ["--ip", "172.22.1.2"]));
 }
 
 #[test]
@@ -536,6 +568,7 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         cluster_name: "test".to_string(),
         cluster: None,
         etcd_endpoints: Vec::new(),
+        container_etcd_endpoints: vec!["https://maestro-etcd:2379".to_string()],
         probe_port: None,
         admin_port: None,
         ingress_ports: vec![],

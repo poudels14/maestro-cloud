@@ -97,6 +97,7 @@ impl EtcdAssignmentStore {
             bail!("assignment manifest contains an assignment for another node");
         }
         let mut identities = BTreeMap::new();
+        let mut addresses = std::collections::BTreeSet::new();
         for assignment in &manifest.assignments {
             let identity = (
                 assignment.service_id.as_str(),
@@ -109,6 +110,11 @@ impl EtcdAssignmentStore {
                 .is_some()
             {
                 bail!("assignment manifest contains a duplicate assignment id");
+            }
+            if let Some(address) = assignment.container_ip
+                && !addresses.insert(address)
+            {
+                bail!("assignment manifest contains duplicate container address `{address}`");
             }
         }
         Ok(())
@@ -561,6 +567,7 @@ mod tests {
             deployment_id: "dep".to_string(),
             replica_index: 0,
             node_id: "worker-node1".to_string(),
+            container_ip: None,
             replaces_assignment_id: None,
             created_at_ms: 1,
         }

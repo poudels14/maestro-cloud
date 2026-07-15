@@ -683,6 +683,7 @@ impl Harness {
                 cluster_name: "test-cluster".to_string(),
                 cluster: None,
                 etcd_endpoints: Vec::new(),
+                container_etcd_endpoints: vec!["https://maestro-etcd:2379".to_string()],
                 probe_port: None,
                 admin_port: None,
                 ingress_ports: vec![],

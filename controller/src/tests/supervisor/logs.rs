@@ -103,14 +103,13 @@ fn traefik_access_log_exposes_structured_request_fields() {
     let line = r#"{"ClientHost":"10.100.0.255","DownstreamStatus":200,"Duration":186492218,"RequestHost":"app.example.com","RequestMethod":"GET","RequestPath":"/api/users?page=2","RequestScheme":"https","RouterName":"app@etcd","ServiceName":"app@etcd","entryPointName":"web","level":"info","msg":"","request_CF-Connecting-IP":"203.0.113.9","time":"2026-07-14T00:01:12Z"}"#;
     let mut parsed = parse_log_line(line);
     normalize_ingress_access_log_attrs(&mut parsed.attrs);
+    let emitted = sanitize_ingress_request_path(line, &mut parsed);
 
-    assert_eq!(parsed.text, line);
+    assert!(!parsed.text.contains("page=2"));
+    assert!(!emitted.contains("page=2"));
     assert_eq!(parsed.level.as_deref(), Some("info"));
     assert_eq!(find_attr(&parsed.attrs, "RequestMethod"), Some("GET"));
-    assert_eq!(
-        find_attr(&parsed.attrs, "RequestPath"),
-        Some("/api/users?page=2")
-    );
+    assert_eq!(find_attr(&parsed.attrs, "RequestPath"), Some("/api/users"));
     assert_eq!(find_attr(&parsed.attrs, "DownstreamStatus"), Some("200"));
     assert_eq!(
         find_attr(&parsed.attrs, "RequestHost"),
