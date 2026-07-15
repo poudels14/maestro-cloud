@@ -246,6 +246,10 @@ pub struct NodeRecord {
     pub last_seen_at_ms: i64,
     pub lost_at_ms: Option<i64>,
     pub data_plane_lost_at_ms: Option<i64>,
+    #[serde(default)]
+    pub control_plane_alerted_at_ms: Option<i64>,
+    #[serde(default)]
+    pub data_plane_alerted_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

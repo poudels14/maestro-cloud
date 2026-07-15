@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cluster::types::NodeInfo;
 use crate::deployment::store::ClusterStore;
 use crate::logs::Logger;
 use crate::utils::crypto::SecretString;
@@ -100,6 +101,27 @@ impl SlackNotifier {
         self.dispatch(SlackCategory::Info, text);
     }
 
+    pub fn notify_node_down(&self, node: &NodeInfo) {
+        let text = node_down_message(&self.inner.cluster_name, node);
+        self.dispatch(SlackCategory::Error, text);
+    }
+
+    pub fn notify_node_recovered(&self, node: &NodeInfo, unavailable_for_ms: i64) {
+        let text = node_recovered_message(&self.inner.cluster_name, node, unavailable_for_ms);
+        self.dispatch(SlackCategory::Info, text);
+    }
+
+    pub fn notify_node_unavailable(&self, node: &NodeInfo, reason: &str, unavailable_for_ms: i64) {
+        let text =
+            node_unavailable_message(&self.inner.cluster_name, node, reason, unavailable_for_ms);
+        self.dispatch(SlackCategory::Error, text);
+    }
+
+    pub fn notify_node_available(&self, node: &NodeInfo, unavailable_for_ms: i64) {
+        let text = node_available_message(&self.inner.cluster_name, node, unavailable_for_ms);
+        self.dispatch(SlackCategory::Info, text);
+    }
+
     fn dispatch(&self, category: SlackCategory, text: String) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
@@ -156,4 +178,119 @@ fn short_version(version: &str) -> String {
     let stripped = version.strip_prefix("cfg-").unwrap_or(version);
     let short: String = stripped.chars().take(7).collect();
     format!("cfg-{short}")
+}
+
+fn node_label(node: &NodeInfo) -> String {
+    format!("`{}` (`{}`)", node.hostname, node.node_id)
+}
+
+fn node_down_message(cluster_name: &str, node: &NodeInfo) -> String {
+    format!(
+        ":red_circle: *Node down* — {}\n> cluster: `{cluster_name}` · role: `{}` · address: `{}:{}`\n> control-plane heartbeat expired",
+        node_label(node),
+        node.role,
+        node.cluster_host_ip,
+        node.cluster_api_port,
+    )
+}
+
+fn node_recovered_message(cluster_name: &str, node: &NodeInfo, unavailable_for_ms: i64) -> String {
+    format!(
+        ":large_green_circle: *Node recovered* — {}\n> cluster: `{cluster_name}` · role: `{}` · downtime: `{}`",
+        node_label(node),
+        node.role,
+        format_duration(unavailable_for_ms),
+    )
+}
+
+fn node_unavailable_message(
+    cluster_name: &str,
+    node: &NodeInfo,
+    reason: &str,
+    unavailable_for_ms: i64,
+) -> String {
+    format!(
+        ":warning: *Node unavailable* — {}\n> cluster: `{cluster_name}` · role: `{}` · address: `{}:{}` · unavailable for: `{}`\n> reason: {reason}",
+        node_label(node),
+        node.role,
+        node.cluster_host_ip,
+        node.cluster_gateway_port,
+        format_duration(unavailable_for_ms),
+    )
+}
+
+fn node_available_message(cluster_name: &str, node: &NodeInfo, unavailable_for_ms: i64) -> String {
+    format!(
+        ":white_check_mark: *Node available* — {}\n> cluster: `{cluster_name}` · role: `{}` · unavailable for: `{}`",
+        node_label(node),
+        node.role,
+        format_duration(unavailable_for_ms),
+    )
+}
+
+fn format_duration(milliseconds: i64) -> String {
+    let seconds = milliseconds.max(0) / 1_000;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = seconds / 60;
+    let remaining_seconds = seconds % 60;
+    if minutes < 60 {
+        return format!("{minutes}m {remaining_seconds}s");
+    }
+    let hours = minutes / 60;
+    let remaining_minutes = minutes % 60;
+    format!("{hours}h {remaining_minutes}m")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::cluster::types::NodeRole;
+
+    fn node() -> NodeInfo {
+        NodeInfo {
+            node_id: "node00000001".to_string(),
+            instance_id: "boot-1".to_string(),
+            hostname: "worker-1".to_string(),
+            role: NodeRole::Worker,
+            cluster_host_ip: "10.20.0.11".parse().unwrap(),
+            cluster_api_port: 3101,
+            cluster_gateway_port: 3102,
+            subnet: "172.22.1.0/24".to_string(),
+            tailscale_ip: None,
+            data_plane_ready: false,
+            data_plane_checked_at_ms: 0,
+            data_plane_error: None,
+            version: "test".to_string(),
+            started_at_ms: 1,
+            labels: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn node_alert_messages_identify_the_cluster_node_and_failure() {
+        let node = node();
+        let down = node_down_message("staging", &node);
+        assert!(down.contains("*Node down*"));
+        assert!(down.contains("`staging`"));
+        assert!(down.contains("`worker-1` (`node00000001`)"));
+        assert!(down.contains("`10.20.0.11:3101`"));
+
+        let unavailable = node_unavailable_message("staging", &node, "gateway timed out", 31_000);
+        assert!(unavailable.contains("*Node unavailable*"));
+        assert!(unavailable.contains("`10.20.0.11:3102`"));
+        assert!(unavailable.contains("`31s`"));
+        assert!(unavailable.contains("gateway timed out"));
+    }
+
+    #[test]
+    fn recovery_messages_include_a_readable_incident_duration() {
+        let node = node();
+        assert!(node_recovered_message("prod", &node, 125_000).contains("`2m 5s`"));
+        assert!(node_available_message("prod", &node, 7_440_000).contains("`2h 4m`"));
+        assert_eq!(format_duration(-1), "0s");
+    }
 }

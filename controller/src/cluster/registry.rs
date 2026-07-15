@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +15,30 @@ use tokio::sync::{Mutex, broadcast};
 use crate::cluster::types::{LeadershipToken, NodeId, NodeInfo, NodeRecord, NodeState};
 use crate::logs::Logger;
 
+const DATA_PLANE_STALE_AFTER_MS: i64 = 15_000;
+const DATA_PLANE_ALERT_AFTER_MS: i64 = 30_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeAvailabilityEvent {
+    Down {
+        node: NodeInfo,
+        since_ms: i64,
+    },
+    Recovered {
+        node: NodeInfo,
+        since_ms: i64,
+    },
+    DataPlaneUnavailable {
+        node: NodeInfo,
+        since_ms: i64,
+        reason: String,
+    },
+    DataPlaneRecovered {
+        node: NodeInfo,
+        since_ms: i64,
+    },
+}
+
 #[async_trait]
 pub trait NodeRegistry: Send + Sync {
     async fn register(&self, info: NodeInfo) -> Result<()>;
@@ -29,9 +54,9 @@ pub trait NodeRegistry: Send + Sync {
     async fn reconcile_liveness(
         &self,
         token: &LeadershipToken,
-        live_node_ids: &[NodeId],
+        live_nodes: &[NodeInfo],
         now_ms: i64,
-    ) -> Result<()>;
+    ) -> Result<Vec<NodeAvailabilityEvent>>;
     async fn update_data_plane_status(
         &self,
         instance_id: &str,
@@ -131,13 +156,37 @@ impl EtcdNodeRegistry {
             info.subnet.replace('.', "-").replace('/', "_")
         );
         let value = serde_json::to_vec(info)?;
+        let mut client = self.client.lock().await;
+        let previous_record_response = client.get(record_key.clone(), None).await?;
+        let previous_record_compare = previous_record_response.kvs().first().map_or_else(
+            || Compare::version(record_key.clone(), CompareOp::Equal, 0),
+            |entry| Compare::value(record_key.clone(), CompareOp::Equal, entry.value()),
+        );
+        let previous_record = previous_record_response
+            .kvs()
+            .first()
+            .map(|entry| serde_json::from_slice::<NodeRecord>(entry.value()))
+            .transpose()?;
+        let registered_at_ms = now_millis();
         let record = serde_json::to_vec(&NodeRecord {
             last_info: info.clone(),
-            last_seen_at_ms: now_millis(),
+            last_seen_at_ms: registered_at_ms,
             lost_at_ms: None,
-            data_plane_lost_at_ms: None,
+            data_plane_lost_at_ms: if info.data_plane_ready {
+                None
+            } else {
+                previous_record
+                    .as_ref()
+                    .and_then(|record| record.data_plane_lost_at_ms)
+                    .or(Some(registered_at_ms))
+            },
+            control_plane_alerted_at_ms: previous_record
+                .as_ref()
+                .and_then(|record| record.control_plane_alerted_at_ms),
+            data_plane_alerted_at_ms: previous_record
+                .as_ref()
+                .and_then(|record| record.data_plane_alerted_at_ms),
         })?;
-        let mut client = self.client.lock().await;
         let control = reservation(&mut client, &control_key, &self.node_id).await?;
         let subnet = reservation(&mut client, &subnet_key, &self.node_id).await?;
         let active_control = serde_json::to_vec(&serde_json::json!({
@@ -155,6 +204,7 @@ impl EtcdNodeRegistry {
                 Compare::version(key.clone(), CompareOp::Equal, 0),
                 Compare::value(control_key.clone(), CompareOp::Equal, control),
                 Compare::value(subnet_key.clone(), CompareOp::Equal, subnet),
+                previous_record_compare,
             ])
             .and_then([
                 TxnOp::put(key, value, Some(PutOptions::new().with_lease(lease_id))),
@@ -290,12 +340,14 @@ impl NodeRegistry for EtcdNodeRegistry {
     async fn reconcile_liveness(
         &self,
         token: &LeadershipToken,
-        live_node_ids: &[NodeId],
+        live_nodes: &[NodeInfo],
         now_ms: i64,
-    ) -> Result<()> {
-        let live = live_node_ids
+    ) -> Result<Vec<NodeAvailabilityEvent>> {
+        let live = live_nodes
             .iter()
-            .collect::<std::collections::HashSet<_>>();
+            .map(|node| (node.node_id.as_str(), node))
+            .collect::<HashMap<_, _>>();
+        let mut events = Vec::new();
         let mut client = self.client.lock().await;
         let response = client
             .get(
@@ -305,21 +357,14 @@ impl NodeRegistry for EtcdNodeRegistry {
             .await?;
         for entry in response.kvs() {
             let mut record: NodeRecord = serde_json::from_slice(entry.value())?;
-            let is_live = live.contains(&record.last_info.node_id);
-            let changed = if is_live {
-                if record.lost_at_ms.is_some() {
-                    record.lost_at_ms = None;
-                    true
-                } else {
-                    false
-                }
-            } else if record.lost_at_ms.is_none() {
-                record.lost_at_ms = Some(now_ms);
-                true
-            } else {
-                false
-            };
-            if !changed {
+            let previous = record.clone();
+            let node_id = record.last_info.node_id.clone();
+            let node_events = reconcile_availability_record(
+                &mut record,
+                live.get(node_id.as_str()).copied(),
+                now_ms,
+            );
+            if record == previous {
                 continue;
             }
             let transaction = Txn::new()
@@ -335,8 +380,9 @@ impl NodeRegistry for EtcdNodeRegistry {
             if !client.txn(transaction).await?.succeeded() {
                 bail!("leadership or node-record CAS rejected liveness reconciliation");
             }
+            events.extend(node_events);
         }
-        Ok(())
+        Ok(events)
     }
 
     async fn update_data_plane_status(
@@ -366,11 +412,15 @@ impl NodeRegistry for EtcdNodeRegistry {
         info.data_plane_error = error;
         let value = serde_json::to_vec(&info)?;
         let previous_record = client.get(record_key.clone(), None).await?;
-        let previous_data_plane_lost_at = previous_record
+        let previous_record_compare = previous_record.kvs().first().map_or_else(
+            || Compare::version(record_key.clone(), CompareOp::Equal, 0),
+            |entry| Compare::value(record_key.clone(), CompareOp::Equal, entry.value()),
+        );
+        let previous_record = previous_record
             .kvs()
             .first()
-            .and_then(|entry| serde_json::from_slice::<NodeRecord>(entry.value()).ok())
-            .and_then(|record| record.data_plane_lost_at_ms);
+            .map(|entry| serde_json::from_slice::<NodeRecord>(entry.value()))
+            .transpose()?;
         let record = serde_json::to_vec(&NodeRecord {
             last_info: info,
             last_seen_at_ms: checked_at_ms,
@@ -378,13 +428,23 @@ impl NodeRegistry for EtcdNodeRegistry {
             data_plane_lost_at_ms: if ready {
                 None
             } else {
-                previous_data_plane_lost_at.or(Some(checked_at_ms))
+                previous_record
+                    .as_ref()
+                    .and_then(|record| record.data_plane_lost_at_ms)
+                    .or(Some(checked_at_ms))
             },
+            control_plane_alerted_at_ms: previous_record
+                .as_ref()
+                .and_then(|record| record.control_plane_alerted_at_ms),
+            data_plane_alerted_at_ms: previous_record
+                .as_ref()
+                .and_then(|record| record.data_plane_alerted_at_ms),
         })?;
         let transaction = Txn::new()
             .when([
                 Compare::value(key.clone(), CompareOp::Equal, existing_value),
                 Compare::lease(key.clone(), CompareOp::Equal, lease_id),
+                previous_record_compare,
             ])
             .and_then([
                 TxnOp::put(key, value, Some(PutOptions::new().with_lease(lease_id))),
@@ -407,6 +467,89 @@ fn node_record_key(node_id: &str) -> String {
 
 fn node_state_key(node_id: &str) -> String {
     format!("/maetro/cluster/node-state/{node_id}")
+}
+
+fn reconcile_availability_record(
+    record: &mut NodeRecord,
+    live: Option<&NodeInfo>,
+    now_ms: i64,
+) -> Vec<NodeAvailabilityEvent> {
+    let mut events = Vec::new();
+    let Some(live) = live else {
+        let lost_at_ms = *record.lost_at_ms.get_or_insert(now_ms);
+        if record.control_plane_alerted_at_ms.is_none() {
+            record.control_plane_alerted_at_ms = Some(lost_at_ms);
+            events.push(NodeAvailabilityEvent::Down {
+                node: record.last_info.clone(),
+                since_ms: lost_at_ms,
+            });
+        }
+        record.data_plane_lost_at_ms = None;
+        record.data_plane_alerted_at_ms = None;
+        return events;
+    };
+
+    record.lost_at_ms = None;
+    if let Some(since_ms) = record.control_plane_alerted_at_ms.take() {
+        events.push(NodeAvailabilityEvent::Recovered {
+            node: live.clone(),
+            since_ms,
+        });
+    }
+
+    let unavailable = if !live.data_plane_ready {
+        Some(
+            record
+                .data_plane_lost_at_ms
+                .or((live.data_plane_checked_at_ms > 0).then_some(live.data_plane_checked_at_ms))
+                .unwrap_or(now_ms),
+        )
+    } else if live.data_plane_checked_at_ms <= 0 {
+        Some(record.data_plane_lost_at_ms.unwrap_or(now_ms))
+    } else if now_ms.saturating_sub(live.data_plane_checked_at_ms) > DATA_PLANE_STALE_AFTER_MS {
+        Some(record.data_plane_lost_at_ms.unwrap_or_else(|| {
+            live.data_plane_checked_at_ms
+                .saturating_add(DATA_PLANE_STALE_AFTER_MS)
+        }))
+    } else {
+        None
+    };
+    record.data_plane_lost_at_ms = unavailable;
+
+    match unavailable {
+        Some(since_ms)
+            if now_ms.saturating_sub(since_ms) >= DATA_PLANE_ALERT_AFTER_MS
+                && record.data_plane_alerted_at_ms.is_none() =>
+        {
+            record.data_plane_alerted_at_ms = Some(since_ms);
+            let reason = live
+                .data_plane_error
+                .clone()
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or_else(|| {
+                    if live.data_plane_ready {
+                        "data-plane health updates are stale".to_string()
+                    } else {
+                        "node gateway health check failed".to_string()
+                    }
+                });
+            events.push(NodeAvailabilityEvent::DataPlaneUnavailable {
+                node: live.clone(),
+                since_ms,
+                reason,
+            });
+        }
+        None => {
+            if let Some(since_ms) = record.data_plane_alerted_at_ms.take() {
+                events.push(NodeAvailabilityEvent::DataPlaneRecovered {
+                    node: live.clone(),
+                    since_ms,
+                });
+            }
+        }
+        Some(_) => {}
+    }
+    events
 }
 
 fn now_millis() -> i64 {
@@ -520,10 +663,10 @@ impl NodeRegistry for InMemoryNodeRegistry {
     async fn reconcile_liveness(
         &self,
         _token: &LeadershipToken,
-        _live_node_ids: &[NodeId],
+        _live_nodes: &[NodeInfo],
         _now_ms: i64,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Vec<NodeAvailabilityEvent>> {
+        Ok(Vec::new())
     }
 
     async fn update_data_plane_status(
@@ -575,6 +718,17 @@ mod tests {
         }
     }
 
+    fn node_record(info: NodeInfo) -> NodeRecord {
+        NodeRecord {
+            last_info: info,
+            last_seen_at_ms: 1,
+            lost_at_ms: None,
+            data_plane_lost_at_ms: None,
+            control_plane_alerted_at_ms: None,
+            data_plane_alerted_at_ms: None,
+        }
+    }
+
     #[tokio::test]
     async fn duplicate_live_instance_is_rejected() {
         let registry = InMemoryNodeRegistry::new("node00000001".to_string());
@@ -603,5 +757,99 @@ mod tests {
             .await
             .expect("current monitor");
         assert!(registry.list_nodes().await.expect("nodes")[0].data_plane_ready);
+    }
+
+    #[test]
+    fn control_plane_loss_and_recovery_emit_once_per_transition() {
+        let mut live = node_info("boot-1");
+        live.data_plane_ready = true;
+        live.data_plane_checked_at_ms = 100;
+        let mut record = node_record(live.clone());
+
+        let down = reconcile_availability_record(&mut record, None, 1_000);
+        assert!(matches!(
+            down.as_slice(),
+            [NodeAvailabilityEvent::Down {
+                since_ms: 1_000,
+                ..
+            }]
+        ));
+        assert!(reconcile_availability_record(&mut record, None, 2_000).is_empty());
+
+        let recovered = reconcile_availability_record(&mut record, Some(&live), 5_000);
+        assert!(matches!(
+            recovered.as_slice(),
+            [NodeAvailabilityEvent::Recovered {
+                since_ms: 1_000,
+                ..
+            }]
+        ));
+        assert!(reconcile_availability_record(&mut record, Some(&live), 6_000).is_empty());
+    }
+
+    #[test]
+    fn data_plane_alert_waits_for_grace_and_recovers_once() {
+        let mut unavailable = node_info("boot-1");
+        unavailable.data_plane_checked_at_ms = 1_000;
+        unavailable.data_plane_error = Some("gateway timed out".to_string());
+        let mut record = node_record(unavailable.clone());
+
+        assert!(reconcile_availability_record(&mut record, Some(&unavailable), 30_999).is_empty());
+        let alert = reconcile_availability_record(&mut record, Some(&unavailable), 31_000);
+        assert!(matches!(
+            alert.as_slice(),
+            [NodeAvailabilityEvent::DataPlaneUnavailable {
+                since_ms: 1_000,
+                reason,
+                ..
+            }] if reason == "gateway timed out"
+        ));
+        assert!(reconcile_availability_record(&mut record, Some(&unavailable), 35_000).is_empty());
+
+        let mut recovered = unavailable.clone();
+        recovered.data_plane_ready = true;
+        recovered.data_plane_checked_at_ms = 36_000;
+        recovered.data_plane_error = None;
+        let recovery = reconcile_availability_record(&mut record, Some(&recovered), 36_000);
+        assert!(matches!(
+            recovery.as_slice(),
+            [NodeAvailabilityEvent::DataPlaneRecovered {
+                since_ms: 1_000,
+                ..
+            }]
+        ));
+        assert!(reconcile_availability_record(&mut record, Some(&recovered), 37_000).is_empty());
+    }
+
+    #[test]
+    fn stale_data_plane_updates_become_an_unavailable_incident() {
+        let mut live = node_info("boot-1");
+        live.data_plane_ready = true;
+        live.data_plane_checked_at_ms = 1_000;
+        let mut record = node_record(live.clone());
+
+        assert!(reconcile_availability_record(&mut record, Some(&live), 45_999).is_empty());
+        let alert = reconcile_availability_record(&mut record, Some(&live), 46_000);
+        assert!(matches!(
+            alert.as_slice(),
+            [NodeAvailabilityEvent::DataPlaneUnavailable {
+                since_ms: 16_000,
+                reason,
+                ..
+            }] if reason == "data-plane health updates are stale"
+        ));
+    }
+
+    #[test]
+    fn legacy_node_records_default_alert_markers() {
+        let value = serde_json::json!({
+            "lastInfo": node_info("boot-1"),
+            "lastSeenAtMs": 1,
+            "lostAtMs": null,
+            "dataPlaneLostAtMs": null
+        });
+        let record: NodeRecord = serde_json::from_value(value).expect("legacy node record");
+        assert_eq!(record.control_plane_alerted_at_ms, None);
+        assert_eq!(record.data_plane_alerted_at_ms, None);
     }
 }

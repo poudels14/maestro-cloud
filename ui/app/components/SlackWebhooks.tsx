@@ -40,6 +40,10 @@ function SlackWebhooks() {
     <div>
       <div class="mb-4">
         <SectionHeader>Slack webhooks</SectionHeader>
+        <p class="mt-1 text-xs text-gray-400">
+          Error notifications include deployment crashes and node failures; info notifications
+          include lifecycle updates and node recoveries.
+        </p>
       </div>
       <Show when={actionError()}>
         <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
