@@ -28,6 +28,17 @@ use crate::utils::time::current_time_millis;
 const MAX_STATUS_TXN_RETRIES: usize = 8;
 const MAX_TXN_RETRIES: usize = 16;
 
+fn is_missing_election_leader(error: &etcd_client::Error) -> bool {
+    matches!(
+        error,
+        etcd_client::Error::GRpcStatus(status) if is_missing_election_leader_message(status.message())
+    )
+}
+
+fn is_missing_election_leader_message(message: &str) -> bool {
+    message == "election: no leader"
+}
+
 #[derive(Clone)]
 pub struct EtcdStateStore {
     client: Arc<tokio::sync::Mutex<EtcdClient>>,
@@ -712,12 +723,17 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn read_cluster_leader(&self) -> Result<Option<crate::cluster::LeaderInfo>> {
-        let response = self
+        let response = match self
             .client
             .lock()
             .await
             .leader("/maetro/cluster/leader")
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if is_missing_election_leader(&error) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         Ok(response.kv().and_then(|entry| {
             std::str::from_utf8(entry.value())
                 .ok()
