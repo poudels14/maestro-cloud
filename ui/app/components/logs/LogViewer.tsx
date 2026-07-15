@@ -1,5 +1,15 @@
-import { createEffect, createSignal, For, Show, Switch, Match, on, onCleanup } from "solid-js";
-import { ChevronUp, ListFilter, Search, X, Loader2 } from "lucide-solid";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Show,
+  Switch,
+  Match,
+  on,
+  onCleanup
+} from "solid-js";
+import { ChevronUp, Loader2 } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import {
@@ -12,7 +22,7 @@ import {
   type LogHistogramBucket
 } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { logLevelColors, httpFields, tsFormatter } from "../../lib/logFormat";
+import { httpFields, tsFormatter } from "../../lib/logFormat";
 import {
   TimeCell,
   ExpanderCell,
@@ -25,6 +35,7 @@ import {
 } from "./cells";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { LogHistogramChart } from "./LogHistogram";
+import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
 
 const COL = {
   time: "sm:w-[118px]",
@@ -37,8 +48,6 @@ const COL = {
 const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
 const HISTOGRAM_POLL_INTERVAL_MS = 30_000;
-const ALWAYS_SHOW_LEVELS = ["error", "warn", "info"];
-const OPTIONAL_LEVELS = ["debug", "trace"];
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000 },
   { label: "6h", ms: 21_600_000 },
@@ -67,7 +76,6 @@ function LogViewer(props: {
   const [hasMore, setHasMore] = createSignal(false);
   const [queryDraft, setQueryDraft] = createSignal("");
   const [query, setQuery] = createSignal("");
-  const [levelFilter, setLevelFilter] = createSignal<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
   const [pollCursor, setPollCursor] = createSignal(0);
@@ -89,18 +97,56 @@ function LogViewer(props: {
     return all.filter((line) => !line.source?.endsWith("/build"));
   };
 
+  const queryCatalog = createMemo<LogQueryCatalog>(() => {
+    const fields = new Set<string>();
+    const values = new Map<string, Set<string>>();
+    const addValue = (field: string, value: string | undefined) => {
+      const normalized = value?.trim();
+      if (!normalized || normalized.length > 160) return;
+      let candidates = values.get(field);
+      if (!candidates) {
+        candidates = new Set();
+        values.set(field, candidates);
+      }
+      if (candidates.size < 25) candidates.add(normalized);
+    };
+
+    addValue("service", props.serviceId);
+    for (const line of phaseLines()) {
+      addValue("level", line.level.toLowerCase());
+      addValue("status", line.level.toLowerCase());
+      addValue("source", line.source);
+      const http = httpFields(line.attrs);
+      addValue("@http.status_code", http.status);
+      for (const [name, value] of line.attrs ?? []) {
+        if (!/^[A-Za-z0-9._-]+$/.test(name)) continue;
+        const field = `@${name}`;
+        fields.add(field);
+        addValue(field, value);
+      }
+    }
+
+    return {
+      fields: Array.from(fields)
+        .sort((left, right) => left.localeCompare(right))
+        .slice(0, 100),
+      values: new Map(
+        Array.from(values, ([field, candidates]) => [
+          field,
+          Array.from(candidates).sort((left, right) =>
+            left.localeCompare(right, undefined, { numeric: true })
+          )
+        ])
+      )
+    };
+  });
+
   const filteredLines = () => {
     return phaseLines();
   };
 
   const requestQuery = () => {
-    const terms: string[] = [];
-    const entered = query().trim();
-    if (entered) terms.push(`(${entered})`);
-    const levels = Array.from(levelFilter()).sort();
-    if (levels.length === 1) terms.push(`level:${levels[0]}`);
-    if (levels.length > 1) terms.push(`(${levels.map((level) => `level:${level}`).join(" OR ")})`);
-    return terms.join(" AND ");
+    return query().trim();
   };
 
   const applyQuery = () => setQuery(queryDraft().trim());
@@ -177,35 +223,6 @@ function LogViewer(props: {
       if (method || status || path) return true;
     }
     return false;
-  };
-
-  const availableLevels = () => {
-    const present = new Set<string>();
-    for (const line of phaseLines()) present.add(line.level.toLowerCase());
-    const ordered: string[] = [...ALWAYS_SHOW_LEVELS];
-    for (const level of OPTIONAL_LEVELS) {
-      if (present.has(level)) ordered.push(level);
-    }
-    for (const level of Array.from(present).sort()) {
-      if (!ordered.includes(level)) ordered.push(level);
-    }
-    return ordered;
-  };
-
-  const levelCounts = () => {
-    const counts = new Map<string, number>();
-    for (const line of phaseLines()) {
-      const key = line.level.toLowerCase();
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  };
-
-  const toggleLevel = (level: string) => {
-    const next = new Set(levelFilter());
-    if (next.has(level)) next.delete(level);
-    else next.add(level);
-    setLevelFilter(next);
   };
 
   const toggleExpanded = (seq: number) => {
@@ -596,79 +613,21 @@ function LogViewer(props: {
         </div>
       </Show>
       <div class="px-3 py-2 border-b border-gray-100 flex items-center gap-3">
-        <div class="relative flex-1 min-w-0">
-          <button
-            type="button"
-            onClick={applyQuery}
-            title="Apply log query"
-            class="absolute left-1.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-indigo-600 outline-none rounded hover:bg-indigo-50"
-          >
-            <Search class="size-3.5" />
-          </button>
-          <input
-            type="text"
-            value={queryDraft()}
-            onInput={(ev) => setQueryDraft(ev.currentTarget.value)}
-            onKeyDown={(ev) => {
-              if (ev.key === "Enter") applyQuery();
-            }}
-            placeholder="Filter logs… e.g. @http.status_code:[500 TO 599]"
-            title="Datadog-style query; press Enter to apply"
-            class="w-full text-sm pl-8 pr-8 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
-          />
-          <Show when={queryDraft().length > 0}>
-            <button
-              type="button"
-              onClick={() => {
-                setQueryDraft("");
-                setQuery("");
-              }}
-              title="Clear"
-              class="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
-            >
-              <X class="size-3" />
-            </button>
-          </Show>
-        </div>
-        <Show when={availableLevels().length > 0}>
-          <div class="flex items-center gap-1.5 shrink-0">
-            <ListFilter class="size-3.5 text-gray-400 mr-0.5 shrink-0" />
-            <For each={availableLevels()}>
-              {(level) => {
-                const active = () => levelFilter().has(level);
-                const count = () => levelCounts().get(level) ?? 0;
-                const empty = () => count() === 0;
-                const colors = logLevelColors(level);
-                return (
-                  <button
-                    type="button"
-                    onClick={() => toggleLevel(level)}
-                    aria-pressed={active()}
-                    class={clsx(
-                      "inline-flex items-center gap-1.5 text-[11px] pl-1.5 pr-2 py-0.5 rounded-md border transition-[background-color,border-color,color,transform] duration-150 ease-out-strong active:scale-[0.96] outline-none",
-                      active() && `${colors.pillActive} font-medium`,
-                      !active() &&
-                        "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800",
-                      !active() && empty() && "opacity-40"
-                    )}
-                  >
-                    <span class={clsx("size-1.5 rounded-full shrink-0", colors.dot)} />
-                    <span class="capitalize">{level}</span>
-                  </button>
-                );
-              }}
-            </For>
-            <Show when={levelFilter().size > 0}>
-              <button
-                type="button"
-                onClick={() => setLevelFilter(new Set())}
-                class="text-[11px] text-gray-400 hover:text-gray-600 ml-0.5 outline-none"
-              >
-                Clear
-              </button>
-            </Show>
-          </div>
-        </Show>
+        <LogQueryInput
+          value={queryDraft()}
+          appliedQuery={query()}
+          catalog={queryCatalog()}
+          onInput={setQueryDraft}
+          onApply={applyQuery}
+          onClear={() => {
+            setQueryDraft("");
+            setQuery("");
+          }}
+          onAppliedQueryChange={(value) => {
+            setQueryDraft(value);
+            setQuery(value);
+          }}
+        />
       </div>
       <div ref={scrollRef} onScroll={onScroll} class="max-h-[600px] overflow-y-auto">
         <Switch>
