@@ -55,7 +55,7 @@ pub fn run_init() -> Result<()> {
     }
 }
 
-pub fn run_validate(path: &PathBuf) -> Result<()> {
+pub async fn run_validate(path: &PathBuf) -> Result<()> {
     let raw = std::fs::read_to_string(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             Error::not_found(format!("{} does not exist", path.display()))
@@ -67,6 +67,7 @@ pub fn run_validate(path: &PathBuf) -> Result<()> {
         .map_err(|err| Error::invalid_config(format!("{}: invalid JSON: {err}", path.display())))?;
     let has_services = value.get("services").is_some();
     let has_cluster = value.get("cluster").is_some();
+    let has_extends = value.get("$extends").is_some();
     let kind = match (has_services, has_cluster) {
         (true, false) => "services",
         (false, true) => "cluster",
@@ -76,6 +77,7 @@ pub fn run_validate(path: &PathBuf) -> Result<()> {
                 path.display()
             )));
         }
+        (false, false) if has_extends => "cluster",
         (false, false) => {
             return Err(Error::invalid_config(format!(
                 "{}: unrecognized config — expected a top-level `services` or `cluster` key",
@@ -84,9 +86,12 @@ pub fn run_validate(path: &PathBuf) -> Result<()> {
         }
     };
     if kind == "cluster" {
-        json5::from_str::<StartConfig>(&raw).map_err(|err| {
-            Error::invalid_config(format!("{}: invalid cluster config: {err}", path.display()))
-        })?;
+        crate::config::load_config(&path.to_string_lossy())
+            .await
+            .map(|_: StartConfig| ())
+            .map_err(|err| {
+                Error::invalid_config(format!("{}: invalid cluster config: {err}", path.display()))
+            })?;
     } else {
         let cluster = crate::cli::rollout::parse_cluster_config(&raw)?;
         for (service_id, template) in &cluster.services {

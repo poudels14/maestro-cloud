@@ -1,5 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/poudels14/maestro-cloud/release/controller/maestro.start.schema.json",
+  // Inherit a shared config, then keep only node-specific overrides here:
+  // "$extends": "aws-secret://maestro/production/common",
   "cluster": {
     "name": "my-cluster"
     // For multi-node mode, add a comma after "my-cluster", then uncomment the
