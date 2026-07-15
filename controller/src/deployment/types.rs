@@ -139,12 +139,20 @@ impl ServiceConfig {
         for value in config.deploy.env.items.values_mut() {
             *value = SecretString::new(value.masked());
         }
+        if let Some(secrets) = &mut config.deploy.secrets {
+            for value in secrets.items.values_mut() {
+                *value = mask_secret_value(value);
+            }
+            for metadata in secrets.keys.values_mut() {
+                metadata.hash.clear();
+            }
+        }
         if let Some(build) = &mut config.build {
             for value in build.env.items.values_mut() {
                 *value = SecretString::new(value.masked());
             }
             for value in build.secrets.items.values_mut() {
-                *value = SecretString::new(value.masked());
+                *value = SecretString::new(mask_secret_value(value.as_str()));
             }
         }
         config
@@ -387,9 +395,19 @@ pub struct SecretsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretKeyMeta {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hash: String,
     #[serde(default)]
     pub changed: bool,
+}
+
+pub(crate) fn mask_secret_value(value: &str) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= 4 {
+        return value.to_string();
+    }
+    let suffix = chars[chars.len() - 4..].iter().collect::<String>();
+    format!("*****{suffix}")
 }
 
 impl SecretsConfig {

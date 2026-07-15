@@ -1,5 +1,6 @@
 use crate::deployment::types::{
-    DeploymentStatus, IngressConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    DeploymentStatus, DeploymentWithReplicas, IngressConfig, ReplicaState, ServiceBuildConfig,
+    ServiceConfig, ServiceDeployConfig, ServiceDeployment,
 };
 
 #[derive(Debug, serde::Serialize)]
@@ -19,14 +20,52 @@ pub(crate) struct RolloutServiceResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServiceListItem {
     #[serde(flatten)]
-    pub(crate) service: ServiceConfig,
-    pub(crate) status: Option<DeploymentStatus>,
+    service: ServiceConfig,
+    status: Option<DeploymentStatus>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) system: bool,
+    system: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) deploy_frozen: bool,
+    deploy_frozen: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) replicas_override: Option<u32>,
+    replicas_override: Option<u32>,
+}
+
+impl ServiceListItem {
+    pub(crate) fn new(
+        service: ServiceConfig,
+        status: Option<DeploymentStatus>,
+        system: bool,
+        deploy_frozen: bool,
+        replicas_override: Option<u32>,
+    ) -> Self {
+        Self {
+            service: service.mask_secrets(),
+            status,
+            system,
+            deploy_frozen,
+            replicas_override,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeploymentListItem {
+    #[serde(flatten)]
+    deployment: ServiceDeployment,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    replicas: Vec<ReplicaState>,
+}
+
+impl DeploymentListItem {
+    pub(crate) fn new(item: DeploymentWithReplicas) -> Self {
+        let mut deployment = item.deployment;
+        deployment.config = deployment.config.mask_secrets();
+        Self {
+            deployment,
+            replicas: item.replicas,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

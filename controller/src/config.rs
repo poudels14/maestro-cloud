@@ -873,4 +873,43 @@ mod tests {
                 .unwrap_err();
         assert!(error.to_string().contains("aws-secret:// source"));
     }
+
+    #[test]
+    fn masked_start_config_never_serializes_plaintext_secrets() {
+        let config: StartConfig = json5::from_str(
+            r#"{
+                cluster: {
+                    name: "test",
+                    "join-secret": "join-plaintext-sentinel"
+                },
+                ingress: { port: 8080 },
+                subnet: "172.22.0.0/16",
+                "encryption-key": "encryption-plaintext-sentinel",
+                "jwt-secret-key": "jwt-plaintext-sentinel",
+                tailscale: { "auth-key": "tailscale-plaintext-sentinel" },
+                datadog: { "api-key": "datadog-plaintext-sentinel" },
+                depot: { token: "depot-plaintext-sentinel" },
+                cloudflare: {
+                    tunnel: { token: "cloudflare-plaintext-sentinel" }
+                },
+                slack: { "webhook-url": "slack-plaintext-sentinel" }
+            }"#,
+        )
+        .expect("start config");
+
+        let json = serde_json::to_string(&config.masked()).expect("masked config JSON");
+        for plaintext in [
+            "join-plaintext-sentinel",
+            "encryption-plaintext-sentinel",
+            "jwt-plaintext-sentinel",
+            "tailscale-plaintext-sentinel",
+            "datadog-plaintext-sentinel",
+            "depot-plaintext-sentinel",
+            "cloudflare-plaintext-sentinel",
+            "slack-plaintext-sentinel",
+        ] {
+            assert!(!json.contains(plaintext), "API config leaked `{plaintext}`");
+        }
+        assert!(json.matches("***").count() >= 8);
+    }
 }

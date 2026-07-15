@@ -1,5 +1,9 @@
 use super::*;
-use crate::deployment::types::{Command, ServiceBuildConfig, ServiceDeployConfig};
+use crate::deployment::types::{
+    Command, DeploymentStatus, DeploymentWithReplicas, EnvConfig, SecretKeyMeta, SecretsConfig,
+    ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment, mask_secret_value,
+};
+use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
 
 fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
@@ -61,6 +65,125 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
         },
         ingress: None,
     }
+}
+
+fn config_with_plaintext_sentinels() -> ServiceConfig {
+    let mut request = sample_patch_request("secret-test", "Secret test");
+    let build = request.build.as_mut().expect("build config");
+    build.env.items.insert(
+        "BUILD_ENV".to_string(),
+        SecretString::new("build-env-plaintext".to_string()),
+    );
+    build.secrets.items.insert(
+        "BUILD_SECRET".to_string(),
+        SecretString::new("build-secret-plaintext".to_string()),
+    );
+    request.deploy.env.items.insert(
+        "DEPLOY_ENV".to_string(),
+        SecretString::new("deploy-env-plaintext".to_string()),
+    );
+    request.deploy.secrets = Some(SecretsConfig {
+        mount_path: "/run/secrets/app.env".to_string(),
+        source: None,
+        items: std::collections::HashMap::from([(
+            "DEPLOY_SECRET".to_string(),
+            "deploy-secret-plaintext".to_string(),
+        )]),
+        keys: std::collections::HashMap::from([(
+            "DEPLOY_SECRET".to_string(),
+            SecretKeyMeta {
+                hash: "secret-hash-plaintext".to_string(),
+                changed: true,
+            },
+        )]),
+    });
+    build_service_config(request).expect("service config")
+}
+
+fn assert_no_config_plaintext(json: &str) {
+    for plaintext in [
+        "build-env-plaintext",
+        "build-secret-plaintext",
+        "deploy-env-plaintext",
+        "deploy-secret-plaintext",
+        "secret-hash-plaintext",
+    ] {
+        assert!(
+            !json.contains(plaintext),
+            "API response leaked `{plaintext}`"
+        );
+    }
+}
+
+#[test]
+fn service_and_deployment_api_models_mask_config_values() {
+    let config = config_with_plaintext_sentinels();
+    let service = ServiceListItem::new(
+        config.clone(),
+        Some(DeploymentStatus::Ready),
+        false,
+        false,
+        None,
+    );
+    let service_json = serde_json::to_string(&service).expect("service response JSON");
+    assert_no_config_plaintext(&service_json);
+    assert!(service_json.contains("bu*****text"));
+    assert!(service_json.contains("de*****text"));
+    assert!(service_json.matches("*****text").count() >= 2);
+    assert!(!service_json.contains("\"hash\""));
+
+    let deployment = DeploymentListItem::new(DeploymentWithReplicas {
+        deployment: ServiceDeployment {
+            id: "deployment-1".to_string(),
+            created_at: 1,
+            deployed_at: Some(2),
+            drained_at: None,
+            status: DeploymentStatus::Ready,
+            config,
+            git_commit: None,
+            build: None,
+            upload_archive: None,
+        },
+        replicas: Vec::new(),
+    });
+    let deployment_json = serde_json::to_string(&deployment).expect("deployment response JSON");
+    assert_no_config_plaintext(&deployment_json);
+    assert!(deployment_json.contains("bu*****text"));
+    assert!(deployment_json.contains("de*****text"));
+    assert!(deployment_json.matches("*****text").count() >= 2);
+    assert!(!deployment_json.contains("\"hash\""));
+}
+
+#[test]
+fn secret_api_mask_shows_only_the_last_four_characters() {
+    assert_eq!(mask_secret_value("secret-1234"), "*****1234");
+    assert_eq!(mask_secret_value("abcd"), "abcd");
+}
+
+#[test]
+fn rollout_diff_masks_environment_values_before_serialization() {
+    let old = EnvConfig {
+        source: None,
+        items: std::collections::HashMap::from([(
+            "TOKEN".to_string(),
+            SecretString::new("old-env-plaintext".to_string()),
+        )]),
+    };
+    let new = EnvConfig {
+        source: None,
+        items: std::collections::HashMap::from([(
+            "TOKEN".to_string(),
+            SecretString::new("new-env-plaintext".to_string()),
+        )]),
+    };
+    let mut changes = Vec::new();
+    diff_env(&old, &new, &mut changes);
+
+    let json = serde_json::to_string(&changes).expect("rollout diff JSON");
+    assert!(!json.contains("old-env-plaintext"));
+    assert!(!json.contains("new-env-plaintext"));
+    assert!(json.contains("ol*****text"));
+    assert!(json.contains("ne*****text"));
 }
 
 #[test]
