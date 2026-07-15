@@ -52,6 +52,8 @@ impl std::str::FromStr for RuntimeType {
 #[serde(rename_all = "kebab-case")]
 pub struct StartConfig {
     pub cluster: ClusterConfig,
+    #[serde(default)]
+    pub node: NodeConfig,
     pub ingress: IngressConfig,
     #[serde(default)]
     pub subnet: Option<String>,
@@ -82,6 +84,13 @@ pub struct StartConfig {
     pub disable_etcd_cert: bool,
     #[serde(default)]
     pub allow_cli_deployment: bool,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct NodeConfig {
+    #[serde(default)]
+    pub role: crate::cluster::NodeRole,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -175,14 +184,10 @@ pub struct ClusterConfig {
     pub gateway_port: u16,
     #[serde(default)]
     pub control_allow_cidrs: Vec<String>,
-    #[serde(default)]
-    pub role: crate::cluster::NodeRole,
     #[serde(default = "default_etcd_client_port")]
     pub etcd_client_port: u16,
     #[serde(default = "default_etcd_peer_port")]
     pub etcd_peer_port: u16,
-    #[serde(default)]
-    pub scheduling: bool,
     #[serde(default)]
     pub shared_registry: Option<String>,
     #[serde(default)]
@@ -258,9 +263,13 @@ impl ClusterConfig {
             .collect()
     }
 
-    pub fn local_endpoint(&self, host_ip: Ipv4Addr) -> Result<crate::cluster::ClusterNodeEndpoint> {
+    pub fn local_endpoint(
+        &self,
+        host_ip: Ipv4Addr,
+        role: crate::cluster::NodeRole,
+    ) -> Result<crate::cluster::ClusterNodeEndpoint> {
         if self.uses_node_ports() {
-            if self.role == crate::cluster::NodeRole::Voter {
+            if role.is_voter() {
                 let matches = self
                     .resolved_nodes()?
                     .into_iter()
@@ -401,6 +410,7 @@ fn default_true() -> bool {
 #[serde(rename_all = "kebab-case")]
 pub struct MaskedConfig {
     pub cluster: ClusterView,
+    pub node: NodeView,
     pub ingress: IngressView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subnet: Option<String>,
@@ -439,16 +449,20 @@ pub struct ClusterView {
     pub api_port: u16,
     pub gateway_port: u16,
     pub control_allow_cidrs: Vec<String>,
-    pub role: crate::cluster::NodeRole,
     pub etcd_client_port: u16,
     pub etcd_peer_port: u16,
-    pub scheduling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_registry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_sha256: Option<String>,
     pub join_secret: Option<String>,
     pub labels: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct NodeView {
+    pub role: crate::cluster::NodeRole,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -535,14 +549,15 @@ impl StartConfig {
                 api_port: self.cluster.api_port,
                 gateway_port: self.cluster.gateway_port,
                 control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
-                role: self.cluster.role,
                 etcd_client_port: self.cluster.etcd_client_port,
                 etcd_peer_port: self.cluster.etcd_peer_port,
-                scheduling: self.cluster.scheduling,
                 shared_registry: self.cluster.shared_registry.clone(),
                 ca_sha256: self.cluster.ca_sha256.clone(),
                 join_secret: self.cluster.join_secret.as_deref().and_then(mask),
                 labels: self.cluster.labels.clone(),
+            },
+            node: NodeView {
+                role: self.node.role,
             },
             ingress: IngressView {
                 ports: self.ingress.resolved_ports(),

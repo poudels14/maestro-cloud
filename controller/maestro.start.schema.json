@@ -63,11 +63,6 @@
           },
           "default": []
         },
-        "role": {
-          "type": "string",
-          "enum": ["voter", "worker"],
-          "default": "voter"
-        },
         "etcd-client-port": {
           "type": "integer",
           "minimum": 1,
@@ -81,10 +76,6 @@
           "maximum": 65535,
           "default": 2380,
           "description": "etcd peer host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +3."
-        },
-        "scheduling": {
-          "type": "boolean",
-          "default": false
         },
         "shared-registry": {
           "type": "string"
@@ -105,6 +96,19 @@
           "default": {}
         }
       }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["hybrid", "voter", "worker"],
+          "default": "hybrid",
+          "description": "Hybrid nodes vote and run workloads; voters are control-plane-only; workers run workloads without a local etcd member."
+        }
+      },
+      "default": {}
     },
     "ingress": {
       "type": "object",

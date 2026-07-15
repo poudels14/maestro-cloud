@@ -108,13 +108,25 @@ pub enum LeadershipState {
 #[serde(rename_all = "lowercase")]
 pub enum NodeRole {
     #[default]
+    Hybrid,
     Voter,
     Worker,
+}
+
+impl NodeRole {
+    pub fn is_voter(self) -> bool {
+        matches!(self, Self::Hybrid | Self::Voter)
+    }
+
+    pub fn runs_workloads(self) -> bool {
+        matches!(self, Self::Hybrid | Self::Worker)
+    }
 }
 
 impl std::fmt::Display for NodeRole {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::Hybrid => "hybrid",
             Self::Voter => "voter",
             Self::Worker => "worker",
         })
@@ -126,10 +138,11 @@ impl std::str::FromStr for NodeRole {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "hybrid" => Ok(Self::Hybrid),
             "voter" => Ok(Self::Voter),
             "worker" => Ok(Self::Worker),
             _ => Err(format!(
-                "invalid node role `{value}`; expected voter or worker"
+                "invalid node role `{value}`; expected hybrid, voter, or worker"
             )),
         }
     }
@@ -149,7 +162,6 @@ pub struct ClusterRuntime {
     pub gateway_port: u16,
     pub etcd_client_port: u16,
     pub etcd_peer_port: u16,
-    pub scheduling: bool,
     pub shared_registry: Option<String>,
     pub labels: BTreeMap<String, String>,
     pub identity_api_port: Option<u16>,
@@ -209,8 +221,6 @@ pub struct NodeInfo {
     pub instance_id: String,
     pub hostname: String,
     pub role: NodeRole,
-    #[serde(default = "scheduling_capable_by_default")]
-    pub scheduling: bool,
     pub cluster_host_ip: Ipv4Addr,
     pub cluster_api_port: u16,
     #[serde(default = "default_cluster_gateway_port")]
@@ -223,13 +233,6 @@ pub struct NodeInfo {
     pub version: String,
     pub started_at_ms: i64,
     pub labels: BTreeMap<String, String>,
-}
-
-// Records written before nodes advertised this capability came from a version where every
-// registered node was considered schedulable. Preserve that behavior during a rolling upgrade;
-// upgraded nodes explicitly publish `false` when their assignment executor is disabled.
-fn scheduling_capable_by_default() -> bool {
-    true
 }
 
 fn default_cluster_gateway_port() -> u16 {

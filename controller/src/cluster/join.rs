@@ -158,7 +158,7 @@ impl JoinCoordinator {
     }
 
     pub async fn approve(&self, token: &LeadershipToken, admission: JoinAdmission) -> Result<()> {
-        if admission.role != NodeRole::Voter {
+        if !admission.role.is_voter() {
             bail!("only voter joins require an approval record");
         }
         validate_admission(&admission)?;
@@ -252,7 +252,7 @@ impl JoinCoordinator {
         }
 
         validate_reservations(&mut client, &request, existing_intent.is_some()).await?;
-        let admission = if request.role == NodeRole::Voter && existing_intent.is_none() {
+        let admission = if request.role.is_voter() && existing_intent.is_none() {
             Some(read_matching_admission(&mut client, &request, &requested_intent).await?)
         } else {
             None
@@ -301,7 +301,7 @@ impl JoinCoordinator {
         )
         .await?;
 
-        let join_info = if request.role == NodeRole::Voter {
+        let join_info = if request.role.is_voter() {
             Some(
                 self.ensure_voter_member(
                     &mut client,
@@ -355,7 +355,7 @@ impl JoinCoordinator {
             etcd_client_port: self.runtime.etcd_client_port,
             etcd_peer_port: self.runtime.etcd_peer_port,
             certificates: NodeCertificateBundle::from(&certificates),
-            voter_ca: (request.role == NodeRole::Voter).then(|| ClusterCaBundle::from(&ca)),
+            voter_ca: request.role.is_voter().then(|| ClusterCaBundle::from(&ca)),
             join_info,
         };
         encrypt_response(&self.join_secret, &request, &payload, 200)
@@ -438,7 +438,7 @@ impl JoinCoordinator {
                 bail!("refusing to remove the cluster's last voter");
             }
             client.member_remove(member.id()).await?;
-        } else if record.last_info.role == NodeRole::Voter && existing_removal.kvs().is_empty() {
+        } else if record.last_info.role.is_voter() && existing_removal.kvs().is_empty() {
             bail!("voter node has no matching etcd member");
         }
 

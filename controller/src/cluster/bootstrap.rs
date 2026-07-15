@@ -6,7 +6,7 @@ use etcd_client::{Client, ConnectOptions, Member, MemberAddOptions, TlsOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::identity;
-use crate::cluster::types::{ClusterMeta, ClusterRuntime, NodeRole};
+use crate::cluster::types::{ClusterMeta, ClusterRuntime};
 use crate::logs::Logger;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,7 +161,7 @@ pub fn decide(runtime: Option<&ClusterRuntime>, data_dir: &Path) -> Result<Boots
     let Some(runtime) = runtime else {
         return Ok(BootstrapAction::SingleNode);
     };
-    if runtime.role == NodeRole::Worker {
+    if !runtime.role.is_voter() {
         return Ok(BootstrapAction::Worker);
     }
     if data_dir.join("system/etcd/data/member").exists() {
@@ -734,6 +734,7 @@ fn legacy_migration_path(data_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::NodeRole;
 
     #[test]
     fn member_names_are_lossless_ipv4_hex() {
@@ -765,7 +766,6 @@ mod tests {
             gateway_port: 3002,
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
-            scheduling: false,
             shared_registry: None,
             labels: Default::default(),
             identity_api_port: None,

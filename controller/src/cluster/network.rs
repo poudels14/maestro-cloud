@@ -67,8 +67,12 @@ impl fmt::Display for Ipv4Cidr {
     }
 }
 
-pub fn validate_cluster_config(config: &ClusterConfig, local_subnet: Option<&str>) -> Result<()> {
-    validate_cluster_config_inner(config, local_subnet, true)
+pub fn validate_cluster_config(
+    config: &ClusterConfig,
+    local_subnet: Option<&str>,
+    role: NodeRole,
+) -> Result<()> {
+    validate_cluster_config_inner(config, local_subnet, role, true)
 }
 
 /// Validate topology before the cluster CA exists. Provisioning still requires a
@@ -76,13 +80,15 @@ pub fn validate_cluster_config(config: &ClusterConfig, local_subnet: Option<&str
 pub fn validate_cluster_provisioning_config(
     config: &ClusterConfig,
     local_subnet: Option<&str>,
+    role: NodeRole,
 ) -> Result<()> {
-    validate_cluster_config_inner(config, local_subnet, false)
+    validate_cluster_config_inner(config, local_subnet, role, false)
 }
 
 fn validate_cluster_config_inner(
     config: &ClusterConfig,
     local_subnet: Option<&str>,
+    role: NodeRole,
     require_ca_fingerprint: bool,
 ) -> Result<()> {
     if config.nodes.is_empty() {
@@ -153,7 +159,7 @@ fn validate_cluster_config_inner(
                 }
             }
         }
-        if config.role == NodeRole::Voter
+        if role.is_voter()
             && !resolved_nodes
                 .iter()
                 .any(|node| node.api_port == config.api_port)
@@ -230,8 +236,8 @@ fn validate_cluster_config_inner(
             bail!("local subnet `{local_subnet}` is absent from cluster.subnets");
         }
     }
-    if config.scheduling && config.shared_registry.is_none() {
-        bail!("cluster.shared-registry is required when cluster scheduling is enabled");
+    if config.shared_registry.is_none() {
+        bail!("cluster.shared-registry is required in multi-node mode");
     }
     if !config.nodes.is_empty() {
         if require_ca_fingerprint {
@@ -266,6 +272,7 @@ fn validate_cluster_config_inner(
 pub fn resolve_cluster_host_ip(
     config: &ClusterConfig,
     data_dir: &Path,
+    role: NodeRole,
 ) -> Result<Option<Ipv4Addr>> {
     if config.nodes.is_empty() {
         return Ok(None);
@@ -283,11 +290,11 @@ pub fn resolve_cluster_host_ip(
             .map(|node| node.host_ip())
             .filter(|ip| local_addresses.contains(ip))
             .collect::<BTreeSet<_>>();
-        if config.role == NodeRole::Voter && matches.len() == 1 {
+        if role.is_voter() && matches.len() == 1 {
             let host_ip = *matches.first().expect("one matched address");
-            config.local_endpoint(host_ip)?;
+            config.local_endpoint(host_ip, role)?;
             host_ip
-        } else if config.role == NodeRole::Voter {
+        } else if role.is_voter() {
             bail!(
                 "expected exactly one cluster.nodes address on this voter, found {} among {:?}",
                 matches.len(),
@@ -310,14 +317,17 @@ pub fn resolve_cluster_host_ip(
             "resolved cluster host IP `{resolved}` is not assigned to a local non-Tailscale control interface"
         );
     }
-    if config.role == NodeRole::Voter {
-        config.local_endpoint(resolved)?;
+    if role.is_voter() {
+        config.local_endpoint(resolved, role)?;
     }
-    if config.role == NodeRole::Worker
-        && !config.uses_node_ports()
-        && config.nodes.iter().any(|node| node.host_ip() == resolved)
-    {
-        bail!("worker control IP `{resolved}` is listed as an initial voter in cluster.nodes");
+    if role == NodeRole::Worker {
+        let local = config.local_endpoint(resolved, role)?;
+        if config.resolved_nodes()?.contains(&local) {
+            bail!(
+                "worker endpoint `{}` is listed as an initial voter in cluster.nodes",
+                local.api_address()
+            );
+        }
     }
     for subnet in &config.subnets {
         if Ipv4Cidr::parse(subnet)?.contains(resolved) {
@@ -494,6 +504,7 @@ mod tests {
             etcd_peer_port: 2380,
             ca_sha256: Some("a".repeat(64)),
             join_secret: Some("x".repeat(32)),
+            shared_registry: Some("registry.example.com/maestro".to_string()),
             ..ClusterConfig::default()
         }
     }
@@ -531,24 +542,29 @@ mod tests {
     #[test]
     fn clustered_networks_are_separate_and_complete() {
         let config = valid_cluster_config();
-        validate_cluster_config(&config, Some("172.22.2.0/24")).expect("valid cluster");
+        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
+            .expect("valid cluster");
 
         let mut overlap = valid_cluster_config();
         overlap.control_allow_cidrs = vec!["172.22.0.0/16".to_string()];
-        assert!(validate_cluster_config(&overlap, Some("172.22.2.0/24")).is_err());
+        assert!(
+            validate_cluster_config(&overlap, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err()
+        );
 
         let mut incomplete = valid_cluster_config();
         incomplete.control_allow_cidrs = vec!["10.20.0.11/32".to_string()];
-        assert!(validate_cluster_config(&incomplete, Some("172.22.2.0/24")).is_err());
+        assert!(
+            validate_cluster_config(&incomplete, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err()
+        );
     }
 
     #[test]
     fn provisioning_does_not_require_the_not_yet_created_ca_fingerprint() {
         let mut config = valid_cluster_config();
         config.ca_sha256 = None;
-        validate_cluster_provisioning_config(&config, Some("172.22.2.0/24"))
+        validate_cluster_provisioning_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
             .expect("provisioning topology");
-        assert!(validate_cluster_config(&config, Some("172.22.2.0/24")).is_err());
+        assert!(validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err());
     }
 
     #[test]
@@ -561,7 +577,8 @@ mod tests {
         ];
         config.api_port = 3101;
 
-        validate_cluster_config(&config, Some("172.22.2.0/24")).expect("same-host cluster");
+        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
+            .expect("same-host cluster");
         let nodes = config.resolved_nodes().unwrap();
         assert_eq!(nodes[1].api_port, 3101);
         assert_eq!(nodes[1].gateway_port, 3102);
@@ -569,7 +586,7 @@ mod tests {
         assert_eq!(nodes[1].etcd_peer_port, 3104);
         assert_eq!(
             config
-                .local_endpoint("10.20.0.11".parse().unwrap())
+                .local_endpoint("10.20.0.11".parse().unwrap(), NodeRole::Hybrid)
                 .unwrap(),
             nodes[1]
         );
@@ -583,10 +600,10 @@ mod tests {
             "10.20.0.11:3004".parse().unwrap(),
             "10.20.0.11:3201".parse().unwrap(),
         ];
-        assert!(validate_cluster_config(&config, Some("172.22.1.0/24")).is_err());
+        assert!(validate_cluster_config(&config, Some("172.22.1.0/24"), NodeRole::Hybrid).is_err());
 
         config.nodes[1] = "10.20.0.11".parse().unwrap();
-        assert!(validate_cluster_config(&config, Some("172.22.1.0/24")).is_err());
+        assert!(validate_cluster_config(&config, Some("172.22.1.0/24"), NodeRole::Hybrid).is_err());
 
         let mut legacy_port_override = valid_cluster_config();
         legacy_port_override.nodes = vec![
@@ -595,7 +612,14 @@ mod tests {
             "10.20.0.11:3201".parse().unwrap(),
         ];
         legacy_port_override.etcd_client_port = 5000;
-        assert!(validate_cluster_config(&legacy_port_override, Some("172.22.1.0/24")).is_err());
+        assert!(
+            validate_cluster_config(
+                &legacy_port_override,
+                Some("172.22.1.0/24"),
+                NodeRole::Hybrid,
+            )
+            .is_err()
+        );
     }
 
     #[test]

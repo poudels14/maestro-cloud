@@ -26,11 +26,15 @@ pub fn spawn(
     logger: Logger,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let gateway_client = gateway_client(&certs_dir);
+        let gateway_client = cluster
+            .role
+            .runs_workloads()
+            .then(|| gateway_client(&certs_dir));
         loop {
             let mut status = match &gateway_client {
-                Ok(client) => check(client, &cluster).await,
-                Err(error) => Err(anyhow::anyhow!(error.to_string())),
+                Some(Ok(client)) => check(client, &cluster).await,
+                Some(Err(error)) => Err(anyhow::anyhow!(error.to_string())),
+                None => Ok(()),
             };
             if status.is_ok()
                 && let Some(gate) = &ingress_gate

@@ -487,6 +487,7 @@ impl LeaderLoop {
             let mut candidates = nodes
                 .iter()
                 .filter(|node| node.node_id != source.node_id)
+                .filter(|node| node.role.runs_workloads())
                 .filter(|node| node.data_plane_ready)
                 .filter(|node| now_ms.saturating_sub(node.data_plane_checked_at_ms) <= 15_000)
                 .filter(|node| {
@@ -518,7 +519,12 @@ impl LeaderLoop {
                     .iter()
                     .filter(|assignment| assignment.node_id == node.node_id)
                     .count();
-                (same_deployment, load, node.node_id.as_str())
+                (
+                    same_deployment,
+                    load,
+                    node.role != crate::cluster::NodeRole::Worker,
+                    node.node_id.as_str(),
+                )
             });
             let Some(target) = candidates.first() else {
                 errors.push(UnschedulableReplica {
@@ -1028,7 +1034,6 @@ mod tests {
             instance_id: format!("instance-{index}"),
             hostname: format!("node-{index}"),
             role: NodeRole::Worker,
-            scheduling: true,
             cluster_host_ip: Ipv4Addr::new(10, 20, 0, u8::try_from(index + 1).unwrap()),
             cluster_api_port: 3001,
             cluster_gateway_port: 3002,

@@ -55,6 +55,7 @@ pub async fn run_nodes(host: &str) -> Result<()> {
             node.node_id,
             node.hostname,
             match node.role {
+                NodeRole::Hybrid => "hybrid",
                 NodeRole::Voter => "voter",
                 NodeRole::Worker => "worker",
             },

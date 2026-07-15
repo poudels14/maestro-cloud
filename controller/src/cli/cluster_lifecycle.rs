@@ -117,7 +117,7 @@ pub async fn prepare_join(config_source: &str, base_data_dir: &Path) -> Result<(
         .as_deref()
         .ok_or_else(|| Error::invalid_config("local subnet is required for cluster join"))?;
     println!("node id: {node_id}");
-    println!("role: {}", config.cluster.role);
+    println!("role: {}", config.node.role);
     println!("host IP: {host_ip}");
     println!("API port: {}", config.cluster.api_port);
     println!("subnet: {subnet}");
@@ -125,7 +125,7 @@ pub async fn prepare_join(config_source: &str, base_data_dir: &Path) -> Result<(
         "public key SHA-256: {}",
         cluster::join::join_key_fingerprint(&private_key)
     );
-    if config.cluster.role == NodeRole::Voter {
+    if config.node.role.is_voter() {
         println!("approve this exact identity on the current leader before joining");
     }
     Ok(())
@@ -165,13 +165,13 @@ pub async fn join_cluster(
     let timestamp_ms = crate::cluster_stats::now_ms();
     let endpoint = config
         .cluster
-        .local_endpoint(host_ip)
+        .local_endpoint(host_ip, config.node.role)
         .map_err(|error| Error::invalid_config(error.to_string()))?;
     let request = cluster::join::create_join_request(
         &private_key,
         node_id,
         cluster::identity::local_hostname(),
-        config.cluster.role,
+        config.node.role,
         endpoint,
         subnet,
         None,
@@ -216,7 +216,7 @@ pub async fn join_cluster(
             "cluster join response identity was not authenticated",
         ));
     }
-    install_join_payload(&data_dir, config.cluster.role, &payload)?;
+    install_join_payload(&data_dir, config.node.role, &payload)?;
     println!("[maestro]: joined cluster `{}`", payload.display_name);
     println!("cluster id: {}", payload.cluster_id);
     println!(
@@ -233,8 +233,12 @@ async fn load_join_config(
     let config = crate::config::load_config(config_source)
         .await
         .map_err(|error| Error::invalid_config(error.to_string()))?;
-    cluster::network::validate_cluster_config(&config.cluster, config.subnet.as_deref())
-        .map_err(|error| Error::invalid_config(error.to_string()))?;
+    cluster::network::validate_cluster_config(
+        &config.cluster,
+        config.subnet.as_deref(),
+        config.node.role,
+    )
+    .map_err(|error| Error::invalid_config(error.to_string()))?;
     if config.cluster.nodes.is_empty() {
         return Err(Error::invalid_config(
             "cluster.nodes must contain at least the bootstrap voter for join",
@@ -242,9 +246,10 @@ async fn load_join_config(
     }
     let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
     std::fs::create_dir_all(&data_dir)?;
-    let host_ip = cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir)
-        .map_err(|error| Error::invalid_config(error.to_string()))?
-        .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+    let host_ip =
+        cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir, config.node.role)
+            .map_err(|error| Error::invalid_config(error.to_string()))?
+            .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
     Ok((config, data_dir, host_ip))
 }
 
@@ -261,7 +266,7 @@ fn install_join_payload(
     }
     crate::utils::certs::write_etcd_certs(&temporary, &payload.certificates.clone().into())
         .map_err(|error| Error::internal(error.to_string()))?;
-    if role == NodeRole::Voter {
+    if role.is_voter() {
         let ca = payload
             .voter_ca
             .clone()
@@ -278,7 +283,7 @@ fn install_join_payload(
         let _ = std::fs::remove_dir_all(&certs_dir);
         return Err(error);
     }
-    if role == NodeRole::Voter {
+    if role.is_voter() {
         let join_info = payload
             .join_info
             .as_ref()

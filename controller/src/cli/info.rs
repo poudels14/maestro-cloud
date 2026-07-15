@@ -32,6 +32,8 @@ struct MetricPoint {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct MaskedConfigView {
+    #[serde(default)]
+    node: NodeView,
     ingress: IngressView,
     #[serde(default)]
     subnet: Option<String>,
@@ -54,6 +56,12 @@ struct MaskedConfigView {
     slack: Option<SlackView>,
     #[serde(default)]
     disable_etcd_cert: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct NodeView {
+    role: crate::cluster::NodeRole,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +182,7 @@ pub async fn run_info(host: &str) -> Result<()> {
     println!("  alias             {}", cluster.cluster_alias);
     println!("  canonical domain  {}", cluster.canonical_domain);
     println!("  alias domain      {}", cluster.alias_domain);
+    println!("  node role         {}", config.node.role);
     if let Some(version) = cluster.version.as_deref() {
         println!("  version           {version}");
     }

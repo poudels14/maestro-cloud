@@ -561,7 +561,6 @@ mod tests {
             instance_id: instance_id.to_string(),
             hostname: "node-1".to_string(),
             role: NodeRole::Voter,
-            scheduling: true,
             cluster_host_ip: Ipv4Addr::new(10, 20, 0, 11),
             cluster_api_port: 3001,
             cluster_gateway_port: 3002,

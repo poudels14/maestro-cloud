@@ -276,7 +276,7 @@ impl DeploymentController {
         deployment: &Deployment,
         status: DeploymentStatus,
     ) -> Result<()> {
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let token = self.leadership_token()?;
             self.store
                 .update_deployment_status_fenced(&token, deployment, status)
@@ -289,7 +289,7 @@ impl DeploymentController {
     }
 
     async fn claim_deployment(&self, queued: &QueuedDeployment) -> Result<bool> {
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let token = self.leadership_token()?;
             self.store
                 .claim_deployment_building_fenced(&token, queued)
@@ -304,7 +304,7 @@ impl DeploymentController {
         deployment: &Deployment,
         updated: &ServiceDeployment,
     ) -> Result<()> {
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let token = self.leadership_token()?;
             self.store
                 .update_deployment_build_info_fenced(&token, deployment, updated)
@@ -321,7 +321,7 @@ impl DeploymentController {
         service_id: &str,
         deployment: &ServiceDeployment,
     ) -> Result<()> {
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let token = self.leadership_token()?;
             self.store
                 .save_build_data_fenced(&token, service_id, deployment)
@@ -336,7 +336,7 @@ impl DeploymentController {
         service_id: &str,
         deployment: &ServiceDeployment,
     ) -> Result<()> {
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let token = self.leadership_token()?;
             self.store
                 .save_deploy_data_fenced(&token, service_id, deployment)
@@ -389,7 +389,7 @@ impl DeploymentController {
             .delete_system_restart_request(request_node_id)
             .await;
 
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             self.requeue_stale_builds().await?;
         } else if let Err(err) = self.queue_terminated_active_deployments().await {
             self.logger.emit(
@@ -461,13 +461,72 @@ impl DeploymentController {
         }
     }
 
+    pub(crate) async fn run_node_maintenance(&mut self) -> Result<ControllerExitReason> {
+        let mut shutdown_started = false;
+        let mut exit_reason = ControllerExitReason::Shutdown;
+        let mut signal_rx = self.signal_rx.resubscribe();
+        let request_node_id = self
+            .config
+            .cluster
+            .as_ref()
+            .map(|cluster| cluster.node_id.as_str());
+        let _ = self
+            .store
+            .delete_system_upgrade_request(request_node_id)
+            .await;
+        let _ = self
+            .store
+            .delete_system_restart_request(request_node_id)
+            .await;
+
+        loop {
+            tokio::select! {
+                signal = signal_rx.recv() => {
+                    match signal {
+                        Ok(ShutdownEvent::Graceful) => {
+                            if !shutdown_started {
+                                self.shutdown_all(ShutdownRequest::Graceful).await;
+                                shutdown_started = true;
+                            }
+                        }
+                        Ok(ShutdownEvent::Force) | Err(broadcast::error::RecvError::Closed) => {
+                            self.shutdown_all(ShutdownRequest::Force).await;
+                            return Ok(exit_reason);
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    }
+                }
+                _ = sleep(POLL_INTERVAL) => {
+                    if let Some(reason) = self.check_system_upgrade().await {
+                        exit_reason = reason;
+                        if !shutdown_started {
+                            self.shutdown_all(ShutdownRequest::Graceful).await;
+                            shutdown_started = true;
+                        }
+                    }
+                    if self.check_system_restart().await {
+                        exit_reason = ControllerExitReason::Restart;
+                        if !shutdown_started {
+                            self.shutdown_all(ShutdownRequest::Graceful).await;
+                            shutdown_started = true;
+                        }
+                    }
+                    self.reap_finished_tasks().await;
+                    if shutdown_started && !self.has_running_services().await {
+                        return Ok(exit_reason);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
-        if !self.config.scheduling_enabled() {
+        if !self.config.cluster_mode() {
             self.stop_removed_deployments().await;
         }
         self.abort_canceled_builds().await;
         self.check_pending_builds().await;
-        if !self.config.scheduling_enabled() {
+        if !self.config.cluster_mode() {
             self.drain_old_deployments().await;
             self.reconcile_replicas().await;
         }
@@ -475,7 +534,7 @@ impl DeploymentController {
         for queued_deployment in queued {
             self.process_queued_deployment(queued_deployment).await?;
         }
-        if !self.config.scheduling_enabled() {
+        if !self.config.cluster_mode() {
             self.cleanup_orphaned_deployments().await;
             self.reconcile_replica_dns().await;
             self.reconcile_stable_dns().await;
@@ -1385,7 +1444,7 @@ impl DeploymentController {
             );
         }
 
-        if self.config.scheduling_enabled() {
+        if self.config.cluster_mode() {
             let has_writable_volume = queued_deployment
                 .deployment
                 .config
@@ -1405,7 +1464,7 @@ impl DeploymentController {
                 self.logger.emit(
                     "error",
                     &format!(
-                        "{service_id}/{deployment_id}: writable host volumes require deploy.node-affinity.node-id in cluster scheduling mode"
+                        "{service_id}/{deployment_id}: writable host volumes require deploy.node-affinity.node-id in cluster mode"
                     ),
                 );
                 DeploymentStatus::Crashed

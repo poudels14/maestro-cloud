@@ -12,12 +12,13 @@
     // "control-allow-cidrs": ["10.20.0.0/24"],
     // "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
     // "gateway-port": 3002,
-    // "role": "voter",
-    // "scheduling": true,
     // "shared-registry": "ghcr.io/acme",
     // "ca-sha256": "replace-with-the-fingerprint-printed-by-cluster-init-ca",
     // "join-secret": "replace-with-at-least-32-characters"
   },
+  // This node votes and runs workloads by default. Set "voter" for a
+  // control-plane-only node or "worker" for a workload-only node.
+  // "node": { "role": "hybrid" },
   "ingress": {
     "port": 8080
   },
