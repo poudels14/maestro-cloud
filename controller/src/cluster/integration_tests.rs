@@ -320,6 +320,7 @@ struct FormingEtcdCluster {
     runtime_cli: String,
     run_id: String,
     token: String,
+    cluster_id: String,
     root: PathBuf,
     nodes: Vec<super::ClusterNodeEndpoint>,
     container_names: BTreeSet<String>,
@@ -339,11 +340,42 @@ impl FormingEtcdCluster {
             runtime_cli,
             token: format!("maestro-forming-{run_id}"),
             run_id,
+            cluster_id: String::new(),
             root,
             nodes,
             container_names: BTreeSet::new(),
             endpoints: Vec::new(),
         };
+        let seed_data = cluster.root.join("node-1");
+        let config = crate::config::ClusterConfig {
+            name: TEST_CLUSTER_NAME.to_string(),
+            nodes: cluster
+                .nodes
+                .iter()
+                .map(|node| {
+                    format!("{}:{}", node.host_ip, node.api_port)
+                        .parse()
+                        .unwrap()
+                })
+                .collect(),
+            subnets: vec![
+                "172.30.1.0/24".to_string(),
+                "172.30.2.0/24".to_string(),
+                "172.30.3.0/24".to_string(),
+            ],
+            api_port: cluster.nodes[0].api_port,
+            control_allow_cidrs: vec!["127.0.0.1/32".to_string()],
+            shared_registry: Some("registry.invalid/maestro".to_string()),
+            join_secret: Some("integration-auto-formation-secret".to_string()),
+            ..crate::config::ClusterConfig::default()
+        };
+        let identity = super::provision::ensure_seed_identity(
+            &config,
+            NodeRole::Voter,
+            &seed_data,
+            Ipv4Addr::LOCALHOST,
+        )?;
+        cluster.cluster_id = identity.cluster_id;
         let seed_name = cluster.nodes[0].member_name();
         let seed_peer = cluster.peer_url(0);
         cluster.start_member(0, &seed_name, &format!("{seed_name}={seed_peer}"), "new")?;
@@ -389,7 +421,7 @@ impl FormingEtcdCluster {
         let initial_cluster =
             super::bootstrap::format_initial_cluster(&members, member_id, &member_name, true)?;
         let join_info = super::bootstrap::JoinInfo {
-            cluster_id: TEST_CLUSTER_NAME.to_string(),
+            cluster_id: self.cluster_id.clone(),
             member_id,
             member_name: member_name.clone(),
             peer_url,
@@ -519,7 +551,7 @@ impl FormingEtcdCluster {
     fn runtime(&self, index: usize) -> super::ClusterRuntime {
         let node = self.nodes[index];
         super::ClusterRuntime {
-            cluster_id: TEST_CLUSTER_NAME.to_string(),
+            cluster_id: self.cluster_id.clone(),
             node_id: format!("node-{}", index + 1),
             instance_id: format!("instance-{}", index + 1),
             host_ip: node.host_ip,
@@ -2147,7 +2179,6 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     let mut cluster = FormingEtcdCluster::start_seed()?;
     let seed_runtime = cluster.runtime(0);
     let seed_data = cluster.root.join("node-1");
-    super::bootstrap::arm_seed(&seed_data, &seed_runtime.cluster_id, seed_runtime.host_ip)?;
     assert_eq!(
         super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
         super::bootstrap::BootstrapAction::BootstrapSeed

@@ -23,6 +23,9 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
 pub enum ControlCommand {
+    DiscoverClusterCa {
+        request: crate::cluster::join::CaDiscoveryRequest,
+    },
     SetNodeState {
         node_id: String,
         unschedulable: bool,
@@ -170,10 +173,22 @@ impl ControlServer {
         if !constant_time_matches(&self.internal_token, &request.token) {
             bail!("control authentication failed");
         }
+        let command = match request.command {
+            ControlCommand::DiscoverClusterCa { request } => {
+                let response = self
+                    .join
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("cluster join service is unavailable"))?
+                    .discover_ca(&request)?;
+                return Ok(Some(serde_json::to_value(response)?));
+            }
+            command => command,
+        };
         let LeadershipState::Leading(token) = self.elector.state() else {
             bail!("local daemon is not the cluster leader");
         };
-        let output = match request.command {
+        let output = match command {
+            ControlCommand::DiscoverClusterCa { .. } => unreachable!("handled without leadership"),
             ControlCommand::SetNodeState {
                 node_id,
                 unschedulable,

@@ -33,6 +33,22 @@ type HmacSha256 = Hmac<Sha256>;
 const JOIN_NONCE_PREFIX: &str = "/maetro/cluster/join-nonces/";
 const JOIN_INTENT_PREFIX: &str = "/maetro/cluster/join-intents/";
 const ADMISSION_PREFIX: &str = "/maetro/cluster/admissions/";
+const CA_DISCOVERY_CONTEXT: &[u8] = b"maestro-cluster-ca-discovery-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaDiscoveryRequest {
+    pub cluster_name: String,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaDiscoveryResponse {
+    pub cluster_id: String,
+    pub ca_pem: String,
+    pub proof: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +173,20 @@ impl JoinCoordinator {
         }
     }
 
+    pub fn discover_ca(&self, request: &CaDiscoveryRequest) -> Result<CaDiscoveryResponse> {
+        if request.cluster_name != self.display_name {
+            bail!("CA discovery requested a different cluster name");
+        }
+        let ca_pem = std::fs::read_to_string(self.data_dir.join("system/certs/ca.pem"))?;
+        create_ca_discovery_response(
+            &self.join_secret,
+            &self.display_name,
+            &self.runtime.cluster_id,
+            &ca_pem,
+            request,
+        )
+    }
+
     pub async fn approve(&self, token: &LeadershipToken, admission: JoinAdmission) -> Result<()> {
         if !admission.role.is_voter() {
             bail!("only voter joins require an approval record");
@@ -252,11 +282,12 @@ impl JoinCoordinator {
         }
 
         validate_reservations(&mut client, &request, existing_intent.is_some()).await?;
-        let admission = if request.role.is_voter() && existing_intent.is_none() {
-            Some(read_matching_admission(&mut client, &request, &requested_intent).await?)
-        } else {
-            None
-        };
+        let admission =
+            if voter_admission_required(&self.runtime, &request, existing_intent.is_some()) {
+                Some(read_matching_admission(&mut client, &request, &requested_intent).await?)
+            } else {
+                None
+            };
         let mut comparisons = vec![
             leadership_compare(token),
             Compare::version(nonce_key.as_str(), CompareOp::Equal, 0),
@@ -575,6 +606,91 @@ impl JoinCoordinator {
         )
         .await?)
     }
+}
+
+fn voter_admission_required(
+    runtime: &ClusterRuntime,
+    request: &JoinRequest,
+    existing_intent: bool,
+) -> bool {
+    request.role.is_voter()
+        && !existing_intent
+        && !runtime.initial_voters.contains(&request.endpoint())
+}
+
+pub fn create_ca_discovery_response(
+    secret: &str,
+    cluster_name: &str,
+    cluster_id: &str,
+    ca_pem: &str,
+    request: &CaDiscoveryRequest,
+) -> Result<CaDiscoveryResponse> {
+    let message = ca_discovery_message(cluster_name, cluster_id, ca_pem, request)?;
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(secret.as_bytes())?;
+    mac.update(&message);
+    Ok(CaDiscoveryResponse {
+        cluster_id: cluster_id.to_string(),
+        ca_pem: ca_pem.to_string(),
+        proof: hex::encode(mac.finalize().into_bytes()),
+    })
+}
+
+pub fn verify_ca_discovery_response(
+    secret: &str,
+    cluster_name: &str,
+    request: &CaDiscoveryRequest,
+    response: &CaDiscoveryResponse,
+) -> Result<()> {
+    let message = ca_discovery_message(
+        cluster_name,
+        &response.cluster_id,
+        &response.ca_pem,
+        request,
+    )?;
+    let proof = hex::decode(&response.proof).context("invalid CA discovery proof")?;
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(secret.as_bytes())?;
+    mac.update(&message);
+    mac.verify_slice(&proof)
+        .map_err(|_| anyhow!("cluster CA discovery authentication failed"))
+}
+
+fn ca_discovery_message(
+    cluster_name: &str,
+    cluster_id: &str,
+    ca_pem: &str,
+    request: &CaDiscoveryRequest,
+) -> Result<Vec<u8>> {
+    if request.cluster_name != cluster_name {
+        bail!("CA discovery response belongs to a different cluster name");
+    }
+    let nonce = decode_32(&request.nonce, "CA discovery nonce")?;
+    if cluster_id.len() != 32
+        || !cluster_id
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        bail!("invalid cluster id in CA discovery response");
+    }
+    let ca_sha256 = crate::utils::certs::certificate_fingerprint(ca_pem)?;
+    let mut message = Vec::with_capacity(
+        CA_DISCOVERY_CONTEXT.len()
+            + cluster_name.len()
+            + cluster_id.len()
+            + nonce.len()
+            + ca_sha256.len()
+            + 5,
+    );
+    for field in [
+        CA_DISCOVERY_CONTEXT,
+        cluster_name.as_bytes(),
+        cluster_id.as_bytes(),
+        nonce.as_slice(),
+        ca_sha256.as_bytes(),
+    ] {
+        message.extend_from_slice(field);
+        message.push(0);
+    }
+    Ok(message)
 }
 
 fn validate_admission(admission: &JoinAdmission) -> Result<()> {
@@ -1455,6 +1571,44 @@ mod tests {
     }
 
     #[test]
+    fn shared_secret_authenticates_ca_discovery() {
+        let ca = crate::utils::certs::generate_cluster_ca().expect("generate CA");
+        let request = CaDiscoveryRequest {
+            cluster_name: "test".to_string(),
+            nonce: "ab".repeat(32),
+        };
+        let secret = "a sufficiently long shared join secret";
+        let response = create_ca_discovery_response(
+            secret,
+            "test",
+            "0123456789abcdef0123456789abcdef",
+            &ca.cert_pem,
+            &request,
+        )
+        .expect("create authenticated discovery response");
+        verify_ca_discovery_response(secret, "test", &request, &response)
+            .expect("authenticate discovered CA");
+
+        assert!(
+            verify_ca_discovery_response(
+                "a different sufficiently long secret",
+                "test",
+                &request,
+                &response,
+            )
+            .is_err()
+        );
+        let mut tampered_ca = response.clone();
+        tampered_ca.ca_pem = crate::utils::certs::generate_cluster_ca()
+            .expect("generate different CA")
+            .cert_pem;
+        assert!(verify_ca_discovery_response(secret, "test", &request, &tampered_ca).is_err());
+        let mut tampered_cluster = response;
+        tampered_cluster.cluster_id = "f".repeat(32);
+        assert!(verify_ca_discovery_response(secret, "test", &request, &tampered_cluster).is_err());
+    }
+
+    #[test]
     fn legacy_join_intent_retry_ignores_new_defaulted_port_fields() {
         let mut old = JoinIntent {
             node_id: "node123abcde".to_string(),
@@ -1493,6 +1647,50 @@ mod tests {
         validate_request_shape(&request, 1_000).expect("valid mapped ports");
         request.etcd_peer_port = 2380;
         assert!(validate_request_shape(&request, 1_000).is_err());
+    }
+
+    #[test]
+    fn configured_original_voters_do_not_need_manual_admission() {
+        let private = StaticSecret::random();
+        let mut request = create_join_request(
+            &private,
+            "node123abcde".to_string(),
+            "node-a".to_string(),
+            NodeRole::Hybrid,
+            "10.20.0.12:3101".parse().unwrap(),
+            "172.22.2.0/24".to_string(),
+            None,
+            1_000,
+        );
+        let runtime = ClusterRuntime {
+            cluster_id: "0123456789abcdef0123456789abcdef".to_string(),
+            node_id: "seed123abcde".to_string(),
+            instance_id: "instance".to_string(),
+            host_ip: "10.20.0.11".parse().unwrap(),
+            role: NodeRole::Hybrid,
+            initial_voters: vec![
+                "10.20.0.11:3001".parse().unwrap(),
+                "10.20.0.12:3101".parse().unwrap(),
+                "10.20.0.13:3201".parse().unwrap(),
+            ],
+            subnets: Vec::new(),
+            control_allow_cidrs: Vec::new(),
+            api_port: 3001,
+            gateway_port: 3002,
+            etcd_client_port: 3003,
+            etcd_peer_port: 3004,
+            shared_registry: None,
+            labels: Default::default(),
+            identity_api_port: Some(3001),
+        };
+        assert!(!voter_admission_required(&runtime, &request, false));
+
+        request.cluster_api_port = 3301;
+        request.identity_api_port = Some(3301);
+        request.cluster_gateway_port = 3302;
+        request.etcd_client_port = 3303;
+        request.etcd_peer_port = 3304;
+        assert!(voter_admission_required(&runtime, &request, false));
     }
 
     #[test]

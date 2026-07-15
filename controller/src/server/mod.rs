@@ -356,7 +356,9 @@ impl Server {
             .route("/_healthy", get(Self::healthy))
             .route("/_ready", get(Self::ready))
             .route("/_maestro/ingress-denied", any(Self::ingress_denied));
-        let joining = Router::new().route("/api/cluster/join", post(Self::join_cluster_node));
+        let joining = Router::new()
+            .route("/api/cluster/ca", post(Self::discover_cluster_ca))
+            .route("/api/cluster/join", post(Self::join_cluster_node));
 
         machine
             .merge(joining)
@@ -887,6 +889,35 @@ impl Server {
             join_forbidden()
         })?;
         Ok(Json(envelope))
+    }
+
+    async fn discover_cluster_ca(
+        State(state): State<AppState>,
+        Json(request): Json<crate::cluster::join::CaDiscoveryRequest>,
+    ) -> Result<Json<crate::cluster::join::CaDiscoveryResponse>, (StatusCode, String)> {
+        let socket = state
+            .control_socket
+            .as_deref()
+            .ok_or_else(join_unavailable)?;
+        let token = state
+            .internal_control_token
+            .as_deref()
+            .ok_or_else(join_unavailable)?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::DiscoverClusterCa { request },
+        )
+        .await
+        .map_err(|error| {
+            eprintln!("cluster CA discovery failed: {error}");
+            join_unavailable()
+        })?
+        .ok_or_else(join_unavailable)?;
+        serde_json::from_value(value).map(Json).map_err(|error| {
+            eprintln!("cluster CA discovery response encoding failed: {error}");
+            join_unavailable()
+        })
     }
 
     async fn get_cluster_stats(
@@ -3052,6 +3083,13 @@ fn build_api_tls_config(
 
 fn join_forbidden() -> (StatusCode, String) {
     (StatusCode::FORBIDDEN, "join rejected".to_string())
+}
+
+fn join_unavailable() -> (StatusCode, String) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "cluster join service unavailable".to_string(),
+    )
 }
 
 fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, String)> {

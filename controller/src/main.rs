@@ -779,13 +779,6 @@ async fn run() -> crate::error::Result<bool> {
             let cluster_alias = cfg.cluster.name.to_lowercase();
             let cluster_data_dir = data_dir.join(&cluster_alias);
             let migration_in_progress = cluster::migration::is_in_progress(&cluster_data_dir);
-            if cfg.cluster.ca_sha256.is_none()
-                && let Some(fingerprint) =
-                    cluster::migration::installed_ca_fingerprint(&cluster_data_dir)
-                        .map_err(|error| Error::invalid_config(error.to_string()))?
-            {
-                cfg.cluster.ca_sha256 = Some(fingerprint);
-            }
             if cfg.cluster.nodes.is_empty()
                 && (migration_in_progress || cluster_data_dir.join("system/cluster-id").exists())
             {
@@ -799,19 +792,11 @@ async fn run() -> crate::error::Result<bool> {
                     cfg.node.role,
                     &cluster_data_dir,
                 );
-            if automatic_legacy_migration {
-                cluster::network::validate_cluster_provisioning_config(
-                    &cfg.cluster,
-                    cfg.subnet.as_deref(),
-                    cfg.node.role,
-                )
-            } else {
-                cluster::network::validate_cluster_config(
-                    &cfg.cluster,
-                    cfg.subnet.as_deref(),
-                    cfg.node.role,
-                )
-            }
+            cluster::network::validate_cluster_config(
+                &cfg.cluster,
+                cfg.subnet.as_deref(),
+                cfg.node.role,
+            )
             .map_err(|err| Error::invalid_config(err.to_string()))?;
             if !cfg.cluster.nodes.is_empty()
                 && cfg
@@ -866,7 +851,6 @@ async fn run() -> crate::error::Result<bool> {
                                 "automatic legacy cluster migration failed: {error}"
                             ))
                         })?;
-                cfg.cluster.ca_sha256 = Some(migration.ca_sha256.clone());
                 eprintln!(
                     "[maestro]: migrated legacy etcd member into cluster `{}`; CA SHA-256: {}; offline backup: {}; recovery manifest: {}",
                     migration.cluster_id,
@@ -874,6 +858,43 @@ async fn run() -> crate::error::Result<bool> {
                     migration.etcd_backup.display(),
                     migration.etcd_backup_manifest.display()
                 );
+            }
+            if !cfg.cluster.nodes.is_empty() && !automatic_legacy_migration {
+                let host_ip = cluster::network::resolve_cluster_host_ip(
+                    &cfg.cluster,
+                    &data_dir,
+                    cfg.node.role,
+                )
+                .map_err(|error| Error::invalid_config(error.to_string()))?
+                .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+                let local_endpoint = cfg
+                    .cluster
+                    .local_endpoint(host_ip, cfg.node.role)
+                    .map_err(|error| Error::invalid_config(error.to_string()))?;
+                let is_seed = cfg.node.role.is_voter()
+                    && cfg
+                        .cluster
+                        .resolved_nodes()
+                        .map_err(|error| Error::invalid_config(error.to_string()))?
+                        .first()
+                        == Some(&local_endpoint);
+                if is_seed {
+                    let identity = cluster::provision::ensure_seed_identity(
+                        &cfg.cluster,
+                        cfg.node.role,
+                        &data_dir,
+                        host_ip,
+                    )?;
+                    if identity.created {
+                        eprintln!(
+                            "[maestro]: automatically initialized cluster `{}` ({})",
+                            cfg.cluster.name, identity.cluster_id
+                        );
+                    }
+                } else if !cluster::provision::identity_installed(&data_dir)? {
+                    cluster::provision::auto_join(&cfg, &data_dir, host_ip, signal_tx.subscribe())
+                        .await?;
+                }
             }
             let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
                 Error::internal(format!("failed to serialize masked config: {err}"))
@@ -898,10 +919,9 @@ async fn run() -> crate::error::Result<bool> {
                 let certs_dir = data_dir.join("system/certs");
                 let node_certs = utils::certs::read_etcd_certs(&certs_dir).map_err(|err| {
                     Error::invalid_config(format!(
-                        "node certificate bundle is missing or invalid: {err}; provision the host-specific bundle issued by `maestro cluster init-ca` or the join API"
+                        "node certificate bundle is missing or invalid after automatic cluster provisioning: {err}"
                     ))
                 })?;
-                validate_ca_fingerprint(cfg.cluster.ca_sha256.as_deref(), &node_certs.ca_pem)?;
                 if cfg.node.role.is_voter() {
                     let ca = utils::certs::load_cluster_ca(&certs_dir.join("cluster-ca")).map_err(
                         |err| {
@@ -2196,7 +2216,7 @@ async fn enable_legacy_cluster(
     let config = config::load_config(config_source)
         .await
         .map_err(|err| Error::invalid_config(err.to_string()))?;
-    cluster::network::validate_cluster_provisioning_config(
+    cluster::network::validate_cluster_config(
         &config.cluster,
         config.subnet.as_deref(),
         config.node.role,
@@ -2265,7 +2285,7 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
     let config = config::load_config(config_source)
         .await
         .map_err(|err| Error::invalid_config(err.to_string()))?;
-    cluster::network::validate_cluster_provisioning_config(
+    cluster::network::validate_cluster_config(
         &config.cluster,
         config.subnet.as_deref(),
         config.node.role,
@@ -2474,27 +2494,6 @@ async fn issue_cluster_node(
 fn certificate_fingerprint(certificate_pem: &str) -> crate::error::Result<String> {
     utils::certs::certificate_fingerprint(certificate_pem)
         .map_err(|error| Error::invalid_config(error.to_string()))
-}
-
-fn validate_ca_fingerprint(
-    expected: Option<&str>,
-    certificate_pem: &str,
-) -> crate::error::Result<()> {
-    let Some(expected) = expected else {
-        return Ok(());
-    };
-    let expected = expected
-        .trim()
-        .strip_prefix("sha256:")
-        .unwrap_or(expected.trim())
-        .to_ascii_lowercase();
-    let actual = certificate_fingerprint(certificate_pem)?;
-    if expected != actual {
-        return Err(Error::invalid_config(format!(
-            "cluster CA fingerprint mismatch: expected `{expected}`, got `{actual}`"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_subnet_cidr(cidr: &str) -> crate::error::Result<()> {

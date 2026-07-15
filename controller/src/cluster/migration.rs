@@ -200,7 +200,8 @@ pub fn is_legacy_candidate(config: &ClusterConfig, role: NodeRole, data_dir: &Pa
         && !cluster_id_path(data_dir).exists()
 }
 
-pub fn installed_ca_fingerprint(data_dir: &Path) -> Result<Option<String>> {
+#[cfg(test)]
+fn installed_ca_fingerprint(data_dir: &Path) -> Result<Option<String>> {
     if !cluster_id_path(data_dir).exists() {
         return Ok(None);
     }
@@ -277,7 +278,6 @@ fn prepare(
     sync_tree(&temporary_certs)?;
 
     let ca_sha256 = crate::utils::certs::certificate_fingerprint(&ca.cert_pem)?;
-    validate_configured_fingerprint(config.ca_sha256.as_deref(), &ca_sha256)?;
     let migration = AutomaticMigration {
         cluster_id: backup.cluster_id,
         legacy_member_name,
@@ -374,22 +374,6 @@ fn validate_state(
         || migration.legacy_member_name != legacy_member_name(config, data_dir)?
     {
         bail!("cluster configuration changed while the legacy migration was in progress");
-    }
-    validate_configured_fingerprint(config.ca_sha256.as_deref(), &migration.ca_sha256)
-}
-
-fn validate_configured_fingerprint(expected: Option<&str>, actual: &str) -> Result<()> {
-    if let Some(expected) = expected {
-        let expected = expected
-            .trim()
-            .strip_prefix("sha256:")
-            .unwrap_or(expected.trim())
-            .to_ascii_lowercase();
-        if expected != actual {
-            bail!(
-                "configured cluster CA fingerprint does not match the automatically generated CA"
-            );
-        }
     }
     Ok(())
 }
