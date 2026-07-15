@@ -439,8 +439,9 @@ maestro cluster remove-node <node-id>
 
 Removal transfers Maestro leadership when necessary, removes voter membership,
 and cleans cluster-owned state. Never delete a voter's local etcd member directory
-as a substitute for `remove-node`; a wiped member deliberately refuses a fresh
-bootstrap. Remove only one voter at a time and verify quorum after every change.
+as a substitute for `remove-node`; a wiped configured voter recovers its existing
+identity as a replacement learner and never bootstraps independently. Remove only
+one voter at a time and verify quorum after every change.
 
 For a lost or compromised node, remove it, rotate `cluster.join-secret`, and
 revoke its runtime/registry credentials. Cluster CA rotation is a manual maintenance
@@ -534,17 +535,23 @@ upgrade; it does not coordinate draining or membership order.
   quorum, the successor leader removes unhealthy endpoints and replaces movable
   replicas after the durable loss grace period.
 - Loss of etcd quorum stops scheduling and deploy writes. Existing containers and
-  the last applied Traefik configuration continue serving. Restore a majority; do
-  not bootstrap a replacement cluster.
+  the last applied Traefik configuration continue serving. If voters merely went
+  offline, quorum returns when they restart. If their local member data is missing
+  or corrupt, the daemons authenticate every configured voter's recovery status;
+  both request and response are nonce-bound to `cluster.join-secret`, and each
+  response also reports whether a linearizable etcd read succeeds. A sole
+  survivor preserves the committed store and rebuilds membership, while empty
+  voters rejoin as learners.
 - Loss of a node's mTLS gateway marks that node's data plane unready and disables
   its local cloudflared connectors when the runtime supports dynamic network
   attachment. Every public Traefik also health-checks each remote gateway and
   removes an unreachable gateway independently, without waiting for the leader.
   The controller, etcd member, and cluster API remain available over private host
   IPs.
-- Loss of the original seed during initial formation has no automatic fallback.
-  Recover the seed and its member data. Starting another fresh seed risks split
-  brain and is intentionally refused.
+- Loss of the original seed during initial formation has no fallback while any
+  configured voter is unreachable. Once every voter answers the authenticated
+  startup rendezvous, surviving member data is preserved. If every voter reports
+  empty, only the first configured voter initializes a clean cluster.
 - A full-cluster restart uses persisted etcd member state and the cluster-bound
   voter cache. Preserve each voter's complete data directory and start a majority
   before attempting writes.
@@ -571,7 +578,10 @@ etcd members are removed. A formation scenario starts only the designated seed,
 admits the other configured voters as learners (including a later-listed voter
 while the middle voter is absent), generates their production-shaped join state,
 waits for catch-up, and promotes them into one writable three-voter cluster. It
-also proves a consumed seed permit cannot authorize fallback bootstrap. A serial
+also proves a consumed seed permit requires authenticated all-voter consensus
+before a clean bootstrap. Another real-etcd scenario deletes two voter stores,
+preserves a committed key through force-new-quorum recovery on the survivor, and
+re-adds both empty voters as learners. A serial
 restart scenario stops one logical node at a time, verifies that the remaining
 etcd members still accept writes and public ingress keeps serving through the
 other gateways, then proves the restarted member, gateway, and workload rejoin
@@ -621,9 +631,11 @@ runtime, or membership changes:
 6. Kill the current leader during a rollout, drain, membership change, and rolling
    upgrade. Confirm the successor resumes durable work and stale fenced writes are
    rejected.
-7. Kill one voter, then restore it. Kill two of three voters and confirm writes
-   fail without disturbing already-running workloads; restore quorum and confirm
-   automatic recovery.
+7. Delete one voter's member data and confirm it is automatically replaced as a
+   learner through the surviving quorum. Delete two members and confirm the sole
+   survivor preserves committed state while rebuilding membership. On a disposable
+   cluster, delete every member and confirm only the first configured voter creates
+   a clean cluster after all voters authenticate their empty state.
 8. Drain a node under load. Confirm all replacement replicas become ready before
    atomic traffic cutover. Repeat with a hard-pinned service and confirm the drain
    blocks rather than stopping it.

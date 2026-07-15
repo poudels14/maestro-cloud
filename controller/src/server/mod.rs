@@ -358,6 +358,10 @@ impl Server {
             .route("/_maestro/ingress-denied", any(Self::ingress_denied));
         let joining = Router::new()
             .route("/api/cluster/ca", post(Self::discover_cluster_ca))
+            .route(
+                "/api/cluster/recovery-status",
+                post(Self::cluster_recovery_status),
+            )
             .route("/api/cluster/join", post(Self::join_cluster_node));
 
         machine
@@ -387,7 +391,9 @@ impl Server {
         .with_graceful_shutdown(async move {
             loop {
                 match shutdown_rx.recv().await {
-                    Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Force) => break,
+                    Ok(ShutdownEvent::Graceful)
+                    | Ok(ShutdownEvent::Force)
+                    | Ok(ShutdownEvent::Restart) => break,
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -420,7 +426,7 @@ impl Server {
         tokio::spawn(async move {
             loop {
                 match shutdown_rx.recv().await {
-                    Ok(ShutdownEvent::Graceful) => {
+                    Ok(ShutdownEvent::Graceful) | Ok(ShutdownEvent::Restart) => {
                         shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
                         break;
                     }
@@ -916,6 +922,35 @@ impl Server {
         .ok_or_else(join_unavailable)?;
         serde_json::from_value(value).map(Json).map_err(|error| {
             eprintln!("cluster CA discovery response encoding failed: {error}");
+            join_unavailable()
+        })
+    }
+
+    async fn cluster_recovery_status(
+        State(state): State<AppState>,
+        Json(request): Json<crate::cluster::recovery::RecoveryStatusRequest>,
+    ) -> Result<Json<crate::cluster::recovery::RecoveryStatusResponse>, (StatusCode, String)> {
+        let socket = state
+            .control_socket
+            .as_deref()
+            .ok_or_else(join_unavailable)?;
+        let token = state
+            .internal_control_token
+            .as_deref()
+            .ok_or_else(join_unavailable)?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::RecoveryStatus { request },
+        )
+        .await
+        .map_err(|error| {
+            eprintln!("cluster recovery status failed: {error}");
+            join_unavailable()
+        })?
+        .ok_or_else(join_unavailable)?;
+        serde_json::from_value(value).map(Json).map_err(|error| {
+            eprintln!("cluster recovery status response encoding failed: {error}");
             join_unavailable()
         })
     }

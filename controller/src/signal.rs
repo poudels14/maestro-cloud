@@ -11,6 +11,7 @@ const CTRL_C_CHAIN_WINDOW: Duration = Duration::from_millis(500);
 pub(crate) enum ShutdownEvent {
     Graceful,
     Force,
+    Restart,
 }
 
 pub(crate) fn spawn_shutdown_signal_bus()

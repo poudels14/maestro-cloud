@@ -187,6 +187,42 @@ impl JoinCoordinator {
         )
     }
 
+    pub async fn recovery_status(
+        &self,
+        request: &crate::cluster::recovery::RecoveryStatusRequest,
+    ) -> Result<crate::cluster::recovery::RecoveryStatusResponse> {
+        if request.cluster_name != self.display_name
+            || request.cluster_id != self.runtime.cluster_id
+        {
+            bail!("cluster recovery status requested a different cluster identity");
+        }
+        crate::cluster::recovery::verify_request(&self.join_secret, request)?;
+        let member_data = if self.data_dir.join("system/etcd/data/member").is_dir() {
+            crate::cluster::recovery::MemberDataState::Present
+        } else {
+            crate::cluster::recovery::MemberDataState::Missing
+        };
+        let cluster_available = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            match self.connect().await {
+                Ok(mut client) => client
+                    .get("/maetro/system/cluster-meta", None)
+                    .await
+                    .is_ok_and(|response| !response.kvs().is_empty()),
+                Err(_) => false,
+            }
+        })
+        .await
+        .unwrap_or(false);
+        crate::cluster::recovery::create_response(
+            &self.join_secret,
+            request,
+            &self.runtime.cluster_id,
+            self.runtime.local_endpoint(),
+            member_data,
+            cluster_available,
+        )
+    }
+
     pub async fn approve(&self, token: &LeadershipToken, admission: JoinAdmission) -> Result<()> {
         if !admission.role.is_voter() {
             bail!("only voter joins require an approval record");

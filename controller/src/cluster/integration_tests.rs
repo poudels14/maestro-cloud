@@ -134,6 +134,9 @@ struct ContainerEtcdCluster {
     runtime_cli: String,
     container_names: Vec<String>,
     endpoints: Vec<String>,
+    nodes: Vec<super::ClusterNodeEndpoint>,
+    root: PathBuf,
+    token: String,
 }
 
 impl ContainerEtcdCluster {
@@ -157,10 +160,15 @@ impl ContainerEtcdCluster {
             .join(",");
         let run_id = crate::utils::nanoid::unique_id(12).to_ascii_lowercase();
         let token = format!("maestro-integration-{run_id}");
+        let root = std::env::temp_dir().join(format!("maestro-etcd-cluster-{run_id}"));
+        std::fs::create_dir_all(&root)?;
         let mut cluster = Self {
             runtime_cli,
             container_names: Vec::new(),
             endpoints: Vec::new(),
+            nodes: nodes.clone(),
+            root,
+            token: token.clone(),
         };
 
         for (index, node) in nodes.iter().enumerate() {
@@ -168,6 +176,8 @@ impl ContainerEtcdCluster {
             let container = format!("maestro-etcd-test-{run_id}-{}", index + 1);
             let client_port = node.etcd_client_port;
             let peer_port = node.etcd_peer_port;
+            let data_dir = cluster.root.join(format!("member-{}", index + 1));
+            std::fs::create_dir_all(&data_dir)?;
             let arguments = vec![
                 "run".to_string(),
                 "--detach".to_string(),
@@ -175,6 +185,8 @@ impl ContainerEtcdCluster {
                 "host".to_string(),
                 "--name".to_string(),
                 container.clone(),
+                "--volume".to_string(),
+                format!("{}:/etcd-data", data_dir.display()),
                 crate::deployment::ETCD_IMAGE_TAG.to_string(),
                 "etcd".to_string(),
                 format!("--name={member}"),
@@ -198,6 +210,87 @@ impl ContainerEtcdCluster {
                 .push(format!("http://127.0.0.1:{client_port}"));
         }
         Ok(cluster)
+    }
+
+    fn initial_cluster(&self) -> String {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                format!(
+                    "member{}=http://127.0.0.1:{}",
+                    index + 1,
+                    node.etcd_peer_port
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn wipe_member(&self, index: usize) -> Result<()> {
+        command_output(
+            &self.runtime_cli,
+            &["rm", "--force", &self.container_names[index]],
+        )?;
+        let data_dir = self.root.join(format!("member-{}", index + 1));
+        std::fs::remove_dir_all(&data_dir)?;
+        std::fs::create_dir_all(data_dir)?;
+        Ok(())
+    }
+
+    fn restart_survivor_with_force_new_cluster(&self, index: usize) -> Result<()> {
+        command_output(
+            &self.runtime_cli,
+            &["rm", "--force", &self.container_names[index]],
+        )?;
+        self.run_member(index, &self.initial_cluster(), true)
+    }
+
+    fn start_replacement(&self, index: usize, initial_cluster: &str) -> Result<()> {
+        self.run_member(index, initial_cluster, false)
+    }
+
+    fn run_member(&self, index: usize, initial_cluster: &str, force_new: bool) -> Result<()> {
+        let node = self.nodes[index];
+        let member = format!("member{}", index + 1);
+        let data_dir = self.root.join(format!("member-{}", index + 1));
+        let mut arguments = vec![
+            "run".to_string(),
+            "--detach".to_string(),
+            "--network".to_string(),
+            "host".to_string(),
+            "--name".to_string(),
+            self.container_names[index].clone(),
+            "--volume".to_string(),
+            format!("{}:/etcd-data", data_dir.display()),
+            crate::deployment::ETCD_IMAGE_TAG.to_string(),
+            "etcd".to_string(),
+            format!("--name={member}"),
+            "--data-dir=/etcd-data".to_string(),
+            format!(
+                "--listen-client-urls=http://0.0.0.0:{}",
+                node.etcd_client_port
+            ),
+            format!(
+                "--advertise-client-urls=http://127.0.0.1:{}",
+                node.etcd_client_port
+            ),
+            format!("--listen-peer-urls=http://0.0.0.0:{}", node.etcd_peer_port),
+            format!(
+                "--initial-advertise-peer-urls=http://127.0.0.1:{}",
+                node.etcd_peer_port
+            ),
+            format!("--initial-cluster={initial_cluster}"),
+            "--initial-cluster-state=existing".to_string(),
+            format!("--initial-cluster-token={}", self.token),
+            "--strict-reconfig-check=true".to_string(),
+        ];
+        if force_new {
+            arguments.push("--force-new-cluster=true".to_string());
+        }
+        let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        command_output(&self.runtime_cli, &references)?;
+        Ok(())
     }
 
     fn stop_member(&self, index: usize) -> Result<()> {
@@ -1172,12 +1265,12 @@ impl Drop for SingleHostHttpCluster {
 
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
-        if self.container_names.is_empty() {
-            return;
+        if !self.container_names.is_empty() {
+            let mut arguments = vec!["rm", "--force"];
+            arguments.extend(self.container_names.iter().map(String::as_str));
+            let _ = Command::new(&self.runtime_cli).args(arguments).output();
         }
-        let mut arguments = vec!["rm", "--force"];
-        arguments.extend(self.container_names.iter().map(String::as_str));
-        let _ = Command::new(&self.runtime_cli).args(arguments).output();
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -2184,9 +2277,10 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
         super::bootstrap::BootstrapAction::BootstrapSeed
     );
     super::bootstrap::mark_seed_starting(&seed_data)?;
-    assert!(
-        super::bootstrap::decide(Some(&seed_runtime), &seed_data).is_err(),
-        "a consumed seed permit must not authorize fallback bootstrap"
+    assert_eq!(
+        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
+        super::bootstrap::BootstrapAction::WaitForAdmission,
+        "a consumed seed permit must wait for authenticated recovery consensus"
     );
     super::bootstrap::mark_seed_joined(&seed_data)?;
     std::fs::create_dir_all(seed_data.join("system/etcd/data/member"))?;
@@ -2207,7 +2301,7 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
         super::bootstrap::persist_join_info(&data_dir, &join_info)?;
         assert_eq!(
             super::bootstrap::decide(Some(&runtime), &data_dir)?,
-            super::bootstrap::BootstrapAction::JoinExisting(join_info)
+            super::bootstrap::BootstrapAction::WaitForAdmission
         );
     }
 
@@ -2605,5 +2699,138 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
     for handle in handles[survivor].drain(..) {
         handle.abort();
     }
+    Ok(())
+}
+
+/// Deletes two of three voter data directories, rebuilds membership from the only surviving
+/// member with etcd's force-new-cluster recovery, and then adds both empty voters back as
+/// learners. The committed key must survive the quorum reconstruction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn surviving_etcd_member_recovers_empty_voters_without_a_backup() -> Result<()> {
+    let cluster = ContainerEtcdCluster::start()?;
+    cluster.wait_until_ready().await?;
+    let mut client = etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await?;
+    client
+        .put(
+            "/maestro/integration/recovery-preserved",
+            "before-data-loss",
+            None,
+        )
+        .await?;
+
+    cluster.wipe_member(1)?;
+    cluster.wipe_member(2)?;
+    cluster.restart_survivor_with_force_new_cluster(0)?;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(mut candidate) =
+                etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await
+                && candidate
+                    .status()
+                    .await
+                    .is_ok_and(|status| status.leader() != 0 && status.errors().is_empty())
+                && candidate
+                    .member_list()
+                    .await
+                    .is_ok_and(|members| members.members().len() == 1)
+                && candidate
+                    .put("/maestro/integration/recovery-ready", "yes", None)
+                    .await
+                    .is_ok()
+            {
+                client = candidate;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("surviving etcd member did not establish a one-member quorum"))?;
+    let preserved = client
+        .get("/maestro/integration/recovery-preserved", None)
+        .await?;
+    assert_eq!(
+        preserved.kvs().first().map(|entry| entry.value()),
+        Some(b"before-data-loss".as_slice())
+    );
+
+    // A daemon crash after etcd recovered but before the durable recovery marker is cleared may
+    // replay the force-new-cluster start. The replay must remain a writable one-member cluster.
+    cluster.restart_survivor_with_force_new_cluster(0)?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(mut candidate) =
+                etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await
+                && candidate
+                    .put("/maestro/integration/recovery-replay", "safe", None)
+                    .await
+                    .is_ok()
+            {
+                client = candidate;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("force-new-cluster recovery was not crash-replay safe"))?;
+
+    for index in [1, 2] {
+        let peer_url = format!("http://127.0.0.1:{}", cluster.nodes[index].etcd_peer_port);
+        let response = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match client
+                    .member_add(
+                        [peer_url.clone()],
+                        Some(MemberAddOptions::new().with_is_learner()),
+                    )
+                    .await
+                {
+                    Ok(response) => return response,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("surviving etcd member did not admit replacement learner"))?;
+        let member = response
+            .member()
+            .ok_or_else(|| anyhow!("etcd omitted replacement learner"))?;
+        let member_id = member.id();
+        let member_name = format!("member{}", index + 1);
+        let initial_cluster = super::bootstrap::format_initial_cluster(
+            response.member_list(),
+            member_id,
+            &member_name,
+            true,
+        )?;
+        cluster.start_replacement(index, &initial_cluster)?;
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(mut replacement) =
+                    etcd_client::Client::connect(vec![cluster.endpoints[index].clone()], None).await
+                    && replacement.status().await.is_ok()
+                    && client.member_promote(member_id).await.is_ok()
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("replacement etcd learner {} did not promote", index + 1))?;
+    }
+
+    cluster.wait_until_ready().await?;
+    let preserved = client
+        .get("/maestro/integration/recovery-preserved", None)
+        .await?;
+    assert_eq!(
+        preserved.kvs().first().map(|entry| entry.value()),
+        Some(b"before-data-loss".as_slice())
+    );
     Ok(())
 }

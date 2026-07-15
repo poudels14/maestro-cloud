@@ -58,7 +58,10 @@ pub fn ensure_seed_identity(
     if identity_installed(data_dir).unwrap_or(false) {
         let cluster_id = cluster::identity::load_cluster_id(data_dir)
             .map_err(|error| Error::invalid_config(error.to_string()))?;
-        if !member_exists {
+        if !member_exists
+            && cluster::bootstrap::seed_is_armed(data_dir)
+                .map_err(|error| Error::invalid_config(error.to_string()))?
+        {
             cluster::bootstrap::ensure_seed_armed(data_dir, &cluster_id, host_ip)
                 .map_err(|error| Error::invalid_config(error.to_string()))?;
         }

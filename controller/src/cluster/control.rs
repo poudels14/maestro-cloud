@@ -26,6 +26,9 @@ pub enum ControlCommand {
     DiscoverClusterCa {
         request: crate::cluster::join::CaDiscoveryRequest,
     },
+    RecoveryStatus {
+        request: crate::cluster::recovery::RecoveryStatusRequest,
+    },
     SetNodeState {
         node_id: String,
         unschedulable: bool,
@@ -182,13 +185,24 @@ impl ControlServer {
                     .discover_ca(&request)?;
                 return Ok(Some(serde_json::to_value(response)?));
             }
+            ControlCommand::RecoveryStatus { request } => {
+                let response = self
+                    .join
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("cluster recovery service is unavailable"))?
+                    .recovery_status(&request)
+                    .await?;
+                return Ok(Some(serde_json::to_value(response)?));
+            }
             command => command,
         };
         let LeadershipState::Leading(token) = self.elector.state() else {
             bail!("local daemon is not the cluster leader");
         };
         let output = match command {
-            ControlCommand::DiscoverClusterCa { .. } => unreachable!("handled without leadership"),
+            ControlCommand::DiscoverClusterCa { .. } | ControlCommand::RecoveryStatus { .. } => {
+                unreachable!("handled without leadership")
+            }
             ControlCommand::SetNodeState {
                 node_id,
                 unschedulable,
