@@ -130,6 +130,22 @@ third voter. Values in angle brackets are placeholders. Keep secrets out of sour
 control and deliver the complete configuration through a secret-backed config
 source such as AWS Secrets Manager.
 
+The shared fields can instead live in one AWS secret. Each node secret inherits
+that config and provides only its local values:
+
+```jsonc
+{
+  "$extends": "aws-secret://maestro/production/common",
+  "node": { "role": "hybrid" },
+  "subnet": "172.22.2.0/24",
+  "cluster": { "api-port": 3101 }
+}
+```
+
+Maestro merges objects recursively and replaces inherited arrays and scalars.
+Explicit daemon CLI arguments override the merged result. Every node's IAM role
+must be able to read its node secret and all secrets referenced by `$extends`.
+
 ### Multiple nodes on one host
 
 Use endpoint nodes when running a complete test cluster on one machine:

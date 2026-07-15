@@ -1,15 +1,55 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["cluster", "ingress", "encryption-key"],
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "required": ["$extends"]
+        }
+      },
+      "then": {
+        "required": ["cluster", "ingress", "encryption-key"],
+        "properties": {
+          "cluster": {
+            "required": ["name"]
+          },
+          "tailscale": {
+            "required": ["auth-key"]
+          },
+          "datadog": {
+            "required": ["api-key"]
+          },
+          "cloudflare": {
+            "required": ["tunnel"],
+            "properties": {
+              "tunnel": {
+                "required": ["token"]
+              }
+            }
+          },
+          "slack": {
+            "required": ["webhook-url"]
+          },
+          "log-backup": {
+            "required": ["bucket", "kms-key-id"]
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string"
     },
+    "$extends": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base config source. Objects merge recursively; arrays and scalar values in this config replace inherited values."
+    },
     "cluster": {
       "type": "object",
-      "required": ["name"],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -155,7 +195,6 @@
     },
     "tailscale": {
       "type": "object",
-      "required": ["auth-key"],
       "additionalProperties": false,
       "properties": {
         "auth-key": {
@@ -182,7 +221,6 @@
     },
     "datadog": {
       "type": "object",
-      "required": ["api-key"],
       "additionalProperties": false,
       "properties": {
         "api-key": {
@@ -235,12 +273,10 @@
     },
     "cloudflare": {
       "type": "object",
-      "required": ["tunnel"],
       "additionalProperties": false,
       "properties": {
         "tunnel": {
           "type": "object",
-          "required": ["token"],
           "additionalProperties": false,
           "properties": {
             "token": {
@@ -256,7 +292,6 @@
     },
     "slack": {
       "type": "object",
-      "required": ["webhook-url"],
       "additionalProperties": false,
       "properties": {
         "webhook-url": {
@@ -266,7 +301,6 @@
     },
     "log-backup": {
       "type": "object",
-      "required": ["bucket", "kms-key-id"],
       "additionalProperties": false,
       "properties": {
         "bucket": {

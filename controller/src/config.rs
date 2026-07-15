@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::logs::Logger;
 use crate::utils::crypto::SecretString;
 use crate::utils::secrets::SecretProvider;
+
+const CONFIG_EXTENDS_KEY: &str = "$extends";
+const MAX_CONFIG_EXTENDS_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -601,24 +604,144 @@ impl StartConfig {
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {
-    let path = source.strip_prefix("file://").unwrap_or(source);
-    let raw = if Path::new(path).exists() {
+    let value = load_config_value(source).await?;
+    let config: StartConfig = serde_json::from_value(value)
+        .map_err(|err| anyhow!("failed to parse merged config `{source}`: {err}"))?;
+    Ok(config)
+}
+
+async fn load_config_value(source: &str) -> Result<serde_json::Value> {
+    let mut current_source = source.to_string();
+    let mut seen = HashSet::new();
+    let mut layers = Vec::new();
+
+    loop {
+        if layers.len() > MAX_CONFIG_EXTENDS_DEPTH {
+            bail!(
+                "config `{source}` exceeds the maximum $extends depth of {MAX_CONFIG_EXTENDS_DEPTH}"
+            );
+        }
+
+        let identity = config_source_identity(&current_source);
+        if !seen.insert(identity) {
+            bail!("config $extends cycle detected at `{current_source}`");
+        }
+
+        let raw = read_config_source(&current_source).await?;
+        let mut value: serde_json::Value = json5::from_str(&raw)
+            .or_else(|_| serde_json::from_str(&raw))
+            .map_err(|err| anyhow!("failed to parse config `{current_source}`: {err}"))?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            anyhow!("config `{current_source}` must contain a JSON object at the top level")
+        })?;
+        let extends = object.remove(CONFIG_EXTENDS_KEY);
+        layers.push(value);
+
+        let Some(extends) = extends else {
+            break;
+        };
+        let extends = extends.as_str().ok_or_else(|| {
+            anyhow!("`$extends` in config `{current_source}` must be a non-empty string")
+        })?;
+        let extends = extends.trim();
+        if extends.is_empty() {
+            bail!("`$extends` in config `{current_source}` must be a non-empty string");
+        }
+        current_source = resolve_extended_source(&current_source, extends)?;
+    }
+
+    let mut layers = layers.into_iter().rev();
+    let mut merged = layers
+        .next()
+        .expect("a config source always contributes one layer");
+    for layer in layers {
+        merge_config_value(&mut merged, layer);
+    }
+    Ok(merged)
+}
+
+async fn read_config_source(source: &str) -> Result<String> {
+    if let Some(path) = local_config_path(source) {
         std::fs::read_to_string(path)
-            .map_err(|err| anyhow!("failed to read config file `{path}`: {err}"))?
+            .map_err(|err| anyhow!("failed to read config file `{}`: {err}", path.display()))
     } else {
         SecretProvider::new(source, &Logger::noop())?
             .fetch_raw()
-            .await?
+            .await
+    }
+}
+
+fn local_config_path(source: &str) -> Option<&Path> {
+    if source.starts_with("aws-secret://") {
+        return None;
+    }
+    if let Some(path) = source.strip_prefix("file://") {
+        return Some(Path::new(path));
+    }
+    (!source.contains("://")).then(|| Path::new(source))
+}
+
+fn config_source_identity(source: &str) -> String {
+    let Some(path) = local_config_path(source) else {
+        return source.to_string();
     };
-    let config: StartConfig = json5::from_str(&raw)
-        .or_else(|_| serde_json::from_str(&raw))
-        .map_err(|err| anyhow!("failed to parse config `{source}`: {err}"))?;
-    Ok(config)
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    format!("file://{}", absolute.display())
+}
+
+fn resolve_extended_source(current_source: &str, extends: &str) -> Result<String> {
+    if extends.starts_with("aws-secret://") {
+        return Ok(extends.to_string());
+    }
+
+    let explicit_file = extends.strip_prefix("file://");
+    let extends_path = explicit_file.unwrap_or(extends);
+    if explicit_file.is_none() && extends.contains("://") {
+        return Ok(extends.to_string());
+    }
+    let extends_path = Path::new(extends_path);
+    if extends_path.is_absolute() {
+        return Ok(format!("file://{}", extends_path.display()));
+    }
+
+    let Some(current_path) = local_config_path(current_source) else {
+        bail!(
+            "relative `$extends` source `{extends}` cannot be resolved from remote config `{current_source}`; use an aws-secret:// source or an absolute file:// path"
+        );
+    };
+    let parent = current_path.parent().unwrap_or_else(|| Path::new("."));
+    Ok(format!("file://{}", parent.join(extends_path).display()))
+}
+
+fn merge_config_value(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                if let Some(existing) = base.get_mut(&key) {
+                    merge_config_value(existing, value);
+                } else {
+                    base.insert(key, value);
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_config_dir(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "maestro-config-{label}-{}-{unique}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn cluster_nodes_accept_bare_ips_and_controller_endpoints() {
@@ -641,5 +764,113 @@ mod tests {
             serde_json::to_value(&endpoint).unwrap()["nodes"][0],
             "10.20.0.11:3101"
         );
+    }
+
+    #[tokio::test]
+    async fn extended_configs_merge_objects_and_replace_arrays() {
+        let directory = temp_config_dir("extends");
+        std::fs::create_dir_all(&directory).unwrap();
+        let base = directory.join("base.jsonc");
+        let shared = directory.join("shared.jsonc");
+        let node = directory.join("node.jsonc");
+
+        std::fs::write(
+            &base,
+            r#"{
+                cluster: {
+                    name: "prod",
+                    nodes: ["10.20.0.11:3001", "10.20.0.12:3101"],
+                    labels: { environment: "prod", region: "us-west-2" }
+                },
+                ingress: { port: 8080 },
+                subnet: "172.22.1.0/24",
+                "encryption-key": "base-key",
+                tags: ["base"],
+                tailscale: {
+                    "auth-key": "tailscale-key",
+                    "advertise-routes": ["172.22.1.0/24"]
+                },
+                cloudflare: {
+                    tunnel: { token: "base-token", replicas: 3 }
+                }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &shared,
+            r#"{
+                "$extends": "base.jsonc",
+                cluster: {
+                    labels: { environment: "staging", zone: "us-west-2a" }
+                },
+                tags: ["shared"],
+                tailscale: { "advertise-routes": ["172.22.2.0/24"] }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &node,
+            r#"{
+                "$extends": "shared.jsonc",
+                cluster: { "api-port": 3101 },
+                node: { role: "worker" },
+                subnet: "172.22.2.0/24",
+                cloudflare: { tunnel: { token: "node-token" } }
+            }"#,
+        )
+        .unwrap();
+
+        let config = load_config(node.to_str().unwrap()).await.unwrap();
+        assert_eq!(config.cluster.name, "prod");
+        assert_eq!(config.cluster.api_port, 3101);
+        assert_eq!(config.cluster.nodes.len(), 2);
+        assert_eq!(config.cluster.labels["environment"], "staging");
+        assert_eq!(config.cluster.labels["region"], "us-west-2");
+        assert_eq!(config.cluster.labels["zone"], "us-west-2a");
+        assert_eq!(config.node.role, crate::cluster::NodeRole::Worker);
+        assert_eq!(config.subnet.as_deref(), Some("172.22.2.0/24"));
+        assert_eq!(config.tags, vec!["shared"]);
+        assert_eq!(
+            config.tailscale.unwrap().advertise_routes,
+            vec!["172.22.2.0/24"]
+        );
+        assert_eq!(
+            config.cloudflare.unwrap().tunnel.replicas,
+            Some(3),
+            "an override must preserve inherited sibling fields"
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn extended_config_cycles_are_rejected() {
+        let directory = temp_config_dir("cycle");
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.jsonc");
+        let second = directory.join("second.jsonc");
+        std::fs::write(&first, r#"{ "$extends": "second.jsonc" }"#).unwrap();
+        std::fs::write(&second, r#"{ "$extends": "first.jsonc" }"#).unwrap();
+
+        let error = load_config(first.to_str().unwrap()).await.unwrap_err();
+        assert!(error.to_string().contains("$extends cycle"));
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn remote_configs_require_explicit_extended_sources() {
+        assert_eq!(
+            resolve_extended_source(
+                "aws-secret://maestro/staging/node-1",
+                "aws-secret://maestro/staging/common"
+            )
+            .unwrap(),
+            "aws-secret://maestro/staging/common"
+        );
+        let error =
+            resolve_extended_source("aws-secret://maestro/staging/node-1", "../common.jsonc")
+                .unwrap_err();
+        assert!(error.to_string().contains("aws-secret:// source"));
     }
 }

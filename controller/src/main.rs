@@ -481,6 +481,112 @@ struct StartArgs {
     project_dir: PathBuf,
 }
 
+struct StartConfigOverrides {
+    cluster_name: Option<String>,
+    encryption_key: Option<String>,
+    role: Option<cluster::NodeRole>,
+    jwt_secret_key: Option<String>,
+    tailscale_authkey: Option<String>,
+    tailscale_advertise_routes: Vec<String>,
+    datadog_api_key: Option<String>,
+    datadog_site: Option<String>,
+    datadog_no_ingress_logs: bool,
+    datadog_no_tailscale_logs: bool,
+    cloudflare_tunnel_token: Option<String>,
+    subnet: Option<String>,
+    egress_deny: Vec<String>,
+    egress_allow: Vec<String>,
+    tags: Vec<String>,
+    runtime: Option<config::RuntimeType>,
+    system: Option<config::SystemType>,
+    disable_etcd_cert: bool,
+}
+
+fn apply_start_config_overrides(cfg: &mut config::StartConfig, overrides: StartConfigOverrides) {
+    if let Some(name) = overrides.cluster_name {
+        cfg.cluster.name = name;
+    }
+    if let Some(key) = overrides.encryption_key {
+        cfg.encryption_key = key;
+    }
+    if let Some(role) = overrides.role {
+        cfg.node.role = role;
+    }
+    if let Some(secret) = overrides.jwt_secret_key {
+        cfg.jwt_secret_key = Some(secret);
+    }
+    if let Some(authkey) = overrides.tailscale_authkey {
+        if let Some(tailscale) = cfg.tailscale.as_mut() {
+            tailscale.auth_key = authkey;
+        } else {
+            cfg.tailscale = Some(config::TailscaleConfig {
+                auth_key: authkey,
+                advertise_routes: Vec::new(),
+            });
+        }
+    }
+    if !overrides.tailscale_advertise_routes.is_empty()
+        && let Some(tailscale) = cfg.tailscale.as_mut()
+    {
+        tailscale.advertise_routes = overrides.tailscale_advertise_routes;
+    }
+    if let Some(api_key) = overrides.datadog_api_key {
+        let datadog = cfg.datadog.get_or_insert(config::DatadogConfig {
+            api_key: String::new(),
+            site: None,
+            include_ingress_logs: true,
+            include_tailscale_logs: true,
+            logs: config::DatadogLogsConfig::default(),
+            include_metrics: false,
+        });
+        datadog.api_key = api_key;
+    }
+    if let Some(token) = overrides.cloudflare_tunnel_token {
+        if let Some(cloudflare) = cfg.cloudflare.as_mut() {
+            cloudflare.tunnel.token = SecretString::new(token);
+        } else {
+            cfg.cloudflare = Some(config::CloudflareConfig {
+                tunnel: config::CloudflareTunnelConfig {
+                    token: SecretString::new(token),
+                    replicas: None,
+                },
+            });
+        }
+    }
+    if let Some(datadog) = cfg.datadog.as_mut() {
+        if let Some(site) = overrides.datadog_site {
+            datadog.site = Some(site);
+        }
+        if overrides.datadog_no_ingress_logs {
+            datadog.include_ingress_logs = false;
+        }
+        if overrides.datadog_no_tailscale_logs {
+            datadog.include_tailscale_logs = false;
+        }
+    }
+    if overrides.subnet.is_some() {
+        cfg.subnet = overrides.subnet;
+    }
+    if !overrides.egress_deny.is_empty() {
+        cfg.egress.deny = overrides.egress_deny;
+    }
+    if !overrides.egress_allow.is_empty() {
+        cfg.egress.allow = overrides.egress_allow;
+    }
+    if !overrides.tags.is_empty() {
+        cfg.tags = overrides.tags;
+    }
+    if let Some(runtime) = overrides.runtime {
+        cfg.runtime = runtime;
+    }
+    if let Some(system) = overrides.system {
+        cfg.system = Some(system);
+    }
+    if overrides.disable_etcd_cert {
+        cfg.disable_etcd_cert = true;
+    }
+}
+
 #[derive(Debug, Args)]
 struct LogsArgs {
     #[arg(
@@ -656,6 +762,7 @@ async fn run() -> crate::error::Result<bool> {
                 None => config::StartConfig {
                     cluster: config::ClusterConfig {
                         name: cluster_name
+                            .clone()
                             .ok_or_else(|| Error::invalid_input("--cluster-name is required"))?,
                         ..Default::default()
                     },
@@ -687,74 +794,29 @@ async fn run() -> crate::error::Result<bool> {
                 },
             };
 
-            if let Some(key) = encryption_key {
-                cfg.encryption_key = key;
-            }
-            if let Some(role) = role {
-                cfg.node.role = role;
-            }
-            if let Some(secret) = jwt_secret_key {
-                cfg.jwt_secret_key = Some(secret);
-            }
-            if let Some(authkey) = tailscale_authkey {
-                cfg.tailscale = Some(config::TailscaleConfig {
-                    auth_key: authkey,
-                    advertise_routes: Vec::new(),
-                });
-            }
-            if !tailscale_advertise_routes.is_empty()
-                && let Some(ts) = cfg.tailscale.as_mut()
-            {
-                ts.advertise_routes.extend(tailscale_advertise_routes);
-            }
-            if let Some(api_key) = dd_api_key {
-                let dd = cfg.datadog.get_or_insert(config::DatadogConfig {
-                    api_key: String::new(),
-                    site: None,
-                    include_ingress_logs: true,
-                    include_tailscale_logs: true,
-                    logs: config::DatadogLogsConfig::default(),
-                    include_metrics: false,
-                });
-                dd.api_key = api_key;
-            }
-            if let Some(token) = cloudflare_tunnel_token {
-                cfg.cloudflare = Some(config::CloudflareConfig {
-                    tunnel: config::CloudflareTunnelConfig {
-                        token: SecretString::new(token),
-                        replicas: None,
-                    },
-                });
-            }
-            if let Some(dd) = cfg.datadog.as_mut() {
-                if let Some(site) = explicit_datadog_site.clone() {
-                    dd.site = Some(site);
-                }
-                if dd_no_ingress_logs {
-                    dd.include_ingress_logs = false;
-                }
-                if dd_no_tailscale_logs {
-                    dd.include_tailscale_logs = false;
-                }
-            }
-            if subnet.is_some() {
-                cfg.subnet = subnet;
-            }
-            if !egress_deny.is_empty() {
-                cfg.egress.deny.extend(egress_deny.clone());
-            }
-            if !egress_allow.is_empty() {
-                cfg.egress.allow.extend(egress_allow.clone());
-            }
-            if let Some(runtime) = runtime_flag {
-                cfg.runtime = runtime;
-            }
-            if let Some(sys) = system {
-                cfg.system = Some(sys);
-            }
-            if disable_etcd_cert {
-                cfg.disable_etcd_cert = true;
-            }
+            apply_start_config_overrides(
+                &mut cfg,
+                StartConfigOverrides {
+                    cluster_name,
+                    encryption_key,
+                    role,
+                    jwt_secret_key,
+                    tailscale_authkey,
+                    tailscale_advertise_routes,
+                    datadog_api_key: dd_api_key,
+                    datadog_site: explicit_datadog_site,
+                    datadog_no_ingress_logs: dd_no_ingress_logs,
+                    datadog_no_tailscale_logs: dd_no_tailscale_logs,
+                    cloudflare_tunnel_token,
+                    subnet,
+                    egress_deny,
+                    egress_allow,
+                    tags,
+                    runtime: runtime_flag,
+                    system,
+                    disable_etcd_cert,
+                },
+            );
 
             let datadog_site = cfg
                 .datadog
@@ -2091,7 +2153,9 @@ async fn run() -> crate::error::Result<bool> {
         }
         Some(CliCommand::Config { command }) => match command {
             ConfigCommand::Init => cli::config::run_init().map(|()| false),
-            ConfigCommand::Validate { path } => cli::config::run_validate(&path).map(|()| false),
+            ConfigCommand::Validate { path } => {
+                cli::config::run_validate(&path).await.map(|()| false)
+            }
         },
     }
 }
@@ -2652,6 +2716,96 @@ fn restart_self() -> ! {
     let err = std::process::Command::new(&exe).args(&args).exec();
     eprintln!("[maestro]: exec failed: {err}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod start_config_override_tests {
+    use super::{StartConfigOverrides, apply_start_config_overrides};
+
+    #[test]
+    fn explicit_cli_values_override_config_without_erasing_siblings() {
+        let mut config: crate::config::StartConfig = json5::from_str(
+            r#"{
+                cluster: { name: "config-name" },
+                node: { role: "hybrid" },
+                ingress: { port: 8080 },
+                subnet: "172.22.1.0/24",
+                egress: {
+                    deny: ["10.0.0.0/8"],
+                    allow: ["10.1.0.0/16"]
+                },
+                "encryption-key": "config-key",
+                "jwt-secret-key": "config-jwt",
+                tags: ["source:config"],
+                tailscale: {
+                    "auth-key": "config-auth",
+                    "advertise-routes": ["172.22.1.0/24"]
+                },
+                datadog: {
+                    "api-key": "config-dd",
+                    site: "datadoghq.com",
+                    "include-ingress-logs": true,
+                    "include-tailscale-logs": true,
+                    "include-metrics": true
+                },
+                cloudflare: {
+                    tunnel: { token: "config-cf", replicas: 4 }
+                }
+            }"#,
+        )
+        .expect("base config");
+
+        apply_start_config_overrides(
+            &mut config,
+            StartConfigOverrides {
+                cluster_name: Some("cli-name".to_string()),
+                encryption_key: Some("cli-key".to_string()),
+                role: Some(crate::cluster::NodeRole::Worker),
+                jwt_secret_key: Some("cli-jwt".to_string()),
+                tailscale_authkey: Some("cli-auth".to_string()),
+                tailscale_advertise_routes: vec!["172.22.2.0/24".to_string()],
+                datadog_api_key: Some("cli-dd".to_string()),
+                datadog_site: Some("datadoghq.eu".to_string()),
+                datadog_no_ingress_logs: true,
+                datadog_no_tailscale_logs: true,
+                cloudflare_tunnel_token: Some("cli-cf".to_string()),
+                subnet: Some("172.22.2.0/24".to_string()),
+                egress_deny: vec!["192.168.0.0/16".to_string()],
+                egress_allow: vec!["192.168.1.0/24".to_string()],
+                tags: vec!["source:cli".to_string()],
+                runtime: Some(crate::config::RuntimeType::Nerdctl),
+                system: Some(crate::config::SystemType::Nixos),
+                disable_etcd_cert: true,
+            },
+        );
+
+        assert_eq!(config.cluster.name, "cli-name");
+        assert_eq!(config.encryption_key, "cli-key");
+        assert_eq!(config.node.role, crate::cluster::NodeRole::Worker);
+        assert_eq!(config.jwt_secret_key.as_deref(), Some("cli-jwt"));
+        assert_eq!(config.subnet.as_deref(), Some("172.22.2.0/24"));
+        assert_eq!(config.tags, vec!["source:cli"]);
+        assert_eq!(config.egress.deny, vec!["192.168.0.0/16"]);
+        assert_eq!(config.egress.allow, vec!["192.168.1.0/24"]);
+        assert_eq!(config.runtime, crate::config::RuntimeType::Nerdctl);
+        assert_eq!(config.system, Some(crate::config::SystemType::Nixos));
+        assert!(config.disable_etcd_cert);
+
+        let tailscale = config.tailscale.expect("tailscale");
+        assert_eq!(tailscale.auth_key, "cli-auth");
+        assert_eq!(tailscale.advertise_routes, vec!["172.22.2.0/24"]);
+
+        let datadog = config.datadog.expect("datadog");
+        assert_eq!(datadog.api_key, "cli-dd");
+        assert_eq!(datadog.site.as_deref(), Some("datadoghq.eu"));
+        assert!(!datadog.include_ingress_logs);
+        assert!(!datadog.include_tailscale_logs);
+        assert!(datadog.include_metrics);
+
+        let tunnel = config.cloudflare.expect("cloudflare").tunnel;
+        assert_eq!(tunnel.token.as_str(), "cli-cf");
+        assert_eq!(tunnel.replicas, Some(4));
+    }
 }
 
 #[cfg(test)]

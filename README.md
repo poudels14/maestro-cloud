@@ -149,6 +149,32 @@ The config file (`maestro.jsonc`) supports:
 
 Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
 
+### Inheriting a shared startup config
+
+Use `$extends` to keep shared cluster settings in one config and store only
+node-specific values in each node's config. For example, an AWS secret named
+`maestro/production/common` can contain the cluster, ingress, credentials, and
+other shared settings. A node secret can then contain:
+
+```jsonc
+{
+  "$extends": "aws-secret://maestro/production/common",
+  "node": { "role": "hybrid" },
+  "subnet": "172.22.2.0/24",
+  "cluster": { "api-port": 3101 }
+}
+```
+
+Objects merge recursively. Arrays and scalar values in the node config replace
+the inherited values. Configs can extend another config, with cycle detection and
+a maximum depth of 16. Relative `$extends` paths resolve from a local config's
+directory; configs loaded from a remote source must reference another
+`aws-secret://` source or an absolute `file://` path. The effective precedence is
+defaults, inherited bases, node config, then explicit CLI arguments.
+
+The instance IAM role must allow `secretsmanager:GetSecretValue` for the node
+secret and every AWS secret referenced through `$extends`.
+
 To use Depot for a service build, set `depot.token` in `maestro.jsonc` and
 `build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is
 missing, Maestro falls back to the default local builder automatically.

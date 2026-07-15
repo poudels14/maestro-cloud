@@ -31,12 +31,48 @@ fn write_template_refuses_overwrite() {
     let _ = std::fs::remove_file(path);
 }
 
-#[test]
-fn cluster_template_validates_as_cluster_config() {
+#[tokio::test]
+async fn cluster_template_validates_as_cluster_config() {
     let path = temp_path("validate-cluster", "jsonc");
     write_template(&path, DEFAULT_START_TEMPLATE).expect("write");
-    run_validate(&path).expect("start template should validate as cluster config");
+    run_validate(&path)
+        .await
+        .expect("start template should validate as cluster config");
     let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn inherited_cluster_config_validates_after_merging() {
+    let base = temp_path("validate-extends-base", "jsonc");
+    let node = temp_path("validate-extends-node", "jsonc");
+    std::fs::write(
+        &base,
+        r#"{
+            cluster: { name: "test" },
+            ingress: { port: 8080 },
+            subnet: "172.22.1.0/24",
+            "encryption-key": "secret"
+        }"#,
+    )
+    .expect("write base");
+    std::fs::write(
+        &node,
+        format!(
+            r#"{{
+                "$extends": "file://{}",
+                subnet: "172.22.2.0/24"
+            }}"#,
+            base.display()
+        ),
+    )
+    .expect("write node");
+
+    run_validate(&node)
+        .await
+        .expect("inherited config should validate after merging");
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(node);
 }
 
 #[test]
@@ -121,19 +157,23 @@ fn datadog_healthcheck_filter_is_opt_in() {
     assert!(!filtered.logs.include_healthcheck);
 }
 
-#[test]
-fn services_template_validates_as_services_config() {
+#[tokio::test]
+async fn services_template_validates_as_services_config() {
     let path = temp_path("validate-services", "jsonc");
     write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect("write");
-    run_validate(&path).expect("cluster template should validate as services config");
+    run_validate(&path)
+        .await
+        .expect("cluster template should validate as services config");
     let _ = std::fs::remove_file(path);
 }
 
-#[test]
-fn validate_rejects_unrecognized_config() {
+#[tokio::test]
+async fn validate_rejects_unrecognized_config() {
     let path = temp_path("validate-unknown", "jsonc");
     std::fs::write(&path, r#"{"foo":1}"#).expect("write");
-    let err = run_validate(&path).expect_err("unknown config should fail");
+    let err = run_validate(&path)
+        .await
+        .expect_err("unknown config should fail");
     assert!(err.to_string().contains("unrecognized config"));
     let _ = std::fs::remove_file(path);
 }
@@ -246,7 +286,7 @@ fn start_schema_matches_serialized_config_fields() {
     let model = serde_json::to_value(config).expect("serialize start config");
     let schema: Value = serde_json::from_str(START_SCHEMA).expect("parse start schema");
 
-    assert_object_keys(&model, &schema, &[], &["$schema"]);
+    assert_object_keys(&model, &schema, &[], &["$schema", "$extends"]);
     assert_object_keys(
         &model["cluster"],
         &schema["properties"]["cluster"],
