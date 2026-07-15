@@ -254,8 +254,26 @@ enum ClusterCommand {
     },
     /// Show the controller's effective config (secrets are masked)
     Config,
-    /// Restart the maestro controller (stops all containers and restarts the process)
+    /// Restart a selected cluster node, every node serially, or only the local controller
     Restart {
+        #[arg(
+            value_name = "NODE_ID",
+            conflicts_with_all = ["all", "local"],
+            help = "Cluster node to drain, restart, verify, and restore"
+        )]
+        node_id: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "local",
+            help = "Drain and restart every node serially with the leader last"
+        )]
+        all: bool,
+        #[arg(
+            long,
+            conflicts_with = "all",
+            help = "Immediately restart only the controller reached by the active context"
+        )]
+        local: bool,
         #[arg(
             short = 'y',
             long = "yes",
@@ -265,12 +283,15 @@ enum ClusterCommand {
     },
     /// Upgrade system components
     #[command(
-        after_help = "Examples:\n  maestro cluster upgrade --version 0.3.0\n  maestro cluster upgrade system"
+        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade --version 0.3.0\n  maestro cluster upgrade system"
     )]
     Upgrade {
         #[command(subcommand)]
         target: Option<UpgradeTarget>,
-        #[arg(long, help = "Roll the entire cluster to this Maestro version")]
+        #[arg(
+            long,
+            help = "Override the CLI version used for the coordinated cluster upgrade"
+        )]
         version: Option<String>,
         #[arg(
             short = 'y',
@@ -1375,7 +1396,7 @@ async fn run() -> crate::error::Result<bool> {
                         )
                         .map_err(|error| {
                             Error::external(format!(
-                                "failed to initialize cluster upgrades: {error}"
+                                "failed to initialize cluster maintenance: {error}"
                             ))
                         })?,
                     ))
@@ -1794,9 +1815,19 @@ async fn run() -> crate::error::Result<bool> {
                 let host = cli::contexts::active_host()?;
                 cli::config::run_config(&host).await.map(|()| false)
             }
-            ClusterCommand::Restart { yes } => {
+            ClusterCommand::Restart {
+                node_id,
+                all,
+                local,
+                yes,
+            } => {
                 let host = cli::contexts::active_host()?;
-                cli::restart::run_restart(&host, yes).await.map(|()| false)
+                if local {
+                    cli::restart::run_restart(&host, yes).await
+                } else {
+                    cli::restart::run_coordinated_restart(&host, node_id.as_deref(), all, yes).await
+                }
+                .map(|()| false)
             }
             ClusterCommand::Upgrade {
                 target,
@@ -1808,14 +1839,11 @@ async fn run() -> crate::error::Result<bool> {
                     (Some(UpgradeTarget::System), None) => {
                         cli::upgrade::run_upgrade_system(&host, yes).await
                     }
-                    (None, Some(version)) => {
-                        cli::upgrade::run_cluster_upgrade(&host, &version, yes).await
+                    (None, version) => {
+                        cli::upgrade::run_cluster_upgrade(&host, version.as_deref(), yes).await
                     }
                     (Some(_), Some(_)) => Err(Error::invalid_input(
                         "choose either `upgrade system` or `upgrade --version`, not both",
-                    )),
-                    (None, None) => Err(Error::invalid_input(
-                        "--version is required for a cluster upgrade",
                     )),
                 }
                 .map(|()| false)
@@ -2488,5 +2516,77 @@ mod spool_identity_tests {
         assert!(first.starts_with("controller-"));
         assert!(!stale_temp.exists());
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod cluster_upgrade_cli_tests {
+    use clap::Parser;
+
+    use super::{Cli, CliCommand, ClusterCommand};
+
+    #[test]
+    fn coordinated_upgrade_does_not_require_a_version_flag() {
+        let cli = Cli::try_parse_from(["maestro", "cluster", "upgrade"])
+            .expect("parse coordinated cluster upgrade");
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Upgrade {
+                    target: None,
+                    version: None,
+                    yes: false,
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn cluster_restart_accepts_a_node_or_all_but_not_both() {
+        let selected = Cli::try_parse_from(["maestro", "cluster", "restart", "node-a"])
+            .expect("parse selected-node restart");
+        assert!(matches!(
+            selected.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Restart {
+                    node_id: Some(node_id),
+                    all: false,
+                    local: false,
+                    yes: false,
+                }
+            }) if node_id == "node-a"
+        ));
+
+        let all = Cli::try_parse_from(["maestro", "cluster", "restart", "--all", "--yes"])
+            .expect("parse all-node restart");
+        assert!(matches!(
+            all.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Restart {
+                    node_id: None,
+                    all: true,
+                    local: false,
+                    yes: true,
+                }
+            })
+        ));
+        assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "node-a", "--all"]).is_err());
+    }
+
+    #[test]
+    fn explicit_local_restart_preserves_the_immediate_path() {
+        let cli = Cli::try_parse_from(["maestro", "cluster", "restart", "--local"])
+            .expect("parse local restart");
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Restart {
+                    node_id: None,
+                    all: false,
+                    local: true,
+                    yes: false,
+                }
+            })
+        ));
     }
 }

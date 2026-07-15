@@ -26,11 +26,12 @@ use tokio::sync::broadcast;
 use tokio_util::io::ReaderStream;
 
 use self::types::{
-    BlockedIpRequest, BlockedIpsResponse, CancelDeploymentResponse, ClusterUnfreezeRequest,
-    ClusterUpgradeRequest, CreateSlackWebhookRequest, RemoveDeploymentResponse,
-    ReplicasOverrideRequest, ReplicasResponse, RolloutChange, RolloutDiffResponse,
-    RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse, ServiceListItem,
-    SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest, UploadServiceResponse,
+    BlockedIpRequest, BlockedIpsResponse, CancelDeploymentResponse, ClusterRestartRequest,
+    ClusterUnfreezeRequest, ClusterUpgradeRequest, CreateSlackWebhookRequest,
+    RemoveDeploymentResponse, ReplicasOverrideRequest, ReplicasResponse, RolloutChange,
+    RolloutDiffResponse, RolloutDiffStatus, RolloutServiceRequest, RolloutServiceResponse,
+    ServiceListItem, SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest,
+    UploadServiceResponse,
 };
 use crate::deployment::store::{ClusterStore, RequestClaim, UpsertServiceOutcome};
 use crate::deployment::types::{
@@ -231,6 +232,10 @@ impl Server {
             .route(
                 "/api/cluster/upgrade",
                 get(Self::get_cluster_upgrade).post(Self::start_cluster_upgrade),
+            )
+            .route(
+                "/api/cluster/restart",
+                get(Self::get_cluster_upgrade).post(Self::start_cluster_restart),
             )
             .route(
                 "/api/cluster/upgrade/unfreeze",
@@ -491,9 +496,13 @@ impl Server {
         let canonical_domain = format!("{}.maestro.internal", state.cluster_name);
         let alias_domain = format!("{}.maestro.internal", state.cluster_alias);
         let upgrade_run = state.store.read_cluster_upgrade().await.ok().flatten();
-        let upgrading = upgrade_run
-            .as_ref()
-            .is_some_and(|run| !run.phase.is_terminal())
+        let coordinated_upgrade = upgrade_run.as_ref().is_some_and(|run| {
+            !run.phase.is_terminal() && run.kind == crate::cluster::ClusterMaintenanceKind::Upgrade
+        });
+        let restarting = upgrade_run.as_ref().is_some_and(|run| {
+            !run.phase.is_terminal() && run.kind == crate::cluster::ClusterMaintenanceKind::Restart
+        });
+        let upgrading = coordinated_upgrade
             || state
                 .store
                 .read_system_upgrade_request(state.local_node_id.as_deref())
@@ -554,6 +563,7 @@ impl Server {
             "aliasDomain": alias_domain,
             "version": MAESTRO_VERSION,
             "upgrading": upgrading,
+            "restarting": restarting,
             "upgradeRun": upgrade_run,
             "thisNodeId": state.local_node_id,
             "leader": leader.as_ref().map(|leader| leader.node_id.as_str()),
@@ -739,6 +749,55 @@ impl Server {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "daemon returned no upgrade run".to_string(),
+            )
+        })?;
+        let run = serde_json::from_value(value).map_err(internal_error)?;
+        Ok((StatusCode::ACCEPTED, Json(run)))
+    }
+
+    async fn start_cluster_restart(
+        State(state): State<AppState>,
+        Json(request): Json<ClusterRestartRequest>,
+    ) -> Result<(StatusCode, Json<crate::cluster::UpgradeRun>), (StatusCode, String)> {
+        let node_id = match (request.node_id, request.all) {
+            (Some(node_id), false) if !node_id.trim().is_empty() => Some(node_id),
+            (None, true) => None,
+            (Some(_), true) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "choose either `nodeId` or `all`, not both".to_string(),
+                ));
+            }
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "a non-empty `nodeId` or `all: true` is required".to_string(),
+                ));
+            }
+        };
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        let value = crate::cluster::control::send_command_with_response(
+            socket,
+            token,
+            crate::cluster::control::ControlCommand::StartRestart { node_id },
+        )
+        .await
+        .map_err(|error| (StatusCode::CONFLICT, error.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon returned no restart run".to_string(),
             )
         })?;
         let run = serde_json::from_value(value).map_err(internal_error)?;

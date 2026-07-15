@@ -8,11 +8,11 @@ use crate::{
     cluster::{
         NodeInfo, NodeRole, NodeState,
         assignment_store::AssignmentStore,
-        elector::{EtcdLeaderElector, LeaderElector},
+        elector::LeaderElector,
         registry::NodeRegistry,
         types::{
-            ClusterFreeze, LeadershipState, LeadershipToken, UpgradeEvent, UpgradeNodeStatus,
-            UpgradeNodeStep, UpgradePhase, UpgradeRun,
+            ClusterFreeze, ClusterMaintenanceKind, LeadershipState, LeadershipToken, UpgradeEvent,
+            UpgradeNodeStatus, UpgradeNodeStep, UpgradePhase, UpgradeRun,
         },
     },
     deployment::{store::ClusterStore, types::DeploymentStatus},
@@ -26,11 +26,12 @@ const UPGRADE_RETRY_MS: i64 = 15_000;
 #[derive(Clone)]
 pub struct ClusterUpgradeOrchestrator {
     local_node_id: String,
-    elector: Arc<EtcdLeaderElector>,
+    elector: Arc<dyn LeaderElector>,
     registry: Arc<dyn NodeRegistry>,
     assignments: Arc<dyn AssignmentStore>,
     store: Arc<dyn ClusterStore>,
     http: Client,
+    node_api_scheme: &'static str,
     jwt_secret: Option<String>,
     logger: Logger,
 }
@@ -41,7 +42,7 @@ impl ClusterUpgradeOrchestrator {
         local_node_id: String,
         local_host_ip: IpAddr,
         certs_dir: &Path,
-        elector: Arc<EtcdLeaderElector>,
+        elector: Arc<dyn LeaderElector>,
         registry: Arc<dyn NodeRegistry>,
         assignments: Arc<dyn AssignmentStore>,
         store: Arc<dyn ClusterStore>,
@@ -67,9 +68,32 @@ impl ClusterUpgradeOrchestrator {
             assignments,
             store,
             http,
+            node_api_scheme: "https",
             jwt_secret,
             logger,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        local_node_id: String,
+        elector: Arc<dyn LeaderElector>,
+        registry: Arc<dyn NodeRegistry>,
+        assignments: Arc<dyn AssignmentStore>,
+        store: Arc<dyn ClusterStore>,
+        http: Client,
+    ) -> Self {
+        Self {
+            local_node_id,
+            elector,
+            registry,
+            assignments,
+            store,
+            http,
+            node_api_scheme: "http",
+            jwt_secret: None,
+            logger: Logger::noop(),
+        }
     }
 
     pub async fn create_run(
@@ -77,12 +101,32 @@ impl ClusterUpgradeOrchestrator {
         token: &LeadershipToken,
         target_version: &str,
     ) -> Result<UpgradeRun> {
-        require_leadership(&self.elector, token)?;
         let target = semver::Version::parse(target_version.trim())
             .with_context(|| format!("invalid target version `{target_version}`"))?;
+        self.create_maintenance_run(token, ClusterMaintenanceKind::Upgrade, Some(target), None)
+            .await
+    }
+
+    pub async fn create_restart_run(
+        &self,
+        token: &LeadershipToken,
+        node_id: Option<&str>,
+    ) -> Result<UpgradeRun> {
+        self.create_maintenance_run(token, ClusterMaintenanceKind::Restart, None, node_id)
+            .await
+    }
+
+    async fn create_maintenance_run(
+        &self,
+        token: &LeadershipToken,
+        kind: ClusterMaintenanceKind,
+        target: Option<semver::Version>,
+        selected_node_id: Option<&str>,
+    ) -> Result<UpgradeRun> {
+        require_leadership(self.elector.as_ref(), token)?;
         let mut nodes = self.registry.list_nodes().await?;
         if nodes.is_empty() {
-            bail!("cannot upgrade a cluster without live nodes");
+            bail!("cannot {kind} a cluster without live nodes");
         }
         for service in self.store.list_service_infos().await? {
             let active_rollout = self
@@ -101,7 +145,7 @@ impl ClusterUpgradeOrchestrator {
                 });
             if active_rollout {
                 bail!(
-                    "service `{}` has an active rollout; wait for it to settle before upgrading",
+                    "service `{}` has an active rollout; wait for it to settle before starting a cluster {kind}",
                     service.config.id
                 );
             }
@@ -120,44 +164,65 @@ impl ClusterUpgradeOrchestrator {
             .collect::<Vec<_>>();
         if !offline.is_empty() {
             bail!(
-                "all cluster nodes must be live before an upgrade; offline: {}",
+                "all cluster nodes must be live before a cluster {kind}; offline: {}",
                 offline.join(", ")
             );
         }
+        let maintenance_reason = kind.to_string();
         for node in &nodes {
             let state = self.registry.get_node_state(&node.node_id).await?;
-            if state.unschedulable && state.reason.as_deref() != Some("upgrade") {
+            if state.unschedulable && state.reason.as_deref() != Some(maintenance_reason.as_str()) {
                 bail!(
-                    "node `{}` is already unschedulable for `{}`; restore it before upgrading",
+                    "node `{}` is already unschedulable for `{}`; restore it before starting a cluster {kind}",
                     node.node_id,
                     state.reason.as_deref().unwrap_or("an operator action")
                 );
             }
         }
-        for node in &nodes {
-            let current = semver::Version::parse(&node.version).with_context(|| {
-                format!(
-                    "node `{}` reported invalid version `{}`",
-                    node.node_id, node.version
-                )
-            })?;
-            if target < current {
-                bail!(
-                    "target version {target} is older than node `{}` version {current}",
-                    node.node_id
-                );
+
+        if let Some(target) = target.as_ref() {
+            for node in &nodes {
+                let current = semver::Version::parse(&node.version).with_context(|| {
+                    format!(
+                        "node `{}` reported invalid version `{}`",
+                        node.node_id, node.version
+                    )
+                })?;
+                if target < &current {
+                    bail!(
+                        "target version {target} is older than node `{}` version {current}",
+                        node.node_id
+                    );
+                }
+            }
+            nodes.retain(|node| node.version != target.to_string());
+            if nodes.is_empty() {
+                bail!("every live cluster node already reports version {target}");
             }
         }
-        nodes.retain(|node| node.version != target.to_string());
-        if nodes.is_empty() {
-            bail!("every live cluster node already reports version {target}");
+
+        if let Some(selected_node_id) = selected_node_id {
+            let selected_node_id = selected_node_id.trim();
+            if selected_node_id.is_empty() {
+                bail!("restart node id cannot be empty");
+            }
+            nodes.retain(|node| node.node_id == selected_node_id);
+            if nodes.is_empty() {
+                bail!("cluster node `{selected_node_id}` is not live");
+            }
         }
         order_nodes(&mut nodes, &token.info.node_id);
         let now_ms = now_millis();
         let run_id = crate::utils::nanoid::unique_id(20).to_lowercase();
+        let target_version = target.map_or_else(String::new, |target| target.to_string());
+        let scope = selected_node_id.map_or_else(
+            || "all nodes".to_string(),
+            |node_id| format!("node `{node_id}`"),
+        );
         let run = UpgradeRun {
             run_id: run_id.clone(),
-            target_version: target.to_string(),
+            kind,
+            target_version: target_version.clone(),
             requested_at_ms: now_ms,
             updated_at_ms: now_ms,
             requested_by_node_id: self.local_node_id.clone(),
@@ -171,6 +236,7 @@ impl ClusterUpgradeOrchestrator {
                     hostname: node.hostname,
                     role: node.role,
                     from_version: node.version,
+                    from_instance_id: Some(node.instance_id),
                     status: UpgradeNodeStatus::Pending,
                     started_at_ms: None,
                     completed_at_ms: None,
@@ -183,12 +249,24 @@ impl ClusterUpgradeOrchestrator {
                 at_ms: now_ms,
                 phase: UpgradePhase::Draining,
                 node_id: None,
-                message: format!("cluster frozen for rolling upgrade to {target}"),
+                message: match kind {
+                    ClusterMaintenanceKind::Upgrade => {
+                        format!("cluster frozen for rolling upgrade to {target_version}")
+                    }
+                    ClusterMaintenanceKind::Restart => {
+                        format!("cluster frozen for rolling restart of {scope}")
+                    }
+                },
             }],
             failure: None,
         };
         let freeze = ClusterFreeze {
-            reason: format!("rolling upgrade to {target}"),
+            reason: match kind {
+                ClusterMaintenanceKind::Upgrade => {
+                    format!("rolling upgrade to {target_version}")
+                }
+                ClusterMaintenanceKind::Restart => format!("rolling restart of {scope}"),
+            },
             upgrade_run_id: run_id,
             at_ms: now_ms,
         };
@@ -197,7 +275,7 @@ impl ClusterUpgradeOrchestrator {
             .create_cluster_upgrade(token, &run, &freeze)
             .await?
         {
-            bail!("leadership changed while creating the cluster upgrade");
+            bail!("leadership changed while creating the cluster {kind}");
         }
         Ok(run)
     }
@@ -221,8 +299,10 @@ impl ClusterUpgradeOrchestrator {
                 continue;
             };
             if let Err(error) = self.tick(&token).await {
-                self.logger
-                    .emit("error", &format!("cluster upgrade tick failed: {error}"));
+                self.logger.emit(
+                    "error",
+                    &format!("cluster maintenance tick failed: {error}"),
+                );
             }
         }
     }
@@ -232,14 +312,14 @@ impl ClusterUpgradeOrchestrator {
         token: &LeadershipToken,
         run_id: &str,
     ) -> Result<UpgradeRun> {
-        require_leadership(&self.elector, token)?;
+        require_leadership(self.elector.as_ref(), token)?;
         self.store
             .manually_unfreeze_cluster_upgrade(token, run_id, now_millis())
             .await
     }
 
     pub async fn tick(&self, token: &LeadershipToken) -> Result<()> {
-        require_leadership(&self.elector, token)?;
+        require_leadership(self.elector.as_ref(), token)?;
         let Some(run) = self.store.read_cluster_upgrade().await? else {
             return Ok(());
         };
@@ -264,6 +344,11 @@ impl ClusterUpgradeOrchestrator {
 
     async fn drain(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
+        let ongoing_operation = match run.kind {
+            ClusterMaintenanceKind::Upgrade => "upgrading",
+            ClusterMaintenanceKind::Restart => "restarting",
+        };
         let node_id = run
             .current_node()
             .expect("checked current node")
@@ -277,7 +362,7 @@ impl ClusterUpgradeOrchestrator {
                     NodeState {
                         unschedulable: true,
                         drained_at_ms: Some(now_ms),
-                        reason: Some("upgrade".to_string()),
+                        reason: Some(operation.to_string()),
                     },
                 )
                 .await?;
@@ -341,10 +426,10 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::SelfRestartPending,
                 now_ms,
                 Some(node_id),
-                "single voter is upgrading and will resume after restart".to_string(),
+                format!("single voter is {ongoing_operation} and will resume after restart"),
             );
             self.persist(token, &run, false).await?;
-            return self.request_node_upgrade(token, run, true).await;
+            return self.request_node_action(token, run, true).await;
         }
 
         if let Some(node) = run.current_node_mut() {
@@ -355,7 +440,7 @@ impl ClusterUpgradeOrchestrator {
             UpgradePhase::UpgradeRequested,
             now_ms,
             Some(node_id),
-            "node drained; requesting node-local upgrade".to_string(),
+            format!("node drained; requesting node-local {operation}"),
         );
         self.persist(token, &run, false).await
     }
@@ -370,6 +455,7 @@ impl ClusterUpgradeOrchestrator {
             .expect("checked current node")
             .node_id
             .clone();
+        let operation = run.operation_name();
         if node_id != token.info.node_id {
             if let Some(node) = run.current_node_mut() {
                 node.status = UpgradeNodeStatus::Upgrading;
@@ -379,7 +465,7 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::UpgradeRequested,
                 now_millis(),
                 Some(node_id),
-                "new leader resumed the upgrade run".to_string(),
+                format!("new leader resumed the {operation} run"),
             );
             return self.persist(token, &run, false).await;
         }
@@ -390,16 +476,17 @@ impl ClusterUpgradeOrchestrator {
     }
 
     async fn request_upgrade(&self, token: &LeadershipToken, run: UpgradeRun) -> Result<()> {
-        self.request_node_upgrade(token, run, false).await
+        self.request_node_action(token, run, false).await
     }
 
-    async fn request_node_upgrade(
+    async fn request_node_action(
         &self,
         token: &LeadershipToken,
         mut run: UpgradeRun,
         self_restart: bool,
     ) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         let node_id = run
             .current_node()
             .expect("checked current node")
@@ -410,7 +497,19 @@ impl ClusterUpgradeOrchestrator {
         {
             step.upgrade_started_at_ms = Some(now_ms);
         }
-        if self.node_has_target_version(&run, &node_id).await? {
+        let live_node = self.live_node(&node_id).await?;
+        if live_node
+            .as_ref()
+            .is_some_and(|node| node_completed_action(&run, node))
+        {
+            let message = match run.kind {
+                ClusterMaintenanceKind::Upgrade => {
+                    "node reports the target version; verifying health".to_string()
+                }
+                ClusterMaintenanceKind::Restart => {
+                    "node reports a new process instance; verifying health".to_string()
+                }
+            };
             if let Some(node) = run.current_node_mut() {
                 node.status = UpgradeNodeStatus::Verifying;
             }
@@ -419,11 +518,11 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::Verifying,
                 now_ms,
                 Some(node_id),
-                "node reports the target version; verifying health".to_string(),
+                message,
             );
             return self.persist(token, &run, false).await;
         }
-        let Some(node) = self.live_node(&node_id).await? else {
+        let Some(node) = live_node else {
             if self_restart {
                 run.updated_at_ms = now_ms;
             } else {
@@ -441,14 +540,17 @@ impl ClusterUpgradeOrchestrator {
             }
             return self.persist(token, &run, false).await;
         };
-        let mut request = self
-            .http
-            .post(node_api_url(&node, "/api/system/upgrade"))
-            .header(
-                "x-maestro-request-id",
-                format!("upgrade-{}-{node_id}", run.run_id),
-            )
-            .json(&serde_json::json!({ "version": run.target_version }));
+        let path = match run.kind {
+            ClusterMaintenanceKind::Upgrade => "/api/system/upgrade",
+            ClusterMaintenanceKind::Restart => "/api/system/restart",
+        };
+        let mut request = self.http.post(self.node_api_url(&node, path)).header(
+            "x-maestro-request-id",
+            format!("{operation}-{}-{node_id}", run.run_id),
+        );
+        if run.kind == ClusterMaintenanceKind::Upgrade {
+            request = request.json(&serde_json::json!({ "version": run.target_version }));
+        }
         if let Some(token) = self.operator_token()? {
             request = request.bearer_auth(token);
         }
@@ -458,7 +560,10 @@ impl ClusterUpgradeOrchestrator {
         }
         match response {
             Ok(response) if response.status().is_success() => {}
-            Ok(response) if response.status() == StatusCode::CONFLICT => {
+            Ok(response)
+                if run.kind == ClusterMaintenanceKind::Upgrade
+                    && response.status() == StatusCode::CONFLICT =>
+            {
                 self.logger.emit(
                     "info",
                     &format!(
@@ -473,7 +578,7 @@ impl ClusterUpgradeOrchestrator {
                     .fail(
                         token,
                         run,
-                        format!("node `{node_id}` rejected upgrade ({status}): {body}"),
+                        format!("node `{node_id}` rejected {operation} ({status}): {body}"),
                     )
                     .await;
             }
@@ -481,7 +586,7 @@ impl ClusterUpgradeOrchestrator {
                 self.logger.emit(
                     "info",
                     &format!(
-                        "upgrade request to `{node_id}` disconnected while the node may be restarting: {error}"
+                        "{operation} request to `{node_id}` disconnected while the node may be restarting: {error}"
                     ),
                 );
             }
@@ -490,6 +595,14 @@ impl ClusterUpgradeOrchestrator {
             run.updated_at_ms = now_ms;
             self.persist(token, &run, false).await
         } else {
+            let message = match run.kind {
+                ClusterMaintenanceKind::Upgrade => {
+                    "upgrade accepted; waiting for exact version and health".to_string()
+                }
+                ClusterMaintenanceKind::Restart => {
+                    "restart accepted; waiting for a new process instance and health".to_string()
+                }
+            };
             if let Some(node) = run.current_node_mut() {
                 node.status = UpgradeNodeStatus::Verifying;
             }
@@ -498,7 +611,7 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::Verifying,
                 now_ms,
                 Some(node_id),
-                "upgrade accepted; waiting for exact version and health".to_string(),
+                message,
             );
             self.persist(token, &run, false).await
         }
@@ -506,12 +619,18 @@ impl ClusterUpgradeOrchestrator {
 
     async fn self_restart(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         let node_id = run
             .current_node()
             .expect("checked current node")
             .node_id
             .clone();
-        if self.node_has_target_version(&run, &node_id).await? {
+        if self
+            .live_node(&node_id)
+            .await?
+            .as_ref()
+            .is_some_and(|node| node_completed_action(&run, node))
+        {
             if let Some(node) = run.current_node_mut() {
                 node.status = UpgradeNodeStatus::Verifying;
             }
@@ -520,7 +639,7 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::Verifying,
                 now_ms,
                 Some(node_id),
-                "single voter restarted at the target version".to_string(),
+                format!("single voter completed its {operation}; verifying health"),
             );
             return self.persist(token, &run, false).await;
         }
@@ -529,7 +648,7 @@ impl ClusterUpgradeOrchestrator {
                 .fail(
                     token,
                     run,
-                    "single voter did not restart at the target version".to_string(),
+                    format!("single voter did not complete its {operation}"),
                 )
                 .await;
         }
@@ -538,7 +657,7 @@ impl ClusterUpgradeOrchestrator {
             .and_then(|node| node.last_upgrade_request_at_ms)
             .is_none_or(|last| now_ms.saturating_sub(last) >= UPGRADE_RETRY_MS);
         if should_retry {
-            return self.request_node_upgrade(token, run, true).await;
+            return self.request_node_action(token, run, true).await;
         }
         run.updated_at_ms = now_ms;
         self.persist(token, &run, false).await
@@ -546,6 +665,7 @@ impl ClusterUpgradeOrchestrator {
 
     async fn verify(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         let node_id = run
             .current_node()
             .expect("checked current node")
@@ -553,12 +673,20 @@ impl ClusterUpgradeOrchestrator {
             .clone();
         let live = self.registry.list_nodes().await?;
         let node = live.iter().find(|node| node.node_id == node_id);
-        let version_matches = node.is_some_and(|node| node.version == run.target_version);
+        let action_completed = node.is_some_and(|node| node_completed_action(&run, node));
         let healthy = match node {
             Some(node) => self.node_healthy(node).await,
             None => false,
         };
-        if version_matches && healthy {
+        if action_completed && healthy {
+            let message = match run.kind {
+                ClusterMaintenanceKind::Upgrade => {
+                    "target version and node health verified".to_string()
+                }
+                ClusterMaintenanceKind::Restart => {
+                    "new process instance and node health verified".to_string()
+                }
+            };
             if let Some(node) = run.current_node_mut() {
                 node.status = UpgradeNodeStatus::Restoring;
             }
@@ -567,20 +695,27 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::Restoring,
                 now_ms,
                 Some(node_id),
-                "target version and node health verified".to_string(),
+                message,
             );
             return self.persist(token, &run, false).await;
         }
         if upgrade_timed_out(&run, now_ms) {
-            let reported = node.map_or("offline", |node| node.version.as_str());
-            let message = format!(
-                "node `{node_id}` failed verification: expected version {}, reported {reported}, healthy={healthy}",
-                run.target_version
-            );
+            let message = match run.kind {
+                ClusterMaintenanceKind::Upgrade => {
+                    let reported = node.map_or("offline", |node| node.version.as_str());
+                    format!(
+                        "node `{node_id}` failed verification: expected version {}, reported {reported}, healthy={healthy}",
+                        run.target_version
+                    )
+                }
+                ClusterMaintenanceKind::Restart => format!(
+                    "node `{node_id}` failed restart verification: new_instance={action_completed}, healthy={healthy}"
+                ),
+            };
             return self.fail(token, run, message).await;
         }
         let should_retry = node.is_some()
-            && !version_matches
+            && !action_completed
             && run
                 .current_node()
                 .and_then(|node| node.last_upgrade_request_at_ms)
@@ -591,8 +726,9 @@ impl ClusterUpgradeOrchestrator {
                 UpgradePhase::UpgradeRequested,
                 now_ms,
                 Some(node_id),
-                "node is still on the old version; retrying the idempotent upgrade request"
-                    .to_string(),
+                format!(
+                    "node has not completed its {operation}; retrying the idempotent {operation} request"
+                ),
             );
             return self.persist(token, &run, false).await;
         }
@@ -602,6 +738,7 @@ impl ClusterUpgradeOrchestrator {
 
     async fn restore(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         let node_id = run
             .current_node()
             .expect("checked current node")
@@ -634,19 +771,20 @@ impl ClusterUpgradeOrchestrator {
             UpgradePhase::Draining,
             now_ms,
             Some(next.clone()),
-            format!("advancing rolling upgrade to node `{next}`"),
+            format!("advancing rolling {operation} to node `{next}`"),
         );
         self.persist(token, &run, false).await
     }
 
     async fn finish_success(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         transition(
             &mut run,
             UpgradePhase::Succeeded,
             now_ms,
             None,
-            "all nodes verified; cluster unfrozen".to_string(),
+            format!("cluster {operation} verified; cluster unfrozen"),
         );
         self.persist(token, &run, true).await
     }
@@ -658,6 +796,7 @@ impl ClusterUpgradeOrchestrator {
         message: String,
     ) -> Result<()> {
         let now_ms = now_millis();
+        let operation = run.operation_name();
         if let Some(node) = run.current_node_mut() {
             node.status = UpgradeNodeStatus::Failed;
             node.error = Some(message.clone());
@@ -670,7 +809,7 @@ impl ClusterUpgradeOrchestrator {
             UpgradePhase::Failed,
             now_ms,
             current_node_id,
-            format!("{message}; remaining nodes skipped and cluster unfrozen"),
+            format!("{message}; remaining {operation} nodes skipped and cluster unfrozen"),
         );
         self.persist(token, &run, true).await
     }
@@ -686,7 +825,7 @@ impl ClusterUpgradeOrchestrator {
             .update_cluster_upgrade(token, run, clear_freeze)
             .await?
         {
-            bail!("leadership changed while advancing the cluster upgrade");
+            bail!("leadership changed while advancing cluster maintenance");
         }
         Ok(())
     }
@@ -700,18 +839,9 @@ impl ClusterUpgradeOrchestrator {
             .find(|node| node.node_id == node_id))
     }
 
-    async fn node_has_target_version(&self, run: &UpgradeRun, node_id: &str) -> Result<bool> {
-        Ok(self
-            .registry
-            .list_nodes()
-            .await?
-            .iter()
-            .any(|node| node.node_id == node_id && node.version == run.target_version))
-    }
-
     async fn node_healthy(&self, node: &NodeInfo) -> bool {
         self.http
-            .get(node_api_url(node, "/_healthy"))
+            .get(self.node_api_url(node, "/_healthy"))
             .send()
             .await
             .is_ok_and(|response| response.status() == StatusCode::OK)
@@ -736,6 +866,13 @@ impl ClusterUpgradeOrchestrator {
             &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
         )?;
         Ok(Some(token))
+    }
+
+    fn node_api_url(&self, node: &NodeInfo, path: &str) -> String {
+        format!(
+            "{}://{}:{}{path}",
+            self.node_api_scheme, node.cluster_host_ip, node.cluster_api_port
+        )
     }
 }
 
@@ -765,6 +902,16 @@ fn upgrade_timed_out(run: &UpgradeRun, now_ms: i64) -> bool {
     now_ms.saturating_sub(started_at_ms) >= VERIFY_TIMEOUT_MS
 }
 
+fn node_completed_action(run: &UpgradeRun, node: &NodeInfo) -> bool {
+    match run.kind {
+        ClusterMaintenanceKind::Upgrade => node.version == run.target_version,
+        ClusterMaintenanceKind::Restart => run
+            .current_node()
+            .and_then(|step| step.from_instance_id.as_deref())
+            .is_some_and(|instance_id| instance_id != node.instance_id),
+    }
+}
+
 fn transition(
     run: &mut UpgradeRun,
     phase: UpgradePhase,
@@ -783,18 +930,11 @@ fn transition(
     });
 }
 
-fn require_leadership(elector: &EtcdLeaderElector, token: &LeadershipToken) -> Result<()> {
+fn require_leadership(elector: &dyn LeaderElector, token: &LeadershipToken) -> Result<()> {
     if elector.state() != LeadershipState::Leading(token.clone()) {
         bail!("local daemon is no longer cluster leader");
     }
     Ok(())
-}
-
-fn node_api_url(node: &NodeInfo, path: &str) -> String {
-    format!(
-        "https://{}:{}{path}",
-        node.cluster_host_ip, node.cluster_api_port
-    )
 }
 
 fn now_millis() -> i64 {
@@ -860,6 +1000,7 @@ mod tests {
     fn retry_transitions_do_not_extend_the_version_verification_deadline() {
         let mut run = UpgradeRun {
             run_id: "run-1".to_string(),
+            kind: ClusterMaintenanceKind::Upgrade,
             target_version: "2.0.0".to_string(),
             requested_at_ms: 0,
             updated_at_ms: 0,
@@ -872,6 +1013,7 @@ mod tests {
                 hostname: "worker".to_string(),
                 role: NodeRole::Worker,
                 from_version: "1.0.0".to_string(),
+                from_instance_id: Some("instance-worker".to_string()),
                 status: UpgradeNodeStatus::Verifying,
                 started_at_ms: Some(0),
                 completed_at_ms: None,
@@ -890,5 +1032,53 @@ mod tests {
             "retry".to_string(),
         );
         assert!(upgrade_timed_out(&run, 121_000));
+    }
+
+    #[test]
+    fn restart_completion_requires_a_new_process_instance() {
+        let mut current = node("worker", NodeRole::Worker);
+        let run = UpgradeRun {
+            run_id: "restart-1".to_string(),
+            kind: ClusterMaintenanceKind::Restart,
+            target_version: String::new(),
+            requested_at_ms: 0,
+            updated_at_ms: 0,
+            requested_by_node_id: "leader".to_string(),
+            phase: UpgradePhase::Verifying,
+            phase_started_at_ms: 0,
+            current_node_index: 0,
+            nodes: vec![UpgradeNodeStep {
+                node_id: "worker".to_string(),
+                hostname: "worker".to_string(),
+                role: NodeRole::Worker,
+                from_version: "1.0.0".to_string(),
+                from_instance_id: Some(current.instance_id.clone()),
+                status: UpgradeNodeStatus::Verifying,
+                started_at_ms: Some(0),
+                completed_at_ms: None,
+                upgrade_started_at_ms: Some(0),
+                last_upgrade_request_at_ms: Some(0),
+                error: None,
+            }],
+            history: Vec::new(),
+            failure: None,
+        };
+
+        assert!(!node_completed_action(&run, &current));
+        current.instance_id = "instance-after-restart".to_string();
+        assert!(node_completed_action(&run, &current));
+        current.version = "9.9.9".to_string();
+        assert!(node_completed_action(&run, &current));
+
+        let mut legacy = serde_json::to_value(&run).expect("serialize maintenance run");
+        legacy.as_object_mut().expect("run object").remove("kind");
+        legacy["nodes"][0]
+            .as_object_mut()
+            .expect("node step object")
+            .remove("fromInstanceId");
+        let decoded: UpgradeRun =
+            serde_json::from_value(legacy).expect("decode pre-restart upgrade schema");
+        assert_eq!(decoded.kind, ClusterMaintenanceKind::Upgrade);
+        assert_eq!(decoded.nodes[0].from_instance_id, None);
     }
 }

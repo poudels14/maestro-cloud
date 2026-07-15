@@ -449,6 +449,13 @@ impl InMemoryNodeRegistry {
             states: RwLock::new(BTreeMap::new()),
         }
     }
+
+    pub fn insert_for_test(&self, info: NodeInfo) {
+        self.nodes
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(info.node_id.clone(), info);
+    }
 }
 
 #[cfg(test)]

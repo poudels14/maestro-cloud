@@ -804,7 +804,11 @@ impl ClusterStore for EtcdStateStore {
         if let Some(entry) = existing.kvs().first() {
             let previous: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
             if !previous.phase.is_terminal() {
-                bail!("cluster upgrade `{}` is already active", previous.run_id);
+                bail!(
+                    "cluster {} `{}` is already active",
+                    previous.operation_name(),
+                    previous.run_id
+                );
             }
             comparisons.push(Compare::value(
                 CLUSTER_UPGRADE_KEY,
@@ -830,11 +834,11 @@ impl ClusterStore for EtcdStateStore {
         let mut client = self.client.lock().await;
         let response = client.get(CLUSTER_UPGRADE_KEY, None).await?;
         let Some(entry) = response.kvs().first() else {
-            bail!("cluster upgrade run disappeared");
+            bail!("cluster maintenance run disappeared");
         };
         let existing: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
         if existing.run_id != run.run_id {
-            bail!("cluster upgrade run changed");
+            bail!("cluster maintenance run changed");
         }
         let mut operations = vec![TxnOp::put(
             CLUSTER_UPGRADE_KEY,
@@ -864,10 +868,10 @@ impl ClusterStore for EtcdStateStore {
         let entry = response
             .kvs()
             .first()
-            .ok_or_else(|| anyhow!("no cluster upgrade run exists"))?;
+            .ok_or_else(|| anyhow!("no cluster maintenance run exists"))?;
         let mut run: crate::cluster::UpgradeRun = serde_json::from_slice(entry.value())?;
         if run.run_id != run_id {
-            bail!("upgrade run id does not match the active run");
+            bail!("maintenance run id does not match the active run");
         }
         if run.phase.is_terminal() {
             let transaction = Txn::new()
@@ -877,12 +881,12 @@ impl ClusterStore for EtcdStateStore {
                 ])
                 .and_then([TxnOp::delete(CLUSTER_FREEZE_KEY, None)]);
             if !client.txn(transaction).await?.succeeded() {
-                bail!("leadership changed while clearing a terminal upgrade freeze");
+                bail!("leadership changed while clearing a terminal maintenance freeze");
             }
             return Ok(run);
         }
         if now_ms.saturating_sub(run.updated_at_ms) < 30_000 {
-            bail!("upgrade orchestrator is active; manual unfreeze is unsafe");
+            bail!("maintenance orchestrator is active; manual unfreeze is unsafe");
         }
         run.phase = crate::cluster::UpgradePhase::Failed;
         let failure = "manually unfrozen by an operator".to_string();
@@ -897,7 +901,7 @@ impl ClusterStore for EtcdStateStore {
             at_ms: now_ms,
             phase: run.phase,
             node_id: run.current_node().map(|node| node.node_id.clone()),
-            message: "cluster manually unfrozen; upgrade run aborted".to_string(),
+            message: "cluster manually unfrozen; maintenance run aborted".to_string(),
         });
         let transaction = Txn::new()
             .when([

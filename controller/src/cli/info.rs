@@ -13,6 +13,8 @@ struct ClusterInfo {
     version: Option<String>,
     #[serde(default)]
     upgrading: bool,
+    #[serde(default)]
+    restarting: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +179,9 @@ pub async fn run_info(host: &str) -> Result<()> {
     }
     if cluster.upgrading {
         println!("  upgrade           in progress");
+    }
+    if cluster.restarting {
+        println!("  restart           in progress");
     }
 
     if let Some(metric) = node_metric.as_ref() {

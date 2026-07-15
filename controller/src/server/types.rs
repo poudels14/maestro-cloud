@@ -148,6 +148,15 @@ pub(crate) struct ClusterUpgradeRequest {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ClusterRestartRequest {
+    #[serde(default)]
+    pub(crate) node_id: Option<String>,
+    #[serde(default)]
+    pub(crate) all: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ClusterUnfreezeRequest {
     pub(crate) upgrade_run_id: String,
 }

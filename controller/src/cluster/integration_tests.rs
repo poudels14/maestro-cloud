@@ -6,11 +6,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
 
+use super::assignment_store::{
+    AssignmentStore, EtcdAssignmentStore, InMemoryAssignmentStore, ReplaceOutcome,
+};
 use super::elector::{EtcdLeaderElector, LeaderElector};
 use super::executor::RunningReplica;
 use super::reconciler::{ReconcileAction, diff_assignments};
+use super::registry::{InMemoryNodeRegistry, NodeRegistry};
 use super::scheduler::{ScheduleInput, plan};
 use super::types::{
     Assignment, AssignmentManifest, DeploymentGroup, LeadershipState, LeadershipToken, NodeInfo,
@@ -23,6 +28,107 @@ use crate::signal::ShutdownEvent;
 
 const TEST_CLUSTER_NAME: &str = "single-host-integration";
 const TEST_AFFINITY_HEADER: &str = "X-Session-Affinity";
+const ROLLOUT_TEST_IMAGE: &str = "python:3.13-alpine";
+const ROLLOUT_SERVER: &str = r#"from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
+import signal
+import threading
+import time
+
+body = os.environ["BODY"].encode()
+ready = os.environ.get("START_READY") == "1"
+draining = False
+active = 0
+condition = threading.Condition()
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def send_body(self, status, value):
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(value)))
+        self.end_headers()
+        self.wfile.write(value)
+
+    def do_GET(self):
+        global active
+        if self.path == "/ready":
+            with condition:
+                available = ready and not draining
+            self.send_body(200 if available else 503, b"ready" if available else b"not-ready")
+            return
+
+        with condition:
+            active += 1
+        try:
+            if self.path == "/slow":
+                open("/tmp/slow-started", "w").close()
+                time.sleep(3)
+            self.send_body(200, body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            with condition:
+                active -= 1
+                condition.notify_all()
+
+    def log_message(self, format, *args):
+        pass
+
+def stop_when_idle():
+    with condition:
+        condition.wait_for(lambda: active == 0)
+    server.shutdown()
+
+def terminate(signum, frame):
+    global draining
+    with condition:
+        draining = True
+    threading.Thread(target=stop_when_idle).start()
+
+def become_ready(signum, frame):
+    global ready
+    with condition:
+        ready = True
+
+server = ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
+signal.signal(signal.SIGTERM, terminate)
+signal.signal(signal.SIGUSR1, become_ready)
+server.serve_forever()
+"#;
+
+#[derive(Clone)]
+struct RestartNodeApiState {
+    node: NodeInfo,
+    registry: Arc<InMemoryNodeRegistry>,
+    requests: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+async fn restart_test_node(
+    axum::extract::State(state): axum::extract::State<RestartNodeApiState>,
+) -> axum::Json<serde_json::Value> {
+    state
+        .requests
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(state.node.node_id.clone());
+    let mut restarted = state
+        .registry
+        .list_nodes()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|node| node.node_id == state.node.node_id)
+        .unwrap_or(state.node);
+    restarted.instance_id = format!("{}-restarted", restarted.instance_id);
+    restarted.started_at_ms = restarted.started_at_ms.saturating_add(1);
+    state.registry.insert_for_test(restarted);
+    axum::Json(serde_json::json!({ "accepted": true }))
+}
+
+async fn restart_test_healthy() -> axum::http::StatusCode {
+    axum::http::StatusCode::OK
+}
 
 struct ContainerEtcdCluster {
     runtime_cli: String,
@@ -62,7 +168,7 @@ impl ContainerEtcdCluster {
             let container = format!("maestro-etcd-test-{run_id}-{}", index + 1);
             let client_port = node.etcd_client_port;
             let peer_port = node.etcd_peer_port;
-            let mut arguments = vec![
+            let arguments = vec![
                 "run".to_string(),
                 "--detach".to_string(),
                 "--network".to_string(),
@@ -81,9 +187,6 @@ impl ContainerEtcdCluster {
                 "--initial-cluster-state=new".to_string(),
                 format!("--initial-cluster-token={token}"),
             ];
-            if cluster.runtime_cli == "docker" {
-                arguments.insert(2, "--rm".to_string());
-            }
             let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
             cluster.container_names.push(container.clone());
             if let Err(error) = command_output(&cluster.runtime_cli, &references) {
@@ -102,6 +205,52 @@ impl ContainerEtcdCluster {
             &self.runtime_cli,
             &["stop", "--time", "1", &self.container_names[index]],
         )?;
+        Ok(())
+    }
+
+    fn restart_member(&self, index: usize) -> Result<()> {
+        command_output(&self.runtime_cli, &["start", &self.container_names[index]])?;
+        Ok(())
+    }
+
+    async fn wait_for_quorum_write(&self, unavailable: usize, sequence: usize) -> Result<()> {
+        let endpoints = self
+            .endpoints
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != unavailable)
+            .map(|(_, endpoint)| endpoint.clone())
+            .collect::<Vec<_>>();
+        let mut last_error = None;
+        let completed = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let result = async {
+                    let mut client = etcd_client::Client::connect(endpoints.clone(), None).await?;
+                    client
+                        .put(
+                            format!("/maestro/integration/restart/{sequence}"),
+                            format!("member-{unavailable}-offline"),
+                            None,
+                        )
+                        .await?;
+                    Result::<(), etcd_client::Error>::Ok(())
+                }
+                .await;
+                match result {
+                    Ok(()) => return,
+                    Err(error) => last_error = Some(error.to_string()),
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await;
+        if completed.is_err() {
+            bail!(
+                "etcd quorum did not accept a write with member {} offline: {}",
+                unavailable + 1,
+                last_error.unwrap_or_else(|| "write timed out".to_string())
+            );
+        }
         Ok(())
     }
 
@@ -164,6 +313,245 @@ impl ContainerEtcdCluster {
             }
         }
         Ok(())
+    }
+}
+
+struct FormingEtcdCluster {
+    runtime_cli: String,
+    run_id: String,
+    token: String,
+    root: PathBuf,
+    nodes: Vec<super::ClusterNodeEndpoint>,
+    container_names: BTreeSet<String>,
+    endpoints: Vec<String>,
+}
+
+impl FormingEtcdCluster {
+    fn start_seed() -> Result<Self> {
+        let runtime_cli = test_runtime_cli()?;
+        command_output(&runtime_cli, &["info"])
+            .context("the formation test requires a working container daemon")?;
+        let nodes = reserve_node_endpoints(3, Ipv4Addr::LOCALHOST)?;
+        let run_id = crate::utils::nanoid::unique_id(12).to_ascii_lowercase();
+        let root = std::env::temp_dir().join(format!("maestro-forming-cluster-{run_id}"));
+        std::fs::create_dir_all(&root)?;
+        let mut cluster = Self {
+            runtime_cli,
+            token: format!("maestro-forming-{run_id}"),
+            run_id,
+            root,
+            nodes,
+            container_names: BTreeSet::new(),
+            endpoints: Vec::new(),
+        };
+        let seed_name = cluster.nodes[0].member_name();
+        let seed_peer = cluster.peer_url(0);
+        cluster.start_member(0, &seed_name, &format!("{seed_name}={seed_peer}"), "new")?;
+        cluster.endpoints.push(cluster.client_url(0));
+        Ok(cluster)
+    }
+
+    async fn add_and_promote_learner(
+        &mut self,
+        index: usize,
+    ) -> Result<super::bootstrap::JoinInfo> {
+        let peer_url = self.peer_url(index);
+        let member_name = self.nodes[index].member_name();
+        let (member_id, members) = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(mut client) =
+                    etcd_client::Client::connect(vec![self.client_url(0)], None).await
+                {
+                    if let Ok(response) = client.member_list().await
+                        && let Some(member) = response
+                            .members()
+                            .iter()
+                            .find(|member| member.peer_urls().iter().any(|url| url == &peer_url))
+                    {
+                        return (member.id(), response.members().to_vec());
+                    }
+                    if let Ok(response) = client
+                        .member_add(
+                            [peer_url.clone()],
+                            Some(MemberAddOptions::new().with_is_learner()),
+                        )
+                        .await
+                        && let Some(member) = response.member()
+                    {
+                        return (member.id(), response.member_list().to_vec());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("seed did not admit etcd learner `{member_name}`"))?;
+        let initial_cluster =
+            super::bootstrap::format_initial_cluster(&members, member_id, &member_name, true)?;
+        let join_info = super::bootstrap::JoinInfo {
+            cluster_id: TEST_CLUSTER_NAME.to_string(),
+            member_id,
+            member_name: member_name.clone(),
+            peer_url,
+            initial_cluster: initial_cluster.clone(),
+        };
+
+        self.start_member(index, &member_name, &initial_cluster, "existing")?;
+        self.endpoints.push(self.client_url(index));
+        self.wait_for_member_status(index).await?;
+
+        let promoted = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(mut client) =
+                    etcd_client::Client::connect(vec![self.client_url(0)], None).await
+                    && let Ok(members) = client.member_list().await
+                {
+                    if members
+                        .members()
+                        .iter()
+                        .find(|member| member.id() == member_id)
+                        .is_some_and(|member| !member.is_learner())
+                    {
+                        return;
+                    }
+                    let _ = client.member_promote(member_id).await;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await;
+        if promoted.is_err() {
+            bail!("etcd learner `{member_name}` did not catch up and promote");
+        }
+        Ok(join_info)
+    }
+
+    fn start_member(
+        &mut self,
+        index: usize,
+        member_name: &str,
+        initial_cluster: &str,
+        initial_state: &str,
+    ) -> Result<()> {
+        let container_name = self.container_name(index);
+        let client_port = self.nodes[index].etcd_client_port;
+        let peer_port = self.nodes[index].etcd_peer_port;
+        let arguments = vec![
+            "run".to_string(),
+            "--detach".to_string(),
+            "--network".to_string(),
+            "host".to_string(),
+            "--name".to_string(),
+            container_name.clone(),
+            crate::deployment::ETCD_IMAGE_TAG.to_string(),
+            "etcd".to_string(),
+            format!("--name={member_name}"),
+            "--data-dir=/etcd-data".to_string(),
+            format!("--listen-client-urls=http://0.0.0.0:{client_port}"),
+            format!("--advertise-client-urls={}", self.client_url(index)),
+            format!("--listen-peer-urls=http://0.0.0.0:{peer_port}"),
+            format!("--initial-advertise-peer-urls={}", self.peer_url(index)),
+            format!("--initial-cluster={initial_cluster}"),
+            format!("--initial-cluster-state={initial_state}"),
+            format!("--initial-cluster-token={}", self.token),
+        ];
+        self.container_names.insert(container_name.clone());
+        let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        command_output(&self.runtime_cli, &references)
+            .with_context(|| format!("failed to start etcd member `{member_name}`"))?;
+        Ok(())
+    }
+
+    async fn wait_for_seed(&self) -> Result<()> {
+        self.wait_for_member_status(0).await
+    }
+
+    async fn wait_for_member_status(&self, index: usize) -> Result<()> {
+        let endpoint = self.client_url(index);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(mut client) =
+                    etcd_client::Client::connect(vec![endpoint.clone()], None).await
+                    && client
+                        .status()
+                        .await
+                        .is_ok_and(|status| status.leader() != 0)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("etcd member at `{endpoint}` did not become ready"))
+    }
+
+    async fn assert_formed(&self) -> Result<()> {
+        let expected_names = self
+            .nodes
+            .iter()
+            .map(|node| node.member_name())
+            .collect::<BTreeSet<_>>();
+        for endpoint in &self.endpoints {
+            let mut client = etcd_client::Client::connect(vec![endpoint.clone()], None).await?;
+            let status = client.status().await?;
+            if status.leader() == 0 || !status.errors().is_empty() {
+                bail!("formed member `{endpoint}` has no healthy leader");
+            }
+            let members = client.member_list().await?;
+            let names = members
+                .members()
+                .iter()
+                .map(|member| member.name().to_string())
+                .collect::<BTreeSet<_>>();
+            if names != expected_names || members.members().iter().any(|member| member.is_learner())
+            {
+                bail!("formed membership does not contain three promoted voters: {names:?}");
+            }
+        }
+        let mut client = etcd_client::Client::connect(self.endpoints.clone(), None).await?;
+        client
+            .put("/maestro/integration/formed", "three-voters", None)
+            .await?;
+        Ok(())
+    }
+
+    fn runtime(&self, index: usize) -> super::ClusterRuntime {
+        let node = self.nodes[index];
+        super::ClusterRuntime {
+            cluster_id: TEST_CLUSTER_NAME.to_string(),
+            node_id: format!("node-{}", index + 1),
+            instance_id: format!("instance-{}", index + 1),
+            host_ip: node.host_ip,
+            role: NodeRole::Voter,
+            initial_voters: self.nodes.clone(),
+            subnets: vec![
+                "172.30.1.0/24".to_string(),
+                "172.30.2.0/24".to_string(),
+                "172.30.3.0/24".to_string(),
+            ],
+            control_allow_cidrs: Vec::new(),
+            api_port: node.api_port,
+            gateway_port: node.gateway_port,
+            etcd_client_port: node.etcd_client_port,
+            etcd_peer_port: node.etcd_peer_port,
+            scheduling: true,
+            shared_registry: None,
+            labels: BTreeMap::new(),
+            identity_api_port: node.identity_api_port,
+        }
+    }
+
+    fn client_url(&self, index: usize) -> String {
+        format!("http://127.0.0.1:{}", self.nodes[index].etcd_client_port)
+    }
+
+    fn peer_url(&self, index: usize) -> String {
+        format!("http://127.0.0.1:{}", self.nodes[index].etcd_peer_port)
+    }
+
+    fn container_name(&self, index: usize) -> String {
+        format!("maestro-forming-etcd-{}-{}", self.run_id, index + 1)
     }
 }
 
@@ -264,13 +652,131 @@ impl SingleHostHttpCluster {
         Ok(())
     }
 
+    fn start_rollout_backend(
+        &mut self,
+        index: usize,
+        version: &str,
+        start_ready: bool,
+    ) -> Result<String> {
+        let script_path = self.root.join("rollout-server.py");
+        if !script_path.exists() {
+            std::fs::write(&script_path, ROLLOUT_SERVER)?;
+        }
+        let name = self.rollout_backend_name(index, version);
+        let network = self.network_name(index);
+        let mount = format!("{}:/rollout-server.py:ro", script_path.display());
+        let body = format!("BODY={version}-node-{}", index + 1);
+        let ready = format!("START_READY={}", u8::from(start_ready));
+        self.run_container(
+            &name,
+            &[
+                "run",
+                "--detach",
+                "--network",
+                &network,
+                "--name",
+                &name,
+                "--volume",
+                &mount,
+                "--env",
+                &body,
+                "--env",
+                &ready,
+                ROLLOUT_TEST_IMAGE,
+                "python",
+                "/rollout-server.py",
+            ],
+        )?;
+        Ok(name)
+    }
+
+    fn mark_rollout_backend_ready(&self, index: usize, version: &str) -> Result<()> {
+        command_output(
+            &self.runtime_cli,
+            &[
+                "exec",
+                &self.rollout_backend_name(index, version),
+                "sh",
+                "-c",
+                "kill -USR1 1",
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn write_rollout_gateway_configs(&self, version: &str) -> Result<()> {
+        for index in 0..self.nodes.len() {
+            self.write_gateway_config_for_backends(
+                index,
+                &[self.rollout_backend_name(index, version)],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn rollout_backend_has_status(&self, index: usize, version: &str, expected: u16) -> bool {
+        const STATUS_CHECK: &str = r#"import sys, urllib.error, urllib.request
+try:
+    code = urllib.request.urlopen("http://127.0.0.1:8080/ready").status
+except urllib.error.HTTPError as error:
+    code = error.code
+sys.exit(0 if code == int(sys.argv[1]) else 1)
+"#;
+        command_output(
+            &self.runtime_cli,
+            &[
+                "exec",
+                &self.rollout_backend_name(index, version),
+                "python",
+                "-c",
+                STATUS_CHECK,
+                &expected.to_string(),
+            ],
+        )
+        .is_ok()
+    }
+
+    fn rollout_marker_exists(&self, index: usize, version: &str, marker: &str) -> bool {
+        command_output(
+            &self.runtime_cli,
+            &[
+                "exec",
+                &self.rollout_backend_name(index, version),
+                "test",
+                "-f",
+                marker,
+            ],
+        )
+        .is_ok()
+    }
+
+    fn stop_rollout_backend(&self, index: usize, version: &str) -> Result<()> {
+        command_output(
+            &self.runtime_cli,
+            &[
+                "stop",
+                "--time",
+                "10",
+                &self.rollout_backend_name(index, version),
+            ],
+        )?;
+        Ok(())
+    }
+
     fn start_gateway(&mut self, index: usize) -> Result<()> {
         self.write_gateway_config(index)?;
         let config_path = self.root.join(format!("gateway-{}.yml", index + 1));
         let name = self.gateway_name(index);
         let network = self.network_name(index);
         let publish = format!("{}:{}:8080", self.host_ip, self.nodes[index].gateway_port);
-        let mount = format!("{}:/config/dynamic.yml:ro", config_path.display());
+        let mount = format!("{}:/config:ro", self.root.display());
+        let provider = format!(
+            "--providers.file.filename=/config/{}",
+            config_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow!("gateway config path has no file name"))?
+        );
         self.run_container(
             &name,
             &[
@@ -288,7 +794,7 @@ impl SingleHostHttpCluster {
                 "--log.level=ERROR",
                 "--api.dashboard=false",
                 "--entrypoints.web.address=:8080",
-                "--providers.file.filename=/config/dynamic.yml",
+                &provider,
                 "--providers.file.watch=true",
             ],
         )?;
@@ -323,7 +829,7 @@ impl SingleHostHttpCluster {
                 "http:\n  routers:\n    local:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: local\n      middlewares: [affinity]\n  middlewares:\n    affinity:\n      headers:\n        customRequestHeaders:\n          {TEST_AFFINITY_HEADER}: \"{affinity_token}\"\n        customResponseHeaders:\n          {TEST_AFFINITY_HEADER}: \"{affinity_token}\"\n  services:\n    local:\n      loadBalancer:\n        sticky:\n          cookie:\n            name: maestro-affinity\n            httpOnly: true\n        servers:\n{servers}\n"
             )
         };
-        std::fs::write(&config_path, config)?;
+        write_atomic(&config_path, config.as_bytes())?;
         Ok(())
     }
 
@@ -369,14 +875,15 @@ impl SingleHostHttpCluster {
             .collect::<Vec<_>>()
             .join("\n");
         let config_path = self.root.join("public.yml");
-        std::fs::write(
+        write_atomic(
             &config_path,
             format!(
                 "http:\n  routers:\n    public:\n      entryPoints: [web]\n      rule: PathPrefix(`/`)\n      service: cluster\n{affinity_routers}\n  services:\n    cluster:\n      loadBalancer:\n        sticky:\n          cookie:\n            name: maestro-node-affinity\n            httpOnly: true\n        healthCheck:\n          path: /\n          interval: 500ms\n          timeout: 300ms\n        servers:\n{servers}\n{affinity_services}\n"
-            ),
+            )
+            .as_bytes(),
         )?;
         let name = self.public_name();
-        let mount = format!("{}:/config/dynamic.yml:ro", config_path.display());
+        let mount = format!("{}:/config:ro", self.root.display());
         let entrypoint = format!("--entrypoints.web.address=:{}", self.public_port);
         self.run_container(
             &name,
@@ -393,7 +900,7 @@ impl SingleHostHttpCluster {
                 "--log.level=ERROR",
                 "--api.dashboard=false",
                 &entrypoint,
-                "--providers.file.filename=/config/dynamic.yml",
+                "--providers.file.filename=/config/public.yml",
                 "--providers.file.watch=false",
             ],
         )?;
@@ -590,6 +1097,13 @@ impl SingleHostHttpCluster {
         )
     }
 
+    fn rollout_backend_name(&self, index: usize, version: &str) -> String {
+        format!(
+            "maestro-http-rollout-{}-{version}-node-{}",
+            self.run_id, self.nodes[index].api_port
+        )
+    }
+
     fn gateway_name(&self, index: usize) -> String {
         format!(
             "maestro-http-gateway-{}-node-{}",
@@ -633,6 +1147,17 @@ impl Drop for ContainerEtcdCluster {
         let mut arguments = vec!["rm", "--force"];
         arguments.extend(self.container_names.iter().map(String::as_str));
         let _ = Command::new(&self.runtime_cli).args(arguments).output();
+    }
+}
+
+impl Drop for FormingEtcdCluster {
+    fn drop(&mut self) {
+        if !self.container_names.is_empty() {
+            let mut arguments = vec!["rm", "--force"];
+            arguments.extend(self.container_names.iter().map(String::as_str));
+            let _ = Command::new(&self.runtime_cli).args(arguments).output();
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -749,6 +1274,13 @@ fn command_output(program: &str, arguments: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn write_atomic(path: &std::path::Path, contents: &[u8]) -> Result<()> {
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, contents)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+}
+
 async fn wait_for_leader(
     electors: &[Arc<EtcdLeaderElector>],
     timeout: Duration,
@@ -818,6 +1350,49 @@ async fn wait_for_body(
         );
     }
     Ok(())
+}
+
+async fn wait_for_rollout_status(
+    cluster: &SingleHostHttpCluster,
+    index: usize,
+    version: &str,
+    expected: u16,
+    timeout: Duration,
+) -> Result<()> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            if cluster.rollout_backend_has_status(index, version, expected) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "rollout backend `{version}` on logical node {} did not return status {expected}",
+            index + 1
+        )
+    })
+}
+
+async fn wait_for_rollout_marker(
+    cluster: &SingleHostHttpCluster,
+    index: usize,
+    version: &str,
+    marker: &str,
+    timeout: Duration,
+) -> Result<()> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            if cluster.rollout_marker_exists(index, version, marker) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("rollout backend `{version}` did not create marker `{marker}`"))
 }
 
 async fn wait_for_affinity_response(
@@ -1138,6 +1713,79 @@ async fn single_host_gateways_route_and_recover_across_logical_nodes() -> Result
     Ok(())
 }
 
+/// Simulates a serial rolling restart across three logical nodes. Each step stops one etcd
+/// member, workload, and node gateway; verifies quorum writes and public traffic through the
+/// remaining nodes; then waits for every restarted component to rejoin before continuing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn serial_node_restarts_preserve_quorum_and_ingress() -> Result<()> {
+    let etcd = ContainerEtcdCluster::start()?;
+    etcd.wait_until_ready().await?;
+    let http = SingleHostHttpCluster::start()?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let all = ["node-1", "node-2", "node-3"]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+
+    wait_for_routing_set(
+        &client,
+        &http.public_url(),
+        &all,
+        &all,
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    for index in 0..http.nodes.len() {
+        let restarting = format!("node-{}", index + 1);
+        etcd.stop_member(index)?;
+        http.stop_gateway(index)?;
+        http.stop_backend(index)?;
+
+        etcd.wait_for_quorum_write(index, index).await?;
+        wait_until_unavailable(&client, &http.gateway_url(index), Duration::from_secs(10)).await?;
+        let remaining = all
+            .iter()
+            .filter(|node| *node != &restarting)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        wait_for_routing_set(
+            &client,
+            &http.public_url(),
+            &remaining,
+            &remaining,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+        etcd.restart_member(index)?;
+        http.restart_backend(index)?;
+        http.restart_gateway(index)?;
+
+        etcd.wait_until_ready().await?;
+        wait_for_body(
+            &client,
+            &http.gateway_url(index),
+            &restarting,
+            Duration::from_secs(20),
+        )
+        .await?;
+        wait_for_routing_set(
+            &client,
+            &http.public_url(),
+            &all,
+            &all,
+            Duration::from_secs(30),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Uses the production scheduler and reconciler diff against real HTTP containers and Traefik
 /// gateways. It verifies stable placement and externally visible routes while scaling one service
 /// from one replica to five and back to two across three logical nodes.
@@ -1214,6 +1862,172 @@ async fn scheduler_scales_live_replicas_across_logical_nodes() -> Result<()> {
             .all(|name| !cluster.container_exists(name))
     );
     assert_eq!(actual.len(), 2);
+    Ok(())
+}
+
+/// Exercises a two-version rollout through real node gateways. The new deployment remains outside
+/// the routing configuration until every replica reports ready, public requests keep succeeding
+/// during the atomic cutover, and SIGTERM waits for an in-flight request on the old deployment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn readiness_gated_rollout_preserves_in_flight_requests() -> Result<()> {
+    let mut cluster = SingleHostHttpCluster::start()?;
+    ensure_image(&cluster.runtime_cli, ROLLOUT_TEST_IMAGE)?;
+    cluster.remove_initial_backends()?;
+    for index in 0..cluster.nodes.len() {
+        cluster.start_rollout_backend(index, "v1", true)?;
+    }
+    cluster.write_rollout_gateway_configs("v1")?;
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let v1 = (1..=cluster.nodes.len())
+        .map(|index| format!("v1-node-{index}"))
+        .collect::<BTreeSet<_>>();
+    let v2 = (1..=cluster.nodes.len())
+        .map(|index| format!("v2-node-{index}"))
+        .collect::<BTreeSet<_>>();
+    wait_for_routing_set(
+        &client,
+        &cluster.public_url(),
+        &v1,
+        &v1,
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    for index in 0..cluster.nodes.len() {
+        cluster.start_rollout_backend(index, "v2", index + 1 < cluster.nodes.len())?;
+    }
+    for index in 0..cluster.nodes.len() - 1 {
+        wait_for_rollout_status(
+            &cluster,
+            index,
+            "v2",
+            reqwest::StatusCode::OK.as_u16(),
+            Duration::from_secs(20),
+        )
+        .await?;
+    }
+    let delayed_index = cluster.nodes.len() - 1;
+    wait_for_rollout_status(
+        &cluster,
+        delayed_index,
+        "v2",
+        reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+        Duration::from_secs(20),
+    )
+    .await?;
+    wait_for_routing_set(
+        &client,
+        &cluster.public_url(),
+        &v1,
+        &v1,
+        Duration::from_secs(10),
+    )
+    .await?;
+
+    cluster.mark_rollout_backend_ready(delayed_index, "v2")?;
+    wait_for_rollout_status(
+        &cluster,
+        delayed_index,
+        "v2",
+        reqwest::StatusCode::OK.as_u16(),
+        Duration::from_secs(10),
+    )
+    .await?;
+
+    let traffic_client = client.clone();
+    let public_url = cluster.public_url();
+    let allowed_during_cutover = v1.union(&v2).cloned().collect::<BTreeSet<_>>();
+    let (traffic_started, traffic_is_running) = tokio::sync::oneshot::channel();
+    let traffic = tokio::spawn(async move {
+        let mut observed = BTreeSet::new();
+        let mut traffic_started = Some(traffic_started);
+        for _ in 0..160 {
+            let response = traffic_client.get(&public_url).send().await?;
+            if !response.status().is_success() {
+                bail!(
+                    "public request failed during rollout with {}",
+                    response.status()
+                );
+            }
+            let body = response.text().await?.trim().to_string();
+            if !allowed_during_cutover.contains(&body) {
+                bail!("public request reached unexpected rollout backend `{body}`");
+            }
+            observed.insert(body);
+            if let Some(started) = traffic_started.take() {
+                let _ = started.send(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        Result::<BTreeSet<String>>::Ok(observed)
+    });
+    traffic_is_running
+        .await
+        .map_err(|_| anyhow!("continuous rollout traffic stopped before cutover"))?;
+
+    let slow_client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let slow_url = format!("{}/slow", cluster.gateway_url(0));
+    let slow_request = tokio::spawn(async move {
+        let response = slow_client.get(slow_url).send().await?;
+        if !response.status().is_success() {
+            bail!("in-flight request returned {}", response.status());
+        }
+        Result::<String>::Ok(response.text().await?.trim().to_string())
+    });
+    wait_for_rollout_marker(
+        &cluster,
+        0,
+        "v1",
+        "/tmp/slow-started",
+        Duration::from_secs(10),
+    )
+    .await?;
+
+    cluster.write_rollout_gateway_configs("v2")?;
+    let runtime_cli = cluster.runtime_cli.clone();
+    let old_backend = cluster.rollout_backend_name(0, "v1");
+    let old_stop = tokio::task::spawn_blocking(move || {
+        command_output(&runtime_cli, &["stop", "--time", "10", &old_backend])?;
+        Result::<()>::Ok(())
+    });
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        !old_stop.is_finished(),
+        "the old replica exited before its in-flight request completed"
+    );
+
+    wait_for_routing_set(
+        &client,
+        &cluster.public_url(),
+        &v2,
+        &v2,
+        Duration::from_secs(30),
+    )
+    .await?;
+    assert_eq!(slow_request.await??, "v1-node-1");
+    old_stop.await??;
+    for index in 1..cluster.nodes.len() {
+        cluster.stop_rollout_backend(index, "v1")?;
+    }
+    let observed = traffic.await??;
+    assert!(observed.iter().any(|body| v1.contains(body)));
+    assert!(observed.iter().any(|body| v2.contains(body)));
+    wait_for_routing_set(
+        &client,
+        &cluster.public_url(),
+        &v2,
+        &v2,
+        Duration::from_secs(20),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1325,6 +2139,269 @@ async fn node_affinity_is_automatic_opaque_and_replayable() -> Result<()> {
     Ok(())
 }
 
+/// Forms a three-voter cluster from one designated seed and two serial learners. It exercises the
+/// production bootstrap state decisions and initial-cluster formatter, proves that a later-listed
+/// voter can join while the middle voter is absent, and verifies every learner catches up before
+/// promotion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
+    let mut cluster = FormingEtcdCluster::start_seed()?;
+    let seed_runtime = cluster.runtime(0);
+    let seed_data = cluster.root.join("node-1");
+    super::bootstrap::arm_seed(&seed_data, &seed_runtime.cluster_id, seed_runtime.host_ip)?;
+    assert_eq!(
+        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
+        super::bootstrap::BootstrapAction::BootstrapSeed
+    );
+    super::bootstrap::mark_seed_starting(&seed_data)?;
+    assert!(
+        super::bootstrap::decide(Some(&seed_runtime), &seed_data).is_err(),
+        "a consumed seed permit must not authorize fallback bootstrap"
+    );
+    super::bootstrap::mark_seed_joined(&seed_data)?;
+    std::fs::create_dir_all(seed_data.join("system/etcd/data/member"))?;
+    assert_eq!(
+        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
+        super::bootstrap::BootstrapAction::Restart
+    );
+    cluster.wait_for_seed().await?;
+
+    for index in [2, 1] {
+        let runtime = cluster.runtime(index);
+        let data_dir = cluster.root.join(format!("node-{}", index + 1));
+        assert_eq!(
+            super::bootstrap::decide(Some(&runtime), &data_dir)?,
+            super::bootstrap::BootstrapAction::WaitForAdmission
+        );
+        let join_info = cluster.add_and_promote_learner(index).await?;
+        super::bootstrap::persist_join_info(&data_dir, &join_info)?;
+        assert_eq!(
+            super::bootstrap::decide(Some(&runtime), &data_dir)?,
+            super::bootstrap::BootstrapAction::JoinExisting(join_info)
+        );
+    }
+
+    cluster.assert_formed().await?;
+    Ok(())
+}
+
+/// Drives the production maintenance state machine against real etcd fencing and two real
+/// electors. Simulated node APIs replace their process instance on restart, allowing the test to
+/// verify worker/follower/leader order, leadership transfer, health verification, restoration,
+/// and removal of the cluster-wide deployment freeze.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Result<()> {
+    let etcd = ContainerEtcdCluster::start()?;
+    etcd.wait_until_ready().await?;
+    let endpoints = reserve_node_endpoints(3, Ipv4Addr::LOCALHOST)?;
+    let registry = Arc::new(InMemoryNodeRegistry::new("test-orchestrator".to_string()));
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let roles = [NodeRole::Worker, NodeRole::Voter, NodeRole::Voter];
+    let node_ids = ["node-a", "node-b", "node-c"];
+    let mut nodes = Vec::new();
+    let mut api_handles = Vec::new();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let node = NodeInfo {
+            node_id: node_ids[index].to_string(),
+            instance_id: format!("instance-{}", node_ids[index]),
+            hostname: node_ids[index].to_string(),
+            role: roles[index],
+            scheduling: true,
+            cluster_host_ip: Ipv4Addr::LOCALHOST,
+            cluster_api_port: endpoint.api_port,
+            cluster_gateway_port: endpoint.gateway_port,
+            subnet: format!("172.31.{}.0/24", index + 1),
+            tailscale_ip: None,
+            data_plane_ready: true,
+            data_plane_checked_at_ms: 1,
+            data_plane_error: None,
+            version: "1.0.0".to_string(),
+            started_at_ms: 1,
+            labels: BTreeMap::new(),
+        };
+        registry.insert_for_test(node.clone());
+        nodes.push(node.clone());
+        let listener =
+            tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, endpoint.api_port)).await?;
+        let app = axum::Router::new()
+            .route(
+                "/api/system/restart",
+                axum::routing::post(restart_test_node),
+            )
+            .route("/_healthy", axum::routing::get(restart_test_healthy))
+            .with_state(RestartNodeApiState {
+                node,
+                registry: registry.clone(),
+                requests: requests.clone(),
+            });
+        api_handles.push(tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        }));
+    }
+
+    let leader = Arc::new(
+        EtcdLeaderElector::connect(&etcd.endpoints, None, "node-c".to_string(), true).await?,
+    );
+    let follower = Arc::new(
+        EtcdLeaderElector::connect(&etcd.endpoints, None, "node-b".to_string(), true).await?,
+    );
+    let (shutdown_leader, _) = broadcast::channel(2);
+    let (shutdown_follower, _) = broadcast::channel(2);
+    let mut election_handles = leader
+        .clone()
+        .spawn(shutdown_leader.subscribe(), Logger::noop());
+    let initial_token = leader.wait_until_leading(Duration::from_secs(20)).await?;
+    election_handles.extend(
+        follower
+            .clone()
+            .spawn(shutdown_follower.subscribe(), Logger::noop()),
+    );
+
+    let store = Arc::new(
+        EtcdStateStore::new_with_endpoints(
+            &etcd.endpoints,
+            crate::utils::crypto::derive_key("coordinated-restart-integration"),
+            None,
+        )
+        .await?,
+    );
+    let assignments = Arc::new(InMemoryAssignmentStore::default());
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let leader_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
+        "node-c".to_string(),
+        leader.clone(),
+        registry.clone(),
+        assignments.clone(),
+        store.clone(),
+        http.clone(),
+    );
+    let follower_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
+        "node-b".to_string(),
+        follower.clone(),
+        registry.clone(),
+        assignments,
+        store.clone(),
+        http,
+    );
+    let created = leader_orchestrator
+        .create_restart_run(&initial_token, None)
+        .await?;
+    assert_eq!(created.kind, super::ClusterMaintenanceKind::Restart);
+    assert_eq!(
+        created
+            .nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["node-a", "node-b", "node-c"]
+    );
+
+    let completed = tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            let run = store
+                .read_cluster_upgrade()
+                .await?
+                .ok_or_else(|| anyhow!("coordinated restart run disappeared"))?;
+            if run.phase.is_terminal() {
+                return Result::<super::UpgradeRun>::Ok(run);
+            }
+            match (leader.state(), follower.state()) {
+                (LeadershipState::Leading(token), _) => {
+                    leader_orchestrator.tick(&token).await?;
+                }
+                (_, LeadershipState::Leading(token)) => {
+                    follower_orchestrator.tick(&token).await?;
+                }
+                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("coordinated restart did not finish"))??;
+    assert_eq!(completed.phase, super::UpgradePhase::Succeeded);
+    assert_eq!(
+        *requests.lock().unwrap_or_else(|error| error.into_inner()),
+        vec![
+            "node-a".to_string(),
+            "node-b".to_string(),
+            "node-c".to_string()
+        ]
+    );
+    for node in nodes {
+        let restarted = registry
+            .list_nodes()
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.node_id == node.node_id)
+            .ok_or_else(|| anyhow!("restarted node `{}` disappeared", node.node_id))?;
+        assert_ne!(restarted.instance_id, node.instance_id);
+        assert_eq!(
+            registry.get_node_state(&node.node_id).await?,
+            NodeState::default()
+        );
+    }
+    assert!(store.read_cluster_freeze().await?.is_none());
+
+    let (active_orchestrator, active_token) = match (leader.state(), follower.state()) {
+        (LeadershipState::Leading(token), _) => (&leader_orchestrator, token),
+        (_, LeadershipState::Leading(token)) => (&follower_orchestrator, token),
+        _ => bail!("cluster had no leader after the all-node restart"),
+    };
+    let selected = active_orchestrator
+        .create_restart_run(&active_token, Some("node-a"))
+        .await?;
+    assert_eq!(selected.nodes.len(), 1);
+    assert_eq!(selected.nodes[0].node_id, "node-a");
+    let selected_completed = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let run = store
+                .read_cluster_upgrade()
+                .await?
+                .ok_or_else(|| anyhow!("selected-node restart run disappeared"))?;
+            if run.phase.is_terminal() {
+                return Result::<super::UpgradeRun>::Ok(run);
+            }
+            match (leader.state(), follower.state()) {
+                (LeadershipState::Leading(token), _) => {
+                    leader_orchestrator.tick(&token).await?;
+                }
+                (_, LeadershipState::Leading(token)) => {
+                    follower_orchestrator.tick(&token).await?;
+                }
+                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("selected-node restart did not finish"))??;
+    assert_eq!(selected_completed.phase, super::UpgradePhase::Succeeded);
+    assert_eq!(
+        *requests.lock().unwrap_or_else(|error| error.into_inner()),
+        vec![
+            "node-a".to_string(),
+            "node-b".to_string(),
+            "node-c".to_string(),
+            "node-a".to_string()
+        ]
+    );
+    assert!(store.read_cluster_freeze().await?.is_none());
+
+    let _ = shutdown_leader.send(ShutdownEvent::Force);
+    let _ = shutdown_follower.send(ShutdownEvent::Force);
+    for handle in election_handles {
+        handle.abort();
+    }
+    for handle in api_handles {
+        handle.abort();
+    }
+    Ok(())
+}
+
 /// This is deliberately ignored in the default unit suite because it starts and destroys three
 /// host-networked etcd containers. Run it on an isolated Linux container host with:
 ///
@@ -1371,6 +2448,31 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
         )
         .await
         .context("the elected leader could not perform a fenced mutation")?;
+    let assignment_store = EtcdAssignmentStore::connect(&cluster.endpoints, None).await?;
+    let first_assignment = Assignment {
+        assignment_id: "assignment-before-failover".to_string(),
+        placement_epoch: 1,
+        service_id: "failover-service".to_string(),
+        deployment_id: "deployment-v1".to_string(),
+        replica_index: 0,
+        node_id: "workload-node".to_string(),
+        replaces_assignment_id: None,
+        created_at_ms: 1,
+    };
+    assert_eq!(
+        assignment_store
+            .replace_for_node(
+                &stale_token,
+                0,
+                AssignmentManifest {
+                    node_id: "workload-node".to_string(),
+                    generation: 0,
+                    assignments: vec![first_assignment.clone()],
+                },
+            )
+            .await?,
+        ReplaceOutcome::Applied
+    );
 
     let shutdown = [&shutdown_a, &shutdown_b];
     let _ = shutdown[first_leader].send(ShutdownEvent::Graceful);
@@ -1400,6 +2502,47 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
     if stale_result.is_ok() {
         bail!("a stale leader completed a fenced mutation after failover");
     }
+    let persisted = assignment_store
+        .get_for_node(&"workload-node".to_string())
+        .await?
+        .ok_or_else(|| anyhow!("successor could not load the existing assignment manifest"))?;
+    assert_eq!(persisted.generation, 1);
+    assert_eq!(persisted.assignments, vec![first_assignment.clone()]);
+    let successor_assignment = Assignment {
+        assignment_id: "assignment-after-failover".to_string(),
+        placement_epoch: 2,
+        deployment_id: "deployment-v2".to_string(),
+        replaces_assignment_id: Some(first_assignment.assignment_id.clone()),
+        created_at_ms: 2,
+        ..first_assignment
+    };
+    let successor_manifest = AssignmentManifest {
+        node_id: "workload-node".to_string(),
+        generation: persisted.generation,
+        assignments: vec![successor_assignment.clone()],
+    };
+    assert_eq!(
+        assignment_store
+            .replace_for_node(
+                &stale_token,
+                persisted.generation,
+                successor_manifest.clone(),
+            )
+            .await?,
+        ReplaceOutcome::LeadershipLost
+    );
+    assert_eq!(
+        assignment_store
+            .replace_for_node(&live_token, persisted.generation, successor_manifest)
+            .await?,
+        ReplaceOutcome::Applied
+    );
+    let resumed = assignment_store
+        .get_for_node(&"workload-node".to_string())
+        .await?
+        .ok_or_else(|| anyhow!("successor assignment manifest disappeared"))?;
+    assert_eq!(resumed.generation, 2);
+    assert_eq!(resumed.assignments, vec![successor_assignment]);
     store
         .apply_cluster_mutation(
             &live_token,

@@ -33,9 +33,8 @@ struct ClusterUnfreezeRequest<'a> {
     upgrade_run_id: &'a str,
 }
 
-pub async fn run_cluster_upgrade(host: &str, version: &str, yes: bool) -> Result<()> {
-    let version = semver::Version::parse(version.trim())
-        .map_err(|error| Error::invalid_input(format!("invalid target version: {error}")))?;
+pub async fn run_cluster_upgrade(host: &str, version: Option<&str>, yes: bool) -> Result<()> {
+    let version = cluster_target_version(version)?;
     let confirmed = crate::cli::confirm::confirm_action(
         host,
         &format!("About to roll every cluster node to Maestro {version}"),
@@ -72,7 +71,13 @@ pub async fn run_cluster_upgrade(host: &str, version: &str, yes: bool) -> Result
         .await
         .map_err(|error| Error::external(format!("invalid cluster upgrade response: {error}")))?;
     println!("[maestro]: cluster upgrade `{}` started", run.run_id);
-    stream_cluster_upgrade(&base, run).await
+    stream_cluster_maintenance(&base, run).await
+}
+
+fn cluster_target_version(version: Option<&str>) -> Result<semver::Version> {
+    let version = version.unwrap_or(CLIENT_VERSION).trim();
+    semver::Version::parse(version)
+        .map_err(|error| Error::invalid_input(format!("invalid target version: {error}")))
 }
 
 pub async fn run_cluster_unfreeze(host: &str, run_id: &str) -> Result<()> {
@@ -98,14 +103,23 @@ pub async fn run_cluster_unfreeze(host: &str, run_id: &str) -> Result<()> {
         .await
         .map_err(|error| Error::external(format!("invalid unfreeze response: {error}")))?;
     println!(
-        "[maestro]: upgrade `{}` aborted and cluster deploys unfrozen",
+        "[maestro]: {} `{}` aborted and cluster deploys unfrozen",
+        run.operation_name(),
         run.run_id
     );
     Ok(())
 }
 
-async fn stream_cluster_upgrade(base: &str, mut run: crate::cluster::UpgradeRun) -> Result<()> {
+pub(crate) async fn stream_cluster_maintenance(
+    base: &str,
+    mut run: crate::cluster::UpgradeRun,
+) -> Result<()> {
     let mut printed = 0_usize;
+    let operation = run.operation_name();
+    let status_path = match run.kind {
+        crate::cluster::ClusterMaintenanceKind::Upgrade => "/api/cluster/upgrade",
+        crate::cluster::ClusterMaintenanceKind::Restart => "/api/cluster/restart",
+    };
     loop {
         for event in run.history.iter().skip(printed) {
             let node = event
@@ -118,42 +132,49 @@ async fn stream_cluster_upgrade(base: &str, mut run: crate::cluster::UpgradeRun)
         printed = run.history.len();
         if run.phase.is_terminal() {
             return if run.phase == crate::cluster::UpgradePhase::Succeeded {
-                println!(
-                    "[maestro]: cluster upgrade `{}` completed at version {}",
-                    run.run_id, run.target_version
-                );
+                match run.kind {
+                    crate::cluster::ClusterMaintenanceKind::Upgrade => println!(
+                        "[maestro]: cluster upgrade `{}` completed at version {}",
+                        run.run_id, run.target_version
+                    ),
+                    crate::cluster::ClusterMaintenanceKind::Restart => {
+                        println!("[maestro]: cluster restart `{}` completed", run.run_id)
+                    }
+                }
                 Ok(())
             } else {
                 Err(Error::external(
                     run.failure
-                        .unwrap_or_else(|| "cluster upgrade failed".to_string()),
+                        .unwrap_or_else(|| format!("cluster {operation} failed")),
                 ))
             };
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         match contexts::build_http_client()?
-            .get(format!("{base}/api/cluster/upgrade"))
+            .get(format!("{base}{status_path}"))
             .send()
             .await
         {
             Ok(response) if response.status().is_success() => {
                 let next: Option<crate::cluster::UpgradeRun> =
                     response.json().await.map_err(|error| {
-                        Error::external(format!("invalid cluster upgrade status: {error}"))
+                        Error::external(format!("invalid cluster {operation} status: {error}"))
                     })?;
                 let Some(next) = next else {
-                    return Err(Error::external("cluster upgrade status disappeared"));
+                    return Err(Error::external(format!(
+                        "cluster {operation} status disappeared"
+                    )));
                 };
                 if next.run_id != run.run_id {
-                    return Err(Error::external(
-                        "a different cluster upgrade run replaced this run",
-                    ));
+                    return Err(Error::external(format!(
+                        "a different cluster maintenance run replaced this {operation}"
+                    )));
                 }
                 run = next;
             }
             Ok(response) => {
                 eprintln!(
-                    "[maestro]: upgrade status temporarily unavailable ({})",
+                    "[maestro]: {operation} status temporarily unavailable ({})",
                     response.status()
                 );
             }
@@ -260,5 +281,25 @@ mod tests {
         })
         .expect("serialize cluster upgrade request");
         assert_eq!(payload["targetVersion"], "1.2.3");
+    }
+
+    #[test]
+    fn cluster_upgrade_defaults_to_the_cli_version() {
+        assert_eq!(
+            cluster_target_version(None)
+                .expect("resolve target version")
+                .to_string(),
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    #[test]
+    fn cluster_upgrade_accepts_an_explicit_version_override() {
+        assert_eq!(
+            cluster_target_version(Some(" 1.2.3 "))
+                .expect("resolve target version")
+                .to_string(),
+            "1.2.3"
+        );
     }
 }
