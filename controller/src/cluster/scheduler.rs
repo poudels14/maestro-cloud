@@ -179,6 +179,7 @@ pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
                         deployment_id: group.deployment_id.clone(),
                         replica_index,
                         node_id: node.node_id.clone(),
+                        container_ip: None,
                         replaces_assignment_id: existing
                             .map(|assignment| assignment.assignment_id.clone()),
                         created_at_ms: input.now_ms,
@@ -215,6 +216,12 @@ pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
         }
     }
 
+    output.unschedulable.extend(ensure_workload_addresses(
+        &mut output.assignments,
+        &input.nodes,
+        &input.current,
+    ));
+
     output.assignments.sort_by(|left, right| {
         left.node_id
             .cmp(&right.node_id)
@@ -230,6 +237,83 @@ pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
             .then_with(|| left.replica_index.cmp(&right.replica_index))
     });
     output
+}
+
+pub(crate) fn ensure_workload_addresses(
+    assignments: &mut Vec<Assignment>,
+    nodes: &[NodeInfo],
+    current: &[Assignment],
+) -> Vec<UnschedulableReplica> {
+    let active_ids = assignments
+        .iter()
+        .map(|assignment| assignment.assignment_id.clone())
+        .collect::<HashSet<_>>();
+    let mut used = HashMap::<NodeId, BTreeSet<std::net::Ipv4Addr>>::new();
+
+    // Do not immediately reuse an address from an assignment being replaced.
+    // Its old container can remain alive while the replacement becomes ready.
+    for assignment in current {
+        if active_ids.contains(&assignment.assignment_id) {
+            continue;
+        }
+        if let Some(address) = assignment.container_ip {
+            used.entry(assignment.node_id.clone())
+                .or_default()
+                .insert(address);
+        }
+    }
+
+    let subnets = nodes
+        .iter()
+        .filter_map(|node| {
+            crate::cluster::network::Ipv4Cidr::parse(&node.subnet)
+                .ok()
+                .map(|subnet| (node.node_id.clone(), subnet))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut unassigned = Vec::new();
+    for assignment in assignments.iter_mut() {
+        let Some(subnet) = subnets.get(&assignment.node_id).copied() else {
+            // A held assignment can outlive its node's registry lease during
+            // the failure grace period. Preserve its previously fenced address
+            // until the node returns or the assignment is replaced.
+            if let Some(address) = assignment.container_ip {
+                used.entry(assignment.node_id.clone())
+                    .or_default()
+                    .insert(address);
+            }
+            continue;
+        };
+        let node_used = used.entry(assignment.node_id.clone()).or_default();
+        let preserved = assignment
+            .container_ip
+            .filter(|address| subnet.is_workload_address(*address) && node_used.insert(*address));
+        assignment.container_ip = preserved.or_else(|| {
+            subnet
+                .workload_addresses()
+                .find(|address| node_used.insert(*address))
+        });
+        if assignment.container_ip.is_none() {
+            unassigned.push(assignment.assignment_id.clone());
+        }
+    }
+
+    if unassigned.is_empty() {
+        return Vec::new();
+    }
+    let unassigned = unassigned.into_iter().collect::<HashSet<_>>();
+    let errors = assignments
+        .iter()
+        .filter(|assignment| unassigned.contains(&assignment.assignment_id))
+        .map(|assignment| UnschedulableReplica {
+            service_id: assignment.service_id.clone(),
+            deployment_id: assignment.deployment_id.clone(),
+            replica_index: assignment.replica_index,
+            reason: "node workload address capacity exhausted".to_string(),
+        })
+        .collect();
+    assignments.retain(|assignment| !unassigned.contains(&assignment.assignment_id));
+    errors
 }
 
 fn eligible_nodes<'a>(
@@ -441,6 +525,17 @@ mod tests {
     }
 
     #[test]
+    fn held_assignment_survives_a_temporary_registry_lease_gap() {
+        let initial = plan(input(1)).assignments.remove(0);
+        let mut next = input(1);
+        next.nodes.clear();
+        next.held.insert(initial.assignment_id.clone());
+        next.current = vec![initial.clone()];
+
+        assert_eq!(plan(next).assignments, vec![initial]);
+    }
+
+    #[test]
     fn spreads_replicas_evenly_when_replica_count_exceeds_nodes() {
         let output = plan(input(5));
         let counts = output.assignments.iter().fold(
@@ -536,6 +631,7 @@ mod tests {
             deployment_id: "dep1".to_string(),
             replica_index: 0,
             node_id: "node-b".to_string(),
+            container_ip: None,
             replaces_assignment_id: None,
             created_at_ms: 0,
         }];
@@ -554,5 +650,56 @@ mod tests {
         let output = plan(value);
 
         assert_eq!(output.assignments[0].node_id, "node-b");
+    }
+
+    #[test]
+    fn workload_addresses_are_unique_and_exclude_the_system_range() {
+        let output = plan(input(8));
+        let mut by_node = HashMap::<String, HashSet<std::net::Ipv4Addr>>::new();
+        for assignment in output.assignments {
+            let address = assignment.container_ip.expect("reserved workload address");
+            assert!(address.octets()[3] < 224);
+            assert!(
+                by_node
+                    .entry(assignment.node_id)
+                    .or_default()
+                    .insert(address)
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_does_not_reuse_an_address_while_the_old_container_drains() {
+        let old = Assignment {
+            assignment_id: "old".to_string(),
+            placement_epoch: 1,
+            service_id: "web".to_string(),
+            deployment_id: "dep1".to_string(),
+            replica_index: 0,
+            node_id: "node-a".to_string(),
+            container_ip: Some("172.20.1.2".parse().unwrap()),
+            replaces_assignment_id: None,
+            created_at_ms: 0,
+        };
+        let mut replacements = vec![Assignment {
+            assignment_id: "new".to_string(),
+            placement_epoch: 2,
+            service_id: "web".to_string(),
+            deployment_id: "dep2".to_string(),
+            replica_index: 0,
+            node_id: "node-a".to_string(),
+            container_ip: None,
+            replaces_assignment_id: Some("old".to_string()),
+            created_at_ms: 1,
+        }];
+
+        assert!(
+            ensure_workload_addresses(&mut replacements, &[node("node-a", true, &[])], &[old],)
+                .is_empty()
+        );
+        assert_eq!(
+            replacements[0].container_ip,
+            Some("172.20.1.3".parse().unwrap())
+        );
     }
 }

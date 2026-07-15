@@ -17,6 +17,8 @@ pub struct Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
+    pub const SYSTEM_RESERVED_HOSTS: u32 = 31;
+
     pub fn parse(value: &str) -> Result<Self> {
         let (ip, prefix) = value
             .split_once('/')
@@ -53,6 +55,35 @@ impl Ipv4Cidr {
 
     pub fn gateway_address(self) -> Ipv4Addr {
         Ipv4Addr::from(u32::from(self.network) | 254)
+    }
+
+    pub fn broadcast_address(self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.network) | !prefix_mask(self.prefix))
+    }
+
+    /// Returns an address relative to the broadcast address. An offset of one
+    /// is the highest usable address in the subnet.
+    pub fn host_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
+        let network = u32::from(self.network);
+        let broadcast = u32::from(self.broadcast_address());
+        let address = broadcast.checked_sub(offset)?;
+        (address > network).then(|| Ipv4Addr::from(address))
+    }
+
+    /// Addresses available to workload replicas. The first address is kept
+    /// for the runtime gateway and the highest addresses are reserved for
+    /// Maestro's fixed-address system containers.
+    pub fn workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
+        let first = u32::from(self.network).saturating_add(2);
+        let end = u32::from(self.broadcast_address()).saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
+        (first..end).map(Ipv4Addr::from)
+    }
+
+    pub fn is_workload_address(self, address: Ipv4Addr) -> bool {
+        let address = u32::from(address);
+        let first = u32::from(self.network).saturating_add(2);
+        let end = u32::from(self.broadcast_address()).saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
+        address >= first && address < end
     }
 
     pub fn is_private(self) -> bool {

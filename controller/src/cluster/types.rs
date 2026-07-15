@@ -394,6 +394,8 @@ pub struct Assignment {
     pub replica_index: u32,
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_ip: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces_assignment_id: Option<String>,
     pub created_at_ms: i64,
 }

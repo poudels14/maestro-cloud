@@ -68,6 +68,11 @@ binds clustered etcd and the cluster API to the resolved private host IP rather
 than a wildcard address.
 
 Every workload remains addressed by its node-local container IP. In cluster mode,
+the scheduler assigns workload addresses from host offsets `2..223` of each `/24`
+and persists them with the fenced assignment. The highest 31 usable addresses are
+reserved for fixed-address system containers: node gateway, admin, etcd, public
+ingress, probe, Tailscale/CoreDNS, and cloudflared replicas. A replacement never
+reuses its predecessor's address while the old container may still be draining.
 Maestro starts a private `maestro-gateway` Traefik on each hybrid or worker node.
 Public ingress
 selects a healthy node gateway at
@@ -568,6 +573,11 @@ cargo test-multi-node
 The command uses a working nerdctl daemon when available and otherwise falls
 back to Docker. Set `MAESTRO_TEST_RUNTIME=nerdctl` or
 `MAESTRO_TEST_RUNTIME=docker` to require a specific runtime.
+
+The suite also starts the pinned Traefik image with the exact production access
+log flags and verifies its published ingress port becomes reachable. A separate
+container verifies that single-node etcd is reached through the private
+`maestro-etcd:2379` container endpoint rather than a host-loopback endpoint.
 
 Run it on an isolated Linux container host. It creates and destroys three
 host-networked etcd containers using separate controller-derived four-port blocks,

@@ -912,6 +912,7 @@ mod tests {
                 deployment_id: "dep".to_string(),
                 replica_index: 0,
                 node_id: node.to_string(),
+                container_ip: ip.parse().ok(),
                 replaces_assignment_id: None,
                 created_at_ms: 1,
             },

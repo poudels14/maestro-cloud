@@ -1010,6 +1010,11 @@ async fn run() -> crate::error::Result<bool> {
             } else {
                 etcd_endpoints[0].clone()
             };
+            let container_etcd_endpoints = deployment::container_etcd_endpoints(
+                cluster_runtime.as_ref(),
+                &etcd_endpoints,
+                cfg.disable_etcd_cert,
+            );
             let network = network.unwrap_or_else(|| {
                 cluster_runtime
                     .as_ref()
@@ -1141,6 +1146,18 @@ async fn run() -> crate::error::Result<bool> {
 
             let recreate_legacy_network =
                 cluster::migration::network_reconfiguration_required(&data_dir);
+            let cloudflare_tunnel_replicas = cfg
+                .cloudflare
+                .as_ref()
+                .and_then(|cf| cf.tunnel.replicas)
+                .unwrap_or(2)
+                .max(1);
+            if cloudflare_tunnel_replicas > deployment::MAX_CLOUDFLARED_REPLICAS {
+                return Err(Error::invalid_config(format!(
+                    "cloudflare.tunnel.replicas cannot exceed {}",
+                    deployment::MAX_CLOUDFLARED_REPLICAS
+                )));
+            }
             let mut deployment_config = ControllerConfig {
                 cluster_alias,
                 cluster_name,
@@ -1148,6 +1165,7 @@ async fn run() -> crate::error::Result<bool> {
                 data_dir,
                 etcd_port,
                 etcd_endpoints,
+                container_etcd_endpoints,
                 probe_port: None,
                 admin_port,
                 ingress_ports: {
@@ -1179,12 +1197,7 @@ async fn run() -> crate::error::Result<bool> {
                 disable_etcd_cert: cfg.disable_etcd_cert,
                 enable_ingress_access_logs,
                 maestro_config,
-                cloudflare_tunnel_replicas: cfg
-                    .cloudflare
-                    .as_ref()
-                    .and_then(|cf| cf.tunnel.replicas)
-                    .unwrap_or(2)
-                    .max(1),
+                cloudflare_tunnel_replicas,
                 cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
                 slack_webhook_url: cfg.slack.map(|sl| sl.webhook_url),
             };
@@ -1410,11 +1423,19 @@ async fn run() -> crate::error::Result<bool> {
                     .map(|_| cluster::data_plane::IngressConnectorGate {
                         network: deployment_config.network.clone(),
                         containers: (1..=deployment_config.cloudflare_tunnel_replicas)
-                            .map(|replica| {
-                                format!(
+                            .map(|replica| cluster::data_plane::IngressConnector {
+                                name: format!(
                                     "maestro-cloudflared-{}-{replica}",
                                     deployment_config.system_name()
+                                ),
+                                static_ip: deployment::cloudflared_ip_from_cidr(
+                                    deployment_config
+                                        .subnet
+                                        .as_deref()
+                                        .expect("cluster subnet was validated"),
+                                    replica,
                                 )
+                                .expect("cloudflared replica address was validated"),
                             })
                             .collect(),
                     });

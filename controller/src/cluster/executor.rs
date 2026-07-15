@@ -217,6 +217,9 @@ impl EngineReplicaExecutor {
             deployment_id: assignment.deployment_id.clone(),
             replica_index: assignment.replica_index,
             assignment_id: assignment.assignment_id.clone(),
+            container_ip: assignment
+                .container_ip
+                .ok_or_else(|| anyhow!("assignment has no reserved workload address"))?,
             runtime_suffix: self.runtime_suffix.clone(),
         };
         let deploy_output = self
@@ -454,6 +457,13 @@ impl EngineReplicaExecutor {
             .inspect_container_ip(hostname)
             .await
             .ok_or_else(|| anyhow!("container `{hostname}` has no network address"))?;
+        if let Some(expected) = assignment.container_ip
+            && container_ip != expected.to_string()
+        {
+            bail!(
+                "container `{hostname}` received address `{container_ip}`, expected `{expected}`"
+            );
+        }
         Ok(Some(ReplicaEndpoint {
             container_ip,
             container_hostname: hostname.to_string(),
@@ -531,6 +541,7 @@ mod tests {
             deployment_id: "deployment-1".to_string(),
             replica_index: 2,
             node_id: "node00000001".to_string(),
+            container_ip: None,
             replaces_assignment_id: None,
             created_at_ms: 1,
         };

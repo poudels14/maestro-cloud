@@ -13,7 +13,13 @@ use crate::runtime::RuntimeProvider;
 #[derive(Debug, Clone)]
 pub struct IngressConnectorGate {
     pub network: String,
-    pub containers: Vec<String>,
+    pub containers: Vec<IngressConnector>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngressConnector {
+    pub name: String,
+    pub static_ip: String,
 }
 
 pub fn spawn(
@@ -89,12 +95,18 @@ async fn set_ingress_connectors(
     let mut errors = Vec::new();
     for container in &gate.containers {
         if let Err(error) = runtime
-            .set_container_network_access(container, &gate.network, enabled)
+            .set_container_network_access(
+                &container.name,
+                &gate.network,
+                enabled,
+                Some(&container.static_ip),
+            )
             .await
             .with_context(|| {
                 format!(
-                    "failed to {} cloudflared container `{container}`",
-                    if enabled { "enable" } else { "disable" }
+                    "failed to {} cloudflared container `{}`",
+                    if enabled { "enable" } else { "disable" },
+                    container.name
                 )
             })
         {
@@ -105,11 +117,17 @@ async fn set_ingress_connectors(
         if enabled {
             for container in &gate.containers {
                 if let Err(error) = runtime
-                    .set_container_network_access(container, &gate.network, false)
+                    .set_container_network_access(
+                        &container.name,
+                        &gate.network,
+                        false,
+                        Some(&container.static_ip),
+                    )
                     .await
                 {
                     errors.push(format!(
-                        "failed to roll back cloudflared container `{container}`: {error}"
+                        "failed to roll back cloudflared container `{}`: {error}",
+                        container.name
                     ));
                 }
             }
@@ -182,8 +200,10 @@ mod tests {
 
     use super::*;
 
+    type NetworkTransition = (String, String, bool, Option<String>);
+
     struct RecordingRuntime {
-        transitions: Mutex<Vec<(String, String, bool)>>,
+        transitions: Mutex<Vec<NetworkTransition>>,
     }
 
     #[async_trait]
@@ -213,11 +233,14 @@ mod tests {
             name: &str,
             network: &str,
             enabled: bool,
+            static_ip: Option<&str>,
         ) -> Result<()> {
-            self.transitions
-                .lock()
-                .unwrap()
-                .push((name.to_string(), network.to_string(), enabled));
+            self.transitions.lock().unwrap().push((
+                name.to_string(),
+                network.to_string(),
+                enabled,
+                static_ip.map(str::to_string),
+            ));
             Ok(())
         }
 
@@ -275,7 +298,16 @@ mod tests {
         };
         let gate = IngressConnectorGate {
             network: "maestro".to_string(),
-            containers: vec!["cloudflared-1".to_string(), "cloudflared-2".to_string()],
+            containers: vec![
+                IngressConnector {
+                    name: "cloudflared-1".to_string(),
+                    static_ip: "10.100.0.248".to_string(),
+                },
+                IngressConnector {
+                    name: "cloudflared-2".to_string(),
+                    static_ip: "10.100.0.247".to_string(),
+                },
+            ],
         };
 
         set_ingress_connectors(&runtime, &gate, false)
@@ -286,10 +318,30 @@ mod tests {
         assert_eq!(
             runtime.transitions.into_inner().unwrap(),
             vec![
-                ("cloudflared-1".to_string(), "maestro".to_string(), false),
-                ("cloudflared-2".to_string(), "maestro".to_string(), false),
-                ("cloudflared-1".to_string(), "maestro".to_string(), true),
-                ("cloudflared-2".to_string(), "maestro".to_string(), true),
+                (
+                    "cloudflared-1".to_string(),
+                    "maestro".to_string(),
+                    false,
+                    Some("10.100.0.248".to_string()),
+                ),
+                (
+                    "cloudflared-2".to_string(),
+                    "maestro".to_string(),
+                    false,
+                    Some("10.100.0.247".to_string()),
+                ),
+                (
+                    "cloudflared-1".to_string(),
+                    "maestro".to_string(),
+                    true,
+                    Some("10.100.0.248".to_string()),
+                ),
+                (
+                    "cloudflared-2".to_string(),
+                    "maestro".to_string(),
+                    true,
+                    Some("10.100.0.247".to_string()),
+                ),
             ]
         );
     }

@@ -31,6 +31,7 @@ pub struct ReplicaRuntimeIdentity {
     pub deployment_id: String,
     pub replica_index: u32,
     pub assignment_id: String,
+    pub container_ip: std::net::Ipv4Addr,
     pub runtime_suffix: Option<String>,
 }
 
@@ -271,6 +272,7 @@ impl ContainerDeploymentProvider {
                 extra_flags.extend(["-e".to_string(), format!("{key}={}", value.as_str())]);
             }
             if let Some(identity) = identity {
+                extra_flags.extend(["--ip".to_string(), identity.container_ip.to_string()]);
                 for (key, value) in [
                     ("maestro.node-id", identity.node_id.as_str()),
                     ("maestro.service-id", identity.service_id.as_str()),
