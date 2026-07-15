@@ -359,17 +359,17 @@ mod tests {
         }
     }
 
-    fn successful_healthcheck_log(seq: i64) -> LogEntry {
+    fn healthcheck_log(seq: i64, status_code: &str) -> LogEntry {
         let mut entry = service_log(seq, "request".into());
+        let raw = format!(
+            r#"{{"hostname":"app-qXMETj","http":{{"method":"GET","status_code":"{status_code}","url_details":{{"path":"/api/_status/db"}}}},"service":"app","status":"info","duration":"130832638"}}"#
+        );
+        let parsed = crate::supervisor::logs::parse_log_line(&raw);
         entry.tags = Arc::new(serde_json::json!([
             "service:api",
-            crate::logs::healthcheck_path_tag("/health")
+            crate::logs::healthcheck_path_tag("/api/_status/db")
         ]));
-        entry.attrs = vec![
-            ("http.method".into(), "GET".into()),
-            ("http.status_code".into(), "200".into()),
-            ("http.url_details.path".into(), "/health".into()),
-        ];
+        entry.attrs = parsed.attrs;
         entry
     }
 
@@ -420,16 +420,14 @@ mod tests {
             DatadogSink::with_endpoint("test-api-key".into(), endpoint, false, false, true, store);
 
         let outcome = sink
-            .send(&[successful_healthcheck_log(1)])
+            .send(&[healthcheck_log(1, "200")])
             .await
             .expect("successful healthcheck should be filtered");
         assert_eq!(outcome.filtered_entries, 1);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        let mut failed = successful_healthcheck_log(2);
-        failed.attrs[1].1 = "503".into();
         let outcome = sink
-            .send(&[failed])
+            .send(&[healthcheck_log(2, "503")])
             .await
             .expect("failed healthcheck should be sent");
         assert_eq!(outcome.filtered_entries, 0);
