@@ -287,7 +287,7 @@ enum ClusterCommand {
     },
     /// Upgrade system components
     #[command(
-        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade --version 0.3.2\n  maestro cluster upgrade system"
+        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade --version 0.3.3\n  maestro cluster upgrade system"
     )]
     Upgrade {
         #[command(subcommand)]
