@@ -9,7 +9,7 @@ import {
 } from "solid-js";
 import { Search, X } from "lucide-solid";
 import clsx from "clsx";
-import { logQueryPills, removeLogQueryPill } from "./logQueryPills";
+import { logQueryPills, removeLogQueryPill, type LogQueryPill } from "./logQueryPills";
 
 type LogQueryCatalog = {
   fields: string[];
@@ -22,6 +22,7 @@ type QuerySuggestion = {
   insert: string;
   description: string;
   example?: string;
+  complete?: boolean;
 };
 
 type FieldDefinition = {
@@ -67,13 +68,15 @@ const EXAMPLE_SUGGESTIONS: QuerySuggestion[] = [
     id: "example-status",
     label: "@http.status_code:404",
     insert: "@http.status_code:404",
-    description: "Exact HTTP status"
+    description: "Exact HTTP status",
+    complete: true
   },
   {
     id: "example-status-range",
     label: "@http.status_code:[500 TO 599]",
     insert: "@http.status_code:[500 TO 599]",
-    description: "Numeric range"
+    description: "Numeric range",
+    complete: true
   },
   {
     id: "example-level",
@@ -86,13 +89,15 @@ const EXAMPLE_SUGGESTIONS: QuerySuggestion[] = [
     id: "example-message",
     label: 'message:"connection refused"',
     insert: 'message:"connection refused"',
-    description: "Exact phrase"
+    description: "Exact phrase",
+    complete: true
   },
   {
     id: "example-exclude",
     label: '-message:"health check"',
     insert: '-message:"health check"',
-    description: "Exclude matching logs"
+    description: "Exclude matching logs",
+    complete: true
   }
 ];
 
@@ -132,6 +137,318 @@ const OPERATOR_SUGGESTIONS: QuerySuggestion[] = [
 
 const MAX_SUGGESTIONS = 10;
 
+function LogQueryInput(props: {
+  value: string;
+  appliedQuery: string;
+  catalog: LogQueryCatalog;
+  onInput: (value: string) => void;
+  onApply: () => void;
+  onClear: () => void;
+  onAppliedQueryChange: (value: string) => void;
+}) {
+  const [open, setOpen] = createSignal(false);
+  const [cursor, setCursor] = createSignal(0);
+  const [activeIndex, setActiveIndex] = createSignal(-1);
+  const listboxId = `log-query-suggestions-${createUniqueId()}`;
+  let inputRef: HTMLInputElement | undefined;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const appliedPills = createMemo(() => logQueryPills(props.appliedQuery));
+  const appliedRemainder = createMemo(() => logQueryRemainder(props.appliedQuery, appliedPills()));
+  const hasApplied = () => props.appliedQuery.trim().length > 0;
+  const suggestions = createMemo(() =>
+    buildSuggestions(props.value, cursor(), props.catalog, hasApplied())
+  );
+
+  createEffect(() => {
+    if (activeIndex() >= suggestions().length) setActiveIndex(-1);
+  });
+
+  createEffect(() => {
+    const index = activeIndex();
+    if (!open() || index < 0) return;
+    requestAnimationFrame(() => {
+      document.getElementById(`${listboxId}-${index}`)?.scrollIntoView({ block: "nearest" });
+    });
+  });
+
+  onCleanup(() => {
+    if (closeTimer) clearTimeout(closeTimer);
+  });
+
+  const updateCursor = () => setCursor(inputRef?.selectionStart ?? props.value.length);
+
+  const focusInput = (nextCursor: number) => {
+    setCursor(nextCursor);
+    setActiveIndex(-1);
+    setOpen(true);
+    requestAnimationFrame(() => {
+      inputRef?.focus();
+      inputRef?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  const acceptSuggestion = (suggestion: QuerySuggestion) => {
+    const token = tokenAtCursor(props.value, cursor());
+    const next = `${props.value.slice(0, token.start)}${suggestion.insert}${props.value.slice(token.end)}`;
+    props.onInput(next);
+    if (suggestion.complete) {
+      props.onApply();
+      focusInput(0);
+    } else {
+      focusInput(token.start + suggestion.insert.length);
+    }
+  };
+
+  const editFragment = (fragment: string, nextAppliedQuery: string) => {
+    props.onAppliedQueryChange(nextAppliedQuery);
+    const draft = props.value.trim() ? `${fragment} ${props.value}` : fragment;
+    props.onInput(draft);
+    focusInput(fragment.length);
+  };
+
+  const editPill = (pill: LogQueryPill) =>
+    editFragment(pillFilterText(pill), removeLogQueryPill(props.appliedQuery, pill));
+
+  const editRemainder = () =>
+    editFragment(appliedRemainder(), appliedPills().map(pillFilterText).join(" "));
+
+  const popLastToken = () => {
+    if (appliedRemainder()) {
+      editRemainder();
+    } else {
+      const lastPill = appliedPills().at(-1);
+      if (lastPill) editPill(lastPill);
+    }
+  };
+
+  return (
+    <div class="flex-1 min-w-0">
+      <div class="relative">
+        <div
+          onClick={() => inputRef?.focus()}
+          class="flex w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-gray-50 py-1 pl-8 pr-8 transition-colors focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-100"
+        >
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onApply();
+              setOpen(false);
+            }}
+            title="Apply log query"
+            class="absolute left-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-indigo-600 outline-none rounded hover:bg-indigo-50"
+          >
+            <Search class="size-3.5" />
+          </button>
+          <For each={appliedPills()}>
+            {(pill) => (
+              <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-indigo-200 bg-indigo-50 text-[11px]">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    editPill(pill);
+                  }}
+                  title="Edit filter"
+                  class="flex min-w-0 items-stretch outline-none"
+                >
+                  <span class="shrink-0 border-r border-indigo-200 bg-indigo-100/70 px-1.5 py-0.5 font-mono font-medium text-indigo-700">
+                    {pill.prefix}
+                    {pill.field}
+                  </span>
+                  <span
+                    class="min-w-0 truncate px-1.5 py-0.5 font-mono text-gray-700 hover:bg-indigo-100/60"
+                    title={pill.value}
+                  >
+                    {pill.value}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onAppliedQueryChange(removeLogQueryPill(props.appliedQuery, pill));
+                    inputRef?.focus();
+                  }}
+                  aria-label={`Remove filter ${pillFilterText(pill)}`}
+                  title="Remove filter"
+                  class="self-stretch border-l border-indigo-200 px-1 text-indigo-400 outline-none hover:bg-indigo-100 hover:text-indigo-700"
+                >
+                  <X class="size-3" />
+                </button>
+              </span>
+            )}
+          </For>
+          <Show when={appliedRemainder()}>
+            <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-gray-200 bg-gray-100 text-[11px]">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  editRemainder();
+                }}
+                title="Edit query"
+                class="min-w-0 truncate px-1.5 py-0.5 font-mono text-gray-700 outline-none hover:bg-gray-200/70"
+              >
+                {appliedRemainder()}
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onAppliedQueryChange(appliedPills().map(pillFilterText).join(" "));
+                  inputRef?.focus();
+                }}
+                aria-label={`Remove query ${appliedRemainder()}`}
+                title="Remove query"
+                class="self-stretch border-l border-gray-200 px-1 text-gray-400 outline-none hover:bg-gray-200 hover:text-gray-700"
+              >
+                <X class="size-3" />
+              </button>
+            </span>
+          </Show>
+          <input
+            ref={inputRef}
+            type="text"
+            value={props.value}
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-expanded={open() && suggestions().length > 0}
+            aria-controls={listboxId}
+            aria-activedescendant={activeIndex() >= 0 ? `${listboxId}-${activeIndex()}` : undefined}
+            onFocus={() => {
+              if (closeTimer) clearTimeout(closeTimer);
+              updateCursor();
+              setOpen(true);
+              setActiveIndex(-1);
+            }}
+            onBlur={() => {
+              closeTimer = setTimeout(() => setOpen(false), 100);
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              updateCursor();
+            }}
+            onSelect={updateCursor}
+            onInput={(event) => {
+              props.onInput(event.currentTarget.value);
+              setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
+              setOpen(true);
+              setActiveIndex(-1);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setOpen(true);
+                setActiveIndex((index) => Math.min(index + 1, suggestions().length - 1));
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setOpen(true);
+                setActiveIndex((index) => (index <= 0 ? suggestions().length - 1 : index - 1));
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setOpen(false);
+                setActiveIndex(-1);
+                return;
+              }
+              if (event.key === "Backspace" && props.value.length === 0 && hasApplied()) {
+                event.preventDefault();
+                popLastToken();
+                return;
+              }
+              if ((event.key === "Enter" || event.key === "Tab") && activeIndex() >= 0) {
+                event.preventDefault();
+                const suggestion = suggestions()[activeIndex()];
+                if (suggestion) acceptSuggestion(suggestion);
+                return;
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                props.onApply();
+                setOpen(false);
+              }
+            }}
+            placeholder={
+              hasApplied() ? "Add filter…" : "Filter logs… type @ to see available fields"
+            }
+            title="Datadog-style query; press Enter to apply"
+            class="min-w-[140px] flex-1 bg-transparent py-0.5 text-sm outline-none placeholder:text-gray-400"
+          />
+          <Show when={props.value.length > 0 || hasApplied()}>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onClear();
+                setOpen(false);
+                setActiveIndex(-1);
+              }}
+              title="Clear all filters"
+              class="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
+            >
+              <X class="size-3" />
+            </button>
+          </Show>
+        </div>
+        <Show when={open() && suggestions().length > 0}>
+          <div class="absolute z-40 mt-1 w-full overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
+            <ul id={listboxId} role="listbox" class="max-h-72 overflow-y-auto py-1">
+              <For each={suggestions()}>
+                {(suggestion, index) => (
+                  <li
+                    id={`${listboxId}-${index()}`}
+                    role="option"
+                    aria-selected={activeIndex() === index()}
+                  >
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        acceptSuggestion(suggestion);
+                      }}
+                      onMouseEnter={() => setActiveIndex(index())}
+                      class={clsx(
+                        "flex w-full items-center justify-between gap-4 px-3 py-2 text-left outline-none",
+                        activeIndex() === index() ? "bg-indigo-50" : "hover:bg-gray-50"
+                      )}
+                    >
+                      <span class="min-w-0">
+                        <span class="block truncate font-mono text-xs text-gray-800">
+                          {suggestion.label}
+                        </span>
+                        <span class="block truncate text-[11px] text-gray-400">
+                          {suggestion.description}
+                        </span>
+                      </span>
+                      <Show when={suggestion.example}>
+                        <span class="hidden shrink-0 font-mono text-[10px] text-gray-400 lg:block">
+                          {suggestion.example}
+                        </span>
+                      </Show>
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <div class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-3 py-1.5 text-[10px] text-gray-400">
+              <span>Custom attributes use @ · AND, OR, NOT, and - are supported</span>
+              <span class="hidden shrink-0 sm:inline">
+                ↑↓ select · Enter apply · Backspace edit last filter
+              </span>
+            </div>
+          </div>
+        </Show>
+      </div>
+    </div>
+  );
+}
+
 function tokenAtCursor(query: string, cursor: number) {
   let start = Math.min(cursor, query.length);
   while (start > 0 && !/[\s()]/.test(query[start - 1])) start -= 1;
@@ -141,6 +458,21 @@ function tokenAtCursor(query: string, cursor: number) {
 function quoteQueryValue(value: string) {
   if (/^[^\s:()[\]"]+$/.test(value)) return value;
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function pillFilterText(pill: LogQueryPill) {
+  return `${pill.prefix}${pill.field}:${pill.value}`;
+}
+
+function logQueryRemainder(query: string, pills: LogQueryPill[]) {
+  let remainder = "";
+  let sliceStart = 0;
+  for (const pill of pills) {
+    remainder += `${query.slice(sliceStart, Math.max(sliceStart, pill.removeStart))} `;
+    sliceStart = Math.max(sliceStart, pill.removeEnd);
+  }
+  remainder += query.slice(sliceStart);
+  return remainder.replace(/\s+/g, " ").trim();
 }
 
 function fieldSuggestions(prefix: string, negative: string, catalog: LogQueryCatalog) {
@@ -219,16 +551,25 @@ function valueSuggestions(
       id: `value-${negative}${field}-${value}`,
       label: `${negative}${field}:${value}`,
       insert: `${negative}${field}:${value}`,
-      description
+      description,
+      complete: true
     }));
 }
 
-function buildSuggestions(query: string, cursor: number, catalog: LogQueryCatalog) {
+function buildSuggestions(
+  query: string,
+  cursor: number,
+  catalog: LogQueryCatalog,
+  hasApplied: boolean
+) {
   const token = tokenAtCursor(query, cursor);
   const negative = token.text.startsWith("-") ? "-" : "";
   const raw = negative ? token.text.slice(1) : token.text;
 
-  if (!raw && !query.trim()) return EXAMPLE_SUGGESTIONS;
+  if (!raw && !query.trim()) {
+    if (hasApplied) return fieldSuggestions("", negative, catalog);
+    return EXAMPLE_SUGGESTIONS;
+  }
   if (!raw) {
     return [
       ...OPERATOR_SUGGESTIONS,
@@ -244,227 +585,6 @@ function buildSuggestions(query: string, cursor: number, catalog: LogQueryCatalo
     return valueSuggestions(raw.slice(0, colon), raw.slice(colon + 1), negative, catalog);
   }
   return fieldSuggestions(raw, negative, catalog);
-}
-
-function LogQueryInput(props: {
-  value: string;
-  appliedQuery: string;
-  catalog: LogQueryCatalog;
-  onInput: (value: string) => void;
-  onApply: () => void;
-  onClear: () => void;
-  onAppliedQueryChange: (value: string) => void;
-}) {
-  const [open, setOpen] = createSignal(false);
-  const [cursor, setCursor] = createSignal(0);
-  const [activeIndex, setActiveIndex] = createSignal(-1);
-  const listboxId = `log-query-suggestions-${createUniqueId()}`;
-  let inputRef: HTMLInputElement | undefined;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const suggestions = createMemo(() => buildSuggestions(props.value, cursor(), props.catalog));
-  const appliedPills = createMemo(() => logQueryPills(props.appliedQuery));
-
-  createEffect(() => {
-    if (activeIndex() >= suggestions().length) setActiveIndex(-1);
-  });
-
-  createEffect(() => {
-    const index = activeIndex();
-    if (!open() || index < 0) return;
-    requestAnimationFrame(() => {
-      document.getElementById(`${listboxId}-${index}`)?.scrollIntoView({ block: "nearest" });
-    });
-  });
-
-  onCleanup(() => {
-    if (closeTimer) clearTimeout(closeTimer);
-  });
-
-  const updateCursor = () => setCursor(inputRef?.selectionStart ?? props.value.length);
-
-  const acceptSuggestion = (suggestion: QuerySuggestion) => {
-    const token = tokenAtCursor(props.value, cursor());
-    const next = `${props.value.slice(0, token.start)}${suggestion.insert}${props.value.slice(token.end)}`;
-    const nextCursor = token.start + suggestion.insert.length;
-    props.onInput(next);
-    setCursor(nextCursor);
-    setActiveIndex(-1);
-    setOpen(true);
-    requestAnimationFrame(() => {
-      inputRef?.focus();
-      inputRef?.setSelectionRange(nextCursor, nextCursor);
-    });
-  };
-
-  return (
-    <div class="flex-1 min-w-0">
-      <div class="relative">
-        <button
-          type="button"
-          onClick={() => {
-            props.onApply();
-            setOpen(false);
-          }}
-          title="Apply log query"
-          class="absolute left-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-indigo-600 outline-none rounded hover:bg-indigo-50"
-        >
-          <Search class="size-3.5" />
-        </button>
-        <input
-          ref={inputRef}
-          type="text"
-          value={props.value}
-          role="combobox"
-          aria-haspopup="listbox"
-          aria-autocomplete="list"
-          aria-expanded={open() && suggestions().length > 0}
-          aria-controls={listboxId}
-          aria-activedescendant={activeIndex() >= 0 ? `${listboxId}-${activeIndex()}` : undefined}
-          onFocus={() => {
-            if (closeTimer) clearTimeout(closeTimer);
-            updateCursor();
-            setOpen(true);
-            setActiveIndex(-1);
-          }}
-          onBlur={() => {
-            closeTimer = setTimeout(() => setOpen(false), 100);
-          }}
-          onClick={updateCursor}
-          onSelect={updateCursor}
-          onInput={(event) => {
-            props.onInput(event.currentTarget.value);
-            setCursor(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
-            setOpen(true);
-            setActiveIndex(-1);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setOpen(true);
-              setActiveIndex((index) => Math.min(index + 1, suggestions().length - 1));
-              return;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setOpen(true);
-              setActiveIndex((index) => (index <= 0 ? suggestions().length - 1 : index - 1));
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setOpen(false);
-              setActiveIndex(-1);
-              return;
-            }
-            if ((event.key === "Enter" || event.key === "Tab") && activeIndex() >= 0) {
-              event.preventDefault();
-              const suggestion = suggestions()[activeIndex()];
-              if (suggestion) acceptSuggestion(suggestion);
-              return;
-            }
-            if (event.key === "Enter") {
-              event.preventDefault();
-              props.onApply();
-              setOpen(false);
-            }
-          }}
-          placeholder="Filter logs… type @ to see available fields"
-          title="Datadog-style query; press Enter to apply"
-          class="w-full text-sm pl-8 pr-8 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-colors placeholder:text-gray-400"
-        />
-        <Show when={props.value.length > 0}>
-          <button
-            type="button"
-            onClick={() => {
-              props.onClear();
-              setOpen(false);
-              setActiveIndex(-1);
-            }}
-            title="Clear"
-            class="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-gray-600 outline-none rounded hover:bg-gray-100"
-          >
-            <X class="size-3" />
-          </button>
-        </Show>
-        <Show when={open() && suggestions().length > 0}>
-          <div class="absolute z-40 mt-1 w-full overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
-            <ul id={listboxId} role="listbox" class="max-h-72 overflow-y-auto py-1">
-              <For each={suggestions()}>
-                {(suggestion, index) => (
-                  <li
-                    id={`${listboxId}-${index()}`}
-                    role="option"
-                    aria-selected={activeIndex() === index()}
-                  >
-                    <button
-                      type="button"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onMouseEnter={() => setActiveIndex(index())}
-                      onClick={() => acceptSuggestion(suggestion)}
-                      class={clsx(
-                        "flex w-full items-center justify-between gap-4 px-3 py-2 text-left outline-none",
-                        activeIndex() === index() ? "bg-indigo-50" : "hover:bg-gray-50"
-                      )}
-                    >
-                      <span class="min-w-0">
-                        <span class="block truncate font-mono text-xs text-gray-800">
-                          {suggestion.label}
-                        </span>
-                        <span class="block truncate text-[11px] text-gray-400">
-                          {suggestion.description}
-                        </span>
-                      </span>
-                      <Show when={suggestion.example}>
-                        <span class="hidden shrink-0 font-mono text-[10px] text-gray-400 lg:block">
-                          {suggestion.example}
-                        </span>
-                      </Show>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-            <div class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-3 py-1.5 text-[10px] text-gray-400">
-              <span>Custom attributes use @ · AND, OR, NOT, and - are supported</span>
-              <span class="hidden shrink-0 sm:inline">↑↓ select · Enter insert · Esc close</span>
-            </div>
-          </div>
-        </Show>
-      </div>
-      <Show when={appliedPills().length > 0}>
-        <div class="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Applied log filters">
-          <span class="mr-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-400">
-            Applied
-          </span>
-          <For each={appliedPills()}>
-            {(pill) => (
-              <span class="inline-flex max-w-full items-center overflow-hidden rounded-md border border-indigo-200 bg-indigo-50 text-[11px] shadow-sm">
-                <span class="shrink-0 border-r border-indigo-200 bg-indigo-100/70 px-2 py-1 font-mono font-medium text-indigo-700">
-                  {pill.prefix}
-                  {pill.field}
-                </span>
-                <span class="min-w-0 truncate px-2 py-1 font-mono text-gray-700" title={pill.value}>
-                  {pill.value}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    props.onAppliedQueryChange(removeLogQueryPill(props.appliedQuery, pill))
-                  }
-                  aria-label={`Remove filter ${pill.prefix}${pill.field}:${pill.value}`}
-                  title="Remove filter"
-                  class="self-stretch border-l border-indigo-200 px-1.5 text-indigo-400 outline-none hover:bg-indigo-100 hover:text-indigo-700"
-                >
-                  <X class="size-3" />
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-      </Show>
-    </div>
-  );
 }
 
 export { LogQueryInput };

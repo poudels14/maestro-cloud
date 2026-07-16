@@ -7,13 +7,12 @@ import { HydrationScript } from "solid-js/web";
 import { queryClient } from "../lib/queryClient";
 import { clusterInfoQuery, unschedulableQuery } from "../lib/queries";
 import { ClientOnly } from "../components/ClientOnly";
-import appCss from "../app.css?url";
+import "../app.css";
 
 export const Route = createRootRoute({
   ssr: true,
   head: () => ({
     links: [
-      { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       {
         rel: "preconnect",

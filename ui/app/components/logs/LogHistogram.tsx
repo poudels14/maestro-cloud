@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, onCleanup, onMount } from "solid-js";
 import * as d3 from "d3";
 import type { LogHistogramBucket } from "../../lib/api";
 
@@ -258,40 +258,9 @@ function LogHistogramChart(props: {
     render();
   });
 
-  const observedLevels = createMemo(() => {
-    const totals = new Map<string, number>();
-    for (const bucket of props.data) {
-      for (const [level, count] of bucketLevels(bucket)) {
-        totals.set(level, (totals.get(level) ?? 0) + count);
-      }
-    }
-    return Array.from(totals, ([level, count]) => ({ level, count })).sort((left, right) => {
-      const rank = levelRank(left.level) - levelRank(right.level);
-      return rank || left.level.localeCompare(right.level);
-    });
-  });
-
   return (
     <div ref={containerRef} class="w-full">
       <svg ref={svgRef} class="block w-full" />
-      <Show when={observedLevels().length > 0}>
-        <div class="flex flex-wrap justify-end gap-x-3 gap-y-1 px-3 pb-1 text-[10px] text-gray-500">
-          <For each={observedLevels()}>
-            {(item) => (
-              <span
-                class="inline-flex items-center gap-1"
-                title={`${item.count.toLocaleString()} logs`}
-              >
-                <span
-                  class="size-2 rounded-sm"
-                  style={{ "background-color": levelColor(item.level) }}
-                />
-                {item.level}
-              </span>
-            )}
-          </For>
-        </div>
-      </Show>
     </div>
   );
 }

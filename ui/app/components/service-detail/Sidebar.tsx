@@ -35,7 +35,7 @@ function ServiceSidebar(props: {
           }
         )}
       >
-        <div class="px-4 h-14 flex items-center justify-between gap-2 shrink-0 border-b border-gray-200">
+        <div class="h-10 px-4 flex items-center justify-between gap-2 shrink-0 border-b border-gray-200">
           <button
             type="button"
             onClick={props.onBack}

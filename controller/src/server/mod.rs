@@ -1616,7 +1616,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
         };
-        let (from, to) = metrics_time_range(&query.range);
+        let (from, to) = metrics_time_range(query.from, query.to);
         if from > to {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1638,7 +1638,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
         };
-        let (from, to) = metrics_time_range(&query.range);
+        let (from, to) = metrics_time_range(query.from, query.to);
         if from > to {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -2286,7 +2286,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query.range);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let entries = log_store
             .read_stats_metrics(query.name.as_deref(), from, to)
             .await
@@ -2301,7 +2301,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let entries = log_store
             .read_metrics("node", from, to)
             .await
@@ -2316,7 +2316,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let entries = log_store
             .read_metrics("cluster", from, to)
             .await
@@ -2346,7 +2346,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let source = format!("service:{service_id}");
         let entries = log_store
             .read_metrics(&source, from, to)
@@ -2366,7 +2366,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let entries = log_store
             .read_traffic_metrics(service_id, from, to)
             .await
@@ -2385,7 +2385,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(crate::logs::IngressTrafficBreakdown::default()));
         };
-        let (from, to) = metrics_time_range(&query.range);
+        let (from, to) = metrics_time_range(query.from, query.to);
         if from > to {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -2411,7 +2411,7 @@ impl Server {
         let Some(log_store) = &state.log_store else {
             return Ok(Json(Vec::new()));
         };
-        let (from, to) = metrics_time_range(&query);
+        let (from, to) = metrics_time_range(query.from, query.to);
         let prefix = format!("container:{service_id}-");
         let entries = log_store
             .read_metrics_by_prefix(&prefix, from, to)
@@ -2860,24 +2860,24 @@ struct MetricsQuery {
 #[derive(serde::Deserialize)]
 struct StatsMetricsQuery {
     name: Option<String>,
-    #[serde(flatten)]
-    range: MetricsQuery,
+    from: Option<i64>,
+    to: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
 struct TrafficBreakdownQuery {
-    #[serde(flatten)]
-    range: MetricsQuery,
+    from: Option<i64>,
+    to: Option<i64>,
     limit: Option<usize>,
 }
 
-fn metrics_time_range(query: &MetricsQuery) -> (i64, i64) {
+fn metrics_time_range(from: Option<i64>, to: Option<i64>) -> (i64, i64) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64;
-    let from = query.from.unwrap_or(now - 3_600_000);
-    let to = query.to.unwrap_or(now);
+    let from = from.unwrap_or(now - 3_600_000);
+    let to = to.unwrap_or(now);
     (from, to)
 }
 

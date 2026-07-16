@@ -84,7 +84,12 @@ function DeploymentSheet(props: {
                       />
                     </div>
                   </div>
-                  <div class="flex-1 overflow-y-auto">
+                  <div
+                    class={clsx("flex-1 min-h-0", {
+                      "overflow-y-auto": props.tab === "details",
+                      "overflow-hidden": props.tab !== "details"
+                    })}
+                  >
                     <Switch>
                       <Match when={props.tab === "logs"}>
                         <LogViewer
@@ -94,6 +99,7 @@ function DeploymentSheet(props: {
                           hasBuild={props.hasBuild}
                           phase="deploy"
                           embedded={true}
+                          fillHeight
                         />
                       </Match>
                       <Match when={props.tab === "build"}>
@@ -104,6 +110,7 @@ function DeploymentSheet(props: {
                           hasBuild={props.hasBuild}
                           phase="build"
                           embedded={true}
+                          fillHeight
                         />
                       </Match>
                       <Match when={props.tab === "details"}>

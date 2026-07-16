@@ -18,6 +18,10 @@ const VALID_TABS = new Set(["overview", "deployments", "metrics", "traffic", "lo
 type DetailTab = "overview" | "deployments" | "metrics" | "traffic" | "logs";
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
+  validateSearch: (search: Record<string, unknown>): { query?: string; range?: string } => ({
+    ...(typeof search.query === "string" && search.query ? { query: search.query } : {}),
+    ...(typeof search.range === "string" && search.range ? { range: search.range } : {})
+  }),
   component: ServiceDetailPage
 });
 
@@ -122,7 +126,7 @@ function ServiceDetailPanel(props: {
           </button>
           <span class="text-sm font-semibold text-gray-900 truncate">{props.service.name}</span>
         </div>
-        <div class="px-3 sm:px-6 pt-3 sm:pt-5 overflow-x-auto">
+        <div class="px-3 sm:px-6 pt-1.5 sm:pt-2.5 overflow-x-auto">
           <div
             class={clsx(
               "mx-auto flex justify-start sm:justify-center gap-4 -mb-px whitespace-nowrap",
@@ -161,8 +165,17 @@ function ServiceDetailPanel(props: {
           </div>
         </div>
       </div>
-      <div class="flex-1 overflow-y-auto py-4 sm:py-5 bg-[#fafafa]">
-        <div class={clsx("mx-auto px-3 sm:px-6", contentMaxWidth())}>
+      <div
+        class={clsx("flex-1 py-3 sm:py-4 bg-[#fafafa]", {
+          "min-h-0 overflow-hidden": props.tab === "logs",
+          "overflow-y-auto": props.tab !== "logs"
+        })}
+      >
+        <div
+          class={clsx("mx-auto px-3 sm:px-6", contentMaxWidth(), {
+            "h-full min-h-0": props.tab === "logs"
+          })}
+        >
           <Show when={props.tab === "overview"}>
             <OverviewTab service={props.service} />
           </Show>

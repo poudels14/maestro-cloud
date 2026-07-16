@@ -1,17 +1,30 @@
 import { Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
+import { getRouteApi, useNavigate } from "@tanstack/solid-router";
 import type { Service } from "../../lib/types";
 import { deploymentsQuery } from "../../lib/queries";
 import { LogViewer } from "../logs/LogViewer";
 
+const routeApi = getRouteApi("/services/$serviceId/$tab");
+
 function LogsTab(props: { service: Service }) {
   const isSystem = () => props.service.system === true;
+  const search = routeApi.useSearch();
+  const navigate = useNavigate();
 
   const deployments = useQuery(() => ({
     ...deploymentsQuery(props.service.id),
     enabled: !isSystem()
   }));
   const hasAnyDeployment = () => (deployments.data?.length ?? 0) > 0;
+
+  const setUrlSearch = (updates: { query?: string; range?: string }) =>
+    navigate({
+      to: "/services/$serviceId/$tab",
+      params: { serviceId: props.service.id, tab: "logs" },
+      search: { ...search(), ...updates },
+      replace: true
+    });
 
   return (
     <Show
@@ -29,6 +42,11 @@ function LogsTab(props: { service: Service }) {
         hasBuild={!!props.service.build}
         phase="deploy"
         showHistogram
+        fillHeight
+        query={search().query ?? ""}
+        onQueryChange={(value) => setUrlSearch({ query: value || undefined })}
+        range={search().range}
+        onRangeChange={(value) => setUrlSearch({ range: value === "1h" ? undefined : value })}
       />
     </Show>
   );

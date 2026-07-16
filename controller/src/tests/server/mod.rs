@@ -287,6 +287,45 @@ fn upgrade_rejects_a_malformed_semantic_version() {
 }
 
 #[test]
+fn ingress_traffic_queries_parse_millisecond_ranges() {
+    for (path, expected_from, expected_to) in [
+        (
+            "/api/ingress/traffic?from=1784160569791&to=1784164169791&limit=200",
+            1_784_160_569_791,
+            1_784_164_169_791,
+        ),
+        (
+            "/api/ingress/blocked-traffic?from=1784160569825&to=1784164169825&limit=200",
+            1_784_160_569_825,
+            1_784_164_169_825,
+        ),
+    ] {
+        let uri = path.parse::<axum::http::Uri>().expect("traffic URI");
+        let query = axum::extract::Query::<TrafficBreakdownQuery>::try_from_uri(&uri)
+            .expect("deserialize traffic query")
+            .0;
+
+        assert_eq!(query.from, Some(expected_from));
+        assert_eq!(query.to, Some(expected_to));
+        assert_eq!(query.limit, Some(200));
+    }
+}
+
+#[test]
+fn stats_metric_queries_parse_millisecond_ranges() {
+    let uri = "/api/metrics/stats?name=requests&from=1784160569791&to=1784164169791"
+        .parse::<axum::http::Uri>()
+        .expect("stats URI");
+    let query = axum::extract::Query::<StatsMetricsQuery>::try_from_uri(&uri)
+        .expect("deserialize stats query")
+        .0;
+
+    assert_eq!(query.name.as_deref(), Some("requests"));
+    assert_eq!(query.from, Some(1_784_160_569_791));
+    assert_eq!(query.to, Some(1_784_164_169_791));
+}
+
+#[test]
 fn hs256_service_tokens_use_an_installed_crypto_provider() {
     let secret = "service-jwt-test-secret";
     let claims = serde_json::json!({
