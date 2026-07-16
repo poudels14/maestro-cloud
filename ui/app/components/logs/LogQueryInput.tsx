@@ -16,88 +16,53 @@ type LogQueryCatalog = {
   values: ReadonlyMap<string, readonly string[]>;
 };
 
+type SuggestionKind = "operator" | "field" | "value";
+
 type QuerySuggestion = {
   id: string;
+  kind: SuggestionKind;
   label: string;
   insert: string;
-  description: string;
+  description?: string;
   example?: string;
   complete?: boolean;
 };
 
+const SUGGESTION_GROUP_LABELS: Record<SuggestionKind, string> = {
+  operator: "Operators",
+  field: "Fields",
+  value: "Values"
+};
+
 type FieldDefinition = {
   field: string;
-  description: string;
   example: string;
 };
 
 const FIELD_DEFINITIONS: FieldDefinition[] = [
-  { field: "level", description: "Log severity", example: "level:error" },
-  { field: "message", description: "Log message text", example: 'message:"connection refused"' },
-  { field: "service", description: "Service or service source prefix", example: "service:app" },
+  { field: "level", example: "level:error" },
+  { field: "message", example: 'message:"connection refused"' },
+  { field: "service", example: "service:app" },
   {
     field: "source",
-    description: "Exact log source; wildcards are supported",
     example: "source:app/*"
   },
-  { field: "status", description: "Alias for log severity", example: "status:error" },
+  { field: "status", example: "status:error" },
   {
     field: "@http.status_code",
-    description: "Canonical HTTP response status",
     example: "@http.status_code:404"
   },
   {
     field: "@http.method",
-    description: "Structured HTTP method attribute",
     example: "@http.method:GET"
   },
   {
     field: "@http.url_details.path",
-    description: "Structured HTTP request path",
     example: "@http.url_details.path:/api/*"
   },
   {
     field: "@maestro.client_ip",
-    description: "Normalized ingress client address",
     example: "@maestro.client_ip:203.0.113.10"
-  }
-];
-
-const EXAMPLE_SUGGESTIONS: QuerySuggestion[] = [
-  {
-    id: "example-status",
-    label: "@http.status_code:404",
-    insert: "@http.status_code:404",
-    description: "Exact HTTP status",
-    complete: true
-  },
-  {
-    id: "example-status-range",
-    label: "@http.status_code:[500 TO 599]",
-    insert: "@http.status_code:[500 TO 599]",
-    description: "Numeric range",
-    complete: true
-  },
-  {
-    id: "example-level",
-    label: "level:",
-    insert: "level:",
-    description: "Filter by log severity",
-    example: "error · warn · info · debug · trace"
-  },
-  {
-    id: "example-message",
-    label: 'message:"connection refused"',
-    insert: 'message:"connection refused"',
-    description: "Exact phrase",
-    complete: true
-  },
-  {
-    id: "example-exclude",
-    label: '-message:"health check"',
-    insert: '-message:"health check"',
-    description: "Exclude matching logs",
-    complete: true
   }
 ];
 
@@ -129,10 +94,34 @@ const STATIC_VALUES: Record<string, { value: string; description: string }[]> = 
 };
 
 const OPERATOR_SUGGESTIONS: QuerySuggestion[] = [
-  { id: "operator-and", label: "AND", insert: "AND ", description: "Require both expressions" },
-  { id: "operator-or", label: "OR", insert: "OR ", description: "Match either expression" },
-  { id: "operator-not", label: "NOT", insert: "NOT ", description: "Exclude the next expression" },
-  { id: "operator-minus", label: "-", insert: "-", description: "Short form exclusion" }
+  {
+    id: "operator-and",
+    kind: "operator",
+    label: "AND",
+    insert: "AND ",
+    description: "Require both expressions"
+  },
+  {
+    id: "operator-or",
+    kind: "operator",
+    label: "OR",
+    insert: "OR ",
+    description: "Match either expression"
+  },
+  {
+    id: "operator-not",
+    kind: "operator",
+    label: "NOT",
+    insert: "NOT ",
+    description: "Exclude the next expression"
+  },
+  {
+    id: "operator-minus",
+    kind: "operator",
+    label: "-",
+    insert: "-",
+    description: "Short form exclusion"
+  }
 ];
 
 const MAX_SUGGESTIONS = 10;
@@ -153,12 +142,43 @@ function LogQueryInput(props: {
   let inputRef: HTMLInputElement | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
+  const focusShortcut = (event: KeyboardEvent) => {
+    if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    inputRef?.focus();
+  };
+  document.addEventListener("keydown", focusShortcut);
+  onCleanup(() => document.removeEventListener("keydown", focusShortcut));
+
   const appliedPills = createMemo(() => logQueryPills(props.appliedQuery));
   const appliedRemainder = createMemo(() => logQueryRemainder(props.appliedQuery, appliedPills()));
   const hasApplied = () => props.appliedQuery.trim().length > 0;
-  const suggestions = createMemo(() =>
-    buildSuggestions(props.value, cursor(), props.catalog, hasApplied())
-  );
+  const suggestions = createMemo(() => buildSuggestions(props.value, cursor(), props.catalog));
+  const currentToken = createMemo(() => {
+    const token = tokenAtCursor(props.value, cursor()).text;
+    return token.startsWith("-") ? token.slice(1) : token;
+  });
+  const suggestionGroups = createMemo(() => {
+    const groups: { label: string; items: { suggestion: QuerySuggestion; flatIndex: number }[] }[] =
+      [];
+    suggestions().forEach((suggestion, flatIndex) => {
+      const label = SUGGESTION_GROUP_LABELS[suggestion.kind];
+      const lastGroup = groups.at(-1);
+      if (lastGroup && lastGroup.label === label) {
+        lastGroup.items.push({ suggestion, flatIndex });
+      } else {
+        groups.push({ label, items: [{ suggestion, flatIndex }] });
+      }
+    });
+    return groups;
+  });
 
   createEffect(() => {
     if (activeIndex() >= suggestions().length) setActiveIndex(-1);
@@ -227,7 +247,7 @@ function LogQueryInput(props: {
       <div class="relative">
         <div
           onClick={() => inputRef?.focus()}
-          class="flex w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-gray-50 py-1 pl-8 pr-8 transition-colors focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-100"
+          class="flex w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-gray-50 py-1 pl-8 pr-8 transition-colors focus-within:border-indigo-300 focus-within:bg-white"
         >
           <button
             type="button"
@@ -243,7 +263,7 @@ function LogQueryInput(props: {
           </button>
           <For each={appliedPills()}>
             {(pill) => (
-              <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-indigo-200 bg-indigo-50 text-[11px]">
+              <span class="inline-flex max-w-full items-center overflow-hidden rounded-md border border-gray-200 bg-gray-100 font-mono text-[11px]">
                 <button
                   type="button"
                   onClick={(event) => {
@@ -251,16 +271,13 @@ function LogQueryInput(props: {
                     editPill(pill);
                   }}
                   title="Edit filter"
-                  class="flex min-w-0 items-stretch outline-none"
+                  class="flex min-w-0 items-baseline py-0.5 pl-2 pr-1 outline-none transition-colors hover:bg-gray-200/70"
                 >
-                  <span class="shrink-0 border-r border-indigo-200 bg-indigo-100/70 px-1.5 py-0.5 font-mono font-medium text-indigo-700">
+                  <span class="shrink-0 font-medium text-gray-700">
                     {pill.prefix}
-                    {pill.field}
+                    {pill.field}:
                   </span>
-                  <span
-                    class="min-w-0 truncate px-1.5 py-0.5 font-mono text-gray-700 hover:bg-indigo-100/60"
-                    title={pill.value}
-                  >
+                  <span class="min-w-0 truncate text-gray-600" title={pill.value}>
                     {pill.value}
                   </span>
                 </button>
@@ -273,7 +290,7 @@ function LogQueryInput(props: {
                   }}
                   aria-label={`Remove filter ${pillFilterText(pill)}`}
                   title="Remove filter"
-                  class="self-stretch border-l border-indigo-200 px-1 text-indigo-400 outline-none hover:bg-indigo-100 hover:text-indigo-700"
+                  class="self-stretch pl-0.5 pr-1.5 text-gray-400 outline-none transition-colors hover:bg-gray-200 hover:text-gray-700"
                 >
                   <X class="size-3" />
                 </button>
@@ -281,7 +298,7 @@ function LogQueryInput(props: {
             )}
           </For>
           <Show when={appliedRemainder()}>
-            <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-gray-200 bg-gray-100 text-[11px]">
+            <span class="inline-flex max-w-full items-center overflow-hidden rounded-md border border-gray-200 bg-gray-100 font-mono text-[11px]">
               <button
                 type="button"
                 onClick={(event) => {
@@ -289,7 +306,7 @@ function LogQueryInput(props: {
                   editRemainder();
                 }}
                 title="Edit query"
-                class="min-w-0 truncate px-1.5 py-0.5 font-mono text-gray-700 outline-none hover:bg-gray-200/70"
+                class="min-w-0 truncate py-0.5 pl-2 pr-1 text-gray-700 outline-none transition-colors hover:bg-gray-200/70"
               >
                 {appliedRemainder()}
               </button>
@@ -302,7 +319,7 @@ function LogQueryInput(props: {
                 }}
                 aria-label={`Remove query ${appliedRemainder()}`}
                 title="Remove query"
-                class="self-stretch border-l border-gray-200 px-1 text-gray-400 outline-none hover:bg-gray-200 hover:text-gray-700"
+                class="self-stretch pl-0.5 pr-1.5 text-gray-400 outline-none transition-colors hover:bg-gray-200 hover:text-gray-700"
               >
                 <X class="size-3" />
               </button>
@@ -398,46 +415,68 @@ function LogQueryInput(props: {
         </div>
         <Show when={open() && suggestions().length > 0}>
           <div class="absolute z-40 mt-1 w-full overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
-            <ul id={listboxId} role="listbox" class="max-h-72 overflow-y-auto py-1">
-              <For each={suggestions()}>
-                {(suggestion, index) => (
-                  <li
-                    id={`${listboxId}-${index()}`}
-                    role="option"
-                    aria-selected={activeIndex() === index()}
-                  >
-                    <button
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        acceptSuggestion(suggestion);
-                      }}
-                      onMouseEnter={() => setActiveIndex(index())}
-                      class={clsx(
-                        "flex w-full items-center justify-between gap-4 px-3 py-2 text-left outline-none",
-                        activeIndex() === index() ? "bg-indigo-50" : "hover:bg-gray-50"
-                      )}
+            <ul id={listboxId} role="listbox" class="max-h-72 overflow-y-auto pb-1">
+              <For each={suggestionGroups()}>
+                {(group) => (
+                  <>
+                    <li
+                      role="presentation"
+                      class="select-none border-b border-gray-100 bg-gray-50/70 px-3 py-1 text-[10px] font-medium text-gray-400"
                     >
-                      <span class="min-w-0">
-                        <span class="block truncate font-mono text-xs text-gray-800">
-                          {suggestion.label}
-                        </span>
-                        <span class="block truncate text-[11px] text-gray-400">
-                          {suggestion.description}
-                        </span>
-                      </span>
-                      <Show when={suggestion.example}>
-                        <span class="hidden shrink-0 font-mono text-[10px] text-gray-400 lg:block">
-                          {suggestion.example}
-                        </span>
-                      </Show>
-                    </button>
-                  </li>
+                      {group.label}
+                    </li>
+                    <For each={group.items}>
+                      {(item) => (
+                        <li
+                          id={`${listboxId}-${item.flatIndex}`}
+                          role="option"
+                          aria-selected={activeIndex() === item.flatIndex}
+                        >
+                          <button
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              acceptSuggestion(item.suggestion);
+                            }}
+                            onMouseEnter={() => setActiveIndex(item.flatIndex)}
+                            class={clsx(
+                              "flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left outline-none",
+                              activeIndex() === item.flatIndex ? "bg-indigo-50" : "hover:bg-gray-50"
+                            )}
+                          >
+                            <span class="min-w-0">
+                              <span class="block truncate font-mono text-xs text-gray-800">
+                                <HighlightedLabel
+                                  label={item.suggestion.label}
+                                  match={currentToken()}
+                                />
+                              </span>
+                              <Show when={item.suggestion.description}>
+                                <span class="block truncate text-[11px] text-gray-400">
+                                  {item.suggestion.description}
+                                </span>
+                              </Show>
+                            </span>
+                            <Show when={item.suggestion.example}>
+                              <span class="hidden shrink-0 font-mono text-[10px] text-gray-400 lg:block">
+                                {item.suggestion.example}
+                              </span>
+                            </Show>
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </>
                 )}
               </For>
             </ul>
-            <div class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-3 py-1.5 text-[10px] text-gray-400">
-              <span>Custom attributes use @ · AND, OR, NOT, and - are supported</span>
+            <div class="flex items-center justify-between gap-4 border-t border-gray-100 bg-gray-50 px-3 py-1.5 text-[10px] text-gray-400">
+              <span class="min-w-0 truncate">
+                AND, OR, NOT and - are supported · e.g.{" "}
+                <span class="font-mono text-gray-500">
+                  level:error -message:"health check" @http.status_code:[500 TO 599]
+                </span>
+              </span>
               <span class="hidden shrink-0 sm:inline">
                 ↑↓ select · Enter apply · Backspace edit last filter
               </span>
@@ -446,6 +485,29 @@ function LogQueryInput(props: {
         </Show>
       </div>
     </div>
+  );
+}
+
+function HighlightedLabel(props: { label: string; match: string }) {
+  const matchRange = () => {
+    const needle = props.match.trim().toLowerCase();
+    if (!needle) return null;
+    const index = props.label.toLowerCase().indexOf(needle);
+    return index >= 0 ? { start: index, end: index + needle.length } : null;
+  };
+
+  return (
+    <Show when={matchRange()} fallback={<>{props.label}</>}>
+      {(range) => (
+        <>
+          {props.label.slice(0, range().start)}
+          <span class="rounded-sm bg-indigo-100/70 text-indigo-700">
+            {props.label.slice(range().start, range().end)}
+          </span>
+          {props.label.slice(range().end)}
+        </>
+      )}
+    </Show>
   );
 }
 
@@ -487,7 +549,6 @@ function fieldSuggestions(prefix: string, negative: string, catalog: LogQueryCat
       const firstValue = catalog.values.get(field)?.[0];
       definitions.set(field, {
         field,
-        description: "Observed log attribute",
         example: firstValue ? `${field}:${quoteQueryValue(firstValue)}` : `${field}:*`
       });
     }
@@ -512,9 +573,9 @@ function fieldSuggestions(prefix: string, negative: string, catalog: LogQueryCat
     .slice(0, MAX_SUGGESTIONS)
     .map<QuerySuggestion>((definition) => ({
       id: `field-${negative}${definition.field}`,
+      kind: "field",
       label: `${negative}${definition.field}:`,
       insert: `${negative}${definition.field}:`,
-      description: definition.description,
       example: definition.example
     }));
 }
@@ -549,6 +610,7 @@ function valueSuggestions(
     .slice(0, MAX_SUGGESTIONS)
     .map<QuerySuggestion>(([value, description]) => ({
       id: `value-${negative}${field}-${value}`,
+      kind: "value",
       label: `${negative}${field}:${value}`,
       insert: `${negative}${field}:${value}`,
       description,
@@ -556,19 +618,13 @@ function valueSuggestions(
     }));
 }
 
-function buildSuggestions(
-  query: string,
-  cursor: number,
-  catalog: LogQueryCatalog,
-  hasApplied: boolean
-) {
+function buildSuggestions(query: string, cursor: number, catalog: LogQueryCatalog) {
   const token = tokenAtCursor(query, cursor);
   const negative = token.text.startsWith("-") ? "-" : "";
   const raw = negative ? token.text.slice(1) : token.text;
 
   if (!raw && !query.trim()) {
-    if (hasApplied) return fieldSuggestions("", negative, catalog);
-    return EXAMPLE_SUGGESTIONS;
+    return fieldSuggestions("", negative, catalog);
   }
   if (!raw) {
     return [

@@ -583,6 +583,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             to: Some(to),
             phase: None,
             query: Some("level:error".into()),
+            bucket_ms: None,
         },
     )
     .expect("one hour");
@@ -597,6 +598,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             to: Some(to),
             phase: None,
             query: None,
+            bucket_ms: None,
         },
     )
     .expect("six hours");
@@ -610,10 +612,39 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             to: Some(to),
             phase: None,
             query: None,
+            bucket_ms: None,
         },
     )
     .expect("seven days");
-    assert_eq!(seven_days.bucket_ms, THIRTY_MINUTES_MS);
+    assert_eq!(seven_days.bucket_ms, TWO_HOURS_MS);
+
+    let one_day = build_log_histogram_query(
+        LogReadScope::Prefix("api/".into()),
+        None,
+        &LogHistogramHttpQuery {
+            from: Some(to - 24 * DEFAULT_LOG_RANGE_MS),
+            to: Some(to),
+            phase: None,
+            query: None,
+            bucket_ms: None,
+        },
+    )
+    .expect("one day");
+    assert_eq!(one_day.bucket_ms, TEN_MINUTES_MS);
+
+    let client_bucket = build_log_histogram_query(
+        LogReadScope::Prefix("api/".into()),
+        None,
+        &LogHistogramHttpQuery {
+            from: Some(to - MAX_LOG_RANGE_MS),
+            to: Some(to),
+            phase: None,
+            query: None,
+            bucket_ms: Some(1),
+        },
+    )
+    .expect("client bucket");
+    assert_eq!(client_bucket.bucket_ms, MAX_LOG_RANGE_MS / 1_000);
 
     let first_bucket = one_hour.from - one_hour.from.rem_euclid(one_hour.bucket_ms);
     let complete = complete_log_histogram(
@@ -638,6 +669,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
         to: Some(to),
         phase: None,
         query: None,
+        bucket_ms: None,
     };
     assert!(
         build_log_histogram_query(LogReadScope::Prefix("api/".into()), None, &too_wide).is_err()

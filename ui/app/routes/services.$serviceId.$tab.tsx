@@ -18,9 +18,22 @@ const VALID_TABS = new Set(["overview", "deployments", "metrics", "traffic", "lo
 type DetailTab = "overview" | "deployments" | "metrics" | "traffic" | "logs";
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
-  validateSearch: (search: Record<string, unknown>): { query?: string; range?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>
+  ): {
+    query?: string;
+    range?: string;
+    deployment?: string;
+    tab?: "logs" | "build" | "details";
+  } => ({
     ...(typeof search.query === "string" && search.query ? { query: search.query } : {}),
-    ...(typeof search.range === "string" && search.range ? { range: search.range } : {})
+    ...(typeof search.range === "string" && search.range ? { range: search.range } : {}),
+    ...(typeof search.deployment === "string" && search.deployment
+      ? { deployment: search.deployment }
+      : {}),
+    ...(search.tab === "logs" || search.tab === "build" || search.tab === "details"
+      ? { tab: search.tab }
+      : {})
   }),
   component: ServiceDetailPage
 });

@@ -53,9 +53,9 @@ function ReplicasEditor(props: { service: Service }) {
   };
 
   return (
-    <div class="bg-white rounded-lg border border-gray-200 px-4 py-2.5 flex items-center justify-between gap-4">
+    <div class="px-4 py-2.5 flex items-center justify-between gap-4">
       <div class="flex items-baseline gap-2 min-w-0">
-        <span class="text-xs text-gray-500 shrink-0">Replicas</span>
+        <span class="text-xs font-medium text-gray-700 shrink-0">Replicas</span>
         <Show when={props.service.replicasOverride}>
           <span class="text-[11px] text-amber-600">override · config: {configuredReplicas()}</span>
         </Show>

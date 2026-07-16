@@ -4,6 +4,9 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+
   --color-brand: #4f46e5;
   --color-brand-light: #eef2ff;
   --color-brand-hover: #4338ca;
@@ -20,6 +23,10 @@ body {
   font-family: var(--font-sans);
   background-color: #fafafa;
   color: #111827;
+  letter-spacing: -0.011em;
+  font-feature-settings:
+    "cv05" 1,
+    "cv08" 1;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -30,10 +37,20 @@ body {
   h3,
   h4 {
     text-wrap: balance;
+    letter-spacing: -0.02em;
   }
 
   p {
     text-wrap: pretty;
+  }
+
+  :where(.font-mono, pre, code, kbd) {
+    letter-spacing: 0;
+    font-feature-settings: normal;
+  }
+
+  ::selection {
+    background-color: #e0e7ff;
   }
 }
 

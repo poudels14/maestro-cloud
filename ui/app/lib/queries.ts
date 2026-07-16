@@ -91,13 +91,17 @@ const unschedulableQuery = () => ({
 const servicesQuery = () => ({
   queryKey: queryKeys.services,
   queryFn: ssrSafe(getServices, []),
-  refetchInterval: 15_000
+  refetchInterval: 15_000,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000
 });
 
 const deploymentsQuery = (serviceId: string) => ({
   queryKey: queryKeys.deployments(serviceId),
   queryFn: ssrSafe(() => getDeployments(serviceId), []),
-  refetchInterval: 10_000
+  refetchInterval: 10_000,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000
 });
 
 const ingressRoutesQuery = () => ({

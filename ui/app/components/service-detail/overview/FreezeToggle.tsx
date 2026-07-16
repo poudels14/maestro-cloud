@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import type { Service } from "../../../lib/types";
 import { freezeService } from "../../../lib/api";
@@ -12,31 +13,29 @@ function FreezeToggle(props: { service: Service }) {
   }));
 
   return (
-    <div>
-      <h4 class="text-xs font-medium text-gray-400 mb-2">Deploy freeze</h4>
-      <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex items-center justify-between">
-        <div>
-          <p class="text-sm text-gray-700">
-            {props.service.deployFrozen ? "Deploys are frozen" : "Deploys are active"}
-          </p>
-          <p class="text-xs text-gray-400 mt-0.5">
-            {props.service.deployFrozen
-              ? "Auto-deploys from git watch are paused. Manual deploys require force."
-              : "Services will auto-deploy when new commits are detected."}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => mutation.mutate(!props.service.deployFrozen)}
-          disabled={mutation.isPending}
-          class={clsx("px-3 py-1.5 text-xs font-medium rounded-lg transition-colors outline-none", {
+    <div class="px-4 py-2.5 flex items-center justify-between gap-4">
+      <div class="flex min-w-0 items-baseline gap-2">
+        <span class="text-xs font-medium text-gray-700 shrink-0">Deploy freeze</span>
+        <Show when={props.service.deployFrozen}>
+          <span class="text-[11px] text-amber-600 truncate">
+            auto-deploys paused · manual deploys require force
+          </span>
+        </Show>
+      </div>
+      <button
+        type="button"
+        onClick={() => mutation.mutate(!props.service.deployFrozen)}
+        disabled={mutation.isPending}
+        class={clsx(
+          "shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors outline-none",
+          {
             "bg-amber-100 text-amber-700 hover:bg-amber-200": props.service.deployFrozen,
             "bg-gray-100 text-gray-600 hover:bg-gray-200": !props.service.deployFrozen
-          })}
-        >
-          {props.service.deployFrozen ? "Unfreeze" : "Freeze"}
-        </button>
-      </div>
+          }
+        )}
+      >
+        {props.service.deployFrozen ? "Unfreeze" : "Freeze"}
+      </button>
     </div>
   );
 }

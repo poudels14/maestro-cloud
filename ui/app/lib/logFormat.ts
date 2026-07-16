@@ -20,20 +20,6 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   day: "2-digit"
 });
 
-function logLevelPill(level: string) {
-  const normalized = level.toLowerCase();
-  if (normalized === "error" || normalized === "fatal") {
-    return "bg-red-50 text-red-600 border border-red-100";
-  }
-  if (normalized === "warn" || normalized === "warning") {
-    return "bg-amber-50 text-amber-600 border border-amber-100";
-  }
-  if (normalized === "debug" || normalized === "trace") {
-    return "bg-gray-50 text-gray-400 border border-gray-100";
-  }
-  return "bg-blue-50 text-blue-600 border border-blue-100";
-}
-
 const HTTP_METHOD_KEYS = [
   "http.method",
   "http.request.method",
@@ -158,11 +144,11 @@ function httpMethodColor(method: string): string {
 
 function httpStatusPill(status: string): string {
   const code = Number.parseInt(status, 10);
-  if (code >= 500) return "bg-red-50 text-red-700 border border-red-100";
-  if (code >= 400) return "bg-amber-50 text-amber-700 border border-amber-100";
-  if (code >= 300) return "bg-cyan-50 text-cyan-700 border border-cyan-100";
-  if (code >= 200) return "bg-emerald-50 text-emerald-700 border border-emerald-100";
-  return "bg-gray-50 text-gray-500 border border-gray-100";
+  if (code >= 500) return "bg-red-100 text-red-600 border border-red-200";
+  if (code >= 400) return "bg-amber-100 text-amber-600 border border-amber-200";
+  if (code >= 300) return "bg-cyan-100 text-cyan-600 border border-cyan-200";
+  if (code >= 200) return "bg-emerald-100 text-emerald-600 border border-emerald-200";
+  return "bg-gray-100 text-gray-500 border border-gray-200";
 }
 
 function logLevelColors(level: string) {
@@ -170,7 +156,7 @@ function logLevelColors(level: string) {
   if (normalized === "error" || normalized === "fatal") {
     return {
       dot: "bg-red-500",
-      text: "text-red-700",
+      text: "text-red-600",
       pillActive: "bg-red-50 text-red-700 border-red-200",
       pillHover: "hover:bg-red-50 hover:text-red-700 hover:border-red-200"
     };
@@ -178,7 +164,7 @@ function logLevelColors(level: string) {
   if (normalized === "warn" || normalized === "warning") {
     return {
       dot: "bg-amber-500",
-      text: "text-amber-700",
+      text: "text-amber-600",
       pillActive: "bg-amber-50 text-amber-700 border-amber-200",
       pillHover: "hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
     };
@@ -193,7 +179,7 @@ function logLevelColors(level: string) {
   }
   return {
     dot: "bg-blue-500",
-    text: "text-blue-700",
+    text: "text-blue-600",
     pillActive: "bg-blue-50 text-blue-700 border-blue-200",
     pillHover: "hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200"
   };
@@ -203,7 +189,6 @@ export {
   tsFormatter,
   timeFormatter,
   dateFormatter,
-  logLevelPill,
   logLevelColors,
   httpFields,
   httpMethodColor,

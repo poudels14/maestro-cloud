@@ -29,9 +29,7 @@ function DiskCard(props: { disk: DiskInfo }) {
   return (
     <Card class="p-4">
       <div class="flex items-baseline justify-between mb-1">
-        <h3 class="text-xs font-medium text-gray-500 truncate font-mono">
-          {props.disk.mountPoint}
-        </h3>
+        <h3 class="text-xs font-medium text-gray-700 truncate">{props.disk.mountPoint}</h3>
         <span class="text-xs text-gray-400 shrink-0 ml-2 tabular-nums">
           {formatBytes(usedBytes())} / {formatBytes(props.disk.totalBytes)}
         </span>

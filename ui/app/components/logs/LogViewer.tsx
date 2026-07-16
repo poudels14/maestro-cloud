@@ -9,7 +9,7 @@ import {
   on,
   onCleanup
 } from "solid-js";
-import { ChevronUp, Loader2, X } from "lucide-solid";
+import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import {
@@ -22,7 +22,7 @@ import {
   type LogHistogramBucket
 } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { httpFields, tsFormatter } from "../../lib/logFormat";
+import { dateFormatter, httpFields } from "../../lib/logFormat";
 import {
   TimeCell,
   ExpanderCell,
@@ -46,14 +46,20 @@ const COL = {
   status: "sm:w-[56px]"
 };
 
+const minuteFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false
+});
+
 const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
 const HISTOGRAM_POLL_INTERVAL_MS = 30_000;
 const TIME_RANGES = [
-  { label: "1h", ms: 3_600_000 },
-  { label: "6h", ms: 21_600_000 },
-  { label: "24h", ms: 86_400_000 },
-  { label: "7d", ms: 604_800_000 }
+  { label: "1h", ms: 3_600_000, bucketMs: 60_000 },
+  { label: "6h", ms: 21_600_000, bucketMs: 300_000 },
+  { label: "24h", ms: 86_400_000, bucketMs: 600_000 },
+  { label: "7d", ms: 604_800_000, bucketMs: 7_200_000 }
 ];
 
 type SelectedLogBucket = {
@@ -278,7 +284,13 @@ function LogViewer(props: {
   const selectedIntervalLabel = () => {
     const selected = selectedBucket();
     if (!selected) return "";
-    return `${tsFormatter.format(new Date(selected.from))} – ${tsFormatter.format(new Date(selected.to))}`;
+    const from = new Date(selected.from);
+    const to = new Date(selected.to);
+    const fromLabel = `${dateFormatter.format(from)} ${minuteFormatter.format(from)}`;
+    if (from.toDateString() === to.toDateString()) {
+      return `${fromLabel}–${minuteFormatter.format(to)}`;
+    }
+    return `${fromLabel} – ${dateFormatter.format(to)} ${minuteFormatter.format(to)}`;
   };
 
   const showHost = () => {
@@ -418,6 +430,7 @@ function LogViewer(props: {
     if (!props.showHistogram || props.deploymentId) return;
     const generation = ++histogramGeneration;
     const requestedRangeMs = rangeMs();
+    const bucketMs = TIME_RANGES.find((range) => range.ms === requestedRangeMs)?.bucketMs;
     const to = Date.now() + 1;
     const from = to - requestedRangeMs;
     const searchQuery = requestQuery();
@@ -425,13 +438,14 @@ function LogViewer(props: {
     setHistogramError(null);
     try {
       const result = props.isSystem
-        ? await getSystemLogHistogram(props.serviceId, from, to, searchQuery || undefined)
+        ? await getSystemLogHistogram(props.serviceId, from, to, searchQuery || undefined, bucketMs)
         : await getServiceLogHistogram(
             props.serviceId,
             from,
             to,
             props.phase,
-            searchQuery || undefined
+            searchQuery || undefined,
+            bucketMs
           );
       if (
         generation !== histogramGeneration ||
@@ -549,11 +563,20 @@ function LogViewer(props: {
   let scrollRef: HTMLDivElement | undefined;
   let wasAtBottom = true;
   const [nearTop, setNearTop] = createSignal(false);
+  const [atBottom, setAtBottom] = createSignal(true);
 
   const updateScrollFlags = () => {
     if (!scrollRef) return;
     wasAtBottom = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight < 50;
+    setAtBottom(wasAtBottom);
     setNearTop(scrollRef.scrollTop < 80);
+  };
+
+  const jumpToLatest = () => {
+    if (scrollRef) {
+      scrollRef.scrollTop = scrollRef.scrollHeight;
+      updateScrollFlags();
+    }
   };
 
   createEffect(
@@ -584,9 +607,11 @@ function LogViewer(props: {
     loadMore();
   });
 
+  const streamView = () => props.phase === "build";
+
   return (
     <div
-      class={clsx("overflow-hidden", {
+      class={clsx("relative overflow-hidden", {
         "h-full min-h-0 flex flex-col": props.fillHeight,
         "bg-white rounded-lg border border-gray-200": !props.embedded
       })}
@@ -596,25 +621,24 @@ function LogViewer(props: {
           <div class="flex flex-wrap items-center justify-between gap-2 px-1">
             <div class="flex items-center gap-2 min-w-0">
               <Show when={histogram()}>
-                <div class="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px]">
-                  <span class="font-medium whitespace-nowrap text-gray-600">
-                    {histogramTotal().toLocaleString()} logs
+                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                  <span class="text-sm font-medium tabular-nums whitespace-nowrap text-gray-700">
+                    {histogramTotal().toLocaleString()} {histogramTotal() === 1 ? "log" : "logs"}
                   </span>
                   <Show when={selectedBucket()}>
-                    <span class="text-gray-300">·</span>
-                    <span class="font-medium whitespace-nowrap text-indigo-700">
-                      {selectedBucketCount().toLocaleString()} matching logs
-                    </span>
-                    <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-indigo-200 bg-indigo-50">
-                      <span class="min-w-0 truncate px-1.5 py-0.5 font-mono text-indigo-700">
+                    <span class="inline-flex max-w-full items-center overflow-hidden rounded-md border border-gray-200 bg-gray-100">
+                      <span class="min-w-0 truncate py-0.5 pl-2 pr-1 font-mono text-gray-700">
                         {selectedIntervalLabel()}
+                        <span class="text-gray-400"> · </span>
+                        {selectedBucketCount().toLocaleString()}{" "}
+                        {selectedBucketCount() === 1 ? "log" : "logs"}
                       </span>
                       <button
                         type="button"
                         onClick={() => setSelectedBucket(null)}
                         aria-label="Clear selected log interval"
                         title="Clear selected interval"
-                        class="self-stretch border-l border-indigo-200 px-1 text-indigo-400 outline-none hover:bg-indigo-100 hover:text-indigo-700"
+                        class="self-stretch pl-0.5 pr-1.5 text-gray-400 outline-none transition-colors hover:bg-gray-200 hover:text-gray-700"
                       >
                         <X class="size-3" />
                       </button>
@@ -730,7 +754,7 @@ function LogViewer(props: {
                   onClick={loadMore}
                   disabled={loadingMore()}
                   class={clsx(
-                    "pointer-events-auto shrink-0 whitespace-nowrap mt-9 sm:mt-12 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border bg-white shadow-md outline-none transition-colors",
+                    "pointer-events-auto shrink-0 whitespace-nowrap mt-9 sm:mt-12 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md border bg-white shadow-md outline-none transition-colors",
                     loadingMore()
                       ? "text-gray-400 border-gray-200 cursor-wait"
                       : "text-gray-600 border-gray-200 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50"
@@ -745,8 +769,8 @@ function LogViewer(props: {
               </div>
             </Show>
             <ul class="font-mono text-xs">
-              <li class="hidden sm:flex items-stretch px-2 py-1.5 border-b border-gray-200 bg-gray-100 text-[10px] font-sans font-semibold uppercase tracking-normal text-gray-500 sticky top-0 z-10">
-                <span class="w-[18px] shrink-0" />
+              <li class="hidden sm:flex items-stretch py-1.5 px-2 border-b border-gray-200 bg-gray-100 text-[11px] font-sans font-medium text-gray-500 sticky top-0 z-10">
+                <span class={clsx("shrink-0", streamView() ? "w-2" : "w-[18px]")} />
                 <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
                 <Show when={showHost()}>
                   <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
@@ -775,6 +799,7 @@ function LogViewer(props: {
                     index={index()}
                     showHost={showHost()}
                     showHttp={showHttp()}
+                    stream={streamView()}
                     expanded={expanded().has(line.seq)}
                     onToggle={() => toggleExpanded(line.seq)}
                   />
@@ -784,8 +809,33 @@ function LogViewer(props: {
           </Match>
         </Switch>
       </div>
+      <Show when={!atBottom() && filteredLines().length > 0}>
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          class="absolute bottom-3 left-1/2 z-20 inline-flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 shadow-md outline-none transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+        >
+          <ChevronDown class="size-3" />
+          Jump to latest
+        </button>
+      </Show>
     </div>
   );
+}
+
+function streamMessageClass(level: string) {
+  switch (level.toLowerCase()) {
+    case "error":
+    case "err":
+    case "fatal":
+    case "panic":
+      return "text-red-600";
+    case "warn":
+    case "warning":
+      return "text-amber-700";
+    default:
+      return "text-gray-700";
+  }
 }
 
 function LogRow(props: {
@@ -793,6 +843,7 @@ function LogRow(props: {
   index: number;
   showHost: boolean;
   showHttp: boolean;
+  stream?: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -800,22 +851,32 @@ function LogRow(props: {
   const http = () => httpFields(props.line.attrs);
   return (
     <li
-      class={clsx("border-b border-gray-50 cursor-pointer transition-colors", {
+      class={clsx("border-b border-gray-50 transition-colors", {
+        "cursor-pointer": !props.stream,
         "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
         "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
         "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
       })}
-      onClick={props.onToggle}
+      onClick={() => {
+        if (!props.stream) props.onToggle();
+      }}
     >
-      <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 px-2 py-1.5 sm:py-1">
+      <div
+        class={clsx("flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 pr-2 py-1.5 sm:py-1", {
+          "pl-2": !props.stream,
+          "pl-4": props.stream
+        })}
+      >
         <div class="flex items-center flex-wrap gap-x-2 gap-y-1 shrink-0 sm:contents">
-          <ExpanderCell
-            expanded={props.expanded}
-            onToggle={(ev) => {
-              ev.stopPropagation();
-              props.onToggle();
-            }}
-          />
+          <Show when={!props.stream}>
+            <ExpanderCell
+              expanded={props.expanded}
+              onToggle={(ev) => {
+                ev.stopPropagation();
+                props.onToggle();
+              }}
+            />
+          </Show>
           <div class={clsx("shrink-0 sm:pr-2 sm:pt-px", COL.time)}>
             <TimeCell ts={props.line.ts} />
           </div>
@@ -837,7 +898,15 @@ function LogRow(props: {
           </Show>
         </div>
         <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
-          <Show when={http().path} fallback={<MessageCell text={props.line.text} />}>
+          <Show
+            when={http().path}
+            fallback={
+              <MessageCell
+                text={props.line.text}
+                class={props.stream ? streamMessageClass(props.line.level) : undefined}
+              />
+            }
+          >
             <PathCell
               path={http().path!}
               durationLabel={http().durationLabel}

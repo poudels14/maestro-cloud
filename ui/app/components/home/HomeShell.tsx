@@ -117,7 +117,7 @@ function ClusterHero() {
               )}
             </Show>
           </div>
-          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono">
+          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             <a
               href={`http://${info().canonicalDomain}`}
               title="Canonical domain"

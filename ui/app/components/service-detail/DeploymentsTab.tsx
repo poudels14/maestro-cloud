@@ -1,5 +1,6 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { getRouteApi, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
 import { clusterInfoQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
@@ -11,17 +12,30 @@ import { DeploymentRow } from "./DeploymentRow";
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
+const routeApi = getRouteApi("/services/$serviceId/$tab");
+
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
   const clusterInfo = useQuery(() => clusterInfoQuery());
+  const search = routeApi.useSearch();
+  const navigate = useNavigate();
 
   const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<"redeploy" | "restart" | null>(
     null
   );
-  const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [sheetTab, setSheetTab] = createSignal<SheetTabId>("logs");
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
+
+  const setUrlSheetState = (updates: { deployment?: string; tab?: SheetTabId }) =>
+    navigate({
+      to: "/services/$serviceId/$tab",
+      params: { serviceId: props.serviceId, tab: "deployments" },
+      search: { ...search(), ...updates },
+      replace: true
+    });
+
+  const selectedId = () => search().deployment ?? null;
+  const sheetTab = () => search().tab ?? "logs";
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: queryKeys.deployments(props.serviceId) });
@@ -133,25 +147,29 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
             </div>
           }
         >
-          <div class="space-y-3">
-            <For each={visibleDeployments()}>
-              {(deployment, index) => (
-                <DeploymentRow
-                  deployment={deployment}
-                  isLatest={index() === 0}
-                  isSelected={selectedId() === deployment.id}
-                  clusterInfo={clusterInfo.data ?? null}
-                  onOpen={() => {
-                    setSelectedId(deployment.id);
-                    setSheetTab("logs");
-                  }}
-                  onCancel={() => cancelMutation.mutate(deployment.id)}
-                  onStop={() => stopMutation.mutate(deployment.id)}
-                  onRedeploy={handleRedeploy}
-                  onRestart={handleRestart}
-                />
-              )}
-            </For>
+          <div>
+            <div class="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+              <For each={visibleDeployments()}>
+                {(deployment, index) => (
+                  <DeploymentRow
+                    deployment={deployment}
+                    isLatest={index() === 0}
+                    isSelected={selectedId() === deployment.id}
+                    clusterInfo={clusterInfo.data ?? null}
+                    onOpen={() =>
+                      setUrlSheetState({
+                        deployment: deployment.id,
+                        tab: ["QUEUED", "BUILDING"].includes(deployment.status) ? "build" : "logs"
+                      })
+                    }
+                    onCancel={() => cancelMutation.mutate(deployment.id)}
+                    onStop={() => stopMutation.mutate(deployment.id)}
+                    onRedeploy={handleRedeploy}
+                    onRestart={handleRestart}
+                  />
+                )}
+              </For>
+            </div>
             <Show when={hasMore()}>
               <div ref={attachObserver} class="h-4" />
               <div class="text-center text-xs text-gray-400 py-2">
@@ -166,8 +184,8 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
         serviceId={props.serviceId}
         hasBuild={props.hasBuild}
         tab={sheetTab()}
-        onTabChange={setSheetTab}
-        onClose={() => setSelectedId(null)}
+        onTabChange={(tab) => setUrlSheetState({ tab })}
+        onClose={() => setUrlSheetState({ deployment: undefined, tab: undefined })}
         clusterInfo={clusterInfo.data ?? null}
       />
     </>

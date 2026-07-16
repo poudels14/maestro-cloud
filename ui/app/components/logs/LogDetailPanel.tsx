@@ -1,20 +1,13 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
-import {
-  httpFields,
-  httpMethodColor,
-  httpStatusPill,
-  tsFormatter,
-  type HttpFields
-} from "../../lib/logFormat";
+import { httpFields, httpMethodColor, httpStatusPill, type HttpFields } from "../../lib/logFormat";
 
 function AccessLogSummary(props: { fields: HttpFields }) {
   const metadata = () => {
     const fields = props.fields;
     const values: { label: string; value: string }[] = [];
     if (fields.clientIp) values.push({ label: "Client IP", value: fields.clientIp });
-    if (fields.durationLabel) values.push({ label: "Duration", value: fields.durationLabel });
     if (fields.router) values.push({ label: "Router", value: fields.router });
     if (fields.service) values.push({ label: "Service", value: fields.service });
     if (fields.entryPoint) values.push({ label: "Entry point", value: fields.entryPoint });
@@ -54,9 +47,7 @@ function AccessLogSummary(props: { fields: HttpFields }) {
           <For each={metadata()}>
             {(item) => (
               <span class="min-w-0">
-                <span class="block text-[10px] uppercase tracking-wide text-gray-400">
-                  {item.label}
-                </span>
+                <span class="block text-[11px] font-medium text-gray-400">{item.label}</span>
                 <span class="block text-[11px] font-mono text-gray-600 truncate" title={item.value}>
                   {item.value}
                 </span>
@@ -81,17 +72,9 @@ function LogDetailPanel(props: { entry: LogEntry }) {
   const http = () => httpFields(props.entry.attrs);
   const baseAttrs = () => {
     const entry = props.entry;
-    const attrs: { label: string; value: string }[] = [
-      { label: "Timestamp", value: tsFormatter.format(new Date(entry.ts)) },
-      { label: "Sequence", value: String(entry.seq) },
-      { label: "Level", value: entry.level.toUpperCase() },
-      { label: "Stream", value: entry.stream }
-    ];
+    const attrs: { label: string; value: string }[] = [];
     if (entry.hostname) {
       attrs.push({ label: "Hostname", value: entry.hostname });
-    }
-    if (entry.source) {
-      attrs.push({ label: "Source", value: entry.source });
     }
     entry.attrs?.forEach(([key, value]) => {
       attrs.push({ label: key, value });
@@ -101,7 +84,12 @@ function LogDetailPanel(props: { entry: LogEntry }) {
 
   const tags = () =>
     props.entry.tags?.filter(
-      (tag) => !tag.startsWith("hostname:") && !tag.startsWith("maestro.internal.")
+      (tag) =>
+        !tag.startsWith("hostname:") &&
+        !tag.startsWith("maestro.internal.") &&
+        !tag.startsWith("service:") &&
+        !tag.startsWith("deployment_id:") &&
+        !tag.startsWith("cluster:")
     ) ?? [];
 
   return (
@@ -124,23 +112,23 @@ function LogDetailPanel(props: { entry: LogEntry }) {
           </pre>
         </details>
       </Show>
-      <div>
-        <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-          Fields
+      <Show when={baseAttrs().length > 0}>
+        <div>
+          <div class="mb-1.5 text-[11px] font-semibold text-gray-500">Fields</div>
+          <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
+            <For each={baseAttrs()}>
+              {(attr) => (
+                <>
+                  <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap">
+                    {attr.label}
+                  </span>
+                  <span class="text-[11px] font-mono text-gray-600 break-all">{attr.value}</span>
+                </>
+              )}
+            </For>
+          </div>
         </div>
-        <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
-          <For each={baseAttrs()}>
-            {(attr) => (
-              <>
-                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap">
-                  {attr.label}
-                </span>
-                <span class="text-[11px] font-mono text-gray-600 break-all">{attr.value}</span>
-              </>
-            )}
-          </For>
-        </div>
-      </div>
+      </Show>
       <Show when={tags().length > 0}>
         <div class="flex items-center gap-1.5 flex-wrap">
           <span class="text-[11px] text-gray-400 font-medium">Tags</span>

@@ -259,7 +259,8 @@ export async function getServiceLogHistogram(
   from: number,
   to: number,
   phase?: "build" | "deploy",
-  query?: string
+  query?: string,
+  bucketMs?: number
 ): Promise<LogHistogram> {
   const url = new URL(
     `/api/services/${encodeURIComponent(serviceId)}/logs/histogram`,
@@ -269,6 +270,7 @@ export async function getServiceLogHistogram(
   url.searchParams.set("to", String(to));
   if (phase != null) url.searchParams.set("phase", phase);
   if (query) url.searchParams.set("query", query);
+  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();
@@ -281,12 +283,14 @@ export async function getSystemLogHistogram(
   name: string,
   from: number,
   to: number,
-  query?: string
+  query?: string,
+  bucketMs?: number
 ): Promise<LogHistogram> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs/histogram`, location.origin);
   url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
   if (query) url.searchParams.set("query", query);
+  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();

@@ -1,12 +1,13 @@
 import { createSignal, For, Show, Switch, Match } from "solid-js";
-import { Clock, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
+import { Check, Copy, ExternalLink, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
 import type { Deployment } from "../../lib/types";
 import { type ClusterInfo } from "../../lib/api";
-import { StatusBadge } from "../../lib/ui";
+import { StatusBadge, timeAgo } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
+import { ReplicaRow } from "./DeploymentRow";
 
 type SheetTabId = "logs" | "build" | "details";
 
@@ -38,7 +39,7 @@ function DeploymentSheet(props: {
                   <div class="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200 shrink-0">
                     <div class="flex items-start justify-between gap-3 mb-3">
                       <div class="min-w-0 flex-1">
-                        <div class="text-base font-semibold text-gray-900 leading-snug tracking-tight">
+                        <div class="text-xl font-semibold text-gray-900 leading-snug tracking-tight">
                           {d.gitCommit ? d.gitCommit.message : shortId}
                         </div>
                         <div class="flex items-center gap-2 flex-wrap text-xs mt-1.5">
@@ -52,10 +53,9 @@ function DeploymentSheet(props: {
                           <span class="font-mono text-gray-400">{shortId}</span>
                           <span class="text-gray-300">·</span>
                           <span
-                            class="flex items-center gap-1 text-gray-400 tabular-nums"
+                            class="text-gray-400 tabular-nums"
                             title={new Date(d.createdAt).toLocaleString()}
                           >
-                            <Clock class="size-3" />
                             {formatDateTime(d.createdAt, true)}
                           </span>
                         </div>
@@ -66,9 +66,9 @@ function DeploymentSheet(props: {
                     </div>
                     <div class="flex gap-1 -mb-px">
                       <SheetTab
-                        label="Logs"
-                        active={props.tab === "logs"}
-                        onClick={() => props.onTabChange("logs")}
+                        label="Details"
+                        active={props.tab === "details"}
+                        onClick={() => props.onTabChange("details")}
                       />
                       <Show when={props.hasBuild}>
                         <SheetTab
@@ -78,9 +78,9 @@ function DeploymentSheet(props: {
                         />
                       </Show>
                       <SheetTab
-                        label="Details"
-                        active={props.tab === "details"}
-                        onClick={() => props.onTabChange("details")}
+                        label="Logs"
+                        active={props.tab === "logs"}
+                        onClick={() => props.onTabChange("logs")}
                       />
                     </div>
                   </div>
@@ -133,7 +133,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
     <button
       type="button"
       onClick={props.onClick}
-      class={clsx("px-3 pb-2 text-sm font-medium border-b-2 transition-colors outline-none", {
+      class={clsx("px-3 pb-1 text-sm font-medium border-b-2 transition-colors outline-none", {
         "border-indigo-500 text-indigo-600": props.active,
         "border-transparent text-gray-400 hover:text-gray-600": !props.active
       })}
@@ -180,18 +180,69 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
   return (
     <div class="p-4 sm:p-5 space-y-4 sm:space-y-5">
       <div>
-        <h4 class="text-[10px] font-medium text-gray-400 mb-2">Deployment</h4>
+        <h4 class="text-xs font-medium text-gray-400 mb-2">Deployment</h4>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          <DetailRow label="ID" value={d.id} mono />
-          <DetailRow label="Config version" value={d.config.version} mono />
+          <DetailRow label="ID" value={d.id} />
+          <Show when={d.gitCommit}>
+            {(commit) => <DetailRow label="Git commit" value={commit().reference} />}
+          </Show>
+          <DetailRow label="Created" value={formatTimestamp(d.createdAt)} />
+          <Show when={d.deployedAt}>
+            {(deployedAt) => <DetailRow label="Deployed" value={formatTimestamp(deployedAt())} />}
+          </Show>
+          <Show when={d.drainedAt}>
+            {(drainedAt) => <DetailRow label="Drained" value={formatTimestamp(drainedAt())} />}
+          </Show>
+          <CopyRow label="Config version" value={d.config.version} />
+          <Show when={d.build?.dockerImageId}>
+            {(imageId) => <DetailRow label="Image" value={imageId()} />}
+          </Show>
           <Show when={deploymentDomain()}>
-            {(domain) => <DetailRow label="Endpoint" value={domain()} mono />}
+            {(domain) => (
+              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                <span class="text-xs font-medium text-gray-700 shrink-0">Endpoint</span>
+                <a
+                  href={`http://${domain()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="group inline-flex min-w-0 items-center gap-1 text-xs text-gray-600 hover:text-indigo-600 underline decoration-gray-300 underline-offset-2 hover:decoration-indigo-300"
+                >
+                  <span class="truncate">{domain()}</span>
+                  <ExternalLink class="size-3 shrink-0 text-gray-400 group-hover:text-indigo-500" />
+                </a>
+              </div>
+            )}
           </Show>
         </div>
       </div>
+      <Show when={(d.replicas?.length ?? 0) > 0}>
+        <div>
+          <h4 class="text-xs font-medium text-gray-400 mb-2">Replicas</h4>
+          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <For each={d.replicas}>
+              {(replica) => (
+                <div class="px-4 py-2.5">
+                  <ReplicaRow
+                    deployment={d}
+                    replicaIndex={replica.replicaIndex}
+                    replicaStatus={replica.status}
+                    nodeId={replica.nodeId}
+                    clusterInfo={props.clusterInfo}
+                  />
+                  <Show when={replica.error}>
+                    {(error) => (
+                      <p class="mt-1 pl-4 text-[11px] text-red-500 break-words">{error()}</p>
+                    )}
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
       <Show when={buildEnvEntries().length > 0 || buildEnvSource()}>
         <SecretsList
-          title="Build Environment"
+          title="Build environment variables"
           source={buildEnvSource()}
           entries={buildEnvEntries()}
           revealed={envRevealed()}
@@ -208,7 +259,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
       </Show>
       <Show when={envEntries().length > 0 || envSource()}>
         <SecretsList
-          title="Deploy Environment"
+          title="Deploy environment variables"
           source={envSource()}
           entries={envEntries()}
           revealed={envRevealed()}
@@ -217,25 +268,25 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
       </Show>
       <Show when={secretEntries().length > 0 || secretSource()}>
         <div>
-          <div class="text-[10px] font-medium text-gray-400 mb-2">
+          <div class="text-xs font-medium text-gray-400 mb-2">
             Deploy Secrets
-            <span class="normal-case text-gray-300 ml-1">
-              ({d.config.deploy.secrets?.mountPath})
+            <span class="text-gray-300 ml-1">
+              (mounted at {d.config.deploy.secrets?.mountPath})
             </span>
           </div>
-          <Show when={secretSource()}>
-            <div class="text-xs font-mono text-gray-400 mb-2">{secretSource()}</div>
-          </Show>
           <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <Show when={secretSource()}>
+              {(source) => <DetailRow label="Source" value={source()} class="bg-gray-50" />}
+            </Show>
             <For each={secretEntries()}>
               {([key, meta]) => (
                 <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                  <span class="text-xs text-gray-500 font-mono">{key}</span>
+                  <span class="text-xs text-gray-700">{key}</span>
                   <div class="flex items-center gap-2">
                     <Show when={meta.changed}>
-                      <span class="text-amber-500 text-[10px]">changed</span>
+                      <span class="text-amber-600 text-[10px] font-medium">changed</span>
                     </Show>
-                    <span class="text-sm font-mono text-gray-400">••••••••</span>
+                    <span class="text-xs text-gray-400">••••••••</span>
                   </div>
                 </div>
               )}
@@ -252,11 +303,47 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
   );
 }
 
-function DetailRow(props: { label: string; value: string; mono?: boolean }) {
+function formatTimestamp(ms: number) {
+  return `${formatDateTime(ms, true)} · ${timeAgo(ms)}`;
+}
+
+function CopyRow(props: { label: string; value: string }) {
+  const [copied, setCopied] = createSignal(false);
+  const truncated = () => (props.value.length > 20 ? `${props.value.slice(0, 20)}…` : props.value);
+  const copy = async () => {
+    await navigator.clipboard.writeText(props.value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1_500);
+  };
+
   return (
-    <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-      <span class="text-xs text-gray-500 shrink-0">{props.label}</span>
-      <span class={clsx("text-sm text-gray-800 text-right truncate", { "font-mono": props.mono })}>
+    <div class="px-4 py-2.5 flex items-center justify-between gap-6">
+      <span class="text-xs font-medium text-gray-700 shrink-0">{props.label}</span>
+      <div class="flex min-w-0 items-center gap-1.5">
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy full value"
+          aria-label={`Copy ${props.label}`}
+          class="rounded p-0.5 text-gray-300 outline-none transition-colors hover:bg-gray-100 hover:text-gray-600"
+        >
+          <Show when={copied()} fallback={<Copy class="size-3" />}>
+            <Check class="size-3 text-emerald-500" />
+          </Show>
+        </button>
+        <span class="text-xs tabular-nums text-gray-600 truncate" title={props.value}>
+          {truncated()}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow(props: { label: string; value: string; class?: string }) {
+  return (
+    <div class={clsx("px-4 py-2.5 flex items-baseline justify-between gap-6", props.class)}>
+      <span class="text-xs font-medium text-gray-700 shrink-0">{props.label}</span>
+      <span class="text-xs tabular-nums text-gray-600 text-right truncate" title={props.value}>
         {props.value}
       </span>
     </div>
@@ -273,10 +360,10 @@ function SecretsList(props: {
   return (
     <div>
       <div class="flex items-center justify-between mb-2">
-        <div class="text-[10px] font-medium text-gray-400">
+        <div class="text-xs font-medium text-gray-400">
           {props.title}
           <Show when={props.source}>
-            <span class="normal-case ml-1.5 text-gray-300 font-mono">{props.source}</span>
+            <span class="ml-1.5 text-gray-300">{props.source}</span>
           </Show>
         </div>
         <Show when={props.entries.length > 0 && props.onToggleReveal}>
@@ -296,8 +383,13 @@ function SecretsList(props: {
           <For each={props.entries}>
             {([key, value]) => (
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs text-gray-500 font-mono">{key}</span>
-                <span class="text-sm font-mono text-gray-700 truncate text-right">
+                <span class="text-xs text-gray-700">{key}</span>
+                <span
+                  class={clsx("text-xs truncate text-right", {
+                    "font-mono text-gray-600": props.revealed,
+                    "text-gray-400": !props.revealed
+                  })}
+                >
                   {props.revealed ? value : "••••••••"}
                 </span>
               </div>
