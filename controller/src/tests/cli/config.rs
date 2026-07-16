@@ -286,12 +286,34 @@ fn start_schema_matches_serialized_config_fields() {
     let model = serde_json::to_value(config).expect("serialize start config");
     let schema: Value = serde_json::from_str(START_SCHEMA).expect("parse start schema");
 
-    assert_object_keys(&model, &schema, &[], &["$schema", "$extends"]);
+    assert_object_keys(
+        &model,
+        &schema,
+        &[],
+        &[
+            "$schema",
+            "$extends",
+            "encryptionKey",
+            "jwtSecretKey",
+            "logBackup",
+            "disableEtcdCert",
+            "allowCliDeployment",
+        ],
+    );
     assert_object_keys(
         &model["cluster"],
         &schema["properties"]["cluster"],
         &[],
-        &[],
+        &[
+            "bindIp",
+            "apiPort",
+            "gatewayPort",
+            "controlAllowCidrs",
+            "etcdClientPort",
+            "etcdPeerPort",
+            "sharedRegistry",
+            "joinSecret",
+        ],
     );
     assert_object_keys(&model["node"], &schema["properties"]["node"], &[], &[]);
     assert_object_keys(
@@ -305,19 +327,24 @@ fn start_schema_matches_serialized_config_fields() {
         &model["tailscale"],
         &schema["properties"]["tailscale"],
         &[],
-        &[],
+        &["authKey", "advertiseRoutes"],
     );
     assert_object_keys(
         &model["datadog"],
         &schema["properties"]["datadog"],
         &[],
-        &[],
+        &[
+            "apiKey",
+            "includeIngressLogs",
+            "includeTailscaleLogs",
+            "includeMetrics",
+        ],
     );
     assert_object_keys(
         &model["datadog"]["logs"],
         &schema["properties"]["datadog"]["properties"]["logs"],
         &[],
-        &[],
+        &["includeHealthcheck"],
     );
     assert_object_keys(&model["depot"], &schema["properties"]["depot"], &[], &[]);
     assert_object_keys(
@@ -332,12 +359,17 @@ fn start_schema_matches_serialized_config_fields() {
         &[],
         &[],
     );
-    assert_object_keys(&model["slack"], &schema["properties"]["slack"], &[], &[]);
+    assert_object_keys(
+        &model["slack"],
+        &schema["properties"]["slack"],
+        &[],
+        &["webhookUrl"],
+    );
     assert_object_keys(
         &model["log-backup"],
         &schema["properties"]["log-backup"],
         &[],
-        &[],
+        &["kmsKeyId", "retentionDays"],
     );
 }
 

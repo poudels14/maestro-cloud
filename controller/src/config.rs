@@ -12,6 +12,40 @@ use crate::utils::secrets::SecretProvider;
 
 const CONFIG_EXTENDS_KEY: &str = "$extends";
 const MAX_CONFIG_EXTENDS_DEPTH: usize = 16;
+const START_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("encryptionKey", "encryption-key"),
+    ("jwtSecretKey", "jwt-secret-key"),
+    ("logBackup", "log-backup"),
+    ("disableEtcdCert", "disable-etcd-cert"),
+    ("allowCliDeployment", "allow-cli-deployment"),
+];
+const CLUSTER_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("bindIp", "bind-ip"),
+    ("apiPort", "api-port"),
+    ("gatewayPort", "gateway-port"),
+    ("controlAllowCidrs", "control-allow-cidrs"),
+    ("etcdClientPort", "etcd-client-port"),
+    ("etcdPeerPort", "etcd-peer-port"),
+    ("sharedRegistry", "shared-registry"),
+    ("joinSecret", "join-secret"),
+];
+const TAILSCALE_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("authKey", "auth-key"),
+    ("advertiseRoutes", "advertise-routes"),
+];
+const DATADOG_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("apiKey", "api-key"),
+    ("includeIngressLogs", "include-ingress-logs"),
+    ("includeTailscaleLogs", "include-tailscale-logs"),
+    ("includeMetrics", "include-metrics"),
+];
+const DATADOG_LOGS_CONFIG_KEY_ALIASES: &[(&str, &str)] =
+    &[("includeHealthcheck", "include-healthcheck")];
+const SLACK_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[("webhookUrl", "webhook-url")];
+const LOG_BACKUP_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("kmsKeyId", "kms-key-id"),
+    ("retentionDays", "retention-days"),
+];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -62,10 +96,11 @@ pub struct StartConfig {
     pub subnet: Option<String>,
     #[serde(default)]
     pub egress: EgressConfig,
+    #[serde(alias = "encryptionKey")]
     pub encryption_key: String,
     #[serde(default)]
     pub tailscale: Option<TailscaleConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "jwtSecretKey")]
     pub jwt_secret_key: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -81,11 +116,11 @@ pub struct StartConfig {
     pub cloudflare: Option<CloudflareConfig>,
     #[serde(default)]
     pub slack: Option<SlackConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "logBackup")]
     pub log_backup: Option<LogBackupConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "disableEtcdCert")]
     pub disable_etcd_cert: bool,
-    #[serde(default)]
+    #[serde(default, alias = "allowCliDeployment")]
     pub allow_cli_deployment: bool,
 }
 
@@ -129,6 +164,7 @@ pub struct CloudflareTunnelConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SlackConfig {
+    #[serde(alias = "webhookUrl")]
     pub webhook_url: SecretString,
 }
 
@@ -136,12 +172,13 @@ pub struct SlackConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct LogBackupConfig {
     pub bucket: String,
+    #[serde(alias = "kmsKeyId")]
     pub kms_key_id: String,
     #[serde(default)]
     pub region: Option<String>,
     #[serde(default)]
     pub prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "retentionDays")]
     pub retention_days: Option<u32>,
 }
 
@@ -177,23 +214,23 @@ pub struct ClusterConfig {
     pub name: String,
     #[serde(default)]
     pub nodes: Vec<ClusterNodeConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "bindIp")]
     pub bind_ip: Option<Ipv4Addr>,
     #[serde(default)]
     pub subnets: Vec<String>,
-    #[serde(default = "default_cluster_api_port")]
+    #[serde(default = "default_cluster_api_port", alias = "apiPort")]
     pub api_port: u16,
-    #[serde(default = "default_cluster_gateway_port")]
+    #[serde(default = "default_cluster_gateway_port", alias = "gatewayPort")]
     pub gateway_port: u16,
-    #[serde(default)]
+    #[serde(default, alias = "controlAllowCidrs")]
     pub control_allow_cidrs: Vec<String>,
-    #[serde(default = "default_etcd_client_port")]
+    #[serde(default = "default_etcd_client_port", alias = "etcdClientPort")]
     pub etcd_client_port: u16,
-    #[serde(default = "default_etcd_peer_port")]
+    #[serde(default = "default_etcd_peer_port", alias = "etcdPeerPort")]
     pub etcd_peer_port: u16,
-    #[serde(default)]
+    #[serde(default, alias = "sharedRegistry")]
     pub shared_registry: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "joinSecret")]
     pub join_secret: Option<String>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
@@ -367,31 +404,33 @@ impl IngressConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct TailscaleConfig {
+    #[serde(alias = "authKey")]
     pub auth_key: String,
-    #[serde(default)]
+    #[serde(default, alias = "advertiseRoutes")]
     pub advertise_routes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DatadogConfig {
+    #[serde(alias = "apiKey")]
     pub api_key: String,
     #[serde(default)]
     pub site: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "includeIngressLogs")]
     pub include_ingress_logs: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "includeTailscaleLogs")]
     pub include_tailscale_logs: bool,
     #[serde(default)]
     pub logs: DatadogLogsConfig,
-    #[serde(default)]
+    #[serde(default, alias = "includeMetrics")]
     pub include_metrics: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DatadogLogsConfig {
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "includeHealthcheck")]
     pub include_healthcheck: bool,
 }
 
@@ -631,6 +670,12 @@ async fn load_config_value(source: &str) -> Result<serde_json::Value> {
         let mut value: serde_json::Value = json5::from_str(&raw)
             .or_else(|_| serde_json::from_str(&raw))
             .map_err(|err| anyhow!("failed to parse config `{current_source}`: {err}"))?;
+        if !value.is_object() {
+            bail!("config `{current_source}` must contain a JSON object at the top level");
+        }
+        normalize_start_config_keys(&mut value).map_err(|err| {
+            anyhow!("failed to normalize config `{current_source}` field names: {err}")
+        })?;
         let object = value.as_object_mut().ok_or_else(|| {
             anyhow!("config `{current_source}` must contain a JSON object at the top level")
         })?;
@@ -658,6 +703,61 @@ async fn load_config_value(source: &str) -> Result<serde_json::Value> {
         merge_config_value(&mut merged, layer);
     }
     Ok(merged)
+}
+
+fn normalize_start_config_keys(value: &mut serde_json::Value) -> Result<()> {
+    let root = value
+        .as_object_mut()
+        .expect("the startup config top level was checked before normalization");
+    normalize_object_aliases(root, "config", START_CONFIG_KEY_ALIASES)?;
+
+    if let Some(cluster) = child_object_mut(root, "cluster") {
+        normalize_object_aliases(cluster, "config.cluster", CLUSTER_CONFIG_KEY_ALIASES)?;
+    }
+    if let Some(tailscale) = child_object_mut(root, "tailscale") {
+        normalize_object_aliases(tailscale, "config.tailscale", TAILSCALE_CONFIG_KEY_ALIASES)?;
+    }
+    if let Some(datadog) = child_object_mut(root, "datadog") {
+        normalize_object_aliases(datadog, "config.datadog", DATADOG_CONFIG_KEY_ALIASES)?;
+        if let Some(logs) = child_object_mut(datadog, "logs") {
+            normalize_object_aliases(logs, "config.datadog.logs", DATADOG_LOGS_CONFIG_KEY_ALIASES)?;
+        }
+    }
+    if let Some(slack) = child_object_mut(root, "slack") {
+        normalize_object_aliases(slack, "config.slack", SLACK_CONFIG_KEY_ALIASES)?;
+    }
+    if let Some(log_backup) = child_object_mut(root, "log-backup") {
+        normalize_object_aliases(
+            log_backup,
+            "config.log-backup",
+            LOG_BACKUP_CONFIG_KEY_ALIASES,
+        )?;
+    }
+    Ok(())
+}
+
+fn child_object_mut<'a>(
+    parent: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a mut serde_json::Map<String, serde_json::Value>> {
+    parent.get_mut(key)?.as_object_mut()
+}
+
+fn normalize_object_aliases(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    path: &str,
+    aliases: &[(&str, &str)],
+) -> Result<()> {
+    for &(alias, canonical) in aliases {
+        let Some(value) = object.remove(alias) else {
+            continue;
+        };
+        if object.contains_key(canonical) {
+            bail!("both `{path}.{canonical}` and `{path}.{alias}` are set; use only one spelling");
+        }
+        object.insert(canonical.to_string(), value);
+    }
+    Ok(())
 }
 
 async fn read_config_source(source: &str) -> Result<String> {
@@ -764,6 +864,163 @@ mod tests {
             serde_json::to_value(&endpoint).unwrap()["nodes"][0],
             "10.20.0.11:3101"
         );
+    }
+
+    #[test]
+    fn camel_case_start_config_fields_deserialize_and_serialize_canonically() {
+        let config: StartConfig = json5::from_str(
+            r#"{
+                cluster: {
+                    name: "prod",
+                    bindIp: "10.20.0.12",
+                    apiPort: 3101,
+                    gatewayPort: 3102,
+                    controlAllowCidrs: ["10.20.0.0/24"],
+                    etcdClientPort: 3103,
+                    etcdPeerPort: 3104,
+                    sharedRegistry: "ghcr.io/acme",
+                    joinSecret: "0123456789abcdef0123456789abcdef"
+                },
+                ingress: { port: 8080 },
+                encryptionKey: "encryption-secret",
+                tailscale: {
+                    authKey: "tailscale-secret",
+                    advertiseRoutes: ["172.22.2.0/24"]
+                },
+                jwtSecretKey: "jwt-secret",
+                datadog: {
+                    apiKey: "datadog-secret",
+                    includeIngressLogs: false,
+                    includeTailscaleLogs: false,
+                    logs: { includeHealthcheck: false },
+                    includeMetrics: true
+                },
+                slack: { webhookUrl: "https://hooks.slack.test" },
+                logBackup: {
+                    bucket: "maestro-logs",
+                    kmsKeyId: "kms-key",
+                    retentionDays: 30
+                },
+                disableEtcdCert: true,
+                allowCliDeployment: true
+            }"#,
+        )
+        .expect("camelCase aliases should deserialize");
+
+        assert_eq!(config.cluster.bind_ip.unwrap().to_string(), "10.20.0.12");
+        assert_eq!(config.cluster.api_port, 3101);
+        assert_eq!(config.cluster.gateway_port, 3102);
+        assert_eq!(config.cluster.etcd_client_port, 3103);
+        assert_eq!(config.cluster.etcd_peer_port, 3104);
+        assert_eq!(config.cluster.control_allow_cidrs, vec!["10.20.0.0/24"]);
+        assert_eq!(
+            config.cluster.shared_registry.as_deref(),
+            Some("ghcr.io/acme")
+        );
+        assert_eq!(
+            config.cluster.join_secret.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            config
+                .tailscale
+                .as_ref()
+                .expect("tailscale")
+                .advertise_routes,
+            vec!["172.22.2.0/24"]
+        );
+        assert!(
+            !config
+                .datadog
+                .as_ref()
+                .expect("datadog")
+                .include_ingress_logs
+        );
+        assert!(config.datadog.as_ref().expect("datadog").include_metrics);
+        assert_eq!(
+            config.log_backup.as_ref().expect("log backup").kms_key_id,
+            "kms-key"
+        );
+        assert!(config.disable_etcd_cert);
+        assert!(config.allow_cli_deployment);
+
+        let serialized = serde_json::to_value(config).expect("serialize startup config");
+        assert!(serialized.get("encryption-key").is_some());
+        assert!(serialized.get("encryptionKey").is_none());
+        assert!(serialized["cluster"].get("api-port").is_some());
+        assert!(serialized["cluster"].get("apiPort").is_none());
+        assert!(serialized["datadog"].get("include-metrics").is_some());
+        assert!(serialized["datadog"].get("includeMetrics").is_none());
+        assert!(serialized["log-backup"].get("kms-key-id").is_some());
+        assert!(serialized.get("logBackup").is_none());
+    }
+
+    #[tokio::test]
+    async fn camel_case_overrides_kebab_case_across_extended_configs() {
+        let directory = temp_config_dir("camel-extends");
+        std::fs::create_dir_all(&directory).unwrap();
+        let base = directory.join("base.jsonc");
+        let node = directory.join("node.jsonc");
+
+        std::fs::write(
+            &base,
+            r#"{
+                cluster: {
+                    name: "prod",
+                    "api-port": 3001,
+                    labels: { apiPort: "label-must-not-be-normalized" }
+                },
+                ingress: { port: 8080 },
+                "encryption-key": "base-key"
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &node,
+            r#"{
+                "$extends": "base.jsonc",
+                cluster: { apiPort: 3101 },
+                encryptionKey: "node-key"
+            }"#,
+        )
+        .unwrap();
+
+        let config = load_config(node.to_str().unwrap()).await.unwrap();
+        assert_eq!(config.cluster.api_port, 3101);
+        assert_eq!(config.encryption_key, "node-key");
+        assert_eq!(
+            config.cluster.labels.get("apiPort").map(String::as_str),
+            Some("label-must-not-be-normalized")
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_camel_and_kebab_case_fields_are_rejected() {
+        let directory = temp_config_dir("duplicate-case");
+        std::fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("maestro.jsonc");
+        std::fs::write(
+            &config_path,
+            r#"{
+                cluster: { name: "prod", "api-port": 3001, apiPort: 3101 },
+                ingress: { port: 8080 },
+                encryptionKey: "secret"
+            }"#,
+        )
+        .unwrap();
+
+        let error = load_config(config_path.to_str().unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("both `config.cluster.api-port` and `config.cluster.apiPort` are set")
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

@@ -9,16 +9,17 @@
         }
       },
       "then": {
-        "required": ["cluster", "ingress", "encryption-key"],
+        "required": ["cluster", "ingress"],
+        "oneOf": [{ "required": ["encryption-key"] }, { "required": ["encryptionKey"] }],
         "properties": {
           "cluster": {
             "required": ["name"]
           },
           "tailscale": {
-            "required": ["auth-key"]
+            "oneOf": [{ "required": ["auth-key"] }, { "required": ["authKey"] }]
           },
           "datadog": {
-            "required": ["api-key"]
+            "oneOf": [{ "required": ["api-key"] }, { "required": ["apiKey"] }]
           },
           "cloudflare": {
             "required": ["tunnel"],
@@ -29,10 +30,15 @@
             }
           },
           "slack": {
-            "required": ["webhook-url"]
+            "oneOf": [{ "required": ["webhook-url"] }, { "required": ["webhookUrl"] }]
           },
           "log-backup": {
-            "required": ["bucket", "kms-key-id"]
+            "required": ["bucket"],
+            "oneOf": [{ "required": ["kms-key-id"] }, { "required": ["kmsKeyId"] }]
+          },
+          "logBackup": {
+            "required": ["bucket"],
+            "oneOf": [{ "required": ["kms-key-id"] }, { "required": ["kmsKeyId"] }]
           }
         }
       }
@@ -75,6 +81,9 @@
           "type": "string",
           "format": "ipv4"
         },
+        "bindIp": {
+          "$ref": "#/properties/cluster/properties/bind-ip"
+        },
         "subnets": {
           "type": "array",
           "items": {
@@ -89,12 +98,18 @@
           "default": 3001,
           "description": "Local controller API port. With IP:port nodes, this selects the local voter entry."
         },
+        "apiPort": {
+          "$ref": "#/properties/cluster/properties/api-port"
+        },
         "gateway-port": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
           "default": 3002,
           "description": "Gateway host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +1."
+        },
+        "gatewayPort": {
+          "$ref": "#/properties/cluster/properties/gateway-port"
         },
         "control-allow-cidrs": {
           "type": "array",
@@ -103,12 +118,18 @@
           },
           "default": []
         },
+        "controlAllowCidrs": {
+          "$ref": "#/properties/cluster/properties/control-allow-cidrs"
+        },
         "etcd-client-port": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
           "default": 2379,
           "description": "etcd client host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +2."
+        },
+        "etcdClientPort": {
+          "$ref": "#/properties/cluster/properties/etcd-client-port"
         },
         "etcd-peer-port": {
           "type": "integer",
@@ -117,13 +138,22 @@
           "default": 2380,
           "description": "etcd peer host port for legacy bare-IP node configuration; IP:port nodes derive this as controller port +3."
         },
+        "etcdPeerPort": {
+          "$ref": "#/properties/cluster/properties/etcd-peer-port"
+        },
         "shared-registry": {
           "type": "string"
+        },
+        "sharedRegistry": {
+          "$ref": "#/properties/cluster/properties/shared-registry"
         },
         "join-secret": {
           "type": "string",
           "minLength": 32,
           "description": "High-entropy shared secret used to authenticate automatic CA discovery and node joins."
+        },
+        "joinSecret": {
+          "$ref": "#/properties/cluster/properties/join-secret"
         },
         "labels": {
           "type": "object",
@@ -193,6 +223,9 @@
     "encryption-key": {
       "type": "string"
     },
+    "encryptionKey": {
+      "$ref": "#/properties/encryption-key"
+    },
     "tailscale": {
       "type": "object",
       "additionalProperties": false,
@@ -200,17 +233,26 @@
         "auth-key": {
           "type": "string"
         },
+        "authKey": {
+          "$ref": "#/properties/tailscale/properties/auth-key"
+        },
         "advertise-routes": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": []
+        },
+        "advertiseRoutes": {
+          "$ref": "#/properties/tailscale/properties/advertise-routes"
         }
       }
     },
     "jwt-secret-key": {
       "type": "string"
+    },
+    "jwtSecretKey": {
+      "$ref": "#/properties/jwt-secret-key"
     },
     "tags": {
       "type": "array",
@@ -226,6 +268,9 @@
         "api-key": {
           "type": "string"
         },
+        "apiKey": {
+          "$ref": "#/properties/datadog/properties/api-key"
+        },
         "site": {
           "type": "string"
         },
@@ -233,9 +278,15 @@
           "type": "boolean",
           "default": true
         },
+        "includeIngressLogs": {
+          "$ref": "#/properties/datadog/properties/include-ingress-logs"
+        },
         "include-tailscale-logs": {
           "type": "boolean",
           "default": true
+        },
+        "includeTailscaleLogs": {
+          "$ref": "#/properties/datadog/properties/include-tailscale-logs"
         },
         "logs": {
           "type": "object",
@@ -244,12 +295,18 @@
             "include-healthcheck": {
               "type": "boolean",
               "default": true
+            },
+            "includeHealthcheck": {
+              "$ref": "#/properties/datadog/properties/logs/properties/include-healthcheck"
             }
           }
         },
         "include-metrics": {
           "type": "boolean",
           "default": false
+        },
+        "includeMetrics": {
+          "$ref": "#/properties/datadog/properties/include-metrics"
         }
       }
     },
@@ -296,6 +353,9 @@
       "properties": {
         "webhook-url": {
           "type": "string"
+        },
+        "webhookUrl": {
+          "$ref": "#/properties/slack/properties/webhook-url"
         }
       }
     },
@@ -311,6 +371,9 @@
           "type": "string",
           "minLength": 1
         },
+        "kmsKeyId": {
+          "$ref": "#/properties/log-backup/properties/kms-key-id"
+        },
         "region": {
           "type": "string",
           "minLength": 1
@@ -321,16 +384,28 @@
         "retention-days": {
           "type": "integer",
           "minimum": 1
+        },
+        "retentionDays": {
+          "$ref": "#/properties/log-backup/properties/retention-days"
         }
       }
+    },
+    "logBackup": {
+      "$ref": "#/properties/log-backup"
     },
     "disable-etcd-cert": {
       "type": "boolean",
       "default": false
     },
+    "disableEtcdCert": {
+      "$ref": "#/properties/disable-etcd-cert"
+    },
     "allow-cli-deployment": {
       "type": "boolean",
       "default": false
+    },
+    "allowCliDeployment": {
+      "$ref": "#/properties/allow-cli-deployment"
     }
   }
 }

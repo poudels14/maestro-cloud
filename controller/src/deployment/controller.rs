@@ -1527,7 +1527,7 @@ impl DeploymentController {
                 self.logger.emit(
                     "error",
                     &format!(
-                        "{service_id}/{deployment_id}: writable host volumes require deploy.node-affinity.node-id in cluster mode"
+                        "{service_id}/{deployment_id}: writable host volumes require deploy.nodeAffinity.node-id in cluster mode"
                     ),
                 );
                 DeploymentStatus::Crashed

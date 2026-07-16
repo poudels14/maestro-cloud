@@ -346,11 +346,11 @@ durable Traefik generation, keeps their assignments running through the drain
 deadline, and only then tells their nodes to stop them. A successor leader resumes
 that sequence from the stored traffic generation after failover.
 
-Placement affinity under `deploy.node-affinity` is a hard requirement:
+Placement affinity under `deploy.nodeAffinity` is a hard requirement:
 
 ```jsonc
 "deploy": {
-  "node-affinity": {
+  "nodeAffinity": {
     "labels": { "disk": "nvme" }
   }
 }
@@ -360,6 +360,13 @@ Placement affinity under `deploy.node-affinity` is a hard requirement:
 silently violate these constraints. A rollout or drain remains blocked when no
 eligible node exists. Writable host volumes require an exact `node-id` because
 their data cannot be relocated safely.
+
+When `nodeAffinity` is omitted, or is set to an empty object, every healthy,
+schedulable `hybrid` or `worker` node is eligible. Maestro preserves an existing
+healthy placement when possible and spreads new replicas according to current
+per-deployment and total node load. An empty affinity is therefore equivalent to
+no affinity; omit it unless a placement constraint is needed. The exception is a
+writable host volume, which requires an explicit `node-id` in cluster mode.
 
 Request affinity is separate and soft. Every response includes an opaque, stable
 node token in `X-Session-Affinity`. API clients can echo that header on later

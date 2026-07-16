@@ -162,6 +162,13 @@ The config file (`maestro.jsonc`) supports:
 }
 ```
 
+Daemon startup fields accept both kebab-case and camelCase, so
+`encryption-key`/`encryptionKey`, `cluster.api-port`/`cluster.apiPort`, and the
+other multi-word startup fields are equivalent. Generated templates and masked
+config output use kebab-case as the canonical form. The two spellings can be
+mixed across `$extends` layers, but the same field cannot be set with both
+spellings in one layer. User-defined `cluster.labels` keys are never rewritten.
+
 Pass as `--config maestro.jsonc` or `--config aws-secret://secret-name`.
 
 ### Inheriting a shared startup config
