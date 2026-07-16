@@ -380,7 +380,7 @@ impl LeaderLoop {
                             service_id: service_id.clone(),
                             deployment_id: deployment.id.clone(),
                             replica_index,
-                            reason: "writable host volumes require deploy.node-affinity.node-id"
+                            reason: "writable host volumes require deploy.nodeAffinity.node-id"
                                 .to_string(),
                         });
                     }
