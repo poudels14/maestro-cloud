@@ -764,6 +764,8 @@ mod tests {
             depot: Default::default(),
             cloudflare: None,
             slack: None,
+            github: None,
+            homepage: None,
             log_backup: None,
             disable_etcd_cert: false,
             allow_cli_deployment: false,

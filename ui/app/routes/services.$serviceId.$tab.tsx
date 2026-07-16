@@ -97,6 +97,7 @@ function ServiceDetailPage() {
         {(service) => (
           <ServiceDetailPanel
             service={service()}
+            services={services.data ?? []}
             tab={tab()}
             navigateTab={navigateTab}
             onOpenDrawer={() => setDrawerOpen(true)}
@@ -109,6 +110,7 @@ function ServiceDetailPage() {
 
 function ServiceDetailPanel(props: {
   service: Service;
+  services: Service[];
   tab: DetailTab;
   navigateTab: (t: DetailTab) => void;
   onOpenDrawer: () => void;
@@ -179,7 +181,7 @@ function ServiceDetailPanel(props: {
           })}
         >
           <Show when={props.tab === "overview"}>
-            <OverviewTab service={props.service} />
+            <OverviewTab service={props.service} services={props.services} />
           </Show>
           <Show when={props.tab === "deployments"}>
             <DeploymentsTab

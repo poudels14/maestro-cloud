@@ -17,6 +17,7 @@ pub mod dns;
 pub mod etcd;
 pub mod ingress_blocklist;
 pub mod keys;
+pub mod preview;
 pub mod provider;
 pub mod store;
 pub mod types;

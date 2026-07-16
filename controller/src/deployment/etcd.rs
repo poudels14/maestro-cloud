@@ -12,10 +12,11 @@ use crate::deployment::ingress_blocklist;
 use crate::deployment::keys::{
     CLUSTER_FREEZE_KEY, CLUSTER_UPGRADE_KEY, SERVICES_PREFIX, SERVICES_ROOT,
     deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
-    deployment_deploy_secrets_key, deployment_prefix, replica_state_key, replica_states_prefix,
-    service_deployment_history_key, service_deployment_history_prefix,
-    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
-    service_info_key, service_prefix, system_restart_request_key, system_upgrade_request_key,
+    deployment_deploy_secrets_key, deployment_prefix, deployment_preview_env_key,
+    replica_state_key, replica_states_prefix, service_deployment_history_key,
+    service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
+    service_id_from_info_key, service_info_key, service_prefix, system_restart_request_key,
+    system_upgrade_request_key,
 };
 use crate::deployment::store::{ClusterStore, SystemUpgradeRequest};
 use crate::deployment::types::{
@@ -144,7 +145,9 @@ impl EtcdStateStore {
         crate::cluster::control::send_command_with_response(
             &relay.socket_path,
             &relay.token,
-            crate::cluster::control::ControlCommand::StoreMutation { mutation },
+            crate::cluster::control::ControlCommand::StoreMutation {
+                mutation: Box::new(mutation),
+            },
         )
         .await
     }
@@ -165,6 +168,10 @@ impl EtcdStateStore {
         d.config.deploy.env.items.clear();
         if let Some(build) = &mut d.config.build {
             build.env.items.clear();
+            build.secrets.items.clear();
+        }
+        if let Some(preview) = &mut d.config.preview {
+            preview.env.items.clear();
         }
         d
     }
@@ -222,26 +229,49 @@ impl EtcdStateStore {
     ) -> Result<Vec<TxnOp>> {
         let mut operations = Vec::new();
         let deployment_id = &deployment.id;
-        if !deployment.config.deploy.env.items.is_empty() {
-            let key = deployment_deploy_env_key(service_id, deployment_id);
-            operations.push(self.encrypted_put(&key, &deployment.config.deploy.env.items)?);
+        let deploy_env_key = deployment_deploy_env_key(service_id, deployment_id);
+        if deployment.config.deploy.env.items.is_empty() {
+            operations.push(TxnOp::delete(deploy_env_key, None));
+        } else {
+            operations
+                .push(self.encrypted_put(&deploy_env_key, &deployment.config.deploy.env.items)?);
         }
-        if let Some(secrets) = &deployment.config.deploy.secrets
-            && !secrets.items.is_empty()
-            && secrets.source.is_none()
-        {
-            let key = deployment_deploy_secrets_key(service_id, deployment_id);
-            operations.push(self.encrypted_put(&key, &secrets.items)?);
+        let deploy_secrets_key = deployment_deploy_secrets_key(service_id, deployment_id);
+        if let Some(secrets) = &deployment.config.deploy.secrets {
+            if !secrets.items.is_empty() && secrets.source.is_none() {
+                operations.push(self.encrypted_put(&deploy_secrets_key, &secrets.items)?);
+            } else {
+                operations.push(TxnOp::delete(deploy_secrets_key, None));
+            }
+        } else {
+            operations.push(TxnOp::delete(deploy_secrets_key, None));
         }
+        let build_env_key = deployment_build_env_key(service_id, deployment_id);
+        let build_secrets_key = deployment_build_secrets_key(service_id, deployment_id);
         if let Some(build) = &deployment.config.build {
-            if !build.env.items.is_empty() {
-                let key = deployment_build_env_key(service_id, deployment_id);
-                operations.push(self.encrypted_put(&key, &build.env.items)?);
+            if build.env.items.is_empty() {
+                operations.push(TxnOp::delete(build_env_key, None));
+            } else {
+                operations.push(self.encrypted_put(&build_env_key, &build.env.items)?);
             }
-            if !build.secrets.items.is_empty() {
-                let key = deployment_build_secrets_key(service_id, deployment_id);
-                operations.push(self.encrypted_put(&key, &build.secrets.items)?);
+            if build.secrets.items.is_empty() {
+                operations.push(TxnOp::delete(build_secrets_key, None));
+            } else {
+                operations.push(self.encrypted_put(&build_secrets_key, &build.secrets.items)?);
             }
+        } else {
+            operations.push(TxnOp::delete(build_env_key, None));
+            operations.push(TxnOp::delete(build_secrets_key, None));
+        }
+        let preview_env_key = deployment_preview_env_key(service_id, deployment_id);
+        if let Some(preview) = &deployment.config.preview {
+            if preview.env.items.is_empty() {
+                operations.push(TxnOp::delete(preview_env_key, None));
+            } else {
+                operations.push(self.encrypted_put(&preview_env_key, &preview.env.items)?);
+            }
+        } else {
+            operations.push(TxnOp::delete(preview_env_key, None));
         }
         Ok(operations)
     }
@@ -262,6 +292,12 @@ impl EtcdStateStore {
                 build.secrets.items = self.read_encrypted(&key).await;
             }
         }
+        if let Some(preview) = &mut deployment.config.preview
+            && preview.env.items.is_empty()
+        {
+            let key = deployment_preview_env_key(service_id, deployment_id);
+            preview.env.items = self.read_encrypted(&key).await;
+        }
     }
 
     async fn restore_deployment_env(&self, service_id: &str, deployment: &mut ServiceDeployment) {
@@ -279,6 +315,12 @@ impl EtcdStateStore {
                 let key = deployment_build_secrets_key(service_id, deployment_id);
                 build.secrets.items = self.read_encrypted(&key).await;
             }
+        }
+        if let Some(preview) = &mut deployment.config.preview
+            && preview.env.items.is_empty()
+        {
+            let key = deployment_preview_env_key(service_id, deployment_id);
+            preview.env.items = self.read_encrypted(&key).await;
         }
     }
 
@@ -2206,6 +2248,12 @@ impl ClusterStore for EtcdStateStore {
                     build.env.items = self.read_encrypted(&key).await;
                 }
             }
+            if let Some(preview) = &mut info.config.preview
+                && preview.env.items.is_empty()
+            {
+                let key = deployment_preview_env_key(service_id, &latest.id);
+                preview.env.items = self.read_encrypted(&key).await;
+            }
         }
         Ok(Some(info))
     }
@@ -2537,25 +2585,16 @@ impl ClusterStore for EtcdStateStore {
             if let Some(dep_snapshot) = &active_deployment {
                 let mut updated_dep = dep_snapshot.deployment.clone();
                 updated_dep.config = config.clone();
-                let updated_dep = updated_dep;
-                let dep_json = serde_json::to_string(&updated_dep)
+                let prev_keys = self.prev_secret_keys(service_id).await;
+                let stripped_dep = self.strip_deployment_with_metadata(&updated_dep, &prev_keys);
+                let dep_json = serde_json::to_string(&stripped_dep)
                     .map_err(|err| anyhow!("failed to serialize deployment: {err}"))?;
                 compare.push(compare_mod_revision_or_absent(
                     &dep_snapshot.key,
                     Some(dep_snapshot.mod_revision),
                 ));
                 success.push(request_put(&dep_snapshot.key, &dep_json));
-                if let Some(build) = &config.build {
-                    if !build.secrets.items.is_empty() {
-                        let key =
-                            deployment_build_secrets_key(service_id, &dep_snapshot.deployment.id);
-                        success.push(self.encrypted_put(&key, &build.secrets.items)?);
-                    }
-                    if !build.env.items.is_empty() {
-                        let key = deployment_build_env_key(service_id, &dep_snapshot.deployment.id);
-                        success.push(self.encrypted_put(&key, &build.env.items)?);
-                    }
-                }
+                success.extend(self.deployment_data_operations(service_id, &updated_dep)?);
             }
 
             let committed = self.txn(compare, success).await?;

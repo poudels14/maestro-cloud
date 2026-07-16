@@ -851,6 +851,8 @@ fn docker_service(id: &str, replicas: u32) -> ServiceConfig {
             egress: Default::default(),
         },
         ingress: None,
+        preview: None,
+        preview_source: None,
     }
 }
 

@@ -66,6 +66,8 @@ fn deployment_with_source(
                 healthcheck_interval: 60,
             },
             ingress: None,
+            preview: None,
+            preview_source: None,
         },
         git_commit: None,
         build: None,
@@ -378,6 +380,8 @@ impl InMemoryStore {
                 healthcheck_interval: 60,
             },
             ingress: None,
+            preview: None,
+            preview_source: None,
         };
         state.configs.insert(service_id.to_string(), config.clone());
 
@@ -429,6 +433,8 @@ impl InMemoryStore {
                 healthcheck_interval: 60,
             },
             ingress: None,
+            preview: None,
+            preview_source: None,
         };
         state.configs.insert(service_id.to_string(), config.clone());
 

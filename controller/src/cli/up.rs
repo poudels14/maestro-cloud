@@ -2,7 +2,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::types::{IngressConfig, ServiceBuildConfig, ServiceDeployConfig};
+use crate::deployment::types::{
+    IngressConfig, PreviewConfig, ServiceBuildConfig, ServiceDeployConfig,
+};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +19,8 @@ pub(super) struct ServiceManifest {
     pub(super) deploy: ServiceDeployConfig,
     #[serde(default)]
     pub(super) ingress: Option<IngressConfig>,
+    #[serde(default)]
+    pub(super) preview: Option<PreviewConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,6 +35,8 @@ pub(super) struct UploadSpecPayload {
     pub(super) deploy: ServiceDeployConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ingress: Option<IngressConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) preview: Option<PreviewConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,7 +127,8 @@ pub(super) fn parse_service_manifest(raw: &str) -> Result<ServiceManifest> {
 
 pub(super) fn build_upload_payload(manifest: ServiceManifest) -> Result<UploadSpecPayload> {
     let service_id = manifest.id.trim().to_string();
-    crate::validation::validate_service_id(&service_id, "id").map_err(Error::invalid_config)?;
+    crate::validation::validate_user_service_id(&service_id, "id")
+        .map_err(Error::invalid_config)?;
     let name = manifest.name.trim().to_string();
     if name.is_empty() {
         return Err(Error::invalid_config(format!(
@@ -136,6 +143,13 @@ pub(super) fn build_upload_payload(manifest: ServiceManifest) -> Result<UploadSp
     .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
     crate::validation::validate_ingress_config(&manifest.ingress)
         .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+    crate::validation::validate_preview_config(
+        &service_id,
+        &manifest.preview,
+        &manifest.build,
+        &manifest.ingress,
+    )
+    .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
 
     Ok(UploadSpecPayload {
         id: service_id,
@@ -144,6 +158,7 @@ pub(super) fn build_upload_payload(manifest: ServiceManifest) -> Result<UploadSp
         image,
         deploy,
         ingress: manifest.ingress,
+        preview: manifest.preview,
     })
 }
 

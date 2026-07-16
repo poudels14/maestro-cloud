@@ -118,6 +118,10 @@ pub struct ServiceConfig {
     pub deploy: ServiceDeployConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingress: Option<IngressConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<PreviewConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_source: Option<PreviewSource>,
 }
 
 impl ServiceConfig {
@@ -130,6 +134,9 @@ impl ServiceConfig {
         if let Some(build) = &mut config.build {
             build.env.items.clear();
             build.secrets.items.clear();
+        }
+        if let Some(preview) = &mut config.preview {
+            preview.env.items.clear();
         }
         config
     }
@@ -155,8 +162,59 @@ impl ServiceConfig {
                 *value = SecretString::new(mask_secret_value(value.as_str()));
             }
         }
+        if let Some(preview) = &mut config.preview {
+            for value in preview.env.items.values_mut() {
+                *value = SecretString::new(value.masked());
+            }
+        }
         config
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_preview_close_grace_period")]
+    pub close_grace_period: String,
+    #[serde(default = "default_replicas")]
+    pub replicas: u32,
+    #[serde(default, skip_serializing_if = "PreviewEnvConfig::is_empty")]
+    pub env: PreviewEnvConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewEnvConfig {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub items: HashMap<String, SecretString>,
+}
+
+impl PreviewEnvConfig {
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSource {
+    pub base_service_id: String,
+    pub pr_number: u64,
+    pub head_ref: String,
+    pub head_sha: String,
+    pub title: String,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub volumes_stripped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<u64>,
+}
+
+fn default_preview_close_grace_period() -> String {
+    "1d".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

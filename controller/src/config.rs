@@ -110,6 +110,10 @@ pub struct StartConfig {
     pub cloudflare: Option<CloudflareConfig>,
     #[serde(default)]
     pub slack: Option<SlackConfig>,
+    #[serde(default)]
+    pub github: Option<GithubConfig>,
+    #[serde(default)]
+    pub homepage: Option<String>,
     #[serde(default, alias = "logBackup")]
     pub log_backup: Option<LogBackupConfig>,
     #[serde(default, alias = "disableEtcdCert")]
@@ -189,6 +193,36 @@ pub struct CloudflareTunnelConfig {
 pub struct SlackConfig {
     #[serde(alias = "webhookUrl")]
     pub webhook_url: SecretString,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct GithubConfig {
+    pub token: SecretString,
+    #[serde(default = "default_preview_domain", alias = "previewDomain")]
+    pub preview_domain: String,
+    #[serde(
+        default = "default_github_poll_interval_secs",
+        alias = "pollIntervalSecs"
+    )]
+    pub poll_interval_secs: u64,
+    #[serde(
+        default = "default_max_concurrent_previews",
+        alias = "maxConcurrentPreviews"
+    )]
+    pub max_concurrent_previews: usize,
+}
+
+fn default_preview_domain() -> String {
+    "preview.getbaton.ai".to_string()
+}
+
+fn default_github_poll_interval_secs() -> u64 {
+    60
+}
+
+fn default_max_concurrent_previews() -> usize {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -524,6 +558,10 @@ pub struct MaskedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slack: Option<SlackView>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<GithubView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_backup: Option<LogBackupConfig>,
     pub disable_etcd_cert: bool,
     #[serde(default)]
@@ -618,6 +656,15 @@ pub struct SlackView {
     pub webhook_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct GithubView {
+    pub token: Option<String>,
+    pub preview_domain: String,
+    pub poll_interval_secs: u64,
+    pub max_concurrent_previews: usize,
+}
+
 fn mask(value: &str) -> Option<String> {
     if value.is_empty() {
         None
@@ -710,6 +757,13 @@ impl StartConfig {
             slack: self.slack.as_ref().map(|sl| SlackView {
                 webhook_url: mask(sl.webhook_url.as_str()),
             }),
+            github: self.github.as_ref().map(|github| GithubView {
+                token: mask(github.token.as_str()),
+                preview_domain: github.preview_domain.clone(),
+                poll_interval_secs: github.poll_interval_secs,
+                max_concurrent_previews: github.max_concurrent_previews,
+            }),
+            homepage: self.homepage.clone(),
             log_backup: self.log_backup.clone(),
             disable_etcd_cert: self.disable_etcd_cert,
             allow_cli_deployment: self.allow_cli_deployment,
@@ -727,6 +781,7 @@ pub async fn load_config_with_diagnostics(source: &str) -> Result<(StartConfig, 
     let value = load_config_value(source).await?;
     let (mut config, ignored_fields) = deserialize_config_value::<StartConfig>(value)
         .map_err(|err| anyhow!("failed to parse merged config `{source}`: {err}"))?;
+    normalize_integration_config(&mut config)?;
     config.hydrate_node_selection()?;
     Ok((config, ignored_fields))
 }
@@ -845,6 +900,60 @@ fn append_field_path(path: &str, field: &str) -> String {
     } else {
         format!("{path}.{field}")
     }
+}
+
+fn normalize_integration_config(config: &mut StartConfig) -> Result<()> {
+    if let Some(homepage) = &mut config.homepage {
+        let trimmed = homepage.trim().trim_end_matches('/');
+        let parsed = reqwest::Url::parse(trimmed)
+            .map_err(|err| anyhow!("homepage must be an absolute HTTP(S) URL: {err}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            bail!("homepage must use the http or https scheme");
+        }
+        if parsed.host_str().is_none() || parsed.query().is_some() || parsed.fragment().is_some() {
+            bail!("homepage must have a host and cannot contain a query or fragment");
+        }
+        *homepage = trimmed.to_string();
+    }
+
+    if let Some(github) = &mut config.github {
+        if github.token.as_str().trim().is_empty() {
+            bail!("github.token cannot be empty");
+        }
+        github.token = SecretString::new(github.token.as_str().trim().to_string());
+        let preview_domain = github
+            .preview_domain
+            .trim()
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        validate_dns_name(&preview_domain, "github.preview-domain")?;
+        github.preview_domain = preview_domain;
+        if github.poll_interval_secs == 0 {
+            bail!("github.poll-interval-secs must be at least 1");
+        }
+        if github.max_concurrent_previews == 0 {
+            bail!("github.max-concurrent-previews must be at least 1");
+        }
+    }
+    Ok(())
+}
+
+fn validate_dns_name(value: &str, field: &str) -> Result<()> {
+    let valid = !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        });
+    if !valid {
+        bail!("{field} must be a valid DNS name");
+    }
+    Ok(())
 }
 
 async fn load_config_value(source: &str) -> Result<serde_json::Value> {
@@ -1399,7 +1508,9 @@ mod tests {
                 cloudflare: {
                     tunnel: { token: "cloudflare-plaintext-sentinel" }
                 },
-                slack: { "webhook-url": "slack-plaintext-sentinel" }
+                slack: { "webhook-url": "slack-plaintext-sentinel" },
+                github: { token: "github-plaintext-sentinel" },
+                homepage: "http://maestro.example.test/"
             }"#,
         )
         .expect("start config");
@@ -1414,9 +1525,69 @@ mod tests {
             "depot-plaintext-sentinel",
             "cloudflare-plaintext-sentinel",
             "slack-plaintext-sentinel",
+            "github-plaintext-sentinel",
         ] {
             assert!(!json.contains(plaintext), "API config leaked `{plaintext}`");
         }
-        assert!(json.matches("***").count() >= 8);
+        assert!(json.matches("***").count() >= 9);
+        assert!(json.contains("http://maestro.example.test/"));
+    }
+
+    #[test]
+    fn integration_config_normalizes_homepage_and_github_defaults() {
+        let mut config: StartConfig = json5::from_str(
+            r#"{
+                cluster: { name: "test" },
+                ingress: { port: 8080 },
+                "encryption-key": "secret",
+                homepage: " http://maestro.example.test/root/ ",
+                github: { token: "token" }
+            }"#,
+        )
+        .unwrap();
+        normalize_integration_config(&mut config).unwrap();
+        assert_eq!(
+            config.homepage.as_deref(),
+            Some("http://maestro.example.test/root")
+        );
+        let github = config.github.unwrap();
+        assert_eq!(github.preview_domain, "preview.getbaton.ai");
+        assert_eq!(github.poll_interval_secs, 60);
+        assert_eq!(github.max_concurrent_previews, 10);
+    }
+
+    #[test]
+    fn integration_config_rejects_invalid_homepage_and_preview_domain() {
+        let mut config: StartConfig = json5::from_str(
+            r#"{
+                cluster: { name: "test" },
+                ingress: { port: 8080 },
+                "encryption-key": "secret",
+                homepage: "ftp://maestro.example.test"
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            normalize_integration_config(&mut config)
+                .unwrap_err()
+                .to_string()
+                .contains("http or https")
+        );
+
+        let mut config: StartConfig = json5::from_str(
+            r#"{
+                cluster: { name: "test" },
+                ingress: { port: 8080 },
+                "encryption-key": "secret",
+                github: { token: "token", "preview-domain": "https://bad.example" }
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            normalize_integration_config(&mut config)
+                .unwrap_err()
+                .to_string()
+                .contains("valid DNS name")
+        );
     }
 }

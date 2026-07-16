@@ -616,6 +616,13 @@ fn start_schema_matches_serialized_config_fields() {
                 "https://hooks.slack.test".to_string(),
             ),
         }),
+        github: Some(crate::config::GithubConfig {
+            token: crate::utils::crypto::SecretString::new("github-token".to_string()),
+            preview_domain: "preview.example.test".to_string(),
+            poll_interval_secs: 60,
+            max_concurrent_previews: 10,
+        }),
+        homepage: Some("http://maestro.example.test".to_string()),
         log_backup: Some(crate::config::LogBackupConfig {
             bucket: "maestro-logs".to_string(),
             kms_key_id: "arn:aws:kms:us-west-2:123456789012:key/test".to_string(),
@@ -700,6 +707,12 @@ fn start_schema_matches_serialized_config_fields() {
         &["webhookUrl"],
     );
     assert_object_keys(
+        &model["github"],
+        &schema["properties"]["github"],
+        &[],
+        &["previewDomain", "pollIntervalSecs", "maxConcurrentPreviews"],
+    );
+    assert_object_keys(
         &model["log-backup"],
         &schema["properties"]["log-backup"],
         &[],
@@ -718,9 +731,9 @@ fn start_schema_matches_serialized_config_fields() {
 #[test]
 fn services_schema_matches_serialized_config_fields() {
     use crate::deployment::types::{
-        Command, DepotConfig, EnvConfig, IngressConfig, SecretKeyMeta, SecretsConfig,
-        ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceEgressConfig,
-        ServiceEgressRule, VolumeMount, VolumeOwner,
+        Command, DepotConfig, EnvConfig, IngressConfig, PreviewConfig, PreviewEnvConfig,
+        SecretKeyMeta, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+        ServiceEgressConfig, ServiceEgressRule, VolumeMount, VolumeOwner,
     };
 
     let env = EnvConfig {
@@ -802,6 +815,15 @@ fn services_schema_matches_serialized_config_fields() {
                 header: "X-Session-Node".to_string(),
             }),
         }),
+        preview: Some(PreviewConfig {
+            enabled: true,
+            close_grace_period: "1d".to_string(),
+            replicas: 1,
+            env: PreviewEnvConfig {
+                items: env.items.clone(),
+            },
+        }),
+        preview_source: None,
     };
     let mut model = serde_json::to_value(service).expect("serialize service config");
     let model = model.as_object_mut().expect("service object");
@@ -865,6 +887,7 @@ fn services_schema_matches_serialized_config_fields() {
         &[],
     );
     assert_object_keys(&model["ingress"], &definitions["ingress"], &[], &[]);
+    assert_object_keys(&model["preview"], &definitions["preview"], &[], &[]);
     assert_object_keys(
         &model["ingress"]["sessionAffinity"],
         &definitions["sessionAffinity"],

@@ -8,6 +8,7 @@ import type { Service } from "../../lib/types";
 import { StatusDot } from "../../lib/ui";
 import { clusterInfoQuery } from "../../lib/queries";
 import { visibleSystemServices } from "../../lib/systemServices";
+import { userServices as visibleUserServices } from "../../lib/previews";
 
 function ServiceSidebar(props: {
   services: Service[];
@@ -19,7 +20,7 @@ function ServiceSidebar(props: {
   onCloseMobile?: () => void;
 }) {
   const cluster = useQuery(() => clusterInfoQuery());
-  const userServices = () => props.services.filter((s) => !s.system);
+  const userServices = () => visibleUserServices(props.services);
   const systemServices = () => visibleSystemServices(props.services, cluster.data);
 
   return (

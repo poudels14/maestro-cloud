@@ -67,6 +67,10 @@ pub fn deployment_deploy_secrets_key(service_id: &str, deployment_id: &str) -> S
     format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/deploy/secrets")
 }
 
+pub fn deployment_preview_env_key(service_id: &str, deployment_id: &str) -> String {
+    format!("{SERVICES_ROOT}/{service_id}/{deployment_id}/preview/env")
+}
+
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
 pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
 pub const CLUSTER_FREEZE_KEY: &str = "/maetro/system/cluster-freeze";

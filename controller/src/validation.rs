@@ -1,6 +1,6 @@
 use crate::deployment::types::{
     EnvConfig, IngressConfig, MAX_HEALTHCHECK_INTERVAL_SECS, MIN_HEALTHCHECK_INTERVAL_SECS,
-    ServiceBuildConfig, ServiceDeployConfig,
+    PreviewConfig, ServiceBuildConfig, ServiceDeployConfig,
 };
 
 pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
@@ -13,6 +13,109 @@ pub fn validate_service_id(service_id: &str, field_name: &str) -> Result<(), Str
     if !is_url_safe {
         return Err(format!(
             "{field_name} must be URL-safe and contain only letters, numbers, '-' or '_'"
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_user_service_id(service_id: &str, field_name: &str) -> Result<(), String> {
+    validate_service_id(service_id, field_name)?;
+    if service_id.to_ascii_lowercase().contains("-pr-") {
+        return Err(format!(
+            "{field_name} cannot contain the reserved `-pr-` infix"
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_preview_config(
+    service_id: &str,
+    preview: &Option<PreviewConfig>,
+    build: &Option<ServiceBuildConfig>,
+    ingress: &Option<IngressConfig>,
+) -> Result<(), String> {
+    let Some(preview) = preview else {
+        return Ok(());
+    };
+    parse_duration(&preview.close_grace_period, "preview.closeGracePeriod")?;
+    if preview.replicas != 1 {
+        return Err("preview.replicas must be 1 in v1".to_string());
+    }
+    if !preview.enabled {
+        return Ok(());
+    }
+    validate_dns_label(service_id, "service id")?;
+    validate_dns_label(&format!("{service_id}-pr-99999"), "derived preview id")?;
+    let repo = build
+        .as_ref()
+        .and_then(|config| config.repo.as_deref())
+        .ok_or_else(|| "preview-enabled services require build.repo".to_string())?;
+    parse_github_repo(repo)?;
+    if ingress.is_none() {
+        return Err("preview-enabled services require ingress configuration".to_string());
+    }
+    Ok(())
+}
+
+pub fn parse_duration(value: &str, field_name: &str) -> Result<std::time::Duration, String> {
+    let value = value.trim();
+    let split_at = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (amount, unit) = value.split_at(split_at);
+    let amount = amount.parse::<u64>().map_err(|_| {
+        format!("{field_name} must be a duration such as `1d`, `12h`, `30m`, or `60s`")
+    })?;
+    if amount == 0 {
+        return Err(format!("{field_name} must be greater than zero"));
+    }
+    let seconds = match unit {
+        "s" => Some(amount),
+        "m" => amount.checked_mul(60),
+        "h" => amount.checked_mul(60 * 60),
+        "d" => amount.checked_mul(24 * 60 * 60),
+        _ => None,
+    }
+    .ok_or_else(|| format!("{field_name} must use one of the units `s`, `m`, `h`, or `d`"))?;
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+pub fn parse_github_repo(repo: &str) -> Result<(String, String), String> {
+    let trimmed = repo.trim();
+    let path = if let Some(path) = trimmed.strip_prefix("git@github.com:") {
+        path.to_string()
+    } else {
+        let parsed = reqwest::Url::parse(trimmed)
+            .map_err(|_| "preview build.repo must be a github.com repository URL".to_string())?;
+        if !parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+        {
+            return Err("preview build.repo must be hosted on github.com".to_string());
+        }
+        parsed.path().trim_start_matches('/').to_string()
+    };
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let mut segments = path.split('/');
+    let owner = segments.next().unwrap_or_default();
+    let name = segments.next().unwrap_or_default();
+    if owner.is_empty() || name.is_empty() || segments.next().is_some() {
+        return Err("preview build.repo must identify a github.com owner/repository".to_string());
+    }
+    Ok((owner.to_string(), name.to_string()))
+}
+
+fn validate_dns_label(value: &str, field_name: &str) -> Result<(), String> {
+    let valid = !value.is_empty()
+        && value.len() <= 63
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+    if !valid {
+        return Err(format!(
+            "{field_name} must be a lowercase DNS label no longer than 63 characters"
         ));
     }
     Ok(())
@@ -386,5 +489,30 @@ mod tests {
             .unwrap_err();
             assert!(error.contains(expected), "unexpected error: {error}");
         }
+    }
+
+    #[test]
+    fn validates_preview_duration_and_github_repository_formats() {
+        assert_eq!(parse_duration("1d", "duration").unwrap().as_secs(), 86_400);
+        assert_eq!(parse_duration("30m", "duration").unwrap().as_secs(), 1_800);
+        assert!(parse_duration("0h", "duration").is_err());
+        assert!(parse_duration("one day", "duration").is_err());
+        assert_eq!(
+            parse_github_repo("git@github.com:Baton-AI/baton.git").unwrap(),
+            ("Baton-AI".to_string(), "baton".to_string())
+        );
+        assert_eq!(
+            parse_github_repo("https://github.com/Baton-AI/baton.git").unwrap(),
+            ("Baton-AI".to_string(), "baton".to_string())
+        );
+        assert!(parse_github_repo("https://gitlab.com/Baton-AI/baton.git").is_err());
+    }
+
+    #[test]
+    fn reserves_preview_ids_for_derived_services() {
+        assert!(validate_user_service_id("app-pr-12", "id").is_err());
+        assert!(validate_user_service_id("app", "id").is_ok());
+        assert!(validate_dns_label("valid-service", "id").is_ok());
+        assert!(validate_dns_label("not_valid", "id").is_err());
     }
 }
