@@ -2735,19 +2735,11 @@ fn stats_warnings(
         }
     }
 
-    if backup.configured {
-        if backup.last_error_at_ms > backup.last_success_at_ms {
-            push(
-                "log-backup-failing",
-                "error",
-                "The latest S3 log-backup attempt failed".to_string(),
-            );
-        }
-    } else {
+    if backup.configured && backup.last_error_at_ms > backup.last_success_at_ms {
         push(
-            "log-backup-disabled",
-            "warning",
-            "S3 log backup is not configured".to_string(),
+            "log-backup-failing",
+            "error",
+            "The latest S3 log-backup attempt failed".to_string(),
         );
     }
 
@@ -2801,7 +2793,7 @@ mod cluster_stats_tests {
     use super::*;
 
     #[test]
-    fn warnings_surface_sink_failure_dead_letters_and_disabled_backup() {
+    fn warnings_surface_sink_failure_and_dead_letters_without_disabled_backup() {
         let controller = crate::cluster_stats::ControllerStatsSnapshot {
             reported_at_ms: 1_000_000,
             version: MAESTRO_VERSION.to_string(),
@@ -2847,7 +2839,7 @@ mod cluster_stats_tests {
 
         assert!(codes.contains("sink-datadog-failing"));
         assert!(codes.contains("datadog-dead-letters"));
-        assert!(codes.contains("log-backup-disabled"));
+        assert!(!codes.contains("log-backup-disabled"));
     }
 }
 
