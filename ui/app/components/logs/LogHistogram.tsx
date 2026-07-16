@@ -1,6 +1,45 @@
-import { createEffect, onCleanup, onMount } from "solid-js";
+import { createEffect, createMemo, For, onCleanup, onMount, Show } from "solid-js";
 import * as d3 from "d3";
 import type { LogHistogramBucket } from "../../lib/api";
+
+const LEVEL_PRIORITY = ["trace", "debug", "info", "warn", "error"];
+
+function levelColor(level: string) {
+  switch (level.toLowerCase()) {
+    case "error":
+    case "err":
+    case "fatal":
+    case "panic":
+      return "#ef4444";
+    case "warn":
+    case "warning":
+      return "#f59e0b";
+    case "info":
+      return "#6366f1";
+    case "debug":
+    case "dbg":
+      return "#8b5cf6";
+    case "trace":
+      return "#64748b";
+    default:
+      return "#9ca3af";
+  }
+}
+
+function levelRank(level: string) {
+  const rank = LEVEL_PRIORITY.indexOf(level.toLowerCase());
+  return rank < 0 ? -1 : rank;
+}
+
+function bucketLevels(bucket: LogHistogramBucket) {
+  const entries = Object.entries(bucket.levels ?? {}).filter(([, count]) => count > 0);
+  const categorized = entries.reduce((total, [, count]) => total + count, 0);
+  if (categorized < bucket.count) entries.push(["other", bucket.count - categorized]);
+  return entries.sort(([left], [right]) => {
+    const rank = levelRank(left) - levelRank(right);
+    return rank || left.localeCompare(right);
+  });
+}
 
 function LogHistogramChart(props: {
   data: LogHistogramBucket[];
@@ -8,7 +47,8 @@ function LogHistogramChart(props: {
   to: number;
   bucketMs: number;
   selectedTs?: number;
-  onSelect: (bucket: LogHistogramBucket) => void;
+  onSelectInterval: (bucket: LogHistogramBucket) => void;
+  onSelect: (bucket: LogHistogramBucket, level: string) => void;
 }) {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
@@ -100,25 +140,22 @@ function LogHistogramChart(props: {
       .attr("font-size", "11px");
 
     graph
-      .selectAll(".log-bucket")
+      .selectAll(".log-bucket-hit-area")
       .data(props.data)
       .join("rect")
-      .attr("class", "log-bucket")
+      .attr("class", "log-bucket-hit-area")
       .attr("x", (bucket) => bucketBounds(bucket).x)
-      .attr("y", (bucket) => yScale(bucket.count))
+      .attr("y", 0)
       .attr("width", (bucket) => bucketBounds(bucket).width)
-      .attr("height", (bucket) => Math.max(0, innerHeight - yScale(bucket.count)))
-      .attr("rx", 1)
-      .attr("fill", (bucket) => (bucket.ts === props.selectedTs ? "#4f46e5" : "#818cf8"))
-      .attr("opacity", (bucket) => (bucket.count === 0 ? 0 : 0.9))
-      .attr("role", (bucket) => (bucket.count > 0 ? "button" : null))
-      .attr("tabindex", (bucket) => (bucket.count > 0 ? 0 : null))
+      .attr("height", innerHeight)
+      .attr("fill", "transparent")
+      .attr("role", "button")
+      .attr("tabindex", 0)
       .attr("aria-label", (bucket) => {
-        if (bucket.count === 0) return null;
         const bounds = bucketBounds(bucket);
-        return `${bucket.count.toLocaleString()} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
+        return `Select ${bucket.count.toLocaleString()} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
       })
-      .style("cursor", (bucket) => (bucket.count > 0 ? "pointer" : "default"))
+      .style("cursor", "pointer")
       .on("mouseenter", (_event, bucket) => {
         const bounds = bucketBounds(bucket);
         const x = bounds.x + bounds.width / 2;
@@ -133,13 +170,63 @@ function LogHistogramChart(props: {
           .text(label);
       })
       .on("mouseleave", () => tooltip.style("display", "none"))
-      .on("click", (_event, bucket) => {
-        if (bucket.count > 0) props.onSelect(bucket);
-      })
+      .on("click", (_event, bucket) => props.onSelectInterval(bucket))
       .on("keydown", (event: KeyboardEvent, bucket) => {
-        if (bucket.count > 0 && (event.key === "Enter" || event.key === " ")) {
+        if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          props.onSelect(bucket);
+          props.onSelectInterval(bucket);
+        }
+      });
+
+    const segments = props.data.flatMap((bucket) => {
+      let offset = 0;
+      return bucketLevels(bucket).map(([level, count]) => {
+        const segment = { bucket, level, count, start: offset, end: offset + count };
+        offset += count;
+        return segment;
+      });
+    });
+
+    graph
+      .selectAll(".log-bucket-segment")
+      .data(segments)
+      .join("rect")
+      .attr("class", "log-bucket-segment")
+      .attr("x", (segment) => bucketBounds(segment.bucket).x)
+      .attr("y", (segment) => yScale(segment.end))
+      .attr("width", (segment) => bucketBounds(segment.bucket).width)
+      .attr("height", (segment) => Math.max(0, yScale(segment.start) - yScale(segment.end)))
+      .attr("rx", 1)
+      .attr("fill", (segment) => levelColor(segment.level))
+      .attr("opacity", 0.9)
+      .attr("role", "button")
+      .attr("tabindex", 0)
+      .attr("aria-label", (segment) => {
+        const bounds = bucketBounds(segment.bucket);
+        return `${segment.count.toLocaleString()} ${segment.level} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
+      })
+      .style("cursor", "pointer")
+      .on("mouseenter", (_event, segment) => {
+        const bounds = bucketBounds(segment.bucket);
+        const x = bounds.x + bounds.width / 2;
+        const start = new Date(bounds.start);
+        const end = new Date(bounds.end);
+        const label = `${segment.count.toLocaleString()} ${segment.level} logs · ${segment.bucket.count.toLocaleString()} total · ${d3.timeFormat("%b %d %H:%M")(start)}–${d3.timeFormat("%H:%M")(end)}`;
+        tooltip.style("display", null);
+        tooltip.select("line").attr("x1", x).attr("x2", x);
+        tooltipText
+          .attr("x", x < innerWidth / 2 ? x + 5 : x - 5)
+          .attr("text-anchor", x < innerWidth / 2 ? "start" : "end")
+          .text(label);
+      })
+      .on("mouseleave", () => tooltip.style("display", "none"))
+      .on("click", (_event, segment) => {
+        props.onSelect(segment.bucket, segment.level);
+      })
+      .on("keydown", (event: KeyboardEvent, segment) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          props.onSelect(segment.bucket, segment.level);
         }
       });
 
@@ -171,9 +258,40 @@ function LogHistogramChart(props: {
     render();
   });
 
+  const observedLevels = createMemo(() => {
+    const totals = new Map<string, number>();
+    for (const bucket of props.data) {
+      for (const [level, count] of bucketLevels(bucket)) {
+        totals.set(level, (totals.get(level) ?? 0) + count);
+      }
+    }
+    return Array.from(totals, ([level, count]) => ({ level, count })).sort((left, right) => {
+      const rank = levelRank(left.level) - levelRank(right.level);
+      return rank || left.level.localeCompare(right.level);
+    });
+  });
+
   return (
     <div ref={containerRef} class="w-full">
       <svg ref={svgRef} class="block w-full" />
+      <Show when={observedLevels().length > 0}>
+        <div class="flex flex-wrap justify-end gap-x-3 gap-y-1 px-3 pb-1 text-[10px] text-gray-500">
+          <For each={observedLevels()}>
+            {(item) => (
+              <span
+                class="inline-flex items-center gap-1"
+                title={`${item.count.toLocaleString()} logs`}
+              >
+                <span
+                  class="size-2 rounded-sm"
+                  style={{ "background-color": levelColor(item.level) }}
+                />
+                {item.level}
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
     </div>
   );
 }

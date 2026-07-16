@@ -322,7 +322,8 @@ pub(super) fn query_log_histogram(
         ));
     }
     let mut sql = format!(
-        "SELECT ts - (ts % ?) AS bucket_at_ms, count(*)::BIGINT AS count
+        "SELECT ts - (ts % ?) AS bucket_at_ms, lower(level) AS level,
+                count(*)::BIGINT AS count
          FROM ({}) q WHERE true",
         arms.join(" UNION ALL ")
     );
@@ -356,20 +357,32 @@ pub(super) fn query_log_histogram(
     }
     sql.push_str(
         " AND ts >= ? AND ts < ?
-         GROUP BY bucket_at_ms ORDER BY bucket_at_ms",
+         GROUP BY bucket_at_ms, lower(level) ORDER BY bucket_at_ms, level",
     );
     values.extend([Value::BigInt(from), Value::BigInt(to)]);
 
     let conn = db.reader()?;
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(values.iter()), |row| {
-        let count = row.get::<_, i64>(1)?;
-        Ok(LogHistogramBucket {
-            ts: row.get(0)?,
-            count: u64::try_from(count).unwrap_or_default(),
-        })
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
     })?;
-    Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    let mut buckets = std::collections::BTreeMap::<i64, LogHistogramBucket>::new();
+    for row in rows {
+        let (ts, level, count) = row?;
+        let count = u64::try_from(count).unwrap_or_default();
+        let bucket = buckets.entry(ts).or_insert_with(|| LogHistogramBucket {
+            ts,
+            count: 0,
+            levels: std::collections::BTreeMap::new(),
+        });
+        bucket.count = bucket.count.saturating_add(count);
+        *bucket.levels.entry(level).or_default() += count;
+    }
+    Ok(buckets.into_values().collect())
 }
 
 fn row_to_entry(row: &duckdb::Row<'_>) -> duckdb::Result<LogEntry> {

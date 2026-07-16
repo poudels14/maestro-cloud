@@ -50,6 +50,8 @@ pub struct LogHistogramQuery {
 pub struct LogHistogramBucket {
     pub ts: i64,
     pub count: u64,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub levels: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

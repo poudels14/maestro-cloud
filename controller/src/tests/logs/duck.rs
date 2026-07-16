@@ -416,6 +416,7 @@ async fn log_histogram_counts_filtered_hot_and_cold_rows() {
         LogOrigin::Service,
         "cold failure",
     );
+    cold.level = Arc::from("error");
     cold.attrs = vec![("DownstreamStatus".into(), "503".into())];
     store.append(&[cold]).await.expect("append cold");
     assert_eq!(store.rollover().await.expect("rollover"), 1);
@@ -426,6 +427,7 @@ async fn log_histogram_counts_filtered_hot_and_cold_rows() {
         LogOrigin::Service,
         "hot failure",
     );
+    hot.level = Arc::from("warn");
     hot.attrs = vec![("http.status_code".into(), "500".into())];
     let mut success = hot.clone();
     success.ts += 1_000;
@@ -447,7 +449,9 @@ async fn log_histogram_counts_filtered_hot_and_cold_rows() {
 
     assert_eq!(buckets.len(), 2);
     assert_eq!(buckets[0].count, 1);
+    assert_eq!(buckets[0].levels.get("error"), Some(&1));
     assert_eq!(buckets[1].count, 1);
+    assert_eq!(buckets[1].levels.get("warn"), Some(&1));
     std::fs::remove_dir_all(root).ok();
 }
 

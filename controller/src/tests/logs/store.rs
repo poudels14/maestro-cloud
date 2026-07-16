@@ -130,10 +130,12 @@ async fn sqlite_log_histogram_applies_time_scope_and_search_before_counting() {
     let from = 1_700_000_040_000;
     let mut first = sample_entry();
     first.ts = from + 1_000;
+    first.level = Arc::from("error");
     first.text = "failed first".into();
     first.attrs = vec![("DownstreamStatus".into(), "503".into())];
     let mut second = first.clone();
     second.ts = from + bucket_ms + 1_000;
+    second.level = Arc::from("warn");
     second.text = "failed second".into();
     let mut success = second.clone();
     success.ts += 1_000;
@@ -161,7 +163,9 @@ async fn sqlite_log_histogram_applies_time_scope_and_search_before_counting() {
     assert_eq!(buckets.len(), 2);
     assert_eq!(buckets.iter().map(|bucket| bucket.count).sum::<u64>(), 2);
     assert_eq!(buckets[0].ts, from);
+    assert_eq!(buckets[0].levels.get("error"), Some(&1));
     assert_eq!(buckets[1].ts, from + bucket_ms);
+    assert_eq!(buckets[1].levels.get("warn"), Some(&1));
     let _ = std::fs::remove_file(path);
 }
 

@@ -3261,17 +3261,18 @@ fn complete_log_histogram(
     query: &LogHistogramQuery,
     buckets: Vec<LogHistogramBucket>,
 ) -> LogHistogram {
-    let counts = buckets
+    let mut buckets = buckets
         .into_iter()
-        .map(|bucket| (bucket.ts, bucket.count))
+        .map(|bucket| (bucket.ts, bucket))
         .collect::<BTreeMap<_, _>>();
     let mut ts = query.from - query.from.rem_euclid(query.bucket_ms);
     let mut completed = Vec::new();
     while ts < query.to {
-        completed.push(LogHistogramBucket {
+        completed.push(buckets.remove(&ts).unwrap_or_else(|| LogHistogramBucket {
             ts,
-            count: counts.get(&ts).copied().unwrap_or_default(),
-        });
+            count: 0,
+            levels: BTreeMap::new(),
+        }));
         let next = ts.saturating_add(query.bucket_ms);
         if next <= ts {
             break;

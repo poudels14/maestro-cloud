@@ -582,11 +582,14 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
         vec![LogHistogramBucket {
             ts: first_bucket + ONE_MINUTE_MS,
             count: 7,
+            levels: std::collections::BTreeMap::from([("error".to_string(), 7)]),
         }],
     );
     assert_eq!(complete.bucket_ms, ONE_MINUTE_MS);
     assert_eq!(complete.buckets[0].count, 0);
+    assert!(complete.buckets[0].levels.is_empty());
     assert_eq!(complete.buckets[1].count, 7);
+    assert_eq!(complete.buckets[1].levels.get("error"), Some(&7));
     assert!(complete.buckets.len() <= 61);
     let json = serde_json::to_value(&complete).expect("serialize histogram");
     assert_eq!(json["bucketMs"], ONE_MINUTE_MS);

@@ -555,7 +555,8 @@ impl LogStore {
             use rusqlite::types::Value;
 
             let mut sql = String::from(
-                "SELECT ts - (ts % ?) AS bucket_at_ms, count(*) AS count
+                "SELECT ts - (ts % ?) AS bucket_at_ms, lower(level) AS level,
+                        count(*) AS count
                  FROM (
                     SELECT ts, level, text, source, origin,
                            tags AS tags_json, attributes AS attributes_json
@@ -594,20 +595,32 @@ impl LogStore {
             }
             sql.push_str(
                 " AND ts >= ? AND ts < ?
-                 GROUP BY bucket_at_ms ORDER BY bucket_at_ms",
+                 GROUP BY bucket_at_ms, lower(level) ORDER BY bucket_at_ms, level",
             );
             values.extend([Value::Integer(query.from), Value::Integer(query.to)]);
 
             let conn = pool.get()?;
             let mut statement = conn.prepare(&sql)?;
             let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {
-                let count = row.get::<_, i64>(1)?;
-                Ok(LogHistogramBucket {
-                    ts: row.get(0)?,
-                    count: u64::try_from(count).unwrap_or_default(),
-                })
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
             })?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            let mut buckets = std::collections::BTreeMap::<i64, LogHistogramBucket>::new();
+            for row in rows {
+                let (ts, level, count) = row?;
+                let count = u64::try_from(count).unwrap_or_default();
+                let bucket = buckets.entry(ts).or_insert_with(|| LogHistogramBucket {
+                    ts,
+                    count: 0,
+                    levels: std::collections::BTreeMap::new(),
+                });
+                bucket.count = bucket.count.saturating_add(count);
+                *bucket.levels.entry(level).or_default() += count;
+            }
+            Ok(buckets.into_values().collect())
         })
         .await?
     }
