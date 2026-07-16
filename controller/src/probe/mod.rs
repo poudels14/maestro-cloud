@@ -99,39 +99,16 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             Ok(None) => {}
             Err(err) => eprintln!("failed to restore backup stats: {err:#}"),
         }
-        // This is the retired probe archive. Active controller spools are shipped
-        // through /api/logs and must never be scanned by the SQLite migrator.
-        for source in [data_root.join("logs.db")] {
-            let archive_hash = sqlite_archive_hash(&source);
-            if matches!(
-                store.has_log_migration_marker(&archive_hash).await,
-                Ok(true)
-            ) {
-                continue;
-            }
-            match duck.migrate_sqlite(&source).await {
-                Ok(count) if count > 0 => {
-                    eprintln!("migrated {count} telemetry rows from {}", source.display());
-                    if let Err(err) = store.put_log_migration_marker(&archive_hash).await {
-                        eprintln!("failed to record migration completion: {err}");
-                    }
-                }
-                Ok(_) => {
-                    if source.exists()
-                        && let Err(err) = store.put_log_migration_marker(&archive_hash).await
-                    {
-                        eprintln!("failed to record migration completion: {err}");
-                    }
-                }
-                Err(err) => eprintln!("SQLite migration failed for {}: {err}", source.display()),
-            }
-        }
-        if let Err(err) = duck.rollover().await {
-            eprintln!("initial DuckDB rollover failed: {err}");
-        }
+        tokio::spawn(migrate_legacy_logs(
+            duck.clone(),
+            store.clone(),
+            data_root.clone(),
+        ));
         let rollover_store = duck.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            let period = Duration::from_secs(60 * 60);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
@@ -147,7 +124,9 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             .map(i64::from)
             .filter(|days| *days > 0);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            let period = Duration::from_secs(24 * 60 * 60);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
@@ -182,7 +161,9 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         );
         let cleanup_store = sqlite.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            let period = Duration::from_secs(24 * 60 * 60);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
@@ -350,6 +331,41 @@ fn parse_bool(value: &str, default: bool) -> bool {
         "1" | "true" | "yes" | "on" => true,
         "0" | "false" | "no" | "off" => false,
         _ => default,
+    }
+}
+
+async fn migrate_legacy_logs(
+    duck: Arc<crate::logs::DuckLogStore>,
+    store: Arc<dyn crate::deployment::store::ClusterStore>,
+    data_root: std::path::PathBuf,
+) {
+    let source = data_root.join("logs.db");
+    let archive_hash = sqlite_archive_hash(&source);
+    let already_migrated = matches!(
+        store.has_log_migration_marker(&archive_hash).await,
+        Ok(true)
+    );
+    if !already_migrated {
+        match duck.migrate_sqlite(&source).await {
+            Ok(count) => {
+                if count > 0 {
+                    eprintln!("migrated {count} telemetry rows from {}", source.display());
+                }
+                if source.exists()
+                    && let Err(err) = store.put_log_migration_marker(&archive_hash).await
+                {
+                    eprintln!("failed to record migration completion: {err}");
+                }
+            }
+            Err(err) => {
+                eprintln!("SQLite migration failed for {}: {err}", source.display());
+                return;
+            }
+        }
+    }
+
+    if let Err(err) = duck.rollover().await {
+        eprintln!("initial DuckDB rollover failed: {err}");
     }
 }
 

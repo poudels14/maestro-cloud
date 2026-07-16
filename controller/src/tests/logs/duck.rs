@@ -681,6 +681,81 @@ async fn sqlite_migration_resumes_without_duplicates() {
 }
 
 #[tokio::test]
+async fn sqlite_metric_migration_commits_multiple_resumable_batches() {
+    let root = temp_root("metric-migration");
+    std::fs::create_dir_all(&root).expect("root");
+    let sqlite_path = root.join("logs.db");
+    let sqlite = LogStore::open(&sqlite_path).expect("SQLite open");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_millis() as i64;
+    let metrics = (0..5_001)
+        .map(|offset| crate::metrics::MetricPoint {
+            ts: now + offset,
+            source: "node".to_string(),
+            cpu_percent: 1.0,
+            memory_bytes: 2,
+            memory_limit_bytes: 3,
+            net_rx_bytes: 4,
+            net_tx_bytes: 5,
+        })
+        .collect::<Vec<_>>();
+    let traffic = (0..5_001)
+        .map(|offset| crate::metrics::TrafficPoint {
+            ts: now + offset,
+            service_id: "api".to_string(),
+            deployment_id: Some("dep".to_string()),
+            status_code: 200,
+            method: "GET".to_string(),
+            requests: 1,
+            bytes_in: 2,
+            bytes_out: 3,
+            lat_le_1s: 1,
+            lat_le_5s: 1,
+            lat_le_10s: 1,
+            lat_total: 1,
+        })
+        .collect::<Vec<_>>();
+    sqlite
+        .append_metrics(&metrics)
+        .await
+        .expect("SQLite metrics append");
+    sqlite
+        .append_traffic_metrics(&traffic)
+        .await
+        .expect("SQLite traffic append");
+    drop(sqlite);
+
+    let duck = DuckLogStore::open(&root.join("new")).expect("DuckDB open");
+    assert_eq!(
+        duck.migrate_sqlite(&sqlite_path).await.expect("migrate"),
+        metrics.len() + traffic.len()
+    );
+    assert_eq!(
+        duck.migrate_sqlite(&sqlite_path)
+            .await
+            .expect("resume migration"),
+        0
+    );
+    assert_eq!(
+        duck.read_metrics("node", now, now + 5_001)
+            .await
+            .expect("metrics read")
+            .len(),
+        metrics.len()
+    );
+    assert_eq!(
+        duck.read_traffic_metrics("api", now, now + 5_001)
+            .await
+            .expect("traffic read")
+            .len(),
+        traffic.len()
+    );
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
 async fn retention_only_removes_partitions_marked_backed_up() {
     let root = temp_root("retention");
     let store = DuckLogStore::open(&root).expect("open");
