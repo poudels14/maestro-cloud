@@ -74,6 +74,26 @@ export interface VolumeOwner {
   gid?: number;
 }
 
+export namespace Preview {
+  export type Config = {
+    enabled: boolean;
+    closeGracePeriod: string;
+    replicas: number;
+    env?: { items?: Record<string, string> };
+  };
+
+  export type Source = {
+    baseServiceId: string;
+    prNumber: number;
+    headRef: string;
+    headSha: string;
+    title: string;
+    createdAt: number;
+    volumesStripped?: boolean;
+    closedAt?: number | null;
+  };
+}
+
 export type SlackCategory = "info" | "error";
 
 export interface SlackWebhook {
@@ -96,6 +116,8 @@ export interface Service {
   system?: boolean;
   deployFrozen?: boolean;
   replicasOverride?: number | null;
+  preview?: Preview.Config | null;
+  previewSource?: Preview.Source | null;
 }
 
 export interface ReplicaState {
@@ -337,6 +359,13 @@ export type MaskedConfig = {
     tunnel: { token: string | null; replicas?: number | null };
   } | null;
   slack?: { "webhook-url": string | null } | null;
+  github?: {
+    token: string | null;
+    "preview-domain": string;
+    "poll-interval-secs": number;
+    "max-concurrent-previews": number;
+  } | null;
+  homepage?: string | null;
   "disable-etcd-cert": boolean;
   "allow-cli-deployment": boolean;
 };

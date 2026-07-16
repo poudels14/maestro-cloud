@@ -796,6 +796,8 @@ async fn run() -> crate::error::Result<bool> {
                     depot: Default::default(),
                     cloudflare: None,
                     slack: None,
+                    github: None,
+                    homepage: None,
                     log_backup: None,
                     disable_etcd_cert: false,
                     allow_cli_deployment: false,
@@ -982,6 +984,8 @@ async fn run() -> crate::error::Result<bool> {
             let maestro_config = serde_json::to_string(&cfg.masked()).map_err(|err| {
                 Error::internal(format!("failed to serialize masked config: {err}"))
             })?;
+            let github_config = cfg.github.clone();
+            let homepage = cfg.homepage.clone();
             let ingestion_token = load_or_create_ingestion_token(&data_dir)?;
             let cluster_runtime = if cfg.cluster.nodes.is_empty() {
                 None
@@ -1848,6 +1852,23 @@ async fn run() -> crate::error::Result<bool> {
             let watcher_store = store.clone();
             let watcher_data_dir = deployment_config.data_dir.clone();
             let watcher_logger = logger.clone();
+            let preview_api = github_config
+                .as_ref()
+                .map(|github| builder::GithubClient::new(github.token.as_str()))
+                .transpose()
+                .map_err(|error| {
+                    Error::invalid_config(format!("failed to initialize GitHub client: {error}"))
+                })?
+                .map(|client| Arc::new(client) as Arc<dyn builder::PullRequestApi>);
+            let preview_watcher_config =
+                github_config
+                    .as_ref()
+                    .map(|github| builder::PrWatcherConfig {
+                        preview_domain: github.preview_domain.clone(),
+                        poll_interval: std::time::Duration::from_secs(github.poll_interval_secs),
+                        max_concurrent_previews: github.max_concurrent_previews,
+                        homepage: homepage.clone(),
+                    });
             let watcher_handle = if cluster_mode {
                 None
             } else {
@@ -1860,6 +1881,24 @@ async fn run() -> crate::error::Result<bool> {
                     )
                     .run(),
                 ))
+            };
+            let preview_watcher_handle = if cluster_mode {
+                None
+            } else if let (Some(api), Some(config)) =
+                (preview_api.clone(), preview_watcher_config.clone())
+            {
+                Some(tokio::spawn(
+                    builder::PrWatcher::new(
+                        watcher_store.clone(),
+                        api,
+                        config,
+                        signal_tx.subscribe(),
+                        watcher_logger.clone(),
+                    )
+                    .run(),
+                ))
+            } else {
+                None
             };
 
             let metrics_signal_rx = signal_tx.subscribe();
@@ -1940,8 +1979,31 @@ async fn run() -> crate::error::Result<bool> {
                             .run(),
                         )
                     });
+                    let scoped_preview_watcher = if cluster_mode {
+                        if let (Some(api), Some(config)) =
+                            (preview_api.clone(), preview_watcher_config.clone())
+                        {
+                            Some(tokio::spawn(
+                                builder::PrWatcher::new(
+                                    watcher_store.clone(),
+                                    api,
+                                    config,
+                                    deployment_shutdown_tx.subscribe(),
+                                    watcher_logger.clone(),
+                                )
+                                .run(),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     let controller_result = controller.run().await;
                     if let Some(handle) = scoped_watcher {
+                        handle.abort();
+                    }
+                    if let Some(handle) = scoped_preview_watcher {
                         handle.abort();
                     }
                     let exit_reason = controller_result.map_err(Error::from)?;
@@ -1955,6 +2017,9 @@ async fn run() -> crate::error::Result<bool> {
             .await;
 
             if let Some(handle) = watcher_handle {
+                handle.abort();
+            }
+            if let Some(handle) = preview_watcher_handle {
                 handle.abort();
             }
             metrics_handle.abort();

@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, io::IsTerminal, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::types::{IngressConfig, ServiceBuildConfig, ServiceDeployConfig};
+use crate::deployment::types::{
+    IngressConfig, PreviewConfig, ServiceBuildConfig, ServiceDeployConfig,
+};
 use crate::error::{Error, Result};
 use crate::utils::crypto::SecretString;
 
@@ -23,6 +25,8 @@ pub(super) struct ServiceTemplate {
     deploy: ServiceDeployConfig,
     #[serde(default)]
     ingress: Option<IngressConfig>,
+    #[serde(default)]
+    preview: Option<PreviewConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +41,8 @@ struct PatchServiceRequest {
     deploy: ServiceDeployConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     ingress: Option<IngressConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<PreviewConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,7 +330,7 @@ pub(super) fn validate_service_template(
     template: &ServiceTemplate,
 ) -> Result<()> {
     let id = service_id.trim();
-    crate::validation::validate_service_id(id, "service id")
+    crate::validation::validate_user_service_id(id, "service id")
         .map_err(|error| Error::invalid_config(format!("services.{service_id}: {error}")))?;
     if template.name.trim().is_empty() {
         return Err(Error::invalid_config(format!(
@@ -339,6 +345,13 @@ pub(super) fn validate_service_template(
     .map_err(|error| service_validation_error(service_id, &error))?;
     crate::validation::validate_ingress_config(&template.ingress)
         .map_err(|error| service_validation_error(service_id, &error))?;
+    crate::validation::validate_preview_config(
+        id,
+        &template.preview,
+        &template.build,
+        &template.ingress,
+    )
+    .map_err(|error| service_validation_error(service_id, &error))?;
     Ok(())
 }
 
@@ -349,7 +362,7 @@ fn service_validation_error(service_id: &str, message: &str) -> Error {
         .filter(|path| {
             matches!(
                 path.split('.').next(),
-                Some("build" | "image" | "deploy" | "ingress")
+                Some("build" | "image" | "deploy" | "ingress" | "preview")
             )
         });
     let path = relative_path.map_or_else(
@@ -379,7 +392,7 @@ fn service_payload(
     service_template: &ServiceTemplate,
 ) -> Result<PatchServiceRequest> {
     let id = service_id.trim();
-    crate::validation::validate_service_id(id, "service id").map_err(Error::invalid_config)?;
+    crate::validation::validate_user_service_id(id, "service id").map_err(Error::invalid_config)?;
 
     let name = service_template.name.trim();
     if name.is_empty() {
@@ -447,6 +460,20 @@ fn service_payload(
         None
     };
 
+    let preview = if let Some(mut preview) = service_template.preview.clone() {
+        let mut resolved_preview_env = std::collections::HashMap::new();
+        for (key, value) in &preview.env.items {
+            let resolved = expand_env_value(value.as_str()).map_err(|err| {
+                Error::invalid_config(format!("service `{service_id}` preview.env `{key}`: {err}"))
+            })?;
+            resolved_preview_env.insert(key.clone(), SecretString::new(resolved));
+        }
+        preview.env.items = resolved_preview_env;
+        Some(preview)
+    } else {
+        None
+    };
+
     Ok(PatchServiceRequest {
         id: id.to_string(),
         name: name.to_string(),
@@ -454,6 +481,7 @@ fn service_payload(
         image,
         deploy,
         ingress: service_template.ingress.clone(),
+        preview,
     })
 }
 

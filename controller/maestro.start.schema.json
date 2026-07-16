@@ -32,6 +32,9 @@
           "slack": {
             "oneOf": [{ "required": ["webhook-url"] }, { "required": ["webhookUrl"] }]
           },
+          "github": {
+            "required": ["token"]
+          },
           "log-backup": {
             "required": ["bucket"],
             "oneOf": [{ "required": ["kms-key-id"] }, { "required": ["kmsKeyId"] }]
@@ -329,6 +332,44 @@
           "$ref": "#/properties/slack/properties/webhook-url"
         }
       }
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preview-domain": {
+          "type": "string",
+          "default": "preview.getbaton.ai"
+        },
+        "previewDomain": {
+          "$ref": "#/properties/github/properties/preview-domain"
+        },
+        "poll-interval-secs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        },
+        "pollIntervalSecs": {
+          "$ref": "#/properties/github/properties/poll-interval-secs"
+        },
+        "max-concurrent-previews": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "maxConcurrentPreviews": {
+          "$ref": "#/properties/github/properties/max-concurrent-previews"
+        }
+      }
+    },
+    "homepage": {
+      "type": "string",
+      "pattern": "^https?://",
+      "description": "Browser-accessible Maestro base URL used in integration links."
     },
     "log-backup": {
       "type": "object",

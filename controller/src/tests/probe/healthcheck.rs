@@ -181,6 +181,8 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 port: Some(port),
                 session_affinity: None,
             }),
+            preview: None,
+            preview_source: None,
         },
         git_commit: None,
         build: None,

@@ -157,6 +157,13 @@ The config file (`maestro.jsonc`) supports:
   "depot": {
     "token": "your-depot-token"
   },
+  "homepage": "http://maestro.internal:3001",
+  "github": {
+    "token": "your-fine-grained-pat",
+    "preview-domain": "preview.getbaton.ai",
+    "poll-interval-secs": 60,
+    "max-concurrent-previews": 10
+  },
   "tailscale": { "auth-key": "tskey-auth-..." },
   "datadog": {
     "api-key": "your-dd-api-key",
@@ -238,6 +245,8 @@ the service can use any port in that destination CIDR. The exception follows all
 replicas of the service across restarts, rolling deployments, and cluster nodes.
 It has no effect unless the destination would otherwise be covered by the node's
 global egress deny list.
+
+For per-pull-request deployments, see [Pull request previews](docs/pr-previews.md).
 
 ## External Secrets
 

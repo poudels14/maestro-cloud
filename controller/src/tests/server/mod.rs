@@ -1,8 +1,8 @@
 use super::*;
 use crate::deployment::types::{
     Command, DeploymentBuildInfo, DeploymentStatus, DeploymentWithReplicas, EnvConfig,
-    SecretKeyMeta, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
-    ServiceDeployment, mask_secret_value,
+    PreviewConfig, PreviewEnvConfig, SecretKeyMeta, SecretsConfig, ServiceBuildConfig,
+    ServiceConfig, ServiceDeployConfig, ServiceDeployment, mask_secret_value,
 };
 use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
@@ -40,6 +40,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             healthcheck_interval: 60,
         },
         ingress: None,
+        preview: None,
     }
 }
 
@@ -67,6 +68,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             healthcheck_interval: 60,
         },
         ingress: None,
+        preview: None,
     }
 }
 
@@ -100,6 +102,17 @@ fn config_with_plaintext_sentinels() -> ServiceConfig {
             },
         )]),
     });
+    request.preview = Some(PreviewConfig {
+        enabled: false,
+        close_grace_period: "1d".to_string(),
+        replicas: 1,
+        env: PreviewEnvConfig {
+            items: std::collections::HashMap::from([(
+                "PREVIEW_ENV".to_string(),
+                SecretString::new("preview-env-plaintext".to_string()),
+            )]),
+        },
+    });
     build_service_config(request).expect("service config")
 }
 
@@ -110,6 +123,7 @@ fn assert_no_config_plaintext(json: &str) {
         "deploy-env-plaintext",
         "deploy-secret-plaintext",
         "secret-hash-plaintext",
+        "preview-env-plaintext",
     ] {
         assert!(
             !json.contains(plaintext),
@@ -227,6 +241,28 @@ fn rollout_diff_masks_environment_values_before_serialization() {
     assert!(!json.contains("new-env-plaintext"));
     assert!(json.contains("ol*****text"));
     assert!(json.contains("ne*****text"));
+}
+
+#[test]
+fn preview_rollouts_require_cluster_github_configuration() {
+    let mut request = sample_patch_request("preview-app", "Preview app");
+    request.build.as_mut().unwrap().repo =
+        Some("https://github.com/Baton-AI/baton.git".to_string());
+    request.ingress = Some(crate::deployment::types::IngressConfig {
+        host: Some("app.example.test".to_string()),
+        hosts: Vec::new(),
+        port: Some(3000),
+        session_affinity: None,
+    });
+    request.preview = Some(PreviewConfig {
+        enabled: true,
+        close_grace_period: "1d".to_string(),
+        replicas: 1,
+        env: PreviewEnvConfig::default(),
+    });
+    let config = build_service_config(request).unwrap();
+    assert!(validate_preview_integration(&config, false).is_err());
+    assert!(validate_preview_integration(&config, true).is_ok());
 }
 
 #[test]

@@ -1028,6 +1028,7 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
                 .repo
@@ -1137,6 +1138,7 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
                 .repo
@@ -1260,6 +1262,7 @@ impl Server {
                 format!("invalid upload request payload: {err}"),
             )
         })?;
+        reject_unconfigured_preview(&state, &service_config)?;
 
         service_config.name = format!("[up] {}", service_config.name);
         service_config.version = format!("{}-up-{}", service_config.version, &archive_hash[..12]);
@@ -1361,6 +1364,8 @@ impl Server {
                         egress: Default::default(),
                     },
                     ingress: None,
+                    preview: None,
+                    preview_source: None,
                 },
                 Some(crate::deployment::types::DeploymentStatus::Ready),
                 true,
@@ -1501,6 +1506,12 @@ impl Server {
             })?;
 
         let configured = info.config.deploy.replicas;
+        if info.config.preview_source.is_some() && body.replicas != configured {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "preview services are fixed at 1 replica".to_string(),
+            ));
+        }
         if body.replicas < configured {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -3994,10 +4005,11 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         image,
         deploy,
         ingress,
+        preview,
     } = request;
 
     let service_id = id.trim().to_string();
-    crate::validation::validate_service_id(&service_id, "id")?;
+    crate::validation::validate_user_service_id(&service_id, "id")?;
 
     let service_name = name.trim().to_string();
     if service_name.is_empty() {
@@ -4006,6 +4018,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
     let (build, image, deploy) =
         crate::validation::validate_service_provider_config(&build, &image, &deploy)?;
     crate::validation::validate_ingress_config(&ingress)?;
+    crate::validation::validate_preview_config(&service_id, &preview, &build, &ingress)?;
 
     let secrets_hash = deploy.secrets.as_ref().map(|s| s.compute_secrets_hash());
     let secrets_source = deploy.secrets.as_ref().and_then(|s| s.source.as_ref());
@@ -4025,7 +4038,8 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
             "secretsSource": &secrets_source,
             "secretsMountPath": deploy.secrets.as_ref().map(|s| &s.mount_path),
         },
-        "ingress": &ingress
+        "ingress": &ingress,
+        "preview": &preview
     });
     let version_bytes = serde_json::to_vec(&version_payload)
         .map_err(|err| format!("failed to serialize version payload: {err}"))?;
@@ -4039,7 +4053,38 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
         image,
         deploy,
         ingress,
+        preview,
+        preview_source: None,
     })
+}
+
+fn reject_unconfigured_preview(
+    state: &AppState,
+    service: &ServiceConfig,
+) -> Result<(), (StatusCode, String)> {
+    let github_configured = state
+        .masked_config
+        .as_ref()
+        .and_then(|config| config.github.as_ref())
+        .is_some();
+    validate_preview_integration(service, github_configured)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
+}
+
+fn validate_preview_integration(
+    service: &ServiceConfig,
+    github_configured: bool,
+) -> Result<(), String> {
+    if service
+        .preview
+        .as_ref()
+        .is_some_and(|preview| preview.enabled)
+        && !github_configured
+    {
+        Err("preview.enabled requires github configuration in maestro.jsonc".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 async fn upsert_config_and_maybe_queue(
@@ -4090,7 +4135,7 @@ async fn upsert_config_and_maybe_queue(
         .map_err(|err| err.to_string())?;
     Ok(UpsertServiceOutcome::Queued {
         deployment_index: outcome.deployment_index,
-        deployment: outcome.deployment,
+        deployment: Box::new(outcome.deployment),
     })
 }
 

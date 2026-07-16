@@ -55,7 +55,7 @@ pub enum ControlCommand {
         run_id: String,
     },
     StoreMutation {
-        mutation: crate::deployment::store::ClusterMutation,
+        mutation: Box<crate::deployment::store::ClusterMutation>,
     },
 }
 
@@ -321,7 +321,7 @@ impl ControlServer {
                 Some(serde_json::to_value(run)?)
             }
             ControlCommand::StoreMutation { mutation } => {
-                self.store.apply_cluster_mutation(&token, mutation).await?
+                self.store.apply_cluster_mutation(&token, *mutation).await?
             }
         };
         if self.elector.state() != LeadershipState::Leading(token) {

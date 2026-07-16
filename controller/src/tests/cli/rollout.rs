@@ -53,3 +53,33 @@ fn service_payload_uses_map_key_as_service_id() {
     assert_eq!(payload.deploy.expose_ports, vec![8080, 8443]);
     assert_eq!(payload.deploy.flags, vec!["--network=host".to_string()]);
 }
+
+#[test]
+fn service_payload_expands_preview_environment() {
+    let parsed = parse_cluster_config(
+        r#"{
+          "services": {
+            "app": {
+              "name": "App",
+              "build": {
+                "repo": "https://github.com/example/app.git",
+                "dockerfile": "Dockerfile"
+              },
+              "deploy": {},
+              "ingress": { "host": "app.example.test", "port": 3000 },
+              "preview": {
+                "enabled": true,
+                "env": { "items": { "PATH_COPY": "$PATH" } }
+              }
+            }
+          }
+        }"#,
+    )
+    .expect("preview config should parse");
+    let payload = service_payload("app", &parsed.services["app"]).expect("payload should build");
+    let path = std::env::var("PATH").expect("PATH should be set for tests");
+    assert_eq!(
+        payload.preview.unwrap().env.items["PATH_COPY"].as_str(),
+        path
+    );
+}

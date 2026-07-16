@@ -83,6 +83,27 @@ impl BuildWatcher {
             if !build_config.watch || info.deploy_frozen {
                 continue;
             }
+            if let Some(preview_source) = &info.config.preview_source {
+                if preview_source.closed_at.is_some() {
+                    continue;
+                }
+                let Some(base) = self
+                    .store
+                    .read_service_info(&preview_source.base_service_id)
+                    .await?
+                else {
+                    continue;
+                };
+                if base.deploy_frozen
+                    || !base
+                        .config
+                        .preview
+                        .as_ref()
+                        .is_some_and(|preview| preview.enabled)
+                {
+                    continue;
+                }
+            }
             if let Some((retry_at, _)) = self.backoff.get(&service_id)
                 && Instant::now() < *retry_at
             {

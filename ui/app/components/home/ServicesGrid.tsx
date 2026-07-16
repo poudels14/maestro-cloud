@@ -7,6 +7,7 @@ import { deleteService } from "../../lib/api";
 import { ErrorBanner, SectionHeader } from "../../lib/ui";
 import { clusterInfoQuery, queryKeys, servicesQuery } from "../../lib/queries";
 import { visibleSystemServices } from "../../lib/systemServices";
+import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -25,7 +26,7 @@ function ServicesGrid() {
   }));
 
   const cluster = useQuery(() => clusterInfoQuery());
-  const userServices = () => (services.data ?? []).filter((s) => !s.system);
+  const userServices = () => visibleUserServices(services.data ?? []);
   const systemServices = () => visibleSystemServices(services.data ?? [], cluster.data);
 
   const openService = (service: Service) =>

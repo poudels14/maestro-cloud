@@ -49,7 +49,7 @@ impl SystemUpgradeRequest {
 pub enum UpsertServiceOutcome {
     Queued {
         deployment_index: usize,
-        deployment: ServiceDeployment,
+        deployment: Box<ServiceDeployment>,
     },
     Unchanged {
         service_id: String,
