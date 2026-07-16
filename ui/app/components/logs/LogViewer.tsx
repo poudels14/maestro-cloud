@@ -9,7 +9,7 @@ import {
   on,
   onCleanup
 } from "solid-js";
-import { ChevronUp, Loader2 } from "lucide-solid";
+import { ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import {
@@ -36,6 +36,7 @@ import {
 import { LogDetailPanel } from "./LogDetailPanel";
 import { LogHistogramChart } from "./LogHistogram";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
+import { logQueryPills, removeLogQueryPill } from "./logQueryPills";
 
 const COL = {
   time: "sm:w-[118px]",
@@ -60,6 +61,35 @@ type SelectedLogBucket = {
   from: number;
   to: number;
 };
+
+function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
+  const existing = new Set(current.map((entry) => entry.seq));
+  const unique = incoming.filter((entry) => {
+    if (existing.has(entry.seq)) return false;
+    existing.add(entry.seq);
+    return true;
+  });
+  return prepend ? [...unique, ...current] : [...current, ...unique];
+}
+
+function quoteLogQueryValue(value: string) {
+  if (/^[^\s:()[\]"]+$/.test(value)) return value;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function withLogLevelFilter(currentQuery: string, level: string) {
+  let next = currentQuery.trim();
+  const existing = logQueryPills(next)
+    .filter(
+      (pill) => pill.prefix.length === 0 && (pill.field === "level" || pill.field === "status")
+    )
+    .sort((left, right) => right.removeStart - left.removeStart);
+  for (const pill of existing) next = removeLogQueryPill(next, pill);
+
+  const filter = `level:${quoteLogQueryValue(level)}`;
+  if (!next) return filter;
+  return /\bOR\b/.test(next) ? `(${next}) AND ${filter}` : `${next} AND ${filter}`;
+}
 
 function LogViewer(props: {
   serviceId: string;
@@ -151,9 +181,6 @@ function LogViewer(props: {
 
   const applyQuery = () => setQuery(queryDraft().trim());
 
-  const rowRequestContext = () =>
-    `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`;
-
   const activeTimeRange = () => {
     if (!props.showHistogram) return { from: undefined, to: undefined };
     const selected = selectedBucket();
@@ -162,6 +189,11 @@ function LogViewer(props: {
     return { from: to - rangeMs(), to };
   };
 
+  const rowRequestContext = createMemo(
+    () =>
+      `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
+  );
+
   const selectRange = (nextRangeMs: number) => {
     if (nextRangeMs === rangeMs() && selectedBucket() == null) return;
     setRangeMs(nextRangeMs);
@@ -169,12 +201,21 @@ function LogViewer(props: {
     setHistogram(null);
   };
 
-  const selectHistogramBucket = (bucket: LogHistogramBucket) => {
-    const current = selectedBucket();
-    if (current?.ts === bucket.ts) {
+  const selectHistogramInterval = (bucket: LogHistogramBucket) => {
+    const value = histogram();
+    if (!value) return;
+    if (selectedBucket()?.ts === bucket.ts) {
       setSelectedBucket(null);
       return;
     }
+    setSelectedBucket({
+      ts: bucket.ts,
+      from: Math.max(value.from, bucket.ts),
+      to: Math.min(value.to, bucket.ts + value.bucketMs)
+    });
+  };
+
+  const selectHistogramBucket = (bucket: LogHistogramBucket, level: string) => {
     const value = histogram();
     if (!value) return;
     setSelectedBucket({
@@ -182,6 +223,9 @@ function LogViewer(props: {
       from: Math.max(value.from, bucket.ts),
       to: Math.min(value.to, bucket.ts + value.bucketMs)
     });
+    const nextQuery = withLogLevelFilter(query(), level);
+    setQueryDraft(nextQuery);
+    setQuery(nextQuery);
   };
 
   const histogramTotal = () =>
@@ -191,14 +235,6 @@ function LogViewer(props: {
     const selected = selectedBucket();
     if (!selected) return 0;
     return histogram()?.buckets.find((bucket) => bucket.ts === selected.ts)?.count ?? 0;
-  };
-
-  const histogramBucketLabel = () => {
-    const bucketMs = histogram()?.bucketMs;
-    if (bucketMs === 60_000) return "1 minute buckets";
-    if (bucketMs === 300_000) return "5 minute buckets";
-    if (bucketMs === 1_800_000) return "30 minute buckets";
-    return "time buckets";
   };
 
   const selectedIntervalLabel = () => {
@@ -401,7 +437,7 @@ function LogViewer(props: {
       setPollCursor(page.cursor);
       const { from, to } = activeTimeRange();
       setLines((prev) =>
-        [...prev, ...page.entries].filter(
+        mergeLogEntries(prev, page.entries).filter(
           (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
         )
       );
@@ -425,7 +461,7 @@ function LogViewer(props: {
         if (requestContext !== rowRequestContext()) return;
         setHasMore(page.entries.length >= PAGE_SIZE);
         wasAtBottom = false;
-        setLines((prev) => [...page.entries, ...prev]);
+        setLines((prev) => mergeLogEntries(prev, page.entries, true));
         requestAnimationFrame(() => {
           if (!scrollRef) return;
           scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
@@ -520,11 +556,28 @@ function LogViewer(props: {
         <div class="border-b border-gray-100 px-3 pt-3 pb-1.5">
           <div class="flex flex-wrap items-center justify-between gap-2 px-1">
             <div class="flex items-center gap-2 min-w-0">
-              <span class="text-xs font-semibold text-gray-700">Logs over time</span>
               <Show when={histogram()}>
-                <span class="text-[10px] text-gray-400 whitespace-nowrap">
-                  {histogramTotal().toLocaleString()} logs · {histogramBucketLabel()}
-                </span>
+                <div class="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px]">
+                  <span class="font-medium whitespace-nowrap text-gray-600">
+                    {histogramTotal().toLocaleString()} logs
+                  </span>
+                  <Show when={selectedBucket()}>
+                    <span class="text-gray-300">·</span>
+                    <span class="font-medium whitespace-nowrap text-indigo-700">
+                      {selectedBucketCount().toLocaleString()} matching logs
+                    </span>
+                    <span class="truncate text-gray-400">{selectedIntervalLabel()}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBucket(null)}
+                      aria-label="Clear selected log interval"
+                      title="Clear selected interval"
+                      class="shrink-0 rounded p-0.5 text-gray-400 outline-none hover:bg-gray-100 hover:text-gray-700"
+                    >
+                      <X class="size-3" />
+                    </button>
+                  </Show>
+                </div>
               </Show>
               <Show when={histogramLoading() && histogram()}>
                 <Loader2 class="size-3 animate-spin text-gray-400" />
@@ -550,22 +603,6 @@ function LogViewer(props: {
               </For>
             </div>
           </div>
-          <Show when={selectedBucket()}>
-            <div class="mt-2 mx-1 flex items-center justify-between gap-3 rounded-md bg-indigo-50 px-2.5 py-1.5 text-[11px] text-indigo-700">
-              <span class="truncate">
-                {selectedBucketCount().toLocaleString()} matching logs from{" "}
-                {selectedIntervalLabel()}
-                {" · "}rows load {PAGE_SIZE.toLocaleString()} at a time
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedBucket(null)}
-                class="shrink-0 font-medium hover:text-indigo-900 outline-none"
-              >
-                Clear interval
-              </button>
-            </div>
-          </Show>
           <Show when={histogramError()}>
             <div
               class={clsx("flex items-center justify-center gap-2 text-xs text-red-500", {
@@ -595,6 +632,7 @@ function LogViewer(props: {
               to={histogram()!.to}
               bucketMs={histogram()!.bucketMs}
               selectedTs={selectedBucket()?.ts}
+              onSelectInterval={selectHistogramInterval}
               onSelect={selectHistogramBucket}
             />
           </Show>

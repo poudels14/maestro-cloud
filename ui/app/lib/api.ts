@@ -270,6 +270,7 @@ export async function getSystemLogs(
 export interface LogHistogramBucket {
   ts: number;
   count: number;
+  levels?: Record<string, number>;
 }
 
 export interface LogHistogram {
