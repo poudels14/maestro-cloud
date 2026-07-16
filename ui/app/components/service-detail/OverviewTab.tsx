@@ -39,6 +39,10 @@ function OverviewTab(props: { service: Service }) {
         value: `${command.command} ${command.args.join(" ")}`.trim()
       });
     }
+    const secretsSource = props.service.deploy.secrets?.source;
+    if (secretsSource) {
+      items.push({ label: "Secrets source", value: secretsSource });
+    }
     if (props.service.deploy.healthcheckPath) {
       items.push({ label: "Healthcheck path", value: props.service.deploy.healthcheckPath });
     }
@@ -56,17 +60,16 @@ function OverviewTab(props: { service: Service }) {
     }));
   const envSource = () => props.service.deploy.env?.source ?? null;
   const secretKeys = () => Object.keys(props.service.deploy.secrets?.keys ?? {}).sort();
-  const secretSource = () => props.service.deploy.secrets?.source ?? null;
   const secretMountPath = () => props.service.deploy.secrets?.mountPath ?? null;
 
   return (
     <div class="space-y-6">
-      <ConfigSection title="Source" items={sourceItems()} />
+      <ConfigSection title="Deploy" items={[...sourceItems(), ...deployItems()]} />
 
       <Show when={buildEnvItems().length > 0 || buildEnvSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 mb-2">
-            Build Environment
+            Build environment variables
             <Show when={buildEnvSource()}>
               <span class="ml-1.5 text-gray-300 normal-case font-mono">{buildEnvSource()}</span>
             </Show>
@@ -93,16 +96,17 @@ function OverviewTab(props: { service: Service }) {
 
       <IngressInfo service={props.service} />
 
-      <ConfigSection title="Deploy" items={deployItems()} />
-
       <Show when={!props.service.system}>
-        <ReplicasEditor service={props.service} />
+        <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+          <ReplicasEditor service={props.service} />
+          <FreezeToggle service={props.service} />
+        </div>
       </Show>
 
       <Show when={envItems().length > 0 || envSource()}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 mb-2">
-            Deploy Environment
+            Deploy environment variables
             <Show when={envSource()}>
               <span class="ml-1.5 text-gray-300 normal-case font-mono">{envSource()}</span>
             </Show>
@@ -113,7 +117,7 @@ function OverviewTab(props: { service: Service }) {
         </div>
       </Show>
 
-      <Show when={secretKeys().length > 0 || secretSource()}>
+      <Show when={secretKeys().length > 0}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 mb-2">
             Deploy Secrets
@@ -121,20 +125,11 @@ function OverviewTab(props: { service: Service }) {
               <span class="ml-1.5 text-gray-300 normal-case">(mounted at {secretMountPath()})</span>
             </Show>
           </h4>
-          <Show when={secretSource()}>
-            <div class="text-xs font-mono text-gray-400 mb-2">{secretSource()}</div>
-          </Show>
-          <Show when={secretKeys().length > 0}>
-            <SecretsList keys={secretKeys()} />
-          </Show>
+          <SecretsList keys={secretKeys()} />
         </div>
       </Show>
 
       <VolumesList service={props.service} />
-
-      <Show when={!props.service.system}>
-        <FreezeToggle service={props.service} />
-      </Show>
     </div>
   );
 }
@@ -145,8 +140,8 @@ function SecretsList(props: { keys: string[] }) {
       <For each={props.keys}>
         {(key) => (
           <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-            <span class="text-xs text-gray-500 shrink-0">{key}</span>
-            <span class="text-sm font-mono text-gray-400">••••••••</span>
+            <span class="text-xs font-medium text-gray-700 shrink-0">{key}</span>
+            <span class="text-xs text-gray-400">••••••••</span>
           </div>
         )}
       </For>

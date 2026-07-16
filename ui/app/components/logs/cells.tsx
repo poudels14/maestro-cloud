@@ -5,7 +5,7 @@ import {
   tsFormatter,
   timeFormatter,
   dateFormatter,
-  logLevelPill,
+  logLevelColors,
   httpMethodColor,
   httpStatusPill
 } from "../../lib/logFormat";
@@ -13,9 +13,9 @@ import {
 function TimeCell(props: { ts: number }) {
   const d = () => new Date(props.ts);
   return (
-    <span class="select-none whitespace-nowrap tabular-nums" title={tsFormatter.format(d())}>
-      <span class="text-gray-400">{dateFormatter.format(d())}</span>
-      <span class="text-gray-500 ml-1.5">{timeFormatter.format(d())}</span>
+    <span class="whitespace-nowrap tabular-nums text-gray-400" title={tsFormatter.format(d())}>
+      <span>{dateFormatter.format(d())}</span>
+      <span class="ml-1.5">{timeFormatter.format(d())}</span>
     </span>
   );
 }
@@ -37,7 +37,7 @@ function ExpanderCell(props: { expanded: boolean; onToggle: (ev: MouseEvent) => 
 
 function HostCell(props: { value: string }) {
   return (
-    <span class="block truncate text-violet-400" title={props.value}>
+    <span class="block truncate text-gray-500" title={props.value}>
       {props.value}
     </span>
   );
@@ -47,8 +47,8 @@ function LevelCell(props: { level: string }) {
   return (
     <span
       class={clsx(
-        "inline-block text-[10px] font-medium uppercase whitespace-nowrap rounded px-1.5 py-px tracking-wide",
-        logLevelPill(props.level)
+        "inline-block text-xs uppercase whitespace-nowrap tracking-wide",
+        logLevelColors(props.level).text
       )}
       title={props.level}
     >
@@ -57,14 +57,20 @@ function LevelCell(props: { level: string }) {
   );
 }
 
-function MessageCell(props: { text: string }) {
-  return <span class="block text-gray-700 whitespace-pre-wrap break-words">{props.text}</span>;
+function MessageCell(props: { text: string; class?: string }) {
+  return (
+    <span class={clsx("block whitespace-pre-wrap break-words", props.class ?? "text-gray-700")}>
+      {props.text}
+    </span>
+  );
 }
 
 function MethodCell(props: { method?: string }) {
   return (
     <Show when={props.method} fallback={<span class="text-gray-300">·</span>}>
-      <span class={clsx("uppercase", httpMethodColor(props.method!))}>{props.method}</span>
+      <span class={clsx("uppercase font-medium", httpMethodColor(props.method!))}>
+        {props.method}
+      </span>
     </Show>
   );
 }

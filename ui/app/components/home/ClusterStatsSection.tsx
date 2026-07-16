@@ -232,13 +232,13 @@ function HealthRow(props: { label: string; level: HealthLevel; value: string; de
   return (
     <div class="px-4 py-3 flex items-start justify-between gap-5">
       <div class="min-w-0">
-        <div class="text-xs text-gray-500">{props.label}</div>
+        <div class="text-xs font-medium text-gray-700">{props.label}</div>
         <Show when={props.detail}>
           <div class="mt-0.5 text-[11px] text-gray-400 break-words">{props.detail}</div>
         </Show>
       </div>
       <div class="min-w-0 flex items-center justify-end gap-2.5 text-right">
-        <span class="text-xs font-mono text-gray-700 tabular-nums break-words">{props.value}</span>
+        <span class="text-xs text-gray-600 tabular-nums break-words">{props.value}</span>
         <HealthPill level={props.level} />
       </div>
     </div>
@@ -252,11 +252,11 @@ function HealthPill(props: { level: HealthLevel; label?: string }) {
       class={clsx(
         "shrink-0 inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium",
         {
-          "border-emerald-200 bg-emerald-50 text-emerald-700": props.level === "healthy",
-          "border-blue-200 bg-blue-50 text-blue-700": props.level === "catching-up",
-          "border-amber-200 bg-amber-50 text-amber-700": props.level === "warning",
-          "border-red-200 bg-red-50 text-red-700": props.level === "error",
-          "border-gray-200 bg-gray-50 text-gray-500": props.level === "disabled"
+          "border-emerald-100 bg-emerald-50 text-emerald-700": props.level === "healthy",
+          "border-blue-100 bg-blue-50 text-blue-700": props.level === "catching-up",
+          "border-amber-100 bg-amber-50 text-amber-700": props.level === "warning",
+          "border-red-100 bg-red-50 text-red-700": props.level === "error",
+          "border-gray-100 bg-gray-50 text-gray-500": props.level === "disabled"
         }
       )}
     >

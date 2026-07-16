@@ -15,83 +15,33 @@ export function timeAgo(ms: number): string {
   return `${days}d ago`;
 }
 
-export const STATUS_COLORS: Record<
-  string,
-  { dot: string; bg: string; text: string; border: string }
-> = {
-  QUEUED: {
-    dot: "bg-amber-400",
-    bg: "bg-amber-50",
-    text: "text-amber-700",
-    border: "border-amber-200"
-  },
-  BUILDING: {
-    dot: "bg-blue-400",
-    bg: "bg-blue-50",
-    text: "text-blue-700",
-    border: "border-blue-200"
-  },
-  PENDING_READY: {
-    dot: "bg-cyan-400",
-    bg: "bg-cyan-50",
-    text: "text-cyan-700",
-    border: "border-cyan-200"
-  },
-  READY: {
-    dot: "bg-emerald-400",
-    bg: "bg-emerald-50",
-    text: "text-emerald-700",
-    border: "border-emerald-200"
-  },
-  DEPLOYING: {
-    dot: "bg-indigo-400",
-    bg: "bg-indigo-50",
-    text: "text-indigo-700",
-    border: "border-indigo-200"
-  },
-  RUNNING: {
-    dot: "bg-emerald-400",
-    bg: "bg-emerald-50",
-    text: "text-emerald-700",
-    border: "border-emerald-200"
-  },
-  FAILED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
-  CRASHED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
-  TERMINATED: {
-    dot: "bg-red-400",
-    bg: "bg-red-50",
-    text: "text-red-700",
-    border: "border-red-200"
-  },
-  CANCELLED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
-  CANCELED: { dot: "bg-red-400", bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
-  SYSTEM: {
-    dot: "bg-violet-400",
-    bg: "bg-violet-50",
-    text: "text-violet-700",
-    border: "border-violet-200"
-  },
-  IDLE: { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600", border: "border-gray-200" },
-  STOPPED: {
-    dot: "bg-gray-400",
-    bg: "bg-gray-100",
-    text: "text-gray-600",
-    border: "border-gray-200"
-  }
+export const STATUS_COLORS: Record<string, { dot: string; pill: string }> = {
+  QUEUED: { dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700 border-amber-100" },
+  BUILDING: { dot: "bg-blue-400", pill: "bg-blue-50 text-blue-700 border-blue-100" },
+  PENDING_READY: { dot: "bg-cyan-400", pill: "bg-cyan-50 text-cyan-700 border-cyan-100" },
+  READY: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  DEPLOYING: { dot: "bg-indigo-400", pill: "bg-indigo-50 text-indigo-700 border-indigo-100" },
+  RUNNING: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  FAILED: { dot: "bg-red-400", pill: "bg-red-50 text-red-700 border-red-100" },
+  CRASHED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
+  TERMINATED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
+  CANCELLED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
+  CANCELED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
+  SYSTEM: { dot: "bg-violet-400", pill: "bg-violet-50 text-violet-700 border-violet-100" },
+  IDLE: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" },
+  STOPPED: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" }
 };
 
-export function StatusBadge(props: { status: string }) {
+export function StatusBadge(props: { status: string; class?: string }) {
   const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.STOPPED!;
   return (
     <span
       class={clsx(
-        "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md border",
-        colors().bg,
-        colors().text,
-        colors().border
+        "inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-md border",
+        colors().pill,
+        props.class
       )}
     >
-      <span class={clsx("size-1.5 rounded-full inline-block", colors().dot)} />
       {props.status.toLowerCase()}
     </span>
   );
@@ -227,5 +177,9 @@ export function Card(props: { class?: string; children: JSX.Element }) {
 }
 
 export function SectionHeader(props: { class?: string; children: JSX.Element }) {
-  return <h2 class={clsx("text-sm font-semibold text-gray-700", props.class)}>{props.children}</h2>;
+  return (
+    <h2 class={clsx("text-sm font-semibold tracking-tight text-gray-900", props.class)}>
+      {props.children}
+    </h2>
+  );
 }

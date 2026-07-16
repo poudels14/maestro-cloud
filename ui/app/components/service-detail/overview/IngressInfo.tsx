@@ -25,13 +25,13 @@ function IngressInfo(props: { service: Service }) {
             <h4 class="text-xs font-medium text-gray-400 mb-2">Ingress</h4>
             <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs text-gray-500 shrink-0">
+                <span class="text-xs font-medium text-gray-700 shrink-0">
                   {hosts().length > 1 ? "Hosts" : "Host"}
                 </span>
                 <Show
                   when={hosts().length > 1}
                   fallback={
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
+                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                       {hosts()[0] ?? "(not set)"}
                     </span>
                   }
@@ -39,7 +39,7 @@ function IngressInfo(props: { service: Service }) {
                   <div class="flex flex-col items-end gap-1 min-w-0">
                     <For each={hosts()}>
                       {(host) => (
-                        <span class="text-sm font-mono text-gray-800 text-right truncate max-w-full">
+                        <span class="text-xs text-gray-600 text-right truncate tabular-nums max-w-full">
                           {host}
                         </span>
                       )}
@@ -48,8 +48,8 @@ function IngressInfo(props: { service: Service }) {
                 </Show>
               </div>
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs text-gray-500 shrink-0">Port</span>
-                <span class="text-sm font-mono text-gray-800 text-right truncate">
+                <span class="text-xs font-medium text-gray-700 shrink-0">Port</span>
+                <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                   {String(value().port ?? 80)}
                 </span>
               </div>
@@ -65,30 +65,30 @@ function IngressInfo(props: { service: Service }) {
               {(route) => (
                 <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
                   <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Service</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
+                    <span class="text-xs font-medium text-gray-700 shrink-0">Service</span>
+                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                       {route.serviceId}
                     </span>
                   </div>
                   <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Rule</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
+                    <span class="text-xs font-medium text-gray-700 shrink-0">Rule</span>
+                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                       {route.rule}
                     </span>
                   </div>
                   <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs text-gray-500 shrink-0">Entry points</span>
-                    <span class="text-sm font-mono text-gray-800 text-right truncate">
+                    <span class="text-xs font-medium text-gray-700 shrink-0">Entry points</span>
+                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                       {route.entryPoints.join(", ")}
                     </span>
                   </div>
                   <For each={route.servers}>
                     {(server, idx) => (
                       <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                        <span class="text-xs text-gray-500 shrink-0">
+                        <span class="text-xs font-medium text-gray-700 shrink-0">
                           {route.servers.length > 1 ? `Server ${idx() + 1}` : "Server"}
                         </span>
-                        <span class="text-sm font-mono text-gray-800 text-right truncate">
+                        <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                           {server}
                         </span>
                       </div>

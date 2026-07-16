@@ -232,7 +232,7 @@ function TrafficTable(props: {
         >
           <div class="overflow-x-auto">
             <table class="w-full text-left">
-              <thead class="bg-gray-50/70 text-[10px] uppercase tracking-wide text-gray-400">
+              <thead class="bg-gray-50/70 text-[11px] text-gray-500">
                 <tr>
                   <th class="px-4 py-2 font-medium">Value</th>
                   <th class="px-4 py-2 font-medium text-right">Requests</th>

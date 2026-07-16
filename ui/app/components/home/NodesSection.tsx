@@ -30,7 +30,7 @@ function NodesSection() {
             <h1 class="text-lg font-semibold text-gray-900">Cluster nodes</h1>
             <p class="text-xs text-gray-500 mt-1">Control-plane health and workload placement.</p>
           </div>
-          <span class="text-xs font-mono text-gray-400">{nodes.data?.length ?? 0} nodes</span>
+          <span class="text-xs text-gray-400 tabular-nums">{nodes.data?.length ?? 0} nodes</span>
         </div>
         <Show when={error()}>
           {(message) => (
@@ -40,7 +40,7 @@ function NodesSection() {
           )}
         </Show>
         <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div class="grid grid-cols-[minmax(9rem,1.4fr)_7rem_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-400">
+          <div class="grid grid-cols-[minmax(9rem,1.4fr)_7rem_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500">
             <span>Node</span>
             <span>Role</span>
             <span>Control</span>

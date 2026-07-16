@@ -55,7 +55,9 @@ const DEFAULT_LOG_RANGE_MS: i64 = 3_600_000;
 const MAX_LOG_RANGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const ONE_MINUTE_MS: i64 = 60_000;
 const FIVE_MINUTES_MS: i64 = 5 * ONE_MINUTE_MS;
-const THIRTY_MINUTES_MS: i64 = 30 * ONE_MINUTE_MS;
+const TEN_MINUTES_MS: i64 = 10 * ONE_MINUTE_MS;
+const TWO_HOURS_MS: i64 = 120 * ONE_MINUTE_MS;
+const MAX_LOG_HISTOGRAM_BUCKETS: i64 = 1_000;
 const MAX_REPLICAS_OVERRIDE: u32 = 25;
 const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const INGESTION_TOKEN_HEADER: &str = "x-maestro-ingestion-token";
@@ -2890,6 +2892,8 @@ struct LogHistogramHttpQuery {
     to: Option<i64>,
     phase: Option<String>,
     query: Option<String>,
+    #[serde(rename = "bucketMs")]
+    bucket_ms: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3193,13 +3197,20 @@ fn build_log_histogram_query(
     let from = query.from.unwrap_or(to - DEFAULT_LOG_RANGE_MS);
     validate_log_time_range(Some(from), Some(to))?;
     let range = to - from;
-    let bucket_ms = if range <= DEFAULT_LOG_RANGE_MS {
+    let default_bucket_ms = if range <= DEFAULT_LOG_RANGE_MS {
         ONE_MINUTE_MS
-    } else if range <= 24 * 60 * 60 * 1000 {
+    } else if range <= 6 * 60 * 60 * 1000 {
         FIVE_MINUTES_MS
+    } else if range <= 24 * 60 * 60 * 1000 {
+        TEN_MINUTES_MS
     } else {
-        THIRTY_MINUTES_MS
+        TWO_HOURS_MS
     };
+    let bucket_ms = query
+        .bucket_ms
+        .unwrap_or(default_bucket_ms)
+        .max(range / MAX_LOG_HISTOGRAM_BUCKETS)
+        .max(ONE_MINUTE_MS);
     Ok(LogHistogramQuery {
         scope,
         origin,

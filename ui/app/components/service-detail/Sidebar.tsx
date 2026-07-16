@@ -102,7 +102,7 @@ function SidebarSection(props: { title: string; count?: number; children: JSX.El
       <div class="px-3 pt-4 pb-1.5 flex items-baseline justify-between">
         <span class="text-xs font-medium text-gray-400">{props.title}</span>
         <Show when={props.count !== undefined}>
-          <span class="text-[10px] font-mono text-gray-300 tabular-nums">{props.count}</span>
+          <span class="text-[10px] text-gray-300 tabular-nums">{props.count}</span>
         </Show>
       </div>
       <div class="px-2 space-y-0.5">{props.children}</div>

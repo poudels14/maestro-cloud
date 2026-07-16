@@ -12,10 +12,10 @@ function VolumesList(props: { service: Service }) {
           <For each={volumes()}>
             {(volume) => (
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs font-mono text-gray-500 shrink-0 truncate">
+                <span class="text-xs font-medium text-gray-700 shrink-0 truncate">
                   {volume.hostPath}
                 </span>
-                <span class="text-sm font-mono text-gray-800 text-right truncate">
+                <span class="text-xs text-gray-600 text-right truncate tabular-nums">
                   {volume.mountPath}
                   <Show when={volume.readOnly}>
                     <span class="ml-1.5 text-xs text-gray-400">(ro)</span>
