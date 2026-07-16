@@ -59,14 +59,11 @@ const queryKeys = {
   slackWebhooks: ["webhooks", "slack"] as const
 };
 
-const clusterInfoQuery = (opts?: { pollWhenMaintaining?: boolean }) => ({
+const clusterInfoQuery = (opts?: { pollForMaintenance?: boolean }) => ({
   queryKey: queryKeys.cluster,
   queryFn: ssrSafe(getClusterInfo, null as ClusterInfo | null) as () => Promise<ClusterInfo>,
   staleTime: 60_000,
-  refetchInterval: opts?.pollWhenMaintaining
-    ? (query: { state: { data?: ClusterInfo } }) =>
-        query.state.data?.upgrading || query.state.data?.restarting ? 5_000 : (false as const)
-    : (false as const)
+  refetchInterval: opts?.pollForMaintenance ? 5_000 : (false as const)
 });
 
 const clusterConfigQuery = () => ({

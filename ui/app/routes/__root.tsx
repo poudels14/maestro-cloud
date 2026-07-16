@@ -72,7 +72,7 @@ function SchedulingBanner() {
 }
 
 function MaintenanceBanner() {
-  const cluster = useQuery(() => clusterInfoQuery({ pollWhenMaintaining: true }));
+  const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
   const isUpgrading = () => cluster.data?.upgrading ?? false;
   const isRestarting = () => cluster.data?.restarting ?? false;
   const isMaintaining = () => isUpgrading() || isRestarting();
