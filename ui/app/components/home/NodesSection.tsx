@@ -164,7 +164,7 @@ function UpgradePanel() {
               <input
                 value={version()}
                 onInput={(event) => setVersion(event.currentTarget.value)}
-                placeholder="Target version, e.g. 0.3.2"
+                placeholder="Target version, e.g. 0.3.3"
                 class="min-w-56 flex-1 rounded-md border border-gray-200 px-3 py-2 text-xs font-mono outline-none focus:border-gray-400"
               />
               <button
