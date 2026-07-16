@@ -504,13 +504,16 @@ context for it, then trigger updates remotely:
 ```bash
 maestro contexts set prod http://127.0.0.1:3001
 maestro contexts use prod
-maestro cluster upgrade system
+maestro cluster upgrade
 ```
 
-The CLI sends its Cargo package version with the upgrade request. The controller
-accepts the request only when that semantic version is newer than the version
-currently running on the cluster. `maestro cluster info` and the UI info page show
-the running version after the cluster comes back online. Bump
+The `maestro cluster upgrade system` spelling is retained as an alias. Both forms
+detect the installation topology: multi-node installations are drained and upgraded
+serially, while a single-node installation upgrades that node directly. The CLI
+sends its Cargo package version with the upgrade request. The controller accepts
+the request only when that semantic version is newer than the version currently
+running on the cluster. `maestro cluster info` and the UI info page show the running
+version after the cluster comes back online. Bump
 `controller/Cargo.toml` for every release; the Nix package reads the same version
 automatically. On NixOS, the running controller resolves the updated flake source
 and pre-builds the new system container images before rebooting. The old controller

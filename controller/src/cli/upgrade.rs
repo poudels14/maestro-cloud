@@ -33,11 +33,41 @@ struct ClusterUnfreezeRequest<'a> {
     upgrade_run_id: &'a str,
 }
 
-pub async fn run_cluster_upgrade(host: &str, version: Option<&str>, yes: bool) -> Result<()> {
-    let version = cluster_target_version(version)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpgradeMode {
+    SingleNode,
+    Coordinated,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct UpgradeConfig {
+    #[serde(default)]
+    cluster: UpgradeClusterConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct UpgradeClusterConfig {
+    #[serde(default)]
+    nodes: Vec<serde_json::Value>,
+    #[serde(default)]
+    subnets: Vec<String>,
+}
+
+pub async fn run_upgrade(host: &str, yes: bool) -> Result<()> {
+    let base = normalize_base_url(host)?;
+    let client = contexts::build_http_client()?;
+    match detect_upgrade_mode(&client, &base).await? {
+        UpgradeMode::SingleNode => run_upgrade_system(host, yes).await,
+        UpgradeMode::Coordinated => run_coordinated_upgrade(host, yes).await,
+    }
+}
+
+async fn run_coordinated_upgrade(host: &str, yes: bool) -> Result<()> {
     let confirmed = crate::cli::confirm::confirm_action(
         host,
-        &format!("About to roll every cluster node to Maestro {version}"),
+        &format!("About to roll every cluster node to Maestro {CLIENT_VERSION}"),
         &[
             "Deploys will be frozen for the duration of the run".to_string(),
             "Nodes will drain and restart serially".to_string(),
@@ -54,7 +84,7 @@ pub async fn run_cluster_upgrade(host: &str, version: Option<&str>, yes: bool) -
         contexts::build_http_client()?.post(format!("{base}/api/cluster/upgrade")),
     )
     .json(&ClusterUpgradeRequest {
-        target_version: &version.to_string(),
+        target_version: CLIENT_VERSION,
     })
     .send()
     .await
@@ -74,10 +104,52 @@ pub async fn run_cluster_upgrade(host: &str, version: Option<&str>, yes: bool) -
     stream_cluster_maintenance(&base, run).await
 }
 
-fn cluster_target_version(version: Option<&str>) -> Result<semver::Version> {
-    let version = version.unwrap_or(CLIENT_VERSION).trim();
-    semver::Version::parse(version)
-        .map_err(|error| Error::invalid_input(format!("invalid target version: {error}")))
+async fn detect_upgrade_mode(client: &reqwest::Client, base: &str) -> Result<UpgradeMode> {
+    let nodes_url = format!("{base}/api/cluster/nodes");
+    let config_url = format!("{base}/api/config");
+    let (nodes, config) = tokio::join!(
+        fetch_upgrade_json::<Vec<serde_json::Value>>(client, &nodes_url),
+        fetch_upgrade_json::<UpgradeConfig>(client, &config_url),
+    );
+
+    let registered_nodes = nodes.as_ref().map(Vec::len).ok();
+    let configured_nodes = config
+        .as_ref()
+        .map(|config| config.cluster.nodes.len().max(config.cluster.subnets.len()))
+        .ok();
+    let node_count = registered_nodes.into_iter().chain(configured_nodes).max();
+
+    match node_count {
+        Some(count) if count > 1 => Ok(UpgradeMode::Coordinated),
+        Some(_) => Ok(UpgradeMode::SingleNode),
+        None => Err(Error::external(format!(
+            "unable to determine whether this is a single-node or multi-node installation; cluster nodes: {}; config: {}",
+            nodes.expect_err("missing node count must be an error"),
+            config.expect_err("missing config count must be an error")
+        ))),
+    }
+}
+
+async fn fetch_upgrade_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<T> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| Error::external(format!("request to {url} failed: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::external(format!(
+            "request to {url} failed with status {status}: {body}"
+        )));
+    }
+    response
+        .json()
+        .await
+        .map_err(|error| Error::external(format!("invalid response from {url}: {error}")))
 }
 
 pub async fn run_cluster_unfreeze(host: &str, run_id: &str) -> Result<()> {
@@ -283,23 +355,103 @@ mod tests {
         assert_eq!(payload["targetVersion"], "1.2.3");
     }
 
-    #[test]
-    fn cluster_upgrade_defaults_to_the_cli_version() {
-        assert_eq!(
-            cluster_target_version(None)
-                .expect("resolve target version")
-                .to_string(),
-            env!("CARGO_PKG_VERSION")
-        );
+    async fn detect_mode(
+        nodes_status: axum::http::StatusCode,
+        nodes: serde_json::Value,
+        config_status: axum::http::StatusCode,
+        config: serde_json::Value,
+    ) -> Result<UpgradeMode> {
+        use axum::{Json, Router, routing::get};
+
+        let nodes_handler = move || {
+            let nodes = nodes.clone();
+            async move { (nodes_status, Json(nodes)) }
+        };
+        let config_handler = move || {
+            let config = config.clone();
+            async move { (config_status, Json(config)) }
+        };
+        let app = Router::new()
+            .route("/api/cluster/nodes", get(nodes_handler))
+            .route("/api/config", get(config_handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind topology test server");
+        let address = listener.local_addr().expect("read topology test address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve topology test app");
+        });
+        let result =
+            detect_upgrade_mode(&reqwest::Client::new(), &format!("http://{address}")).await;
+        server.abort();
+        result
     }
 
-    #[test]
-    fn cluster_upgrade_accepts_an_explicit_version_override() {
-        assert_eq!(
-            cluster_target_version(Some(" 1.2.3 "))
-                .expect("resolve target version")
-                .to_string(),
-            "1.2.3"
+    #[tokio::test]
+    async fn upgrade_mode_uses_durable_cluster_node_count() {
+        let mode = detect_mode(
+            axum::http::StatusCode::OK,
+            serde_json::json!([{"nodeId": "node-a"}, {"nodeId": "node-b", "alive": false}]),
+            axum::http::StatusCode::OK,
+            serde_json::json!({"cluster": {"nodes": ["10.0.0.1"], "subnets": ["10.1.0.0/24"]}}),
+        )
+        .await
+        .expect("detect multi-node mode");
+        assert_eq!(mode, UpgradeMode::Coordinated);
+    }
+
+    #[tokio::test]
+    async fn upgrade_mode_uses_configured_subnets_when_cluster_status_is_unavailable() {
+        let mode = detect_mode(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"message": "election: no leader"}),
+            axum::http::StatusCode::OK,
+            serde_json::json!({
+                "cluster": {
+                    "nodes": ["10.0.0.1"],
+                    "subnets": ["10.1.0.0/24", "10.1.1.0/24"]
+                }
+            }),
+        )
+        .await
+        .expect("detect configured multi-node mode");
+        assert_eq!(mode, UpgradeMode::Coordinated);
+    }
+
+    #[tokio::test]
+    async fn upgrade_mode_selects_direct_upgrade_for_one_node() {
+        let mode = detect_mode(
+            axum::http::StatusCode::OK,
+            serde_json::json!([{"nodeId": "node-a"}]),
+            axum::http::StatusCode::OK,
+            serde_json::json!({
+                "cluster": {
+                    "nodes": ["10.0.0.1"],
+                    "subnets": ["10.1.0.0/24"]
+                }
+            }),
+        )
+        .await
+        .expect("detect single-node mode");
+        assert_eq!(mode, UpgradeMode::SingleNode);
+    }
+
+    #[tokio::test]
+    async fn upgrade_mode_fails_closed_when_topology_cannot_be_determined() {
+        let error = detect_mode(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"message": "unavailable"}),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"message": "unavailable"}),
+        )
+        .await
+        .expect_err("unknown topology must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unable to determine whether this is a single-node")
         );
     }
 }
