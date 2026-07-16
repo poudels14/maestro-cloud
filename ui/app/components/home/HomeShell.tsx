@@ -1,4 +1,5 @@
 import { createSignal, Match, Show, Switch } from "solid-js";
+import clsx from "clsx";
 import { useQuery } from "@tanstack/solid-query";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
@@ -15,6 +16,8 @@ import { ClusterConfigSection } from "./ClusterConfigSection";
 import { SlackWebhooks } from "../SlackWebhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
+import { HttpLogsSection } from "./HttpLogsSection";
+import { IngressTrafficTab } from "../ingress/TrafficTab";
 
 function HomeShell(props: { tab: HomeTab }) {
   const navigate = useNavigate();
@@ -60,8 +63,19 @@ function HomeShell(props: { tab: HomeTab }) {
             )}
           </Show>
         </div>
-        <div class="flex-1 overflow-y-auto py-5 sm:py-6">
-          <div class="mx-auto px-4 sm:px-6 max-w-4xl">
+        <div
+          class={clsx("flex-1 py-5 sm:py-6", {
+            "min-h-0 overflow-hidden": props.tab === "http-logs",
+            "overflow-y-auto": props.tab !== "http-logs"
+          })}
+        >
+          <div
+            class={clsx("mx-auto px-4 sm:px-6", {
+              "max-w-6xl": props.tab === "traffic" || props.tab === "http-logs",
+              "max-w-4xl": props.tab !== "traffic" && props.tab !== "http-logs",
+              "h-full min-h-0": props.tab === "http-logs"
+            })}
+          >
             <ClientOnly
               fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}
             >
@@ -79,6 +93,12 @@ function HomeShell(props: { tab: HomeTab }) {
                     <DisksSection />
                     <NodeMetricsSection />
                   </div>
+                </Match>
+                <Match when={props.tab === "traffic"}>
+                  <IngressTrafficTab />
+                </Match>
+                <Match when={props.tab === "http-logs"}>
+                  <HttpLogsSection />
                 </Match>
                 <Match when={props.tab === "services"}>
                   <ServicesGrid />

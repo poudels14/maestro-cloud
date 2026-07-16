@@ -24,7 +24,8 @@ export default defineConfig({
     }),
     nitro({}),
     viteSolid({
-      ssr: true
+      ssr: true,
+      hot: false
     })
   ]
 });

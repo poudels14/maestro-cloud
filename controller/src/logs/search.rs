@@ -548,6 +548,18 @@ fn attribute_expression(attribute: &str, dialect: SqlDialect) -> String {
     }
 }
 
+pub(crate) fn http_status_class_expression(dialect: SqlDialect) -> String {
+    let status = canonical_status_expression(dialect);
+    let cast = match dialect {
+        SqlDialect::Sqlite => "CAST",
+        SqlDialect::DuckDb => "TRY_CAST",
+    };
+    format!(
+        "CASE WHEN {cast}({status} AS INTEGER) BETWEEN 100 AND 599 \
+         THEN substr({status}, 1, 1) || 'xx' END"
+    )
+}
+
 fn canonical_status_expression(dialect: SqlDialect) -> String {
     const KEYS: &[&str] = &[
         "http.status_code",

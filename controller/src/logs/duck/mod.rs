@@ -408,6 +408,7 @@ impl DuckLogStore {
             from,
             to,
             bucket_ms,
+            group_by,
         } = query;
         match scope {
             LogReadScope::Prefix(prefix) => {
@@ -426,6 +427,7 @@ impl DuckLogStore {
                         from,
                         to,
                         bucket_ms,
+                        group_by,
                         &cold_globs,
                     )
                 })
@@ -450,6 +452,7 @@ impl DuckLogStore {
                         from,
                         to,
                         bucket_ms,
+                        group_by,
                         &cold_globs,
                     )
                 })

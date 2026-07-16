@@ -8,8 +8,8 @@ use tokio::sync::Notify;
 use tokio::task;
 
 use super::{
-    LogHistogramBucket, LogHistogramQuery, LogReadQuery, LogReadScope, LogSearchValue, SqlDialect,
-    sql_like_prefix,
+    LogHistogramBucket, LogHistogramGroupBy, LogHistogramQuery, LogReadQuery, LogReadScope,
+    LogSearchValue, SqlDialect, http_status_class_expression, sql_like_prefix,
 };
 
 type ConnPool = r2d2::Pool<SqliteConnectionManager>;
@@ -554,8 +554,14 @@ impl LogStore {
         task::spawn_blocking(move || -> Result<Vec<LogHistogramBucket>> {
             use rusqlite::types::Value;
 
-            let mut sql = String::from(
-                "SELECT ts - (ts % ?) AS bucket_at_ms, lower(level) AS level,
+            let group_expr = match query.group_by {
+                LogHistogramGroupBy::Level => "lower(level)".to_string(),
+                LogHistogramGroupBy::HttpStatusClass => {
+                    http_status_class_expression(SqlDialect::Sqlite)
+                }
+            };
+            let mut sql = format!(
+                "SELECT ts - (ts % ?) AS bucket_at_ms, {group_expr} AS grp,
                         count(*) AS count
                  FROM (
                     SELECT ts, level, text, source, origin,
@@ -563,6 +569,9 @@ impl LogStore {
                     FROM logs
                  ) q WHERE true",
             );
+            if query.group_by == LogHistogramGroupBy::HttpStatusClass {
+                sql.push_str(&format!(" AND {group_expr} IS NOT NULL"));
+            }
             let mut values = vec![Value::Integer(query.bucket_ms)];
             match query.scope {
                 LogReadScope::Prefix(prefix) => {
@@ -595,7 +604,7 @@ impl LogStore {
             }
             sql.push_str(
                 " AND ts >= ? AND ts < ?
-                 GROUP BY bucket_at_ms, lower(level) ORDER BY bucket_at_ms, level",
+                 GROUP BY bucket_at_ms, grp ORDER BY bucket_at_ms, grp",
             );
             values.extend([Value::Integer(query.from), Value::Integer(query.to)]);
 

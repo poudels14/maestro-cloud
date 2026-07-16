@@ -584,6 +584,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             phase: None,
             query: Some("level:error".into()),
             bucket_ms: None,
+            group_by: None,
         },
     )
     .expect("one hour");
@@ -599,6 +600,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             phase: None,
             query: None,
             bucket_ms: None,
+            group_by: None,
         },
     )
     .expect("six hours");
@@ -613,6 +615,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             phase: None,
             query: None,
             bucket_ms: None,
+            group_by: None,
         },
     )
     .expect("seven days");
@@ -627,6 +630,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             phase: None,
             query: None,
             bucket_ms: None,
+            group_by: None,
         },
     )
     .expect("one day");
@@ -641,6 +645,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
             phase: None,
             query: None,
             bucket_ms: Some(1),
+            group_by: None,
         },
     )
     .expect("client bucket");
@@ -670,6 +675,7 @@ fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
         phase: None,
         query: None,
         bucket_ms: None,
+        group_by: None,
     };
     assert!(
         build_log_histogram_query(LogReadScope::Prefix("api/".into()), None, &too_wide).is_err()
