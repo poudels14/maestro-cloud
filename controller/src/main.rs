@@ -287,16 +287,11 @@ enum ClusterCommand {
     },
     /// Upgrade system components
     #[command(
-        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade --version 0.3.3\n  maestro cluster upgrade system"
+        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade system"
     )]
     Upgrade {
         #[command(subcommand)]
         target: Option<UpgradeTarget>,
-        #[arg(
-            long,
-            help = "Override the CLI version used for the coordinated cluster upgrade"
-        )]
-        version: Option<String>,
         #[arg(
             short = 'y',
             long = "yes",
@@ -2055,24 +2050,9 @@ async fn run() -> crate::error::Result<bool> {
                 }
                 .map(|()| false)
             }
-            ClusterCommand::Upgrade {
-                target,
-                version,
-                yes,
-            } => {
+            ClusterCommand::Upgrade { target: _, yes } => {
                 let host = cli::contexts::active_host()?;
-                match (target, version) {
-                    (Some(UpgradeTarget::System), None) => {
-                        cli::upgrade::run_upgrade_system(&host, yes).await
-                    }
-                    (None, version) => {
-                        cli::upgrade::run_cluster_upgrade(&host, version.as_deref(), yes).await
-                    }
-                    (Some(_), Some(_)) => Err(Error::invalid_input(
-                        "choose either `upgrade system` or `upgrade --version`, not both",
-                    )),
-                }
-                .map(|()| false)
+                cli::upgrade::run_upgrade(&host, yes).await.map(|()| false)
             }
             ClusterCommand::Unfreeze { upgrade_run } => {
                 let host = cli::contexts::active_host()?;
@@ -2845,11 +2825,28 @@ mod cluster_upgrade_cli_tests {
             Some(CliCommand::Cluster {
                 command: ClusterCommand::Upgrade {
                     target: None,
-                    version: None,
                     yes: false,
                 }
             })
         ));
+    }
+
+    #[test]
+    fn system_upgrade_alias_uses_the_same_command_without_a_version_override() {
+        let cli = Cli::try_parse_from(["maestro", "cluster", "upgrade", "system"])
+            .expect("parse system upgrade alias");
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Upgrade {
+                    target: Some(super::UpgradeTarget::System),
+                    yes: false,
+                }
+            })
+        ));
+        assert!(
+            Cli::try_parse_from(["maestro", "cluster", "upgrade", "--version", "0.3.4"]).is_err()
+        );
     }
 
     #[test]

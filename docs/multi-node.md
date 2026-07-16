@@ -524,8 +524,8 @@ maestro cluster upgrade
 ```
 
 The CLI sends its own Cargo package version, matching the existing node-local
-upgrade behavior. `--version <version>` remains available as an explicit override
-for release testing.
+upgrade behavior. The target version cannot be overridden independently of the CLI
+release.
 
 Maestro freezes new deployment mutations, upgrades workers first, then follower
 voters, and the current leader last. Each node is drained, upgraded idempotently,
@@ -544,8 +544,9 @@ stale. It requires the exact run ID and records the run as failed:
 maestro cluster unfreeze --upgrade-run <run-id>
 ```
 
-Do not use the node-local `maestro cluster upgrade system` command for a fleet
-upgrade; it does not coordinate draining or membership order.
+`maestro cluster upgrade system` is retained as an alias and follows the same
+topology-aware behavior. On this multi-node cluster it also coordinates draining
+and membership order.
 
 ## Expected failure behavior
 
