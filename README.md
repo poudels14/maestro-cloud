@@ -113,6 +113,21 @@ maestro logs --service my-app \
   --query '@http.status_code:[500 TO 599] AND -message:*health*'
 ```
 
+Use newline-delimited JSON while following logs or piping them to tools such as
+`jq`. The default JSON shape contains `ts`, `level`, `message`, `source`, and an
+`attributes` object:
+
+```bash
+maestro logs --query '@http.status_code:404' --output json | jq
+```
+
+Add `--full` for the lossless API record, including sequence, stream, origin,
+tags, and raw attribute pairs:
+
+```bash
+maestro logs --query '@http.status_code:404' --output json --full | jq
+```
+
 ## Config file
 
 The config file (`maestro.jsonc`) supports:

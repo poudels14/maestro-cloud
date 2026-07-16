@@ -1,7 +1,7 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
-use clap::Args;
-use serde::Deserialize;
+use clap::{Args, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 use crate::deployment::types::{DeploymentStatus, DeploymentWithReplicas, ServiceConfig};
 use crate::error::{Error, Result};
@@ -35,6 +35,24 @@ pub struct RemoteLogsArgs {
         help = "Datadog-style server-side filter, such as @http.status_code:[500 TO 599]"
     )]
     query: Option<String>,
+    #[arg(
+        long = "output",
+        value_enum,
+        default_value = "text",
+        help = "Output format; JSON emits one structured log object per line"
+    )]
+    output: LogOutput,
+    #[arg(
+        long,
+        help = "Include sequence, stream, origin, tags, and raw attributes in JSON output"
+    )]
+    full: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LogOutput {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +64,7 @@ struct ServiceListItem {
     system: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RemoteLogEntry {
     #[serde(default)]
     seq: i64,
@@ -54,6 +72,19 @@ struct RemoteLogEntry {
     level: String,
     text: String,
     source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attrs: Vec<(String, String)>,
+    #[serde(flatten)]
+    details: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct CompactLogEntry<'a> {
+    ts: i64,
+    level: &'a str,
+    message: &'a str,
+    source: &'a str,
+    attributes: BTreeMap<&'a str, &'a str>,
 }
 
 #[derive(Debug)]
@@ -79,6 +110,7 @@ struct TargetEntries {
 }
 
 pub async fn run_logs(host: &str, args: RemoteLogsArgs) -> Result<()> {
+    validate_output_options(args.output, args.full)?;
     let base = normalize_base_url(host)?;
     let client = reqwest::Client::new();
     let targets = discover_targets(&client, &base, &args).await?;
@@ -90,6 +122,8 @@ pub async fn run_logs(host: &str, args: RemoteLogsArgs) -> Result<()> {
         !args.no_follow,
         None,
         args.query.as_deref(),
+        args.output,
+        args.full,
     )
     .await
 }
@@ -119,6 +153,8 @@ pub async fn run_daemon_logs(
                 include_system: true,
                 system: None,
                 query: None,
+                output: LogOutput::Text,
+                full: false,
             },
         )
         .await?
@@ -131,6 +167,8 @@ pub async fn run_daemon_logs(
         follow,
         source.as_deref(),
         None,
+        LogOutput::Text,
+        false,
     )
     .await
 }
@@ -143,15 +181,19 @@ async fn run_targets(
     follow: bool,
     source_filter: Option<&str>,
     query: Option<&str>,
+    output: LogOutput,
+    full: bool,
 ) -> Result<()> {
     if targets.is_empty() {
-        println!("[maestro]: no log targets found");
+        if output == LogOutput::Text {
+            println!("[maestro]: no log targets found");
+        }
         return Ok(());
     }
 
     let initial_entries =
         fetch_all_targets(client, base, &mut targets, tail, source_filter, query).await?;
-    print_entries(initial_entries);
+    print_entries(initial_entries, output, full)?;
 
     if !follow {
         return Ok(());
@@ -161,7 +203,7 @@ async fn run_targets(
         tokio::time::sleep(Duration::from_millis(DEFAULT_POLL_INTERVAL_MS)).await;
         let entries =
             fetch_all_targets(client, base, &mut targets, 500, source_filter, query).await?;
-        print_entries(entries);
+        print_entries(entries, output, full)?;
     }
 }
 
@@ -403,10 +445,14 @@ async fn decode_response<T: serde::de::DeserializeOwned>(
         .map_err(|err| Error::external(format!("failed to decode {label} response: {err}")))
 }
 
-fn print_entries(entries: Vec<RemoteLogEntry>) {
+fn print_entries(entries: Vec<RemoteLogEntry>, output: LogOutput, full: bool) -> Result<()> {
     for entry in entries {
-        println!("{}", format_log_entry(&entry));
+        match output {
+            LogOutput::Text => println!("{}", format_log_entry(&entry)),
+            LogOutput::Json => println!("{}", format_log_entry_json(&entry, full)?),
+        }
     }
+    Ok(())
 }
 
 fn format_log_entry(entry: &RemoteLogEntry) -> String {
@@ -419,6 +465,34 @@ fn format_log_entry(entry: &RemoteLogEntry) -> String {
         entry.source,
         entry.text
     )
+}
+
+fn format_log_entry_json(entry: &RemoteLogEntry, full: bool) -> Result<String> {
+    if full {
+        return serde_json::to_string(entry).map_err(|error| {
+            Error::internal(format!("failed to encode full log entry as JSON: {error}"))
+        });
+    }
+    let compact = CompactLogEntry {
+        ts: entry.ts,
+        level: &entry.level,
+        message: &entry.text,
+        source: &entry.source,
+        attributes: entry
+            .attrs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect(),
+    };
+    serde_json::to_string(&compact)
+        .map_err(|error| Error::internal(format!("failed to encode log entry as JSON: {error}")))
+}
+
+fn validate_output_options(output: LogOutput, full: bool) -> Result<()> {
+    if full && output != LogOutput::Json {
+        return Err(Error::invalid_input("--full requires --output json"));
+    }
+    Ok(())
 }
 
 fn normalize_base_url(host: &str) -> Result<String> {
@@ -438,7 +512,72 @@ fn normalize_base_url(host: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
+
+    #[derive(Debug, Parser)]
+    struct TestLogsCli {
+        #[command(flatten)]
+        logs: RemoteLogsArgs,
+    }
+
+    #[test]
+    fn output_flag_accepts_json_and_defaults_to_text() {
+        let default = TestLogsCli::try_parse_from(["test"]).expect("parse default output");
+        assert_eq!(default.logs.output, LogOutput::Text);
+
+        let json =
+            TestLogsCli::try_parse_from(["test", "--output", "json"]).expect("parse JSON output");
+        assert_eq!(json.logs.output, LogOutput::Json);
+        assert!(!json.logs.full);
+        let full = TestLogsCli::try_parse_from(["test", "--output", "json", "--full"])
+            .expect("parse full JSON output");
+        assert!(full.logs.full);
+        assert!(validate_output_options(full.logs.output, full.logs.full).is_ok());
+        assert!(validate_output_options(LogOutput::Text, true).is_err());
+        assert!(TestLogsCli::try_parse_from(["test", "--output", "yaml"]).is_err());
+    }
+
+    #[test]
+    fn json_output_preserves_structured_log_details() {
+        let entry: RemoteLogEntry = serde_json::from_value(serde_json::json!({
+            "seq": 42,
+            "ts": 1_784_167_568_000_i64,
+            "level": "info",
+            "stream": "stdout",
+            "text": "request",
+            "source": "agent-server/deployment/replica0",
+            "origin": "service",
+            "tags": ["service:agent-server"],
+            "attrs": [["http.status_code", "404"], ["http.url_details.path", "/missing"]]
+        }))
+        .expect("decode complete log entry");
+
+        let output = format_log_entry_json(&entry, false).expect("encode compact log entry");
+        let output: serde_json::Value = serde_json::from_str(&output).expect("parse JSON output");
+        assert_eq!(output["ts"], 1_784_167_568_000_i64);
+        assert_eq!(output["level"], "info");
+        assert_eq!(output["message"], "request");
+        assert_eq!(output["source"], "agent-server/deployment/replica0");
+        assert_eq!(output["attributes"]["http.status_code"], "404");
+        assert_eq!(output["attributes"]["http.url_details.path"], "/missing");
+        assert!(output.get("seq").is_none());
+        assert!(output.get("stream").is_none());
+        assert!(output.get("origin").is_none());
+        assert!(output.get("tags").is_none());
+
+        let full = format_log_entry_json(&entry, true).expect("encode full log entry");
+        let full: serde_json::Value = serde_json::from_str(&full).expect("parse full JSON output");
+        assert_eq!(full["seq"], 42);
+        assert_eq!(full["stream"], "stdout");
+        assert_eq!(full["origin"], "service");
+        assert_eq!(full["tags"][0], "service:agent-server");
+        assert_eq!(
+            full["attrs"][0],
+            serde_json::json!(["http.status_code", "404"])
+        );
+    }
 
     #[test]
     fn log_endpoint_uses_tail_until_cursor_is_set() {
