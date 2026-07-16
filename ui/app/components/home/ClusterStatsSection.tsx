@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
@@ -12,31 +12,10 @@ type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 function ClusterStatsSection() {
   const stats = useQuery(() => clusterStatsQuery());
   const config = useQuery(() => clusterConfigQuery());
-  const errors = createMemo(() =>
-    (stats.data?.warnings ?? []).filter((item) => item.severity === "error")
-  );
-  const warnings = createMemo(() =>
-    (stats.data?.warnings ?? []).filter((item) => item.severity === "warning")
-  );
-
   return (
     <div>
-      <div class="mb-4 flex items-center justify-between gap-3">
+      <div class="mb-4">
         <SectionHeader>Cluster stats</SectionHeader>
-        <Show when={stats.data}>
-          {(data) => (
-            <HealthPill
-              level={errors().length > 0 ? "error" : warnings().length > 0 ? "warning" : "healthy"}
-              label={
-                errors().length > 0
-                  ? `${errors().length} issue${errors().length === 1 ? "" : "s"}`
-                  : warnings().length > 0
-                    ? `${warnings().length} warning${warnings().length === 1 ? "" : "s"}`
-                    : "healthy"
-              }
-            />
-          )}
-        </Show>
       </div>
 
       <Show when={stats.isError}>
