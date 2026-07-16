@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 use tokio::time::Instant;
 
 use crate::deployment::controller::DeploymentController;
-use crate::deployment::store::ClusterStore;
+use crate::deployment::store::{ClusterStore, SystemUpgradeRequest};
 use crate::deployment::types::{
     CancelDeploymentOutcome, ControllerConfig, Deployment, DeploymentStatus, ForceQueueOutcome,
     IngressConfig, QueuedDeployment, ReplicaState, ServiceConfig, ServiceDeployConfig,
@@ -546,7 +546,10 @@ impl ClusterStore for LifecycleStore {
         Ok(())
     }
 
-    async fn read_system_upgrade_request(&self, _node_id: Option<&str>) -> Result<Option<String>> {
+    async fn read_system_upgrade_request(
+        &self,
+        _node_id: Option<&str>,
+    ) -> Result<Option<SystemUpgradeRequest>> {
         Ok(None)
     }
 

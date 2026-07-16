@@ -137,6 +137,35 @@ fn parse_cargo_package_version(manifest: &str) -> Result<semver::Version> {
     bail!("Cargo manifest does not define package.version")
 }
 
+fn requested_upgrade_version(
+    request: &crate::deployment::store::SystemUpgradeRequest,
+) -> Result<semver::Version> {
+    let target = request.target_version.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "upgrade request has no target version; submit it again with the current Maestro CLI"
+        )
+    })?;
+    semver::Version::parse(target).map_err(|err| {
+        anyhow::anyhow!("upgrade request has invalid target version `{target}`: {err}")
+    })
+}
+
+fn validate_nixos_upgrade_source_version(
+    source: &semver::Version,
+    running: &semver::Version,
+    target: &semver::Version,
+) -> Result<()> {
+    if target <= running {
+        bail!("requested Maestro version {target} is not newer than running version {running}");
+    }
+    if source != target {
+        bail!(
+            "updated services.maestro.source is Maestro {source}, but the upgrade requested {target}; ensure /etc/maestro resolves the requested release and retry"
+        );
+    }
+    Ok(())
+}
+
 pub struct DeploymentController {
     config: ControllerConfig,
     runtime: Arc<dyn RuntimeProvider>,
@@ -723,18 +752,34 @@ impl DeploymentController {
     }
 
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
+        let request_node_id = self
+            .config
+            .cluster
+            .as_ref()
+            .map(|cluster| cluster.node_id.as_str());
         let request = self
             .store
-            .read_system_upgrade_request(
-                self.config
-                    .cluster
-                    .as_ref()
-                    .map(|cluster| cluster.node_id.as_str()),
-            )
-            .await;
-        let system_type = request.ok().flatten()?;
-        if system_type == "nixos" {
-            self.logger.emit("info", "starting NixOS system upgrade");
+            .read_system_upgrade_request(request_node_id)
+            .await
+            .ok()
+            .flatten()?;
+        let target_version = match requested_upgrade_version(&request) {
+            Ok(version) => version,
+            Err(err) => {
+                self.logger
+                    .emit("error", &format!("refusing system upgrade: {err}"));
+                let _ = self
+                    .store
+                    .delete_system_upgrade_request(request_node_id)
+                    .await;
+                return None;
+            }
+        };
+        if request.system_type == "nixos" {
+            self.logger.emit(
+                "info",
+                &format!("starting NixOS system upgrade to Maestro {target_version}"),
+            );
             let flake_result = tokio::process::Command::new("nix")
                 .args(["flake", "update", "--flake", "/etc/maestro"])
                 .output()
@@ -752,6 +797,21 @@ impl DeploymentController {
                 return None;
             }
 
+            let upgrade_source = match self.stage_nixos_upgrade_source(&target_version).await {
+                Ok(source) => source,
+                Err(err) => {
+                    self.logger.emit(
+                        "error",
+                        &format!("refusing NixOS upgrade before rebuilding or rebooting: {err}"),
+                    );
+                    let _ = self
+                        .store
+                        .delete_system_upgrade_request(request_node_id)
+                        .await;
+                    return None;
+                }
+            };
+
             self.logger.emit("info", "running nixos-rebuild boot");
             let rebuild_result = tokio::process::Command::new("nixos-rebuild")
                 .args(["boot", "--flake", "/etc/maestro#default"])
@@ -760,6 +820,7 @@ impl DeploymentController {
             if let Err(err) = &rebuild_result {
                 self.logger
                     .emit("error", &format!("nixos-rebuild failed: {err}"));
+                let _ = std::fs::remove_dir_all(&upgrade_source.path);
                 return None;
             }
             let rebuild_output = rebuild_result.unwrap();
@@ -767,23 +828,12 @@ impl DeploymentController {
                 let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
                 self.logger
                     .emit("error", &format!("nixos-rebuild failed: {stderr}"));
+                let _ = std::fs::remove_dir_all(&upgrade_source.path);
                 return None;
             }
 
             self.logger
                 .emit("info", "NixOS rebuild complete, pre-building system images");
-            let upgrade_source = match self.stage_nixos_upgrade_source().await {
-                Ok(source) => source,
-                Err(err) => {
-                    self.logger.emit(
-                        "error",
-                        &format!(
-                            "failed to stage updated Maestro source; leaving the current system running: {err}"
-                        ),
-                    );
-                    return None;
-                }
-            };
             for (tag, dockerfile) in system_image_build_specs_for_version(&upgrade_source.version) {
                 let result = self
                     .runtime
@@ -863,7 +913,10 @@ impl DeploymentController {
         }
     }
 
-    async fn stage_nixos_upgrade_source(&self) -> Result<NixosUpgradeSource> {
+    async fn stage_nixos_upgrade_source(
+        &self,
+        target_version: &semver::Version,
+    ) -> Result<NixosUpgradeSource> {
         let source_output =
             crate::utils::cmd::run("nix", &["eval", "--raw", NIXOS_MAESTRO_SOURCE_ATTR]).await?;
         let source = PathBuf::from(source_output.trim());
@@ -887,11 +940,7 @@ impl DeploymentController {
         let source_version =
             parse_cargo_package_version(&std::fs::read_to_string(&manifest_path)?)?;
         let running_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
-        if source_version <= running_version {
-            bail!(
-                "updated Maestro source version {source_version} is not newer than running version {running_version}"
-            );
-        }
+        validate_nixos_upgrade_source_version(&source_version, &running_version, target_version)?;
         self.logger.emit(
             "info",
             &format!(
@@ -2765,7 +2814,11 @@ fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod upgrade_source_tests {
-    use super::{parse_cargo_package_version, system_image_build_specs_for_version};
+    use super::{
+        parse_cargo_package_version, requested_upgrade_version,
+        system_image_build_specs_for_version, validate_nixos_upgrade_source_version,
+    };
+    use crate::deployment::store::SystemUpgradeRequest;
 
     #[test]
     fn reads_version_from_cargo_package_section() {
@@ -2803,5 +2856,49 @@ mod upgrade_source_tests {
                 "maestro-tailscale:1.2.3",
             ]
         );
+    }
+
+    #[test]
+    fn stored_upgrade_request_preserves_the_exact_target_version() {
+        let request = SystemUpgradeRequest::new("nixos", "0.3.3");
+        let encoded = request.to_storage().expect("encode request");
+        let decoded = SystemUpgradeRequest::from_storage(&encoded).expect("decode request");
+
+        assert_eq!(decoded, request);
+        assert_eq!(
+            requested_upgrade_version(&decoded).expect("target version"),
+            semver::Version::new(0, 3, 3)
+        );
+    }
+
+    #[test]
+    fn legacy_upgrade_request_cannot_silently_choose_a_version() {
+        let request = SystemUpgradeRequest::from_storage(b"nixos").expect("legacy request");
+
+        assert_eq!(request.system_type, "nixos");
+        assert!(request.target_version.is_none());
+        assert!(requested_upgrade_version(&request).is_err());
+    }
+
+    #[test]
+    fn nixos_upgrade_rejects_a_newer_source_that_is_not_the_requested_version() {
+        let error = validate_nixos_upgrade_source_version(
+            &semver::Version::new(0, 3, 2),
+            &semver::Version::new(0, 3, 1),
+            &semver::Version::new(0, 3, 3),
+        )
+        .expect_err("mismatched source must be rejected");
+
+        assert!(error.to_string().contains("upgrade requested 0.3.3"));
+    }
+
+    #[test]
+    fn nixos_upgrade_accepts_only_the_exact_newer_target() {
+        validate_nixos_upgrade_source_version(
+            &semver::Version::new(0, 3, 3),
+            &semver::Version::new(0, 3, 1),
+            &semver::Version::new(0, 3, 3),
+        )
+        .expect("exact newer target");
     }
 }

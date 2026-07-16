@@ -7,6 +7,43 @@ use crate::deployment::types::{
     ServiceDeployment, ServiceInfo,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemUpgradeRequest {
+    pub system_type: String,
+    #[serde(default)]
+    pub target_version: Option<String>,
+}
+
+impl SystemUpgradeRequest {
+    pub fn new(system_type: impl Into<String>, target_version: impl Into<String>) -> Self {
+        Self {
+            system_type: system_type.into(),
+            target_version: Some(target_version.into()),
+        }
+    }
+
+    pub(crate) fn from_storage(value: &[u8]) -> Result<Self> {
+        match serde_json::from_slice(value) {
+            Ok(request) => Ok(request),
+            Err(json_error) => {
+                let system_type = std::str::from_utf8(value)?.trim();
+                if system_type.is_empty() || system_type.starts_with(['{', '[']) {
+                    return Err(json_error.into());
+                }
+                Ok(Self {
+                    system_type: system_type.to_string(),
+                    target_version: None,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn to_storage(&self) -> Result<Vec<u8>> {
+        Ok(serde_json::to_vec(self)?)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum UpsertServiceOutcome {
@@ -516,14 +553,17 @@ pub trait ClusterStore: Send + Sync {
         bail!("write_slack_webhooks not implemented")
     }
 
-    async fn read_system_upgrade_request(&self, _node_id: Option<&str>) -> Result<Option<String>> {
+    async fn read_system_upgrade_request(
+        &self,
+        _node_id: Option<&str>,
+    ) -> Result<Option<SystemUpgradeRequest>> {
         bail!("read_system_upgrade_request not implemented")
     }
 
     async fn put_system_upgrade_request(
         &self,
         _node_id: Option<&str>,
-        _system_type: &str,
+        _request: &SystemUpgradeRequest,
     ) -> Result<()> {
         bail!("put_system_upgrade_request not implemented")
     }
