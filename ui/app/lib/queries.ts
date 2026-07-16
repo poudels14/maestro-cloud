@@ -10,7 +10,6 @@ import {
   getClusterConfig,
   getClusterInfo,
   getClusterNodes,
-  getClusterUpgrade,
   getClusterMetrics,
   getContainerMetrics,
   getDeployments,
@@ -38,7 +37,6 @@ const queryKeys = {
   cluster: ["cluster"] as const,
   clusterStats: ["cluster", "stats"] as const,
   clusterNodes: ["cluster", "nodes"] as const,
-  clusterUpgrade: ["cluster", "upgrade"] as const,
   unschedulable: ["cluster", "unschedulable"] as const,
   config: ["config"] as const,
   services: ["services"] as const,
@@ -82,12 +80,6 @@ const clusterNodesQuery = () => ({
   queryKey: queryKeys.clusterNodes,
   queryFn: ssrSafe(getClusterNodes, []),
   refetchInterval: 5_000
-});
-
-const clusterUpgradeQuery = () => ({
-  queryKey: queryKeys.clusterUpgrade,
-  queryFn: ssrSafe(getClusterUpgrade, null),
-  refetchInterval: 3_000
 });
 
 const unschedulableQuery = () => ({
@@ -297,7 +289,6 @@ export {
   clusterConfigQuery,
   clusterStatsQuery,
   clusterNodesQuery,
-  clusterUpgradeQuery,
   unschedulableQuery,
   servicesQuery,
   deploymentsQuery,

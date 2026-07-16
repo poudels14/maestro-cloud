@@ -1,10 +1,13 @@
 import { For, Show } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { useQuery } from "@tanstack/solid-query";
 import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
 import { StatusDot } from "../../lib/ui";
+import { clusterInfoQuery } from "../../lib/queries";
+import { visibleSystemServices } from "../../lib/systemServices";
 
 function ServiceSidebar(props: {
   services: Service[];
@@ -15,8 +18,9 @@ function ServiceSidebar(props: {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
+  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => props.services.filter((s) => !s.system);
-  const systemServices = () => props.services.filter((s) => s.system === true);
+  const systemServices = () => visibleSystemServices(props.services, cluster.data);
 
   return (
     <>

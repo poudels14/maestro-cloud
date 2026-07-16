@@ -83,7 +83,7 @@ function HomeShell(props: { tab: HomeTab }) {
                 <Match when={props.tab === "services"}>
                   <ServicesGrid />
                 </Match>
-                <Match when={props.tab === "nodes"}>
+                <Match when={props.tab === "cluster"}>
                   <NodesSection />
                 </Match>
               </Switch>

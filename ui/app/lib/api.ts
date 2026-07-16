@@ -14,8 +14,7 @@ import type {
   SlackWebhook,
   StatsMetricPoint,
   TrafficPoint,
-  UnschedulableReplica,
-  UpgradeRun
+  UnschedulableReplica
 } from "./types";
 
 export interface ClusterInfo {
@@ -29,6 +28,7 @@ export interface ClusterInfo {
   version?: string;
   upgrading?: boolean;
   restarting?: boolean;
+  upgradeRun?: { requestedAtMs: number } | null;
   nodes?: ClusterNode[];
 }
 
@@ -50,32 +50,6 @@ export async function setNodeDrain(nodeId: string, drain: boolean): Promise<void
     method: "POST"
   });
   if (!res.ok) throw new Error((await res.text()) || `Failed to ${operation} node`);
-}
-
-export async function getClusterUpgrade(): Promise<UpgradeRun | null> {
-  const res = await fetch("/api/cluster/upgrade");
-  if (!res.ok) throw new Error(`Failed to fetch cluster upgrade: ${res.statusText}`);
-  return res.json();
-}
-
-export async function startClusterUpgrade(targetVersion: string): Promise<UpgradeRun> {
-  const res = await fetch("/api/cluster/upgrade", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetVersion })
-  });
-  if (!res.ok) throw new Error((await res.text()) || "Failed to start cluster upgrade");
-  return res.json();
-}
-
-export async function unfreezeClusterUpgrade(upgradeRunId: string): Promise<UpgradeRun> {
-  const res = await fetch("/api/cluster/upgrade/unfreeze", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ upgradeRunId })
-  });
-  if (!res.ok) throw new Error((await res.text()) || "Failed to unfreeze cluster");
-  return res.json();
 }
 
 export async function getClusterInfo(): Promise<ClusterInfo> {

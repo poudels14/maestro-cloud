@@ -140,50 +140,6 @@ export interface UnschedulableReplica {
   reason: string;
 }
 
-export type UpgradePhase =
-  | "draining"
-  | "awaiting-leadership-transfer"
-  | "upgrade-requested"
-  | "self-restart-pending"
-  | "verifying"
-  | "restoring"
-  | "succeeded"
-  | "failed";
-
-export interface UpgradeNodeStep {
-  nodeId: string;
-  hostname: string;
-  role: "hybrid" | "voter" | "worker";
-  fromVersion: string;
-  fromInstanceId?: string | null;
-  status: "pending" | "draining" | "upgrading" | "verifying" | "restoring" | "succeeded" | "failed";
-  startedAtMs?: number | null;
-  completedAtMs?: number | null;
-  upgradeStartedAtMs?: number | null;
-  error?: string | null;
-}
-
-export interface UpgradeEvent {
-  atMs: number;
-  phase: UpgradePhase;
-  nodeId?: string | null;
-  message: string;
-}
-
-export interface UpgradeRun {
-  runId: string;
-  kind?: "upgrade" | "restart";
-  targetVersion: string;
-  requestedAtMs: number;
-  updatedAtMs: number;
-  requestedByNodeId: string;
-  phase: UpgradePhase;
-  currentNodeIndex: number;
-  nodes: UpgradeNodeStep[];
-  history: UpgradeEvent[];
-  failure?: string | null;
-}
-
 export interface GitCommitInfo {
   reference: string;
   message: string;

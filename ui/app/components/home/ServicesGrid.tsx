@@ -5,7 +5,8 @@ import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { deleteService } from "../../lib/api";
 import { ErrorBanner, SectionHeader } from "../../lib/ui";
-import { queryKeys, servicesQuery } from "../../lib/queries";
+import { clusterInfoQuery, queryKeys, servicesQuery } from "../../lib/queries";
+import { visibleSystemServices } from "../../lib/systemServices";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -23,8 +24,9 @@ function ServicesGrid() {
     }
   }));
 
+  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => (services.data ?? []).filter((s) => !s.system);
-  const systemServices = () => (services.data ?? []).filter((s) => s.system);
+  const systemServices = () => visibleSystemServices(services.data ?? [], cluster.data);
 
   const openService = (service: Service) =>
     navigate({
