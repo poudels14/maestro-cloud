@@ -9,6 +9,14 @@ import { clusterConfigQuery, clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
+const ROW_COVERED_WARNING_CODES = new Set([
+  "controller-heartbeat-missing",
+  "controller-heartbeat-stale",
+  "datadog-dead-letters",
+  "log-backup-failing",
+  "log-backup-disabled"
+]);
+
 function ClusterStatsSection() {
   const stats = useQuery(() => clusterStatsQuery());
   const config = useQuery(() => clusterConfigQuery());
@@ -27,6 +35,8 @@ function ClusterStatsSection() {
           const controller = () => data().controller;
           const probeSink = () => controller()?.sinks.find((sink) => sink.id === "controller");
           const datadogSink = () => controller()?.sinks.find((sink) => sink.id === "datadog");
+          const warnings = () =>
+            data().warnings.filter((warning) => !ROW_COVERED_WARNING_CODES.has(warning.code));
           return (
             <div class="space-y-3">
               <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
@@ -70,9 +80,9 @@ function ClusterStatsSection() {
                 <BackupRow backup={data().backup} />
               </div>
 
-              <Show when={data().warnings.length > 0}>
+              <Show when={warnings().length > 0}>
                 <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
-                  <For each={data().warnings}>
+                  <For each={warnings()}>
                     {(warning) => (
                       <div class="flex items-start gap-2.5 px-4 py-2.5">
                         <AlertTriangle
