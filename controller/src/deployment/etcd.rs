@@ -17,7 +17,7 @@ use crate::deployment::keys::{
     service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
     service_info_key, service_prefix, system_restart_request_key, system_upgrade_request_key,
 };
-use crate::deployment::store::ClusterStore;
+use crate::deployment::store::{ClusterStore, SystemUpgradeRequest};
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
     ForceQueueOutcome, IngressConfig, IngressRouting, QueuedDeployment, ReplicaState,
@@ -2757,14 +2757,14 @@ impl ClusterStore for EtcdStateStore {
     async fn read_system_upgrade_request(
         &self,
         node_id: Option<&str>,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> anyhow::Result<Option<SystemUpgradeRequest>> {
         let response = self
             .get(system_upgrade_request_key(node_id).into_bytes(), None)
             .await?;
         if let Some(kv) = response.kvs().first() {
-            let value = String::from_utf8(kv.value().to_vec())
-                .map_err(|err| anyhow!("invalid upgrade request value: {err}"))?;
-            Ok(Some(value))
+            SystemUpgradeRequest::from_storage(kv.value())
+                .map(Some)
+                .map_err(|err| anyhow!("invalid upgrade request value: {err}"))
         } else {
             Ok(None)
         }
@@ -2773,15 +2773,14 @@ impl ClusterStore for EtcdStateStore {
     async fn put_system_upgrade_request(
         &self,
         node_id: Option<&str>,
-        system_type: &str,
+        request: &SystemUpgradeRequest,
     ) -> anyhow::Result<()> {
+        let value = request
+            .to_storage()
+            .map_err(|err| anyhow!("failed to encode upgrade request: {err}"))?;
         let mut client = self.client.lock().await;
         client
-            .put(
-                system_upgrade_request_key(node_id),
-                system_type.as_bytes(),
-                None,
-            )
+            .put(system_upgrade_request_key(node_id), value, None)
             .await
             .map_err(|err| anyhow!("failed to write upgrade request: {err}"))?;
         Ok(())

@@ -33,7 +33,10 @@ use self::types::{
     ServiceListItem, SlackWebhookView, UpdateSlackWebhookRequest, UpgradeSystemRequest,
     UploadServiceResponse,
 };
-use crate::deployment::store::{ClusterStore, RequestClaim, UpsertServiceOutcome};
+use crate::deployment::store::{
+    ClusterStore, RequestClaim, SystemUpgradeRequest as StoredSystemUpgradeRequest,
+    UpsertServiceOutcome,
+};
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
     ServiceDeployConfig, ServiceDeployment,
@@ -2446,9 +2449,11 @@ impl Server {
         eprintln!(
             "upgrade request system={system_type} current_version={current_version} target_version={target_version}"
         );
+        let stored_request =
+            StoredSystemUpgradeRequest::new(system_type, target_version.to_string());
         state
             .store
-            .put_system_upgrade_request(state.local_node_id.as_deref(), system_type)
+            .put_system_upgrade_request(state.local_node_id.as_deref(), &stored_request)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         eprintln!(
