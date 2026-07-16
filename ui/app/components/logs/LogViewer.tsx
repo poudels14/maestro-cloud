@@ -77,6 +77,14 @@ function quoteLogQueryValue(value: string) {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+function mergeLogQuery(currentQuery: string, fragment: string) {
+  if (!currentQuery) return fragment;
+  if (!fragment) return currentQuery;
+  const left = /\bOR\b/.test(currentQuery) ? `(${currentQuery})` : currentQuery;
+  const right = /\bOR\b/.test(fragment) ? `(${fragment})` : fragment;
+  return `${left} ${right}`;
+}
+
 function withLogLevelFilter(currentQuery: string, level: string) {
   let next = currentQuery.trim();
   const existing = logQueryPills(next)
@@ -99,17 +107,45 @@ function LogViewer(props: {
   phase?: "build" | "deploy";
   embedded?: boolean;
   showHistogram?: boolean;
+  fillHeight?: boolean;
+  query?: string;
+  onQueryChange?: (query: string) => void;
+  range?: string;
+  onRangeChange?: (range: string) => void;
 }) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [hasMore, setHasMore] = createSignal(false);
   const [queryDraft, setQueryDraft] = createSignal("");
-  const [query, setQuery] = createSignal("");
+  const [internalQuery, setInternalQuery] = createSignal(props.query ?? "");
+  const query = () => (props.onQueryChange ? (props.query ?? "") : internalQuery());
+  const setQuery = (value: string) => {
+    if (props.onQueryChange) {
+      props.onQueryChange(value);
+    } else {
+      setInternalQuery(value);
+    }
+  };
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
   const [pollCursor, setPollCursor] = createSignal(0);
-  const [rangeMs, setRangeMs] = createSignal(TIME_RANGES[0].ms);
+  const [internalRangeMs, setInternalRangeMs] = createSignal(TIME_RANGES[0].ms);
+  const rangeMs = () => {
+    if (props.onRangeChange) {
+      const matched = TIME_RANGES.find((range) => range.label === props.range);
+      return matched?.ms ?? TIME_RANGES[0].ms;
+    }
+    return internalRangeMs();
+  };
+  const setRangeMs = (value: number) => {
+    if (props.onRangeChange) {
+      const matched = TIME_RANGES.find((range) => range.ms === value);
+      props.onRangeChange(matched?.label ?? TIME_RANGES[0].label);
+    } else {
+      setInternalRangeMs(value);
+    }
+  };
   const [histogram, setHistogram] = createSignal<LogHistogram | null>(null);
   const [histogramLoading, setHistogramLoading] = createSignal(false);
   const [histogramError, setHistogramError] = createSignal<string | null>(null);
@@ -179,7 +215,10 @@ function LogViewer(props: {
     return query().trim();
   };
 
-  const applyQuery = () => setQuery(queryDraft().trim());
+  const applyQuery = () => {
+    setQuery(mergeLogQuery(query(), queryDraft().trim()));
+    setQueryDraft("");
+  };
 
   const activeTimeRange = () => {
     if (!props.showHistogram) return { from: undefined, to: undefined };
@@ -223,9 +262,8 @@ function LogViewer(props: {
       from: Math.max(value.from, bucket.ts),
       to: Math.min(value.to, bucket.ts + value.bucketMs)
     });
-    const nextQuery = withLogLevelFilter(query(), level);
-    setQueryDraft(nextQuery);
-    setQuery(nextQuery);
+    setQueryDraft("");
+    setQuery(withLogLevelFilter(query(), level));
   };
 
   const histogramTotal = () =>
@@ -549,11 +587,12 @@ function LogViewer(props: {
   return (
     <div
       class={clsx("overflow-hidden", {
+        "h-full min-h-0 flex flex-col": props.fillHeight,
         "bg-white rounded-lg border border-gray-200": !props.embedded
       })}
     >
       <Show when={props.showHistogram}>
-        <div class="border-b border-gray-100 px-3 pt-3 pb-1.5">
+        <div class="shrink-0 border-b border-gray-100 px-3 pt-3 pb-1.5">
           <div class="flex flex-wrap items-center justify-between gap-2 px-1">
             <div class="flex items-center gap-2 min-w-0">
               <Show when={histogram()}>
@@ -566,16 +605,20 @@ function LogViewer(props: {
                     <span class="font-medium whitespace-nowrap text-indigo-700">
                       {selectedBucketCount().toLocaleString()} matching logs
                     </span>
-                    <span class="truncate text-gray-400">{selectedIntervalLabel()}</span>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedBucket(null)}
-                      aria-label="Clear selected log interval"
-                      title="Clear selected interval"
-                      class="shrink-0 rounded p-0.5 text-gray-400 outline-none hover:bg-gray-100 hover:text-gray-700"
-                    >
-                      <X class="size-3" />
-                    </button>
+                    <span class="inline-flex max-w-full items-center overflow-hidden rounded border border-indigo-200 bg-indigo-50">
+                      <span class="min-w-0 truncate px-1.5 py-0.5 font-mono text-indigo-700">
+                        {selectedIntervalLabel()}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBucket(null)}
+                        aria-label="Clear selected log interval"
+                        title="Clear selected interval"
+                        class="self-stretch border-l border-indigo-200 px-1 text-indigo-400 outline-none hover:bg-indigo-100 hover:text-indigo-700"
+                      >
+                        <X class="size-3" />
+                      </button>
+                    </span>
                   </Show>
                 </div>
               </Show>
@@ -639,7 +682,7 @@ function LogViewer(props: {
         </div>
       </Show>
       <Show when={error()}>
-        <div class="p-3">
+        <div class="shrink-0 p-3">
           <ErrorBanner
             message={error()!}
             onRetry={() => {
@@ -650,7 +693,7 @@ function LogViewer(props: {
           />
         </div>
       </Show>
-      <div class="px-3 py-2 border-b border-gray-100 flex items-center gap-3">
+      <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-3">
         <LogQueryInput
           value={queryDraft()}
           appliedQuery={query()}
@@ -661,13 +704,17 @@ function LogViewer(props: {
             setQueryDraft("");
             setQuery("");
           }}
-          onAppliedQueryChange={(value) => {
-            setQueryDraft(value);
-            setQuery(value);
-          }}
+          onAppliedQueryChange={setQuery}
         />
       </div>
-      <div ref={scrollRef} onScroll={onScroll} class="max-h-[600px] overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        class={clsx("overflow-y-auto", {
+          "min-h-0 flex-1": props.fillHeight,
+          "max-h-[600px]": !props.fillHeight
+        })}
+      >
         <Switch>
           <Match when={loading()}>
             <div class="text-gray-400 text-center py-8 font-mono text-xs">Loading logs…</div>

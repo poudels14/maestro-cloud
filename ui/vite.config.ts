@@ -5,6 +5,9 @@ import tailwindcss from "@tailwindcss/vite";
 import viteSolid from "vite-plugin-solid";
 
 export default defineConfig({
+  experimental: {
+    bundledDev: true
+  },
   plugins: [
     tailwindcss(),
     tanstackStart({

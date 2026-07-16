@@ -113,7 +113,7 @@ export function TabButton(props: {
       type="button"
       onClick={props.onClick}
       class={clsx(
-        "px-1 pb-2.5 text-sm font-medium border-b-2 transition-[color,border-color] duration-150 ease-out-strong outline-none",
+        "px-1 pb-2 text-sm font-medium border-b-2 transition-[color,border-color] duration-150 ease-out-strong outline-none",
         {
           "border-indigo-500 text-indigo-600": props.active,
           "border-transparent text-gray-400 hover:text-gray-600": !props.active
