@@ -13,7 +13,9 @@ pub use duck::{BackupPartition, DuckLogStore, IngestLogEntry, TelemetryStore};
 pub(crate) use filter::healthcheck_path_tag;
 pub use http_sink::HttpSink;
 pub use search::LogSearchQuery;
-pub(crate) use search::{LogSearchValue, SqlDialect, sql_like_prefix};
+pub(crate) use search::{
+    LogSearchValue, SqlDialect, http_status_class_expression, sql_like_prefix,
+};
 pub use sink::SinkWorker;
 pub use store::{LogEntry, LogOrigin, LogStore, Logger};
 
@@ -35,6 +37,13 @@ pub struct LogReadQuery {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogHistogramGroupBy {
+    #[default]
+    Level,
+    HttpStatusClass,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogHistogramQuery {
     pub scope: LogReadScope,
@@ -43,6 +52,7 @@ pub struct LogHistogramQuery {
     pub from: i64,
     pub to: i64,
     pub bucket_ms: i64,
+    pub group_by: LogHistogramGroupBy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

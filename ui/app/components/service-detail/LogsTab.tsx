@@ -1,15 +1,14 @@
 import { Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
-import { getRouteApi, useNavigate } from "@tanstack/solid-router";
+import { useLocation, useNavigate } from "@tanstack/solid-router";
 import type { Service } from "../../lib/types";
 import { deploymentsQuery } from "../../lib/queries";
 import { LogViewer } from "../logs/LogViewer";
 
-const routeApi = getRouteApi("/services/$serviceId/$tab");
-
 function LogsTab(props: { service: Service }) {
   const isSystem = () => props.service.system === true;
-  const search = routeApi.useSearch();
+  const location = useLocation();
+  const search = () => location().search as { query?: string; range?: string };
   const navigate = useNavigate();
 
   const deployments = useQuery(() => ({

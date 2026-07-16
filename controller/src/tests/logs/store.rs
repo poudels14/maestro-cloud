@@ -150,6 +150,7 @@ async fn sqlite_log_histogram_applies_time_scope_and_search_before_counting() {
 
     let buckets = store
         .read_log_histogram(crate::logs::LogHistogramQuery {
+            group_by: crate::logs::LogHistogramGroupBy::Level,
             scope: crate::logs::LogReadScope::Prefix("app/".into()),
             origin: Some(LogOrigin::Service),
             search: Some("@http.status_code:[500 TO 599]".parse().expect("query")),
@@ -166,6 +167,53 @@ async fn sqlite_log_histogram_applies_time_scope_and_search_before_counting() {
     assert_eq!(buckets[0].levels.get("error"), Some(&1));
     assert_eq!(buckets[1].ts, from + bucket_ms);
     assert_eq!(buckets[1].levels.get("warn"), Some(&1));
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn sqlite_log_histogram_groups_by_http_status_class() {
+    let path = temp_db_path("histogram-status-class");
+    let store = LogStore::open(&path).expect("open store");
+    let bucket_ms = 60_000;
+    let from = 1_700_000_040_000 - (1_700_000_040_000 % bucket_ms);
+
+    let mut ok = sample_entry();
+    ok.ts = from;
+    ok.attrs = vec![("http.status_code".into(), "204".into())];
+    let mut not_found = ok.clone();
+    not_found.ts = from + 1_000;
+    not_found.attrs = vec![("DownstreamStatus".into(), "404".into())];
+    let mut server_error = ok.clone();
+    server_error.ts = from + bucket_ms;
+    server_error.attrs = vec![("http.status_code".into(), "503".into())];
+    let mut no_status = ok.clone();
+    no_status.ts = from + 2_000;
+    no_status.attrs = vec![("duration".into(), "12".into())];
+    store
+        .append(&[ok, not_found, server_error, no_status])
+        .await
+        .expect("append");
+
+    let buckets = store
+        .read_log_histogram(crate::logs::LogHistogramQuery {
+            group_by: crate::logs::LogHistogramGroupBy::HttpStatusClass,
+            scope: crate::logs::LogReadScope::Prefix("app/".into()),
+            origin: Some(LogOrigin::Service),
+            search: None,
+            from,
+            to: from + 2 * bucket_ms,
+            bucket_ms,
+        })
+        .await
+        .expect("histogram");
+
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0].ts, from);
+    assert_eq!(buckets[0].count, 2);
+    assert_eq!(buckets[0].levels.get("2xx"), Some(&1));
+    assert_eq!(buckets[0].levels.get("4xx"), Some(&1));
+    assert_eq!(buckets[1].ts, from + bucket_ms);
+    assert_eq!(buckets[1].levels.get("5xx"), Some(&1));
     let _ = std::fs::remove_file(path);
 }
 

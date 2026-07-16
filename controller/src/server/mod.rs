@@ -42,8 +42,8 @@ use crate::deployment::types::{
     ServiceDeployConfig, ServiceDeployment,
 };
 use crate::logs::{
-    LogEntry, LogHistogram, LogHistogramBucket, LogHistogramQuery, LogOrigin, LogReadQuery,
-    LogReadScope, LogSearchQuery,
+    LogEntry, LogHistogram, LogHistogramBucket, LogHistogramGroupBy, LogHistogramQuery, LogOrigin,
+    LogReadQuery, LogReadScope, LogSearchQuery,
 };
 use crate::signal::ShutdownEvent;
 
@@ -2894,6 +2894,8 @@ struct LogHistogramHttpQuery {
     query: Option<String>,
     #[serde(rename = "bucketMs")]
     bucket_ms: Option<i64>,
+    #[serde(rename = "groupBy")]
+    group_by: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3211,6 +3213,16 @@ fn build_log_histogram_query(
         .unwrap_or(default_bucket_ms)
         .max(range / MAX_LOG_HISTOGRAM_BUCKETS)
         .max(ONE_MINUTE_MS);
+    let group_by = match query.group_by.as_deref() {
+        None | Some("level") => LogHistogramGroupBy::Level,
+        Some("status") => LogHistogramGroupBy::HttpStatusClass,
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unknown histogram groupBy `{other}`"),
+            ));
+        }
+    };
     Ok(LogHistogramQuery {
         scope,
         origin,
@@ -3218,6 +3230,7 @@ fn build_log_histogram_query(
         from,
         to,
         bucket_ms,
+        group_by,
     })
 }
 

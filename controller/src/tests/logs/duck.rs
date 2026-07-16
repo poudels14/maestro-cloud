@@ -437,6 +437,7 @@ async fn log_histogram_counts_filtered_hot_and_cold_rows() {
 
     let buckets = store
         .read_log_histogram(crate::logs::LogHistogramQuery {
+            group_by: crate::logs::LogHistogramGroupBy::Level,
             scope: crate::logs::LogReadScope::Prefix("api/".into()),
             origin: Some(LogOrigin::Service),
             search: Some("@http.status_code:[500 TO 599]".parse().expect("query")),

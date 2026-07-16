@@ -6,8 +6,8 @@ use duckdb::{params, params_from_iter, types::Value};
 
 use super::{Db, contains_parquet, hive_component, sql_lit};
 use crate::logs::{
-    LogEntry, LogHistogramBucket, LogOrigin, LogSearchQuery, LogSearchValue, SqlDialect,
-    sql_like_prefix,
+    LogEntry, LogHistogramBucket, LogHistogramGroupBy, LogOrigin, LogSearchQuery, LogSearchValue,
+    SqlDialect, http_status_class_expression, sql_like_prefix,
 };
 
 #[derive(Clone, Copy)]
@@ -273,6 +273,7 @@ pub(super) fn query_log_histogram(
     from: i64,
     to: i64,
     bucket_ms: i64,
+    group_by: LogHistogramGroupBy,
     cold_globs: &[PathBuf],
 ) -> Result<Vec<LogHistogramBucket>> {
     if bucket_ms <= 0 {
@@ -321,12 +322,19 @@ pub(super) fn query_log_histogram(
             "#,
         ));
     }
+    let group_expr = match group_by {
+        LogHistogramGroupBy::Level => "lower(level)".to_string(),
+        LogHistogramGroupBy::HttpStatusClass => http_status_class_expression(SqlDialect::DuckDb),
+    };
     let mut sql = format!(
-        "SELECT ts - (ts % ?) AS bucket_at_ms, lower(level) AS level,
+        "SELECT ts - (ts % ?) AS bucket_at_ms, {group_expr} AS grp,
                 count(*)::BIGINT AS count
          FROM ({}) q WHERE true",
         arms.join(" UNION ALL ")
     );
+    if group_by == LogHistogramGroupBy::HttpStatusClass {
+        sql.push_str(&format!(" AND {group_expr} IS NOT NULL"));
+    }
     let mut values = vec![Value::BigInt(bucket_ms)];
     if let Some(prefix) = prefix {
         sql.push_str(" AND source LIKE ? ESCAPE '\\'");
@@ -357,7 +365,7 @@ pub(super) fn query_log_histogram(
     }
     sql.push_str(
         " AND ts >= ? AND ts < ?
-         GROUP BY bucket_at_ms, lower(level) ORDER BY bucket_at_ms, level",
+         GROUP BY bucket_at_ms, grp ORDER BY bucket_at_ms, grp",
     );
     values.extend([Value::BigInt(from), Value::BigInt(to)]);
 

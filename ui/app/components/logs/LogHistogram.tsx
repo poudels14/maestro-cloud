@@ -2,10 +2,18 @@ import { createEffect, onCleanup, onMount } from "solid-js";
 import * as d3 from "d3";
 import type { LogHistogramBucket } from "../../lib/api";
 
-const LEVEL_PRIORITY = ["trace", "debug", "info", "warn", "error"];
+const LEVEL_PRIORITY = ["trace", "debug", "info", "warn", "error", "2xx", "3xx", "4xx", "5xx"];
 
 function levelColor(level: string) {
   switch (level.toLowerCase()) {
+    case "2xx":
+      return "#34d399";
+    case "3xx":
+      return "#22d3ee";
+    case "4xx":
+      return "#fbbf24";
+    case "5xx":
+      return "#f87171";
     case "error":
     case "err":
     case "fatal":
@@ -47,8 +55,8 @@ function LogHistogramChart(props: {
   to: number;
   bucketMs: number;
   selectedTs?: number;
-  onSelectInterval: (bucket: LogHistogramBucket) => void;
-  onSelect: (bucket: LogHistogramBucket, level: string) => void;
+  onSelectInterval?: (bucket: LogHistogramBucket) => void;
+  onSelect?: (bucket: LogHistogramBucket, level: string) => void;
 }) {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
@@ -155,7 +163,7 @@ function LogHistogramChart(props: {
         const bounds = bucketBounds(bucket);
         return `Select ${bucket.count.toLocaleString()} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
       })
-      .style("cursor", "pointer")
+      .style("cursor", props.onSelectInterval ? "pointer" : "default")
       .on("mouseenter", (_event, bucket) => {
         const bounds = bucketBounds(bucket);
         const x = bounds.x + bounds.width / 2;
@@ -170,11 +178,11 @@ function LogHistogramChart(props: {
           .text(label);
       })
       .on("mouseleave", () => tooltip.style("display", "none"))
-      .on("click", (_event, bucket) => props.onSelectInterval(bucket))
+      .on("click", (_event, bucket) => props.onSelectInterval?.(bucket))
       .on("keydown", (event: KeyboardEvent, bucket) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          props.onSelectInterval(bucket);
+          props.onSelectInterval?.(bucket);
         }
       });
 
@@ -205,7 +213,7 @@ function LogHistogramChart(props: {
         const bounds = bucketBounds(segment.bucket);
         return `${segment.count.toLocaleString()} ${segment.level} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
       })
-      .style("cursor", "pointer")
+      .style("cursor", props.onSelect ? "pointer" : "default")
       .on("mouseenter", (_event, segment) => {
         const bounds = bucketBounds(segment.bucket);
         const x = bounds.x + bounds.width / 2;
@@ -221,12 +229,12 @@ function LogHistogramChart(props: {
       })
       .on("mouseleave", () => tooltip.style("display", "none"))
       .on("click", (_event, segment) => {
-        props.onSelect(segment.bucket, segment.level);
+        props.onSelect?.(segment.bucket, segment.level);
       })
       .on("keydown", (event: KeyboardEvent, segment) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          props.onSelect(segment.bucket, segment.level);
+          props.onSelect?.(segment.bucket, segment.level);
         }
       });
 

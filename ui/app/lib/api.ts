@@ -284,13 +284,15 @@ export async function getSystemLogHistogram(
   from: number,
   to: number,
   query?: string,
-  bucketMs?: number
+  bucketMs?: number,
+  groupBy?: "level" | "status"
 ): Promise<LogHistogram> {
   const url = new URL(`/api/system/${encodeURIComponent(name)}/logs/histogram`, location.origin);
   url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
   if (query) url.searchParams.set("query", query);
   if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
+  if (groupBy) url.searchParams.set("groupBy", groupBy);
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();

@@ -12,10 +12,9 @@ import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
 import { MetricsTab } from "../components/service-detail/MetricsTab";
 import { LogsTab } from "../components/service-detail/LogsTab";
-import { IngressTrafficTab } from "../components/ingress/TrafficTab";
 
-const VALID_TABS = new Set(["overview", "deployments", "metrics", "traffic", "logs"]);
-type DetailTab = "overview" | "deployments" | "metrics" | "traffic" | "logs";
+const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
+type DetailTab = "overview" | "deployments" | "metrics" | "logs";
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
   validateSearch: (
@@ -115,15 +114,12 @@ function ServiceDetailPanel(props: {
   onOpenDrawer: () => void;
 }) {
   createEffect(() => {
-    if (props.tab === "traffic" && props.service.id !== "maestro-ingress") {
-      props.navigateTab("overview");
-    } else if (props.service.system && props.tab === "deployments") {
+    if (props.service.system && props.tab === "deployments") {
       props.navigateTab("logs");
     }
   });
 
-  const contentMaxWidth = () =>
-    props.tab === "logs" || props.tab === "traffic" ? "max-w-6xl" : "max-w-4xl";
+  const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
 
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
@@ -156,13 +152,6 @@ function ServiceDetailPanel(props: {
               active={props.tab === "metrics"}
               onClick={() => props.navigateTab("metrics")}
             />
-            <Show when={props.service.id === "maestro-ingress"}>
-              <TabButton
-                label="Traffic"
-                active={props.tab === "traffic"}
-                onClick={() => props.navigateTab("traffic")}
-              />
-            </Show>
             <Show when={!props.service.system}>
               <TabButton
                 label="Deployments"
@@ -201,9 +190,6 @@ function ServiceDetailPanel(props: {
           </Show>
           <Show when={props.tab === "metrics"}>
             <MetricsTab service={props.service} />
-          </Show>
-          <Show when={props.tab === "traffic" && props.service.id === "maestro-ingress"}>
-            <IngressTrafficTab />
           </Show>
           <Show when={props.tab === "logs"}>
             <LogsTab service={props.service} />

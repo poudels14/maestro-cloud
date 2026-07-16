@@ -1,6 +1,6 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
-import { getRouteApi, useNavigate } from "@tanstack/solid-router";
+import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
 import { clusterInfoQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
@@ -12,13 +12,12 @@ import { DeploymentRow } from "./DeploymentRow";
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-const routeApi = getRouteApi("/services/$serviceId/$tab");
-
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
   const clusterInfo = useQuery(() => clusterInfoQuery());
-  const search = routeApi.useSearch();
+  const location = useLocation();
+  const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
 
   const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<"redeploy" | "restart" | null>(

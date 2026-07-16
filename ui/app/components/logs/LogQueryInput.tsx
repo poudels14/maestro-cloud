@@ -214,7 +214,10 @@ function LogQueryInput(props: {
     props.onInput(next);
     if (suggestion.complete) {
       props.onApply();
-      focusInput(0);
+      setCursor(0);
+      setActiveIndex(-1);
+      setOpen(false);
+      inputRef?.blur();
     } else {
       focusInput(token.start + suggestion.insert.length);
     }
