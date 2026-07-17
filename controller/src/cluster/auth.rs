@@ -18,14 +18,24 @@ pub async fn bootstrap_initial(runtime: &ClusterRuntime, tls: TlsOptions) -> Res
     }
     let endpoint = format!("https://{}:{}", runtime.host_ip, runtime.etcd_client_port);
     let mut client = Client::connect([endpoint], Some(ConnectOptions::new().with_tls(tls))).await?;
-    ensure_role(&mut client, "root", &[]).await?;
-    ensure_role(&mut client, TRAEFIK_ROLE, &traefik_permissions()).await?;
-    ensure_user(&mut client, "root", "root").await?;
+    bootstrap_initial_with_client(runtime, &mut client).await
+}
+
+pub(crate) async fn bootstrap_initial_with_client(
+    runtime: &ClusterRuntime,
+    client: &mut Client,
+) -> Result<()> {
+    if !runtime.is_seed() {
+        bail!("only the bootstrap seed may initialize etcd RBAC");
+    }
+    ensure_role(client, "root", &[]).await?;
+    ensure_role(client, TRAEFIK_ROLE, &traefik_permissions()).await?;
+    ensure_user(client, "root", "root").await?;
     for node in &runtime.initial_voters {
-        provision_voter_transport_users(&mut client, node.host_ip, node.identity_api_port).await?;
+        provision_voter_transport_users(client, node.host_ip, node.identity_api_port).await?;
     }
     provision_node_users_with_client(
-        &mut client,
+        client,
         runtime.host_ip,
         runtime.identity_api_port,
         &runtime.node_id,
@@ -42,7 +52,7 @@ pub async fn bootstrap_initial(runtime: &ClusterRuntime, tls: TlsOptions) -> Res
             None,
         )
         .await?;
-    enable_auth(&mut client).await
+    enable_auth(client).await
 }
 
 async fn enable_auth(client: &mut Client) -> Result<()> {
@@ -218,7 +228,7 @@ async fn ensure_role(client: &mut Client, name: &str, permissions: &[Permission]
         client.role_add(name).await?;
     }
     let current = client.role_get(name).await?.permissions();
-    if same_permissions(&current, permissions) {
+    if !role_permissions_need_reconciliation(name, &current, permissions) {
         return Ok(());
     }
     for permission in current {
@@ -241,6 +251,16 @@ async fn ensure_role(client: &mut Client, name: &str, permissions: &[Permission]
             .await?;
     }
     Ok(())
+}
+
+fn role_permissions_need_reconciliation(
+    name: &str,
+    current: &[Permission],
+    expected: &[Permission],
+) -> bool {
+    // etcd owns the root role's implicit full-keyspace permission and rejects attempts to
+    // revoke it. Other roles remain declaratively reconciled by Maestro.
+    name != "root" && !same_permissions(current, expected)
 }
 
 fn same_permissions(left: &[Permission], right: &[Permission]) -> bool {
@@ -306,6 +326,17 @@ async fn reserve_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_role_implicit_permission_is_never_reconciled() {
+        let current = vec![Permission::read_write(vec![0]).with_range_end(vec![0])];
+        assert!(!role_permissions_need_reconciliation("root", &current, &[]));
+        assert!(role_permissions_need_reconciliation(
+            "maestro-test",
+            &current,
+            &[]
+        ));
+    }
 
     fn writable_prefixes(permissions: &[Permission]) -> Vec<String> {
         permissions
