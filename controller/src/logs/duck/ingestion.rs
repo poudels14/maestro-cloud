@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use duckdb::{Connection, params, params_from_iter, types::Value};
 
 use super::{Db, IngestLogEntry, duckdb_i64_or_zero, now_ms};
-use crate::logs::{LogEntry, ingress_access_sample};
+use crate::logs::{LogEntry, parse_ingress_traffic_event};
 
 pub(super) fn append_log_batch(db: &Db, service: bool, entries: &[IngestLogEntry]) -> Result<()> {
     if entries.is_empty() {
@@ -29,10 +29,10 @@ pub(super) fn append_log_batch(db: &Db, service: bool, entries: &[IngestLogEntry
             }
             offsets.insert(node.clone(), origin_seq);
         }
-        if !service && let Some(sample) = ingress_access_sample(&item.entry) {
+        if !service && let Some(event) = parse_ingress_traffic_event(&item.entry) {
             for (dimension, value) in [
-                ("ip", sample.client_ip.as_str()),
-                ("path", sample.path.as_str()),
+                ("ip", event.client_ip.as_str()),
+                ("path", event.path.as_str()),
             ] {
                 tx.execute(
                     r#"
@@ -46,18 +46,17 @@ pub(super) fn append_log_batch(db: &Db, service: bool, entries: &[IngestLogEntry
                             )
                     "#,
                     params![
-                        sample.bucket_at_ms,
-                        sample.router,
+                        event.bucket_at_ms,
+                        event.router,
                         dimension,
                         value,
-                        i32::from(sample.status_code),
-                        sample.last_seen_at_ms,
+                        i32::from(event.status_code),
+                        event.last_seen_at_ms,
                     ],
                 )?;
             }
-        } else {
-            insert_log(&tx, service, &item.entry)?;
         }
+        insert_log(&tx, service, &item.entry)?;
     }
     for (node, seq) in offsets {
         tx.execute(

@@ -288,13 +288,14 @@ async fn sqlite_ingress_traffic_fallback_groups_access_logs() {
     assert_eq!(blocked.by_ip[0].value, "2001:db8::9");
     assert_eq!(blocked.by_ip[0].status_code, 403);
     assert_eq!(blocked.by_path[0].value, "/wp-admin");
-    assert!(
+    assert_eq!(
         store
             .read_tail("maestro-ingress", 10)
             .await
             .expect("read raw ingress logs")
-            .is_empty(),
-        "access records should be discarded after aggregation"
+            .len(),
+        3,
+        "access records are kept as raw logs alongside aggregation"
     );
 
     let _ = std::fs::remove_file(path);

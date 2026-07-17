@@ -89,7 +89,7 @@ pub struct IngressTrafficBreakdown {
     pub by_path: Vec<TrafficBreakdownEntry>,
 }
 
-pub(crate) struct IngressAccessSample {
+pub(crate) struct IngressTrafficEvent {
     pub bucket_at_ms: i64,
     pub last_seen_at_ms: i64,
     pub router: String,
@@ -98,7 +98,7 @@ pub(crate) struct IngressAccessSample {
     pub status_code: u16,
 }
 
-pub(crate) fn ingress_access_sample(entry: &LogEntry) -> Option<IngressAccessSample> {
+pub(crate) fn parse_ingress_traffic_event(entry: &LogEntry) -> Option<IngressTrafficEvent> {
     if entry.source.as_ref() != "maestro-ingress" {
         return None;
     }
@@ -122,7 +122,7 @@ pub(crate) fn ingress_access_sample(entry: &LogEntry) -> Option<IngressAccessSam
     let path = attr("RequestPath")?.split('?').next().unwrap_or("/");
     let path = if path.is_empty() { "/" } else { path };
     let path = path.chars().take(2_048).collect::<String>();
-    Some(IngressAccessSample {
+    Some(IngressTrafficEvent {
         bucket_at_ms: entry.ts - entry.ts.rem_euclid(60_000),
         last_seen_at_ms: entry.ts,
         router: router.to_string(),

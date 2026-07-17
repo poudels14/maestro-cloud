@@ -325,22 +325,21 @@ impl LogStore {
             )?;
             for entry in &entries {
                 if compact_ingress
-                    && let Some(sample) = crate::logs::ingress_access_sample(entry)
+                    && let Some(event) = crate::logs::parse_ingress_traffic_event(entry)
                 {
                     for (dimension, value) in [
-                        ("ip", sample.client_ip.as_str()),
-                        ("path", sample.path.as_str()),
+                        ("ip", event.client_ip.as_str()),
+                        ("path", event.path.as_str()),
                     ] {
                         traffic_stmt.execute(rusqlite::params![
-                            sample.bucket_at_ms,
-                            sample.router,
+                            event.bucket_at_ms,
+                            event.router,
                             dimension,
                             value,
-                            i64::from(sample.status_code),
-                            sample.last_seen_at_ms,
+                            i64::from(event.status_code),
+                            event.last_seen_at_ms,
                         ])?;
                     }
-                    continue;
                 }
                 let tags_json = serde_json::to_string(&entry.tags).unwrap_or_default();
                 let attrs_json =
