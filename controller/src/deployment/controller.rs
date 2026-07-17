@@ -185,6 +185,7 @@ pub struct DeploymentController {
     notified_ready: HashSet<String>,
     notified_crashed: HashSet<String>,
     leadership_rx: Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
+    egress_firewall: Option<crate::firewall::FirewallManager>,
 }
 
 impl DeploymentController {
@@ -279,7 +280,12 @@ impl DeploymentController {
             notified_ready: HashSet::new(),
             notified_crashed: HashSet::new(),
             leadership_rx: None,
+            egress_firewall: None,
         }
+    }
+
+    pub fn set_egress_firewall(&mut self, firewall: crate::firewall::FirewallManager) {
+        self.egress_firewall = Some(firewall);
     }
 
     pub fn observe_leadership(
@@ -581,8 +587,97 @@ impl DeploymentController {
             self.cleanup_orphaned_deployments().await;
             self.reconcile_replica_dns().await;
             self.reconcile_stable_dns().await;
+            self.reconcile_service_egress().await;
         }
         Ok(())
+    }
+
+    async fn reconcile_service_egress(&self) {
+        let Some(firewall) = &self.egress_firewall else {
+            return;
+        };
+        let service_ids = match self.store.list_service_ids().await {
+            Ok(service_ids) => service_ids,
+            Err(error) => {
+                self.logger.emit(
+                    "warn",
+                    &format!("failed to list services for egress reconciliation: {error}"),
+                );
+                return;
+            }
+        };
+        let mut allows = Vec::new();
+        for service_id in service_ids {
+            let deployments = match self.store.list_service_deployments(&service_id).await {
+                Ok(deployments) => deployments,
+                Err(error) => {
+                    self.logger.emit(
+                        "warn",
+                        &format!(
+                            "failed to list deployments for `{service_id}` egress reconciliation: {error}"
+                        ),
+                    );
+                    return;
+                }
+            };
+            for deployment in deployments {
+                if !is_active(&deployment.status)
+                    || deployment.config.deploy.egress.allow.is_empty()
+                {
+                    continue;
+                }
+                let replicas = match self
+                    .store
+                    .list_replica_states(&service_id, &deployment.id)
+                    .await
+                {
+                    Ok(replicas) => replicas,
+                    Err(error) => {
+                        self.logger.emit(
+                            "warn",
+                            &format!(
+                                "failed to list replicas for `{service_id}` egress reconciliation: {error}"
+                            ),
+                        );
+                        return;
+                    }
+                };
+                for replica in replicas.into_iter().filter(|replica| {
+                    matches!(
+                        replica.status,
+                        DeploymentStatus::Building
+                            | DeploymentStatus::PendingReady
+                            | DeploymentStatus::Ready
+                            | DeploymentStatus::Draining
+                    )
+                }) {
+                    let hostname = deployment.hostname_for_replica(replica.replica_index);
+                    let Some(source) = self.runtime.inspect_container_ip(&hostname).await else {
+                        continue;
+                    };
+                    let Ok(source) = source.parse() else {
+                        self.logger.emit(
+                            "warn",
+                            &format!(
+                                "container `{hostname}` has invalid IPv4 address `{source}` during egress reconciliation"
+                            ),
+                        );
+                        continue;
+                    };
+                    allows.extend(crate::firewall::service_allows_for_source(
+                        &service_id,
+                        source,
+                        &deployment.config.deploy.egress,
+                    ));
+                }
+            }
+        }
+        if let Err(error) = firewall.replace_service_allows(allows).await {
+            self.logger.emit(
+                "warn",
+                &format!("service egress firewall reconciliation failed: {error}"),
+            );
+        }
     }
 
     async fn reconcile_replica_dns(&self) {

@@ -150,6 +150,24 @@ pub fn validate_service_provider_config(
         ));
     }
     let mut resolved_deploy = deploy.clone();
+    for (index, rule) in resolved_deploy.egress.allow.iter_mut().enumerate() {
+        let cidr = rule.cidr.trim();
+        if cidr.is_empty() {
+            return Err(format!("deploy.egress.allow[{index}].cidr cannot be empty"));
+        }
+        let cidr = crate::cluster::network::Ipv4Cidr::parse(cidr)
+            .map_err(|error| format!("deploy.egress.allow[{index}].cidr is invalid: {error}"))?;
+        rule.cidr = cidr.to_string();
+        if rule.ports.contains(&0) {
+            return Err(format!(
+                "deploy.egress.allow[{index}].ports must contain only ports from 1 to 65535"
+            ));
+        }
+        rule.ports.sort_unstable();
+        rule.ports.dedup();
+    }
+    resolved_deploy.egress.allow.sort();
+    resolved_deploy.egress.allow.dedup();
     resolved_deploy.healthcheck_interval = resolved_deploy
         .healthcheck_interval
         .clamp(MIN_HEALTHCHECK_INTERVAL_SECS, MAX_HEALTHCHECK_INTERVAL_SECS);
@@ -265,7 +283,7 @@ fn sensitive_host_path_reason(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::deployment::types::SessionAffinityConfig;
+    use crate::deployment::types::{ServiceEgressConfig, ServiceEgressRule, SessionAffinityConfig};
 
     fn ingress_with_affinity_header(header: &str) -> Option<IngressConfig> {
         Some(IngressConfig {
@@ -291,5 +309,82 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot be `Host`")
         );
+    }
+
+    fn deploy_with_egress(allow: Vec<ServiceEgressRule>) -> ServiceDeployConfig {
+        ServiceDeployConfig {
+            flags: Vec::new(),
+            expose_ports: Vec::new(),
+            command: None,
+            healthcheck_path: None,
+            healthcheck_interval: crate::deployment::types::DEFAULT_HEALTHCHECK_INTERVAL_SECS,
+            replicas: 1,
+            max_restarts: None,
+            env: Default::default(),
+            secrets: None,
+            volumes: Vec::new(),
+            node_affinity: None,
+            egress: ServiceEgressConfig { allow },
+        }
+    }
+
+    #[test]
+    fn validates_and_normalizes_service_egress_allows() {
+        let deploy = deploy_with_egress(vec![
+            ServiceEgressRule {
+                cidr: " 10.0.10.0/24 ".to_string(),
+                ports: vec![5432, 443, 5432],
+            },
+            ServiceEgressRule {
+                cidr: "10.0.10.0/24".to_string(),
+                ports: vec![443, 5432],
+            },
+        ]);
+
+        let (_, _, deploy) =
+            validate_service_provider_config(&None, &Some("example/api".to_string()), &deploy)
+                .unwrap();
+        assert_eq!(
+            deploy.egress.allow,
+            [ServiceEgressRule {
+                cidr: "10.0.10.0/24".to_string(),
+                ports: vec![443, 5432],
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_service_egress_allows_with_field_paths() {
+        for (rule, expected) in [
+            (
+                ServiceEgressRule {
+                    cidr: "10.0.10.1/24".to_string(),
+                    ports: vec![5432],
+                },
+                "deploy.egress.allow[0].cidr is invalid",
+            ),
+            (
+                ServiceEgressRule {
+                    cidr: "2001:db8::/32".to_string(),
+                    ports: vec![5432],
+                },
+                "deploy.egress.allow[0].cidr is invalid",
+            ),
+            (
+                ServiceEgressRule {
+                    cidr: "10.0.10.0/24".to_string(),
+                    ports: vec![0],
+                },
+                "deploy.egress.allow[0].ports",
+            ),
+        ] {
+            let error = validate_service_provider_config(
+                &None,
+                &Some("example/api".to_string()),
+                &deploy_with_egress(vec![rule]),
+            )
+            .unwrap_err();
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
     }
 }

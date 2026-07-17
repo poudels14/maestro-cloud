@@ -117,6 +117,13 @@ impl AssignmentReconciler {
                 continue;
             }
             let mut executor = self.executor.lock().await;
+            if let Err(error) = executor.reconcile_egress(&manifest).await {
+                self.logger.emit(
+                    "warn",
+                    &format!("service egress firewall reconciliation failed: {error}"),
+                );
+                continue;
+            }
             if !discovered {
                 if let Err(error) = executor.discover(&manifest).await {
                     self.logger.emit(

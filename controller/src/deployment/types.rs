@@ -318,6 +318,29 @@ pub struct ServiceDeployConfig {
     pub volumes: Vec<VolumeMount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_affinity: Option<crate::cluster::NodeAffinity>,
+    #[serde(default, skip_serializing_if = "ServiceEgressConfig::is_empty")]
+    pub egress: ServiceEgressConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceEgressConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<ServiceEgressRule>,
+}
+
+impl ServiceEgressConfig {
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceEgressRule {
+    pub cidr: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<u16>,
 }
 
 pub const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;
