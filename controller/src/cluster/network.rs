@@ -294,11 +294,6 @@ pub fn validate_cluster_config(
             "field `node` is invalid: selected cluster node does not match the local role and subnet"
         );
     }
-    if config.control_allow_cidrs.is_empty() {
-        bail!(
-            "field `cluster.control-allow-cidrs` is missing: must include the private control network"
-        );
-    }
     let control_cidrs = config
         .control_allow_cidrs
         .iter()
@@ -323,19 +318,25 @@ pub fn validate_cluster_config(
             }
         }
     }
-    for (name, node) in &config.nodes {
-        if !control_cidrs
-            .iter()
-            .any(|cidr| cidr.contains(node.endpoint.host_ip()))
-        {
-            bail!(
-                "field `cluster.nodes.{name}.endpoint` is invalid: IP `{}` is absent from `cluster.control-allow-cidrs`",
-                node.endpoint.host_ip()
-            );
+    if !control_cidrs.is_empty() {
+        for (name, node) in &config.nodes {
+            if !control_cidrs
+                .iter()
+                .any(|cidr| cidr.contains(node.endpoint.host_ip()))
+            {
+                bail!(
+                    "field `cluster.nodes.{name}.endpoint` is invalid: IP `{}` is absent from `cluster.control-allow-cidrs`",
+                    node.endpoint.host_ip()
+                );
+            }
         }
     }
-    if config.shared_registry.is_none() {
-        bail!("field `cluster.shared-registry` is missing: required in multi-node mode");
+    if !config
+        .image_registry
+        .as_deref()
+        .is_some_and(|registry| !registry.trim().is_empty())
+    {
+        bail!("field `cluster.image-registry` is missing or invalid: required in multi-node mode");
     }
     match config.join_secret.as_deref() {
         Some(secret) if secret.len() >= 32 => {}
@@ -377,14 +378,7 @@ pub fn resolve_cluster_host_ip(
     {
         bail!("resolved cluster host IP `{resolved}` overlaps local workload subnet `{subnet}`");
     }
-    if !config
-        .control_allow_cidrs
-        .iter()
-        .map(|cidr| Ipv4Cidr::parse(cidr))
-        .collect::<Result<Vec<_>>>()?
-        .iter()
-        .any(|cidr| cidr.contains(resolved))
-    {
+    if !control_ip_allowed(config, resolved)? {
         bail!("resolved cluster host IP `{resolved}` is absent from cluster.control-allow-cidrs");
     }
     persist_control_ip(data_dir, resolved)?;
@@ -409,6 +403,9 @@ pub fn local_ipv4_addresses() -> Result<Vec<Ipv4Addr>> {
 }
 
 pub fn control_ip_allowed(config: &ClusterConfig, ip: Ipv4Addr) -> Result<bool> {
+    if config.control_allow_cidrs.is_empty() {
+        return Ok(true);
+    }
     Ok(config
         .control_allow_cidrs
         .iter()
@@ -550,7 +547,7 @@ mod tests {
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
             join_secret: Some("x".repeat(32)),
-            shared_registry: Some("registry.example.com/maestro".to_string()),
+            image_registry: Some("registry.example.com/maestro".to_string()),
             selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
         }
@@ -609,10 +606,16 @@ mod tests {
     }
 
     #[test]
-    fn local_cluster_network_is_separate_and_complete() {
+    fn optional_control_allowlist_is_separate_and_complete() {
         let config = valid_cluster_config();
         validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Master)
             .expect("valid cluster");
+
+        let mut unrestricted = valid_cluster_config();
+        unrestricted.control_allow_cidrs.clear();
+        validate_cluster_config(&unrestricted, Some("172.22.2.0/24"), NodeRole::Master)
+            .expect("control allowlist should be optional");
+        assert!(control_ip_allowed(&unrestricted, "10.99.0.1".parse().unwrap()).unwrap());
 
         let mut overlap = valid_cluster_config();
         overlap.control_allow_cidrs = vec!["172.22.0.0/16".to_string()];

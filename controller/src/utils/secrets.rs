@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use backon::{ConstantBuilder, Retryable};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -44,7 +44,8 @@ impl SecretProvider {
                     .secret_id(&reference)
                     .send()
                     .await
-                    .map_err(|err| anyhow!("failed to fetch AWS secret `{reference}`: {err}"))
+                    .map_err(anyhow::Error::new)
+                    .with_context(|| format!("failed to fetch AWS secret `{reference}`"))
             }
         })
         .retry(backoff)

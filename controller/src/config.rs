@@ -21,7 +21,6 @@ const START_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
 ];
 const CLUSTER_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
     ("controlAllowCidrs", "control-allow-cidrs"),
-    ("sharedRegistry", "shared-registry"),
     ("joinSecret", "join-secret"),
 ];
 const TAILSCALE_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
@@ -248,8 +247,8 @@ pub struct ClusterConfig {
     pub etcd_client_port: u16,
     #[serde(skip, default = "default_etcd_peer_port")]
     pub etcd_peer_port: u16,
-    #[serde(default, alias = "sharedRegistry")]
-    pub shared_registry: Option<String>,
+    #[serde(default)]
+    pub image_registry: Option<String>,
     #[serde(default, alias = "joinSecret")]
     pub join_secret: Option<String>,
     #[serde(default)]
@@ -313,6 +312,7 @@ impl std::str::FromStr for ClusterEndpointConfig {
 pub struct ClusterNodeConfig {
     pub endpoint: ClusterEndpointConfig,
     pub subnet: String,
+    #[serde(default)]
     pub role: crate::cluster::NodeRole,
 }
 
@@ -536,7 +536,7 @@ pub struct ClusterView {
     pub nodes: BTreeMap<String, ClusterNodeConfig>,
     pub control_allow_cidrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shared_registry: Option<String>,
+    pub image_registry: Option<String>,
     pub join_secret: Option<String>,
     pub labels: BTreeMap<String, String>,
 }
@@ -658,7 +658,7 @@ impl StartConfig {
                 name: self.cluster.name.clone(),
                 nodes: self.cluster.nodes.clone(),
                 control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
-                shared_registry: self.cluster.shared_registry.clone(),
+                image_registry: self.cluster.image_registry.clone(),
                 join_secret: self.cluster.join_secret.as_deref().and_then(mask),
                 labels: self.cluster.labels.clone(),
             },
@@ -746,7 +746,9 @@ where
             .filter(|segment| *segment != "?")
             .collect::<Vec<_>>()
             .join(".");
-        ignored_fields.insert(path);
+        if path != "$schema" {
+            ignored_fields.insert(path);
+        }
     });
 
     match result {
@@ -768,16 +770,60 @@ fn format_deserialization_error(path: &str, message: &str) -> String {
         if let Some(field) = quoted_field(message, kind) {
             let path = append_field_path(path, field);
             if kind == "missing field" {
-                return format!("field `{path}` is missing");
+                return format!("{path}: required field is missing");
             }
-            return format!("field `{path}` is invalid: {message}");
+            let expected = message
+                .split_once(", expected ")
+                .map(|(_, expected)| format!("; expected {expected}"))
+                .unwrap_or_default();
+            return format!("{path}: unknown field{expected}");
         }
     }
 
+    let message = humanize_deserialization_message(message);
     if path.is_empty() {
-        format!("config is invalid: {message}")
+        message
     } else {
-        format!("field `{path}` is invalid: {message}")
+        format!("{path}: {message}")
+    }
+}
+
+fn humanize_deserialization_message(message: &str) -> String {
+    let Some(type_error) = message.strip_prefix("invalid type: ") else {
+        return message.to_string();
+    };
+    let Some((actual, expected)) = type_error.split_once(", expected ") else {
+        return message.to_string();
+    };
+    format!(
+        "expected {}, got {}",
+        humanize_expected_type(expected),
+        humanize_actual_type(actual)
+    )
+}
+
+fn humanize_expected_type(expected: &str) -> &str {
+    match expected {
+        "a map" | "map" => "an object",
+        "a sequence" | "sequence" => "an array",
+        "a string" | "string" => "a string",
+        "a boolean" | "boolean" | "bool" => "a boolean",
+        "an integer" | "integer" => "an integer",
+        "a floating point" | "floating point" => "a number",
+        other => other,
+    }
+}
+
+fn humanize_actual_type(actual: &str) -> &str {
+    match actual.split_whitespace().next().unwrap_or(actual) {
+        "map" => "an object",
+        "sequence" => "an array",
+        "string" | "borrowed" => "a string",
+        "bool" | "boolean" => "a boolean",
+        "integer" | "u64" | "i64" => "an integer",
+        "floating" | "f64" => "a number",
+        "unit" | "null" => "null",
+        _ => "a value of the wrong type",
     }
 }
 
@@ -1019,6 +1065,15 @@ mod tests {
             serde_json::to_value(&endpoint).unwrap()["nodes"]["node1"]["endpoint"],
             "10.20.0.11:3101"
         );
+
+        let default_role: ClusterConfig = serde_json::from_str(
+            r#"{"name":"test","nodes":{"node1":{"endpoint":"10.20.0.11","subnet":"10.1.0.0/24"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            default_role.nodes["node1"].role,
+            crate::cluster::NodeRole::Hybrid
+        );
     }
 
     #[test]
@@ -1049,7 +1104,7 @@ mod tests {
                     name: "prod",
                     nodes: {
                         node1: { endpoint: "10.20.0.11", subnet: "10.1.0.0/24", role: "master" },
-                        node2: { endpoint: "10.20.0.12", subnet: "10.2.0.0/24", role: "hybrid" },
+                        node2: { endpoint: "10.20.0.12", subnet: "10.2.0.0/24" },
                         node3: { endpoint: "10.20.0.13:3100", subnet: "10.3.0.0/24", role: "voter" }
                     }
                 },
@@ -1072,7 +1127,7 @@ mod tests {
                 cluster: {
                     name: "prod",
                     controlAllowCidrs: ["10.20.0.0/24"],
-                    sharedRegistry: "ghcr.io/acme",
+                    "image-registry": "ghcr.io/acme",
                     joinSecret: "0123456789abcdef0123456789abcdef"
                 },
                 ingress: { port: 8080 },
@@ -1104,7 +1159,7 @@ mod tests {
         assert_eq!(config.cluster.api_port, 3000);
         assert_eq!(config.cluster.control_allow_cidrs, vec!["10.20.0.0/24"]);
         assert_eq!(
-            config.cluster.shared_registry.as_deref(),
+            config.cluster.image_registry.as_deref(),
             Some("ghcr.io/acme")
         );
         assert_eq!(
@@ -1156,7 +1211,7 @@ mod tests {
             r#"{
                 cluster: {
                     name: "prod",
-                    "shared-registry": "registry.example/base",
+                    "image-registry": "registry.example/base",
                     labels: { apiPort: "label-must-not-be-normalized" }
                 },
                 ingress: { port: 8080 },
@@ -1168,7 +1223,7 @@ mod tests {
             &node,
             r#"{
                 "$extends": "base.jsonc",
-                cluster: { sharedRegistry: "registry.example/node" },
+                cluster: { "image-registry": "registry.example/node" },
                 encryptionKey: "node-key"
             }"#,
         )
@@ -1176,7 +1231,7 @@ mod tests {
 
         let config = load_config(node.to_str().unwrap()).await.unwrap();
         assert_eq!(
-            config.cluster.shared_registry.as_deref(),
+            config.cluster.image_registry.as_deref(),
             Some("registry.example/node")
         );
         assert_eq!(config.encryption_key, "node-key");
@@ -1196,7 +1251,11 @@ mod tests {
         std::fs::write(
             &config_path,
             r#"{
-                cluster: { name: "prod", "shared-registry": "one", sharedRegistry: "two" },
+                cluster: {
+                    name: "prod",
+                    "control-allow-cidrs": ["10.20.0.0/24"],
+                    controlAllowCidrs: ["10.30.0.0/24"]
+                },
                 ingress: { port: 8080 },
                 encryptionKey: "secret"
             }"#,
@@ -1207,7 +1266,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains(
-            "both `config.cluster.shared-registry` and `config.cluster.sharedRegistry` are set"
+            "both `config.cluster.control-allow-cidrs` and `config.cluster.controlAllowCidrs` are set"
         ));
 
         std::fs::remove_dir_all(directory).unwrap();

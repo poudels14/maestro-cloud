@@ -58,9 +58,9 @@ pub fn run_init() -> Result<()> {
 pub async fn run_validate(source: &str) -> Result<()> {
     let raw = crate::config::read_config_source(source)
         .await
-        .map_err(|err| Error::invalid_input(format!("failed to read `{source}`: {err}")))?;
+        .map_err(|err| Error::invalid_input(format!("failed to read `{source}`: {err:#}")))?;
     let value: serde_json::Value = json5::from_str(&raw)
-        .map_err(|err| Error::invalid_config(format!("{source}: invalid JSON: {err}")))?;
+        .map_err(|err| invalid_config(source, format!("invalid JSON: {err}")))?;
     let has_services = value.get("services").is_some();
     let has_cluster = value.get("cluster").is_some();
     let has_extends = value.get("$extends").is_some();
@@ -68,32 +68,32 @@ pub async fn run_validate(source: &str) -> Result<()> {
         (true, false) => "services",
         (false, true) => "cluster",
         (true, true) => {
-            return Err(Error::invalid_config(format!(
-                "{source}: ambiguous — has both `services` and `cluster` top-level keys"
-            )));
+            return Err(invalid_config(
+                source,
+                "ambiguous: both `services` and `cluster` are present",
+            ));
         }
         (false, false) if has_extends => "cluster",
         (false, false) => {
-            return Err(Error::invalid_config(format!(
-                "{source}: unrecognized config — expected a top-level `services` or `cluster` key"
-            )));
+            return Err(invalid_config(
+                source,
+                "unrecognized config: expected a top-level `services` or `cluster` field",
+            ));
         }
     };
     let ignored_fields = if kind == "cluster" {
         let (config, ignored_fields) = crate::config::load_config_with_diagnostics(source)
             .await
-            .map_err(|err| {
-                Error::invalid_config(format!("{source}: invalid cluster config: {err}"))
-            })?;
-        validate_start_config(&config).map_err(|err| {
-            Error::invalid_config(format!("{source}: invalid cluster config: {err}"))
-        })?;
+            .map_err(|err| invalid_config(source, format!("{err:#}")))?;
+        validate_start_config(&config).map_err(|err| invalid_config(source, err))?;
         ignored_fields
     } else {
         let (cluster, ignored_fields) =
-            crate::cli::rollout::parse_cluster_config_with_diagnostics(&raw)?;
+            crate::cli::rollout::parse_cluster_config_with_diagnostics(&raw)
+                .map_err(|err| invalid_config_error(source, err))?;
         for (service_id, template) in &cluster.services {
-            crate::cli::rollout::validate_service_template(service_id, template)?;
+            crate::cli::rollout::validate_service_template(service_id, template)
+                .map_err(|err| invalid_config_error(source, err))?;
         }
         ignored_fields
     };
@@ -107,6 +107,52 @@ pub async fn run_validate(source: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn invalid_config(source: &str, detail: impl AsRef<str>) -> Error {
+    let detail = simplify_config_error(source, detail.as_ref());
+    let detail = detail
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Error::invalid_config(format!("{source}\n{detail}"))
+}
+
+fn invalid_config_error(source: &str, error: Error) -> Error {
+    match error {
+        Error::InvalidConfig(detail) => invalid_config(source, detail),
+        other => other,
+    }
+}
+
+fn simplify_config_error(source: &str, detail: &str) -> String {
+    let mut detail = detail;
+    let merged_prefix = format!("failed to parse merged config `{source}`: ");
+    if let Some(stripped) = detail.strip_prefix(&merged_prefix) {
+        detail = stripped;
+    }
+    for prefix in ["failed to parse config: ", "config is invalid: "] {
+        if let Some(stripped) = detail.strip_prefix(prefix) {
+            detail = stripped;
+        }
+    }
+    simplify_legacy_field_error(detail)
+}
+
+fn simplify_legacy_field_error(original: &str) -> String {
+    let Some(detail) = original.strip_prefix("field `") else {
+        return original.to_string();
+    };
+    let Some((path, problem)) = detail.split_once('`') else {
+        return original.to_string();
+    };
+    for prefix in [" is invalid: ", " is missing: ", " is missing or invalid: "] {
+        if let Some(problem) = problem.strip_prefix(prefix) {
+            return format!("{path}: {problem}");
+        }
+    }
+    original.to_string()
 }
 
 fn validate_start_config(config: &StartConfig) -> std::result::Result<(), String> {

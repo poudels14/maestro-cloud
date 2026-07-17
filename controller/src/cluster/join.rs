@@ -263,14 +263,15 @@ impl JoinCoordinator {
         if request.cluster_host_ip != source_ip {
             bail!("join source address does not match the requested cluster host IP");
         }
-        if !self
-            .runtime
-            .control_allow_cidrs
-            .iter()
-            .map(|cidr| crate::cluster::network::Ipv4Cidr::parse(cidr))
-            .collect::<Result<Vec<_>>>()?
-            .iter()
-            .any(|cidr| cidr.contains(source_ip))
+        if !self.runtime.control_allow_cidrs.is_empty()
+            && !self
+                .runtime
+                .control_allow_cidrs
+                .iter()
+                .map(|cidr| crate::cluster::network::Ipv4Cidr::parse(cidr))
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(|cidr| cidr.contains(source_ip))
         {
             bail!("join source address is outside cluster.control-allow-cidrs");
         }

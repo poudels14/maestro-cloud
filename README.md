@@ -47,14 +47,14 @@ maestro config init   # choose "services" to create maestro.cluster.jsonc
 Set a strong `encryption-key` in `maestro.jsonc`, then edit
 `maestro.cluster.jsonc` with the services you want to deploy.
 
-Verify both files before starting or deploying. The command reports the exact
+Validate both files before starting or deploying. The command reports the exact
 path of missing or invalid fields and lists fields that Maestro will ignore:
 
 ```bash
-maestro config verify maestro.jsonc
-maestro config verify maestro.cluster.jsonc
+maestro config validate maestro.jsonc
+maestro config validate maestro.cluster.jsonc
 # Uses the standard AWS credential chain and reads the secret string:
-maestro config verify aws-secret://maestro/production/node1
+maestro config validate aws-secret://maestro/production/node1
 ```
 
 ### 2. Start the cluster
@@ -173,7 +173,7 @@ The config file (`maestro.jsonc`) supports:
 ```
 
 Daemon startup fields accept both kebab-case and camelCase, so
-`encryption-key`/`encryptionKey`, `cluster.shared-registry`/`cluster.sharedRegistry`, and the
+`encryption-key`/`encryptionKey`, `cluster.join-secret`/`cluster.joinSecret`, and the
 other multi-word startup fields are equivalent. Generated templates and masked
 config output use kebab-case as the canonical form. The two spellings can be
 mixed across `$extends` layers, but the same field cannot be set with both

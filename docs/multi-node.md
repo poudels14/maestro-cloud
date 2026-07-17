@@ -22,8 +22,7 @@ entry with the top-level `node` string:
       },
       "node2": {
         "endpoint": "10.20.0.12:3100",
-        "subnet": "10.2.0.0/24",
-        "role": "hybrid"
+        "subnet": "10.2.0.0/24"
       },
       "node3": {
         "endpoint": "10.20.0.13",
@@ -31,8 +30,7 @@ entry with the top-level `node` string:
         "role": "voter"
       }
     },
-    "control-allow-cidrs": ["10.20.0.0/24"],
-    "shared-registry": "ghcr.io/acme",
+    "image-registry": "ghcr.io/acme",
     "join-secret": "<high-entropy-secret-of-at-least-32-characters>"
   },
   "ingress": { "port": 8080 },
@@ -43,8 +41,16 @@ entry with the top-level `node` string:
 ```
 
 On the second machine, use the same cluster map and set `"node": "node2"`.
-The node entry supplies its role, workload subnet, private control address, and
-optional API port. When the endpoint has no port, the API defaults to `3000`.
+The node entry supplies its workload subnet, private control address, optional
+API port, and optional role. The role defaults to `hybrid`; exactly one node must
+still explicitly use `master`. When the endpoint has no port, the API defaults
+to `3000`.
+
+`cluster.control-allow-cidrs` is optional defense in depth. When configured, it
+restricts signed join requests to those private source ranges and must include
+every configured control endpoint. When omitted, the high-entropy join secret,
+the private source-address check, and live endpoint/subnet reservations remain
+the admission boundary.
 
 This is a breaking config format. The old node array, top-level cluster subnet,
 `node.role`, and explicit cluster gateway/etcd port fields are not accepted.
@@ -159,9 +165,10 @@ its name, endpoint, or subnet. Removed node identities cannot silently rejoin.
 
 ## Registry and scheduling
 
-Multi-node mode requires `cluster.shared-registry`. Workload nodes must be able to
-pull from it, and any node that can lead builds must be able to push. Configure
-runtime registry credentials independently on every host.
+Multi-node mode requires `cluster.image-registry`. It is a base image
+namespace: Maestro appends `/<service-id>:<deployment-id>`. Workload nodes must
+be able to pull from it, and any node that can lead builds must be able to push.
+Configure runtime registry credentials independently on every host.
 
 The scheduler places workloads on ready `master`, `hybrid`, and `worker` nodes.
 Dedicated voters are never placement targets. Hard `deploy.nodeAffinity` rules

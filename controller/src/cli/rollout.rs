@@ -324,12 +324,11 @@ pub(super) fn validate_service_template(
     template: &ServiceTemplate,
 ) -> Result<()> {
     let id = service_id.trim();
-    crate::validation::validate_service_id(id, "service id").map_err(|error| {
-        Error::invalid_config(format!("field `services.{service_id}` is invalid: {error}"))
-    })?;
+    crate::validation::validate_service_id(id, "service id")
+        .map_err(|error| Error::invalid_config(format!("services.{service_id}: {error}")))?;
     if template.name.trim().is_empty() {
         return Err(Error::invalid_config(format!(
-            "field `services.{service_id}.name` is invalid: cannot be empty"
+            "services.{service_id}.name: cannot be empty"
         )));
     }
     crate::validation::validate_service_provider_config(
@@ -357,7 +356,7 @@ fn service_validation_error(service_id: &str, message: &str) -> Error {
         || format!("services.{service_id}"),
         |path| format!("services.{service_id}.{path}"),
     );
-    Error::invalid_config(format!("field `{path}` is invalid: {message}"))
+    Error::invalid_config(format!("{path}: {message}"))
 }
 
 fn normalize_base_url(host: &str) -> Result<String> {
