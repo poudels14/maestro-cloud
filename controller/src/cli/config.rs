@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::StartConfig;
 use crate::error::{Error, Result};
@@ -55,16 +55,12 @@ pub fn run_init() -> Result<()> {
     }
 }
 
-pub async fn run_validate(path: &PathBuf) -> Result<()> {
-    let raw = std::fs::read_to_string(path).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            Error::not_found(format!("{} does not exist", path.display()))
-        } else {
-            Error::invalid_input(format!("failed to read {}: {err}", path.display()))
-        }
-    })?;
+pub async fn run_validate(source: &str) -> Result<()> {
+    let raw = crate::config::read_config_source(source)
+        .await
+        .map_err(|err| Error::invalid_input(format!("failed to read `{source}`: {err}")))?;
     let value: serde_json::Value = json5::from_str(&raw)
-        .map_err(|err| Error::invalid_config(format!("{}: invalid JSON: {err}", path.display())))?;
+        .map_err(|err| Error::invalid_config(format!("{source}: invalid JSON: {err}")))?;
     let has_services = value.get("services").is_some();
     let has_cluster = value.get("cluster").is_some();
     let has_extends = value.get("$extends").is_some();
@@ -73,32 +69,64 @@ pub async fn run_validate(path: &PathBuf) -> Result<()> {
         (false, true) => "cluster",
         (true, true) => {
             return Err(Error::invalid_config(format!(
-                "{}: ambiguous — has both `services` and `cluster` top-level keys",
-                path.display()
+                "{source}: ambiguous — has both `services` and `cluster` top-level keys"
             )));
         }
         (false, false) if has_extends => "cluster",
         (false, false) => {
             return Err(Error::invalid_config(format!(
-                "{}: unrecognized config — expected a top-level `services` or `cluster` key",
-                path.display()
+                "{source}: unrecognized config — expected a top-level `services` or `cluster` key"
             )));
         }
     };
-    if kind == "cluster" {
-        crate::config::load_config(&path.to_string_lossy())
+    let ignored_fields = if kind == "cluster" {
+        let (config, ignored_fields) = crate::config::load_config_with_diagnostics(source)
             .await
-            .map(|_: StartConfig| ())
             .map_err(|err| {
-                Error::invalid_config(format!("{}: invalid cluster config: {err}", path.display()))
+                Error::invalid_config(format!("{source}: invalid cluster config: {err}"))
             })?;
+        validate_start_config(&config).map_err(|err| {
+            Error::invalid_config(format!("{source}: invalid cluster config: {err}"))
+        })?;
+        ignored_fields
     } else {
-        let cluster = crate::cli::rollout::parse_cluster_config(&raw)?;
+        let (cluster, ignored_fields) =
+            crate::cli::rollout::parse_cluster_config_with_diagnostics(&raw)?;
         for (service_id, template) in &cluster.services {
             crate::cli::rollout::validate_service_template(service_id, template)?;
         }
+        ignored_fields
+    };
+    println!("[maestro]: {source} is a valid {kind} config");
+    if ignored_fields.is_empty() {
+        println!("[maestro]: ignored fields: none");
+    } else {
+        println!("[maestro]: ignored fields:");
+        for field in ignored_fields {
+            println!("  - {field}");
+        }
     }
-    println!("[maestro]: {} is a valid {kind} config", path.display());
+    Ok(())
+}
+
+fn validate_start_config(config: &StartConfig) -> std::result::Result<(), String> {
+    crate::cluster::network::validate_cluster_config(
+        &config.cluster,
+        config.subnet.as_deref(),
+        config.node.role,
+    )
+    .map_err(|err| err.to_string())?;
+    if !config.cluster.nodes.is_empty()
+        && config
+            .jwt_secret_key
+            .as_deref()
+            .is_none_or(|secret| secret.len() < 32)
+    {
+        return Err(
+            "field `jwt-secret-key` is missing or invalid: must contain at least 32 characters in cluster mode"
+                .to_string(),
+        );
+    }
     Ok(())
 }
 

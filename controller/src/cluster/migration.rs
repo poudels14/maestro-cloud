@@ -296,6 +296,14 @@ fn install(
     role: NodeRole,
     data_dir: &Path,
 ) -> Result<()> {
+    let endpoint = crate::cluster::ClusterNodeEndpoint {
+        host_ip: migration.host_ip,
+        api_port: migration.api_port,
+        gateway_port: config.gateway_port,
+        etcd_client_port: migration.etcd_client_port,
+        etcd_peer_port: migration.etcd_peer_port,
+        identity_api_port: Some(migration.api_port),
+    };
     crate::cluster::identity::persist_cluster_id(data_dir, &migration.cluster_id)?;
     crate::cluster::bootstrap::prepare_legacy_migration(
         data_dir,
@@ -307,9 +315,9 @@ fn install(
         &ClusterVoterCache {
             cluster_id: migration.cluster_id.clone(),
             voter_host_ips: vec![migration.host_ip],
-            voter_endpoints: Vec::new(),
-            initial_voter_host_ips: migration.initial_voter_host_ips.clone(),
-            initial_voter_endpoints: Vec::new(),
+            voter_endpoints: vec![endpoint],
+            initial_voter_host_ips: vec![migration.host_ip],
+            initial_voter_endpoints: vec![endpoint],
             api_port: migration.api_port,
             etcd_client_port: migration.etcd_client_port,
             etcd_peer_port: migration.etcd_peer_port,
@@ -334,11 +342,8 @@ fn validate_candidate(
     if !role.is_voter() {
         bail!("only a legacy voter can be migrated into cluster mode");
     }
-    if config.uses_node_ports() {
-        bail!("legacy data migration must first complete with bare-IP cluster.nodes");
-    }
-    if config.nodes.first().map(|node| node.host_ip()) != Some(host_ip) {
-        bail!("cluster.nodes[0] must resolve to this legacy host");
+    if config.master_node()?.1.endpoint.host_ip() != host_ip {
+        bail!("the cluster master must resolve to this legacy host");
     }
     if !legacy_member_path(data_dir).exists() {
         bail!("legacy etcd member data is absent");
@@ -616,7 +621,12 @@ fn validate_backup_manifest(
 }
 
 fn configured_host_ips(config: &ClusterConfig) -> Vec<Ipv4Addr> {
-    config.nodes.iter().map(|node| node.host_ip()).collect()
+    config
+        .nodes
+        .values()
+        .filter(|node| node.role.is_voter())
+        .map(|node| node.endpoint.host_ip())
+        .collect()
 }
 
 fn read_backup_manifest(path: &Path) -> Result<EtcdBackupManifest> {
@@ -962,11 +972,40 @@ mod tests {
     fn config() -> ClusterConfig {
         ClusterConfig {
             name: "prod".to_string(),
-            nodes: vec![
-                "10.20.0.11".parse().unwrap(),
-                "10.20.0.12".parse().unwrap(),
-                "10.20.0.13".parse().unwrap(),
-            ],
+            nodes: [
+                (
+                    "node1".to_string(),
+                    crate::config::ClusterNodeConfig {
+                        endpoint: crate::config::ClusterEndpointConfig::Address(
+                            "10.20.0.11".parse().unwrap(),
+                        ),
+                        subnet: "172.22.1.0/24".to_string(),
+                        role: NodeRole::Master,
+                    },
+                ),
+                (
+                    "node2".to_string(),
+                    crate::config::ClusterNodeConfig {
+                        endpoint: crate::config::ClusterEndpointConfig::Address(
+                            "10.20.0.12".parse().unwrap(),
+                        ),
+                        subnet: "172.22.2.0/24".to_string(),
+                        role: NodeRole::Voter,
+                    },
+                ),
+                (
+                    "node3".to_string(),
+                    crate::config::ClusterNodeConfig {
+                        endpoint: crate::config::ClusterEndpointConfig::Address(
+                            "10.20.0.13".parse().unwrap(),
+                        ),
+                        subnet: "172.22.3.0/24".to_string(),
+                        role: NodeRole::Voter,
+                    },
+                ),
+            ]
+            .into(),
+            selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
         }
     }
@@ -994,7 +1033,7 @@ mod tests {
     fn automatic_migration_preserves_legacy_data_and_identity() {
         let root = legacy_data("complete");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
 
         assert_eq!(
             legacy_etcd_container_name(&config, &root).unwrap(),
@@ -1051,7 +1090,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(cache.voter_host_ips, vec![host_ip]);
-        assert_eq!(cache.initial_voter_host_ips, configured_host_ips(&config));
+        assert_eq!(cache.initial_voter_host_ips, vec![host_ip]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1059,7 +1098,7 @@ mod tests {
     fn prepared_migration_resumes_without_replacing_its_ca_or_backup() {
         let root = legacy_data("resume");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let prepared = prepare(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
         assert!(is_in_progress(&root));
         assert!(!cluster_id_path(&root).exists());
@@ -1083,7 +1122,7 @@ mod tests {
     fn certificate_swap_resumes_after_the_legacy_directory_is_backed_up() {
         let root = legacy_data("cert-resume");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let prepared = prepare(&config, NodeRole::Hybrid, &root, host_ip).unwrap();
 
         crate::cluster::identity::persist_cluster_id(&root, &prepared.cluster_id).unwrap();
@@ -1127,7 +1166,7 @@ mod tests {
     fn finalized_backup_is_reused_without_overwriting_when_source_changes() {
         let root = legacy_data("immutable");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&config, &root).unwrap();
         let first = ensure_etcd_backup(&config, &root, host_ip, &member_name, None).unwrap();
         let backup_bytes =
@@ -1153,7 +1192,7 @@ mod tests {
     fn finalized_backup_rejects_a_conflicting_migration_without_modification() {
         let root = legacy_data("config-conflict");
         let original_config = config();
-        let host_ip = original_config.nodes[0].host_ip();
+        let host_ip = original_config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&original_config, &root).unwrap();
         ensure_etcd_backup(&original_config, &root, host_ip, &member_name, None).unwrap();
         let backup_digest = directory_digest(&backup_path(&root)).unwrap();
@@ -1179,7 +1218,7 @@ mod tests {
     fn corrupted_finalized_backup_fails_closed_without_replacement() {
         let root = legacy_data("corrupt-backup");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&config, &root).unwrap();
         ensure_etcd_backup(&config, &root, host_ip, &member_name, None).unwrap();
         let backup_file = backup_path(&root).join("member/wal/0000000000000000.wal");
@@ -1199,7 +1238,7 @@ mod tests {
     fn finalized_backup_rejects_ambiguous_partial_artifacts() {
         let root = legacy_data("ambiguous-backup");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&config, &root).unwrap();
         ensure_etcd_backup(&config, &root, host_ip, &member_name, None).unwrap();
         fs::create_dir(partial_backup_path(&root)).unwrap();
@@ -1221,7 +1260,7 @@ mod tests {
     fn pending_manifest_install_is_recovered_after_backup_rename() {
         let root = legacy_data("manifest-resume");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&config, &root).unwrap();
         let manifest = ensure_etcd_backup(&config, &root, host_ip, &member_name, None).unwrap();
         fs::rename(
@@ -1241,7 +1280,7 @@ mod tests {
     fn unversioned_verified_backup_is_upgraded_without_copying_it_again() {
         let root = legacy_data("upgrade-backup");
         let config = config();
-        let host_ip = config.nodes[0].host_ip();
+        let host_ip = config.master_node().unwrap().1.endpoint.host_ip();
         let member_name = legacy_member_name(&config, &root).unwrap();
         copy_directory(&etcd_data_path(&root), &legacy_backup_path(&root)).unwrap();
 
@@ -1273,8 +1312,13 @@ mod tests {
         );
 
         let config = config();
-        let error =
-            migrate(&config, NodeRole::Hybrid, &root, config.nodes[0].host_ip()).unwrap_err();
+        let error = migrate(
+            &config,
+            NodeRole::Hybrid,
+            &root,
+            config.master_node().unwrap().1.endpoint.host_ip(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("still in use"));
         assert!(!backup_path(&root).exists());
         assert!(!backup_manifest_path(&root).exists());

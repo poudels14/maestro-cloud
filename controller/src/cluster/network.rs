@@ -1,14 +1,101 @@
 use std::collections::BTreeSet;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::io::Write;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cluster::types::NodeRole;
 use crate::config::ClusterConfig;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClusterPorts {
+    version: u8,
+    pub gateway: u16,
+    pub etcd_client: u16,
+    pub etcd_peer: u16,
+}
+
+pub fn load_or_allocate_cluster_ports(
+    data_dir: &Path,
+    host_ip: Ipv4Addr,
+    api_port: u16,
+) -> Result<ClusterPorts> {
+    let system_dir = data_dir.join("system");
+    std::fs::create_dir_all(&system_dir)?;
+    let path = system_dir.join("cluster-ports.json");
+    if path.exists() {
+        let ports: ClusterPorts =
+            serde_json::from_slice(&std::fs::read(&path)?).with_context(|| {
+                format!("failed to parse persisted cluster ports {}", path.display())
+            })?;
+        validate_cluster_ports(ports, api_port)?;
+        return Ok(ports);
+    }
+
+    // Keep every listener open until all ports have been selected so the OS
+    // cannot hand the same ephemeral port back to a later allocation.
+    let mut listeners = Vec::with_capacity(3);
+    let mut ports = Vec::with_capacity(3);
+    while ports.len() < 3 {
+        let listener = TcpListener::bind((host_ip, 0)).with_context(|| {
+            format!("failed to allocate an automatic cluster port on {host_ip}")
+        })?;
+        let port = listener.local_addr()?.port();
+        if port == api_port || ports.contains(&port) {
+            continue;
+        }
+        ports.push(port);
+        listeners.push(listener);
+    }
+    let ports = ClusterPorts {
+        version: 1,
+        gateway: ports[0],
+        etcd_client: ports[1],
+        etcd_peer: ports[2],
+    };
+    validate_cluster_ports(ports, api_port)?;
+
+    let temporary = system_dir.join("cluster-ports.json.tmp");
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(&ports)?)?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, &path)?;
+    std::fs::File::open(&system_dir)?.sync_all()?;
+    drop(listeners);
+    Ok(ports)
+}
+
+fn validate_cluster_ports(ports: ClusterPorts, api_port: u16) -> Result<()> {
+    if ports.version != 1 {
+        bail!(
+            "unsupported persisted cluster port version {}",
+            ports.version
+        );
+    }
+    let values = [api_port, ports.gateway, ports.etcd_client, ports.etcd_peer];
+    if values.contains(&0) || values.iter().copied().collect::<BTreeSet<_>>().len() != values.len()
+    {
+        bail!("persisted API, gateway, and etcd ports must be non-zero and distinct");
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ipv4Cidr {
@@ -120,133 +207,141 @@ pub fn validate_cluster_config(
     if config.nodes.is_empty() {
         return Ok(());
     }
-    if config.nodes.len() != 1 && config.nodes.len() != 3 {
-        bail!("cluster.nodes must contain 1 or 3 initial voter endpoints");
-    }
-    let explicit_node_ports = config
+    config.master_node()?;
+    let voter_count = config
         .nodes
-        .iter()
-        .filter(|node| node.explicit_api_port().is_some())
+        .values()
+        .filter(|node| node.role.is_voter())
         .count();
-    if explicit_node_ports != 0 && explicit_node_ports != config.nodes.len() {
-        bail!("cluster.nodes cannot mix bare IPs and IP:port endpoints");
+    if voter_count != 1 && voter_count != 3 {
+        bail!(
+            "field `cluster.nodes` is invalid: must contain exactly 1 or 3 master/hybrid/voter nodes"
+        );
     }
-    let mut voters = BTreeSet::new();
-    let resolved_nodes = config.resolved_nodes()?;
-    for node in &config.nodes {
-        let ip = node.host_ip();
-        if !ip.is_private() || ip.is_loopback() || ip.is_unspecified() {
-            bail!("cluster voter IP `{ip}` must be a private, non-loopback IPv4 address");
-        }
-        let identity = (ip, node.explicit_api_port());
-        if !voters.insert(identity) {
-            bail!("cluster.nodes contains duplicate endpoint `{node}`");
-        }
-    }
-    if config.api_port == 0
-        || config.gateway_port == 0
-        || config.etcd_client_port == 0
-        || config.etcd_peer_port == 0
-    {
-        bail!("cluster API, gateway, and etcd ports must be non-zero");
-    }
-    if explicit_node_ports == 0 {
-        let ports = [
-            config.api_port,
-            config.gateway_port,
-            config.etcd_client_port,
-            config.etcd_peer_port,
-        ];
-        if ports.iter().copied().collect::<BTreeSet<_>>().len() != ports.len() {
-            bail!("cluster API, gateway, etcd client, and etcd peer ports must be distinct");
-        }
-    } else {
-        if config.gateway_port != 3002
-            || config.etcd_client_port != 2379
-            || config.etcd_peer_port != 2380
+    let mut endpoints = BTreeSet::new();
+    let mut subnets = Vec::new();
+    for (name, node) in &config.nodes {
+        if name.is_empty()
+            || name.len() > 63
+            || !name.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+            || name.starts_with('-')
+            || name.ends_with('-')
         {
             bail!(
-                "cluster.gateway-port and etcd port fields are legacy-only when cluster.nodes uses IP:port; remove those overrides"
+                "field `cluster.nodes.{name}` is invalid: node name must be a lowercase DNS label"
             );
         }
-        let mut host_ports = BTreeSet::new();
-        for node in &resolved_nodes {
-            for port in [
-                node.api_port,
-                node.gateway_port,
-                node.etcd_client_port,
-                node.etcd_peer_port,
-            ] {
-                if !host_ports.insert((node.host_ip, port)) {
-                    bail!(
-                        "cluster node port blocks overlap at `{}:{port}`; each IP:port entry reserves four consecutive ports",
-                        node.host_ip
-                    );
-                }
+        let ip = node.endpoint.host_ip();
+        if !ip.is_private() || ip.is_loopback() || ip.is_unspecified() {
+            bail!(
+                "field `cluster.nodes.{name}.endpoint` is invalid: IP `{ip}` must be private and non-loopback"
+            );
+        }
+        let api_port = node.endpoint.explicit_api_port().unwrap_or(3000);
+        if api_port == 0 || !endpoints.insert((ip, api_port)) {
+            bail!(
+                "field `cluster.nodes.{name}.endpoint` is invalid: `{ip}:{api_port}` has a zero or duplicate port"
+            );
+        }
+        let subnet = Ipv4Cidr::parse(&node.subnet)
+            .map_err(|error| anyhow!("field `cluster.nodes.{name}.subnet` is invalid: {error}"))?;
+        if subnet.prefix() != 24 || !subnet.is_private() {
+            bail!(
+                "field `cluster.nodes.{name}.subnet` is invalid: `{}` must be a private IPv4 /24",
+                node.subnet
+            );
+        }
+        if subnets
+            .iter()
+            .any(|(_, existing): &(&str, Ipv4Cidr)| existing.overlaps(subnet))
+        {
+            bail!(
+                "field `cluster.nodes.{name}.subnet` is invalid: `{}` overlaps another node subnet",
+                node.subnet
+            );
+        }
+        subnets.push((name.as_str(), subnet));
+        for (other_name, other) in &config.nodes {
+            if subnet.contains(other.endpoint.host_ip()) {
+                bail!(
+                    "field `cluster.nodes.{name}.subnet` is invalid: `{}` overlaps `cluster.nodes.{other_name}.endpoint` IP `{}`",
+                    node.subnet,
+                    other.endpoint.host_ip()
+                );
             }
         }
-        if role.is_voter()
-            && !resolved_nodes
-                .iter()
-                .any(|node| node.api_port == config.api_port)
-        {
-            bail!(
-                "cluster.api-port must select this voter from cluster.nodes when node ports are used"
-            );
-        }
     }
+    let (selected_name, selected) = config.selected_node()?;
     let local_subnet = local_subnet
-        .ok_or_else(|| anyhow::anyhow!("local workload subnet is required in cluster mode"))?;
-    let local = Ipv4Cidr::parse(local_subnet)?;
+        .ok_or_else(|| anyhow::anyhow!("field `node` is invalid: selected node has no subnet"))?;
+    let local = Ipv4Cidr::parse(local_subnet).map_err(|error| {
+        anyhow!("field `cluster.nodes.{selected_name}.subnet` is invalid: {error}")
+    })?;
     if local.prefix() != 24 {
-        bail!("local workload subnet `{local_subnet}` must be an IPv4 /24");
+        bail!(
+            "field `cluster.nodes.{selected_name}.subnet` is invalid: `{local_subnet}` must be an IPv4 /24"
+        );
     }
     if !local.is_private() {
-        bail!("local workload subnet `{local_subnet}` must be private IPv4 space");
+        bail!(
+            "field `cluster.nodes.{selected_name}.subnet` is invalid: `{local_subnet}` must be private IPv4 space"
+        );
     }
-    for voter in &resolved_nodes {
-        if local.contains(voter.host_ip) {
-            bail!(
-                "cluster voter IP `{}` overlaps local workload subnet `{local_subnet}`",
-                voter.host_ip,
-            );
-        }
+    if selected.role != role || selected.subnet != local_subnet {
+        bail!(
+            "field `node` is invalid: selected cluster node does not match the local role and subnet"
+        );
     }
     if config.control_allow_cidrs.is_empty() {
-        bail!("cluster.control-allow-cidrs must include the private control network");
+        bail!(
+            "field `cluster.control-allow-cidrs` is missing: must include the private control network"
+        );
     }
     let control_cidrs = config
         .control_allow_cidrs
         .iter()
-        .map(|cidr| Ipv4Cidr::parse(cidr))
+        .enumerate()
+        .map(|(index, cidr)| {
+            Ipv4Cidr::parse(cidr).map_err(|error| {
+                anyhow!("field `cluster.control-allow-cidrs[{index}]` is invalid: {error}")
+            })
+        })
         .collect::<Result<Vec<_>>>()?;
-    for control in &control_cidrs {
+    for (index, control) in control_cidrs.iter().enumerate() {
         if !control.is_private() {
-            bail!("cluster control CIDR `{control}` must be private IPv4 space");
-        }
-        if local.overlaps(*control) {
             bail!(
-                "cluster control CIDR `{control}` overlaps local workload subnet `{local_subnet}`"
+                "field `cluster.control-allow-cidrs[{index}]` is invalid: `{control}` must be private IPv4 space"
             );
         }
+        for (name, subnet) in &subnets {
+            if subnet.overlaps(*control) {
+                bail!(
+                    "field `cluster.control-allow-cidrs[{index}]` is invalid: `{control}` overlaps `cluster.nodes.{name}.subnet` `{subnet}`"
+                );
+            }
+        }
     }
-    for voter in &resolved_nodes {
+    for (name, node) in &config.nodes {
         if !control_cidrs
             .iter()
-            .any(|cidr| cidr.contains(voter.host_ip))
+            .any(|cidr| cidr.contains(node.endpoint.host_ip()))
         {
             bail!(
-                "cluster voter IP `{}` is absent from cluster.control-allow-cidrs",
-                voter.host_ip
+                "field `cluster.nodes.{name}.endpoint` is invalid: IP `{}` is absent from `cluster.control-allow-cidrs`",
+                node.endpoint.host_ip()
             );
         }
     }
     if config.shared_registry.is_none() {
-        bail!("cluster.shared-registry is required in multi-node mode");
+        bail!("field `cluster.shared-registry` is missing: required in multi-node mode");
     }
     match config.join_secret.as_deref() {
         Some(secret) if secret.len() >= 32 => {}
-        _ => bail!("cluster.join-secret must contain at least 32 characters"),
+        _ => bail!(
+            "field `cluster.join-secret` is missing or invalid: must contain at least 32 characters"
+        ),
     }
     Ok(())
 }
@@ -261,37 +356,13 @@ pub fn resolve_cluster_host_ip(
         return Ok(None);
     }
     let local_addresses = local_ipv4_addresses()?;
-    let resolved = if let Some(bind_ip) = config.bind_ip {
-        if !local_addresses.contains(&bind_ip) {
-            bail!("cluster.bind-ip `{bind_ip}` is not assigned to a local non-Tailscale interface");
-        }
-        bind_ip
-    } else {
-        let matches = config
-            .nodes
-            .iter()
-            .map(|node| node.host_ip())
-            .filter(|ip| local_addresses.contains(ip))
-            .collect::<BTreeSet<_>>();
-        if role.is_voter() && matches.len() == 1 {
-            let host_ip = *matches.first().expect("one matched address");
-            config.local_endpoint(host_ip, role)?;
-            host_ip
-        } else if role.is_voter() {
-            bail!(
-                "expected exactly one cluster.nodes address on this voter, found {} among {:?}",
-                matches.len(),
-                local_addresses
-            );
-        } else {
-            let seed = config
-                .resolved_nodes()?
-                .into_iter()
-                .next()
-                .expect("cluster nodes is not empty");
-            route_source_ip(seed.host_ip, seed.api_port)?
-        }
-    };
+    let (name, node) = config.selected_node()?;
+    let resolved = node.endpoint.host_ip();
+    if !local_addresses.contains(&resolved) {
+        bail!(
+            "selected cluster node `{name}` endpoint IP `{resolved}` is not assigned to a local non-Tailscale interface"
+        );
+    }
     if !resolved.is_private() || resolved.is_loopback() || resolved.is_unspecified() {
         bail!("resolved cluster host IP `{resolved}` is not a private host address");
     }
@@ -300,18 +371,7 @@ pub fn resolve_cluster_host_ip(
             "resolved cluster host IP `{resolved}` is not assigned to a local non-Tailscale control interface"
         );
     }
-    if role.is_voter() {
-        config.local_endpoint(resolved, role)?;
-    }
-    if role == NodeRole::Worker {
-        let local = config.local_endpoint(resolved, role)?;
-        if config.resolved_nodes()?.contains(&local) {
-            bail!(
-                "worker endpoint `{}` is listed as an initial voter in cluster.nodes",
-                local.api_address()
-            );
-        }
-    }
+    config.local_endpoint(resolved, role)?;
     if let Some(subnet) = local_subnet
         && Ipv4Cidr::parse(subnet)?.contains(resolved)
     {
@@ -328,9 +388,7 @@ pub fn resolve_cluster_host_ip(
         bail!("resolved cluster host IP `{resolved}` is absent from cluster.control-allow-cidrs");
     }
     persist_control_ip(data_dir, resolved)?;
-    if config.uses_node_ports() {
-        persist_control_endpoint(data_dir, resolved, config.api_port)?;
-    }
+    persist_control_endpoint(data_dir, resolved, config.api_port)?;
     Ok(Some(resolved))
 }
 
@@ -387,18 +445,6 @@ fn is_control_interface(name: &str) -> bool {
         && name != "lo"
 }
 
-fn route_source_ip(destination: Ipv4Addr, port: u16) -> Result<Ipv4Addr> {
-    let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
-        .context("failed to create route-discovery socket")?;
-    socket
-        .connect(SocketAddr::from((destination, port)))
-        .with_context(|| format!("failed to resolve a route to cluster voter `{destination}`"))?;
-    match socket.local_addr()?.ip() {
-        IpAddr::V4(ip) => Ok(ip),
-        IpAddr::V6(_) => bail!("route to `{destination}` selected IPv6 unexpectedly"),
-    }
-}
-
 fn persist_control_ip(data_dir: &Path, resolved: Ipv4Addr) -> Result<()> {
     let system_dir = data_dir.join("system");
     let path = system_dir.join("control-ip");
@@ -406,7 +452,7 @@ fn persist_control_ip(data_dir: &Path, resolved: Ipv4Addr) -> Result<()> {
         let existing = existing.trim();
         if existing != resolved.to_string() {
             bail!(
-                "resolved cluster host IP changed from `{existing}` to `{resolved}`; use cluster.bind-ip or restore the stable host address"
+                "resolved cluster host IP changed from `{existing}` to `{resolved}`; restore the selected node endpoint"
             );
         }
     } else {
@@ -428,7 +474,7 @@ fn persist_control_endpoint(data_dir: &Path, resolved: Ipv4Addr, api_port: u16) 
         let existing = existing.trim();
         if existing != resolved {
             bail!(
-                "resolved cluster endpoint changed from `{existing}` to `{resolved}`; restore the stable cluster.api-port"
+                "resolved cluster endpoint changed from `{existing}` to `{resolved}`; restore the selected node endpoint"
             );
         }
     } else {
@@ -466,15 +512,38 @@ struct AddressInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ClusterEndpointConfig, ClusterNodeConfig};
 
     fn valid_cluster_config() -> ClusterConfig {
         ClusterConfig {
             name: "test".to_string(),
-            nodes: vec![
-                "10.20.0.11".parse().unwrap(),
-                "10.20.0.12".parse().unwrap(),
-                "10.20.0.13".parse().unwrap(),
-            ],
+            nodes: [
+                (
+                    "node1".to_string(),
+                    ClusterNodeConfig {
+                        endpoint: ClusterEndpointConfig::Address("10.20.0.11".parse().unwrap()),
+                        subnet: "172.22.2.0/24".to_string(),
+                        role: NodeRole::Master,
+                    },
+                ),
+                (
+                    "node2".to_string(),
+                    ClusterNodeConfig {
+                        endpoint: ClusterEndpointConfig::Address("10.20.0.12".parse().unwrap()),
+                        subnet: "172.22.3.0/24".to_string(),
+                        role: NodeRole::Voter,
+                    },
+                ),
+                (
+                    "node3".to_string(),
+                    ClusterNodeConfig {
+                        endpoint: ClusterEndpointConfig::Address("10.20.0.13".parse().unwrap()),
+                        subnet: "172.22.4.0/24".to_string(),
+                        role: NodeRole::Voter,
+                    },
+                ),
+            ]
+            .into(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,
             gateway_port: 3002,
@@ -482,6 +551,7 @@ mod tests {
             etcd_peer_port: 2380,
             join_secret: Some("x".repeat(32)),
             shared_registry: Some("registry.example.com/maestro".to_string()),
+            selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
         }
     }
@@ -541,86 +611,66 @@ mod tests {
     #[test]
     fn local_cluster_network_is_separate_and_complete() {
         let config = valid_cluster_config();
-        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
+        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Master)
             .expect("valid cluster");
 
         let mut overlap = valid_cluster_config();
         overlap.control_allow_cidrs = vec!["172.22.0.0/16".to_string()];
         assert!(
-            validate_cluster_config(&overlap, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err()
+            validate_cluster_config(&overlap, Some("172.22.2.0/24"), NodeRole::Master).is_err()
         );
 
         let mut incomplete = valid_cluster_config();
         incomplete.control_allow_cidrs = vec!["10.20.0.11/32".to_string()];
         assert!(
-            validate_cluster_config(&incomplete, Some("172.22.2.0/24"), NodeRole::Hybrid).is_err()
+            validate_cluster_config(&incomplete, Some("172.22.2.0/24"), NodeRole::Master).is_err()
         );
     }
 
     #[test]
-    fn endpoint_nodes_allow_three_voters_on_one_host() {
+    fn endpoint_defaults_api_to_3000_and_allows_an_override() {
         let mut config = valid_cluster_config();
-        config.nodes = vec![
-            "10.20.0.11:3001".parse().unwrap(),
-            "10.20.0.11:3101".parse().unwrap(),
-            "10.20.0.11:3201".parse().unwrap(),
-        ];
+        assert_eq!(config.voter_api_endpoints()[0].port(), 3000);
+        config.nodes.get_mut("node1").unwrap().endpoint =
+            ClusterEndpointConfig::Endpoint("10.20.0.11:3101".parse().unwrap());
         config.api_port = 3101;
+        config.set_local_ports(42001, 42002, 42003);
 
-        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
-            .expect("same-host cluster");
-        let nodes = config.resolved_nodes().unwrap();
-        assert_eq!(nodes[1].api_port, 3101);
-        assert_eq!(nodes[1].gateway_port, 3102);
-        assert_eq!(nodes[1].etcd_client_port, 3103);
-        assert_eq!(nodes[1].etcd_peer_port, 3104);
-        assert_eq!(
-            config
-                .local_endpoint("10.20.0.11".parse().unwrap(), NodeRole::Hybrid)
-                .unwrap(),
-            nodes[1]
-        );
+        validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Master)
+            .expect("valid endpoint override");
+        let node = config
+            .local_endpoint("10.20.0.11".parse().unwrap(), NodeRole::Master)
+            .unwrap();
+        assert_eq!(node.api_port, 3101);
+        assert_eq!(node.gateway_port, 42001);
+        assert_eq!(node.etcd_client_port, 42002);
+        assert_eq!(node.etcd_peer_port, 42003);
     }
 
     #[test]
-    fn endpoint_node_port_blocks_must_not_overlap() {
+    fn duplicate_api_endpoints_are_rejected() {
         let mut config = valid_cluster_config();
-        config.nodes = vec![
-            "10.20.0.11:3001".parse().unwrap(),
-            "10.20.0.11:3004".parse().unwrap(),
-            "10.20.0.11:3201".parse().unwrap(),
-        ];
-        assert!(validate_cluster_config(&config, Some("172.22.1.0/24"), NodeRole::Hybrid).is_err());
-
-        config.nodes[1] = "10.20.0.11".parse().unwrap();
-        assert!(validate_cluster_config(&config, Some("172.22.1.0/24"), NodeRole::Hybrid).is_err());
-
-        let mut legacy_port_override = valid_cluster_config();
-        legacy_port_override.nodes = vec![
-            "10.20.0.11:3001".parse().unwrap(),
-            "10.20.0.11:3101".parse().unwrap(),
-            "10.20.0.11:3201".parse().unwrap(),
-        ];
-        legacy_port_override.etcd_client_port = 5000;
-        assert!(
-            validate_cluster_config(
-                &legacy_port_override,
-                Some("172.22.1.0/24"),
-                NodeRole::Hybrid,
-            )
-            .is_err()
-        );
+        config.nodes.get_mut("node2").unwrap().endpoint =
+            ClusterEndpointConfig::Address("10.20.0.11".parse().unwrap());
+        assert!(validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Master).is_err());
     }
 
     #[test]
-    fn bare_ip_nodes_keep_legacy_ports_and_identity() {
-        let config = valid_cluster_config();
-        let node = config.resolved_nodes().unwrap()[0];
-        assert_eq!(node.api_port, 3001);
-        assert_eq!(node.gateway_port, 3002);
-        assert_eq!(node.etcd_client_port, 2379);
-        assert_eq!(node.etcd_peer_port, 2380);
-        assert_eq!(node.identity_api_port, None);
-        assert_eq!(node.member_name(), "maestro-0a14000b");
+    fn automatic_cluster_ports_are_distinct_and_persistent() {
+        let root = std::env::temp_dir().join(format!(
+            "maestro-cluster-ports-{}",
+            crate::utils::nanoid::unique_id(8)
+        ));
+        let first = load_or_allocate_cluster_ports(&root, Ipv4Addr::LOCALHOST, 3000).unwrap();
+        let second = load_or_allocate_cluster_ports(&root, Ipv4Addr::LOCALHOST, 3000).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            [3000, first.gateway, first.etcd_client, first.etcd_peer]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            4
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

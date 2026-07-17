@@ -116,7 +116,7 @@ export interface ReplicaState {
 export interface ClusterNode {
   nodeId: string;
   hostname: string;
-  role: "hybrid" | "voter" | "worker";
+  role: "master" | "hybrid" | "voter" | "worker";
   clusterHostIp: string;
   clusterApiPort: number;
   subnet: string;
@@ -296,8 +296,25 @@ export interface LogEntry {
 }
 
 export type MaskedConfig = {
-  cluster: { name: string };
-  node: { role: "hybrid" | "voter" | "worker" };
+  cluster: {
+    name: string;
+    nodes: Record<
+      string,
+      {
+        endpoint: string;
+        subnet: string;
+        role: "master" | "hybrid" | "voter" | "worker";
+      }
+    >;
+  };
+  node: {
+    name?: string | null;
+    role: "master" | "hybrid" | "voter" | "worker";
+    "api-port": number;
+    "gateway-port": number;
+    "etcd-client-port": number;
+    "etcd-peer-port": number;
+  };
   ingress: { ports: number[] };
   subnet?: string | null;
   egress: { deny: string[]; allow: string[] };

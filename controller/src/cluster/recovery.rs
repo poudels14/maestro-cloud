@@ -222,11 +222,11 @@ async fn coordinate_with_peers(
         .context("failed to build cluster recovery client")?;
     let local_endpoint = runtime.local_endpoint();
     let mut statuses = BTreeMap::from([(local_endpoint, (local_state, Instant::now()))]);
-    let quorum = runtime.initial_voters.len() / 2 + 1;
+    let quorum = runtime.voter_endpoints.len() / 2 + 1;
     let mut delay = Duration::from_millis(250);
 
     loop {
-        for endpoint in &runtime.initial_voters {
+        for endpoint in &runtime.voter_endpoints {
             if *endpoint == runtime.local_endpoint() {
                 continue;
             }
@@ -268,7 +268,7 @@ async fn coordinate_with_peers(
                 RecoveryDecision::WaitForExisting
             });
         }
-        if statuses.len() == runtime.initial_voters.len() {
+        if statuses.len() == runtime.voter_endpoints.len() {
             if present == 0 {
                 if runtime.is_seed() {
                     crate::cluster::bootstrap::rearm_seed_after_empty_consensus(
@@ -282,7 +282,7 @@ async fn coordinate_with_peers(
             }
 
             let survivor = runtime
-                .initial_voters
+                .voter_endpoints
                 .iter()
                 .find(|endpoint| {
                     statuses
@@ -538,8 +538,13 @@ mod tests {
             node_id: format!("node{index:08}"),
             instance_id: format!("instance-{index}"),
             host_ip: endpoint.host_ip,
-            role: crate::cluster::NodeRole::Hybrid,
+            role: if index == 0 {
+                crate::cluster::NodeRole::Master
+            } else {
+                crate::cluster::NodeRole::Hybrid
+            },
             initial_voters: voters.to_vec(),
+            voter_endpoints: voters.to_vec(),
             subnet: format!("172.22.{}.0/24", index + 1),
             control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
             api_port: endpoint.api_port,
@@ -611,7 +616,11 @@ mod tests {
                 &ca,
                 endpoint.host_ip,
                 endpoint.identity_api_port,
-                crate::cluster::NodeRole::Hybrid,
+                if index == 0 {
+                    crate::cluster::NodeRole::Master
+                } else {
+                    crate::cluster::NodeRole::Hybrid
+                },
             )
             .unwrap();
             let runtime = test_runtime(endpoint, &endpoints, index);

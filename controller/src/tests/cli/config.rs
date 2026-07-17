@@ -35,7 +35,7 @@ fn write_template_refuses_overwrite() {
 async fn cluster_template_validates_as_cluster_config() {
     let path = temp_path("validate-cluster", "jsonc");
     write_template(&path, DEFAULT_START_TEMPLATE).expect("write");
-    run_validate(&path)
+    run_validate(path.to_str().expect("UTF-8 temp path"))
         .await
         .expect("start template should validate as cluster config");
     let _ = std::fs::remove_file(path);
@@ -67,7 +67,7 @@ async fn inherited_cluster_config_validates_after_merging() {
     )
     .expect("write node");
 
-    run_validate(&node)
+    run_validate(node.to_str().expect("UTF-8 temp path"))
         .await
         .expect("inherited config should validate after merging");
 
@@ -160,7 +160,7 @@ fn datadog_healthcheck_filter_is_opt_in() {
 async fn services_template_validates_as_services_config() {
     let path = temp_path("validate-services", "jsonc");
     write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect("write");
-    run_validate(&path)
+    run_validate(path.to_str().expect("UTF-8 temp path"))
         .await
         .expect("cluster template should validate as services config");
     let _ = std::fs::remove_file(path);
@@ -170,11 +170,209 @@ async fn services_template_validates_as_services_config() {
 async fn validate_rejects_unrecognized_config() {
     let path = temp_path("validate-unknown", "jsonc");
     std::fs::write(&path, r#"{"foo":1}"#).expect("write");
-    let err = run_validate(&path)
+    let err = run_validate(path.to_str().expect("UTF-8 temp path"))
         .await
         .expect_err("unknown config should fail");
     assert!(err.to_string().contains("unrecognized config"));
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn config_verify_command_matches_the_cli() {
+    for source in ["maestro.jsonc", "aws-secret://maestro/production/node1"] {
+        let cli = crate::Cli::try_parse_from(["maestro", "config", "verify", source])
+            .expect("config verify should parse");
+        let Some(crate::CliCommand::Config {
+            command:
+                crate::ConfigCommand::Verify {
+                    source: parsed_source,
+                },
+        }) = cli.command
+        else {
+            panic!("expected config verify");
+        };
+        assert_eq!(parsed_source, source);
+    }
+}
+
+#[tokio::test]
+async fn verify_reports_the_full_path_of_a_missing_field() {
+    let path = temp_path("verify-missing-field", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            cluster: {
+                name: "test",
+                nodes: {
+                    node1: { subnet: "172.22.1.0/24", role: "master" }
+                }
+            },
+            node: "node1",
+            ingress: { port: 8080 },
+            "encryption-key": "secret"
+        }"#,
+    )
+    .expect("write");
+
+    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect_err("missing endpoint should fail verification");
+    assert!(
+        error
+            .to_string()
+            .contains("field `cluster.nodes.node1.endpoint` is missing"),
+        "unexpected error: {error}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn verify_reports_the_full_path_of_an_invalid_field() {
+    let path = temp_path("verify-invalid-field", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            cluster: {
+                name: "test",
+                nodes: {
+                    node1: {
+                        endpoint: "not-an-ip",
+                        subnet: "172.22.1.0/24",
+                        role: "master"
+                    }
+                }
+            },
+            node: "node1",
+            ingress: { port: 8080 },
+            "encryption-key": "secret"
+        }"#,
+    )
+    .expect("write");
+
+    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect_err("invalid endpoint should fail verification");
+    assert!(
+        error
+            .to_string()
+            .contains("field `cluster.nodes.node1.endpoint` is invalid"),
+        "unexpected error: {error}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn verify_reports_the_path_of_a_semantically_invalid_field() {
+    let path = temp_path("verify-invalid-semantic-field", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            cluster: {
+                name: "test",
+                nodes: {
+                    node1: {
+                        endpoint: "8.8.8.8",
+                        subnet: "172.22.1.0/24",
+                        role: "master"
+                    }
+                },
+                "control-allow-cidrs": ["10.0.0.0/8"],
+                "shared-registry": "registry.example.test/maestro",
+                "join-secret": "12345678901234567890123456789012"
+            },
+            node: "node1",
+            ingress: { port: 8080 },
+            "encryption-key": "secret",
+            "jwt-secret-key": "12345678901234567890123456789012"
+        }"#,
+    )
+    .expect("write");
+
+    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect_err("public endpoint should fail verification");
+    assert!(
+        error
+            .to_string()
+            .contains("field `cluster.nodes.node1.endpoint` is invalid"),
+        "unexpected error: {error}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn verify_reports_unknown_strict_fields_as_invalid() {
+    let path = temp_path("verify-unknown-strict-field", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            cluster: {
+                name: "test",
+                nodes: {
+                    node1: {
+                        endpoint: "10.0.0.10",
+                        subnet: "172.22.1.0/24",
+                        role: "master",
+                        weight: 10
+                    }
+                }
+            },
+            node: "node1",
+            ingress: { port: 8080 },
+            "encryption-key": "secret"
+        }"#,
+    )
+    .expect("write");
+
+    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect_err("unknown cluster node field should fail verification");
+    assert!(
+        error
+            .to_string()
+            .contains("field `cluster.nodes.node1.weight` is invalid: unknown field"),
+        "unexpected error: {error}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn config_diagnostics_list_every_ignored_field_path() {
+    let path = temp_path("verify-ignored-fields", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            cluster: { name: "test" },
+            ingress: { port: 8080, porrt: 8081 },
+            subnet: "172.22.1.0/24",
+            "encryption-key": "secret",
+            typo: true
+        }"#,
+    )
+    .expect("write");
+
+    let (_, ignored_fields) = crate::config::load_config_with_diagnostics(&path.to_string_lossy())
+        .await
+        .expect("config should otherwise be valid");
+    assert_eq!(ignored_fields, ["ingress.porrt", "typo"]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn services_config_diagnostics_list_nested_ignored_field_paths() {
+    let (_, ignored_fields) = crate::cli::rollout::parse_cluster_config_with_diagnostics(
+        r#"{
+            services: {
+                api: {
+                    name: "API",
+                    image: "example/api:latest",
+                    deploy: { replicas: 1, replicaCount: 2 }
+                }
+            }
+        }"#,
+    )
+    .expect("config should otherwise be valid");
+    assert_eq!(ignored_fields, ["services.api.deploy.replicaCount"]);
 }
 
 #[test]
@@ -303,18 +501,9 @@ fn start_schema_matches_serialized_config_fields() {
         &model["cluster"],
         &schema["properties"]["cluster"],
         &[],
-        &[
-            "bindIp",
-            "apiPort",
-            "gatewayPort",
-            "controlAllowCidrs",
-            "etcdClientPort",
-            "etcdPeerPort",
-            "sharedRegistry",
-            "joinSecret",
-        ],
+        &["controlAllowCidrs", "sharedRegistry", "joinSecret"],
     );
-    assert_object_keys(&model["node"], &schema["properties"]["node"], &[], &[]);
+    assert!(model["node"].is_null());
     assert_object_keys(
         &model["ingress"],
         &schema["properties"]["ingress"],

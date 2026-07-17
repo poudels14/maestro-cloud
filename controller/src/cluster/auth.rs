@@ -116,12 +116,12 @@ async fn provision_node_users_with_client(
     let daemon_user = format!(
         "maestro-{}-{suffix}",
         match role {
-            NodeRole::Hybrid | NodeRole::Voter => "voter",
+            NodeRole::Hybrid | NodeRole::Master | NodeRole::Voter => "voter",
             NodeRole::Worker => "worker",
         }
     );
     let daemon_role = match role {
-        NodeRole::Hybrid | NodeRole::Voter => "root".to_string(),
+        NodeRole::Hybrid | NodeRole::Master | NodeRole::Voter => "root".to_string(),
         NodeRole::Worker => {
             let role_name = format!("maestro-worker-{suffix}");
             ensure_role(client, &role_name, &worker_permissions(node_id)).await?;

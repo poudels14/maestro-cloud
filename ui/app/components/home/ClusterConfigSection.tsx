@@ -32,7 +32,12 @@ function ClusterConfigSection() {
 
 function configRows(config: MaskedConfig) {
   const items: { label: string; value: string }[] = [
+    ...(config.node.name ? [{ label: "Node name", value: config.node.name }] : []),
     { label: "Node role", value: config.node.role },
+    { label: "API port", value: String(config.node["api-port"]) },
+    { label: "Gateway port", value: String(config.node["gateway-port"]) },
+    { label: "etcd client port", value: String(config.node["etcd-client-port"]) },
+    { label: "etcd peer port", value: String(config.node["etcd-peer-port"]) },
     { label: "Ingress ports", value: (config.ingress?.ports ?? []).join(", ") },
     { label: "Runtime", value: config.runtime },
     { label: "Builder", value: config.depot ? "depot" : "default" }

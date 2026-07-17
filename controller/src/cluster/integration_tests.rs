@@ -445,21 +445,39 @@ impl FormingEtcdCluster {
             nodes: cluster
                 .nodes
                 .iter()
-                .map(|node| {
-                    format!("{}:{}", node.host_ip, node.api_port)
-                        .parse()
-                        .unwrap()
+                .enumerate()
+                .map(|(index, node)| {
+                    (
+                        format!("node{}", index + 1),
+                        crate::config::ClusterNodeConfig {
+                            endpoint: crate::config::ClusterEndpointConfig::Endpoint(
+                                format!("{}:{}", node.host_ip, node.api_port)
+                                    .parse()
+                                    .unwrap(),
+                            ),
+                            subnet: format!("172.30.{}.0/24", index + 1),
+                            role: if index == 0 {
+                                NodeRole::Master
+                            } else {
+                                NodeRole::Voter
+                            },
+                        },
+                    )
                 })
                 .collect(),
             api_port: cluster.nodes[0].api_port,
+            gateway_port: cluster.nodes[0].gateway_port,
+            etcd_client_port: cluster.nodes[0].etcd_client_port,
+            etcd_peer_port: cluster.nodes[0].etcd_peer_port,
             control_allow_cidrs: vec!["127.0.0.1/32".to_string()],
             shared_registry: Some("registry.invalid/maestro".to_string()),
             join_secret: Some("integration-auto-formation-secret".to_string()),
+            selected_node: Some("node1".to_string()),
             ..crate::config::ClusterConfig::default()
         };
         let identity = super::provision::ensure_seed_identity(
             &config,
-            NodeRole::Voter,
+            NodeRole::Master,
             &seed_data,
             Ipv4Addr::LOCALHOST,
         )?;
@@ -644,7 +662,8 @@ impl FormingEtcdCluster {
             instance_id: format!("instance-{}", index + 1),
             host_ip: node.host_ip,
             role: NodeRole::Voter,
-            initial_voters: self.nodes.clone(),
+            initial_voters: vec![self.nodes[0]],
+            voter_endpoints: self.nodes.clone(),
             subnet: format!("172.30.{}.0/24", index + 1),
             control_allow_cidrs: Vec::new(),
             api_port: node.api_port,

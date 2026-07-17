@@ -38,22 +38,15 @@ pub fn ensure_seed_identity(
     data_dir: &Path,
     host_ip: std::net::Ipv4Addr,
 ) -> Result<SeedIdentity> {
-    if !role.is_voter() {
+    if role != NodeRole::Master {
         return Err(Error::invalid_config(
-            "the first configured cluster node must be hybrid or voter",
+            "only the configured master may initialize the cluster",
         ));
     }
     let local_endpoint = config
         .local_endpoint(host_ip, role)
         .map_err(|error| Error::invalid_config(error.to_string()))?;
-    let initial_voters = config
-        .resolved_nodes()
-        .map_err(|error| Error::invalid_config(error.to_string()))?;
-    if initial_voters.first() != Some(&local_endpoint) {
-        return Err(Error::invalid_config(
-            "automatic cluster initialization is restricted to cluster.nodes[0]",
-        ));
-    }
+    let initial_voters = vec![local_endpoint];
     let member_exists = data_dir.join("system/etcd/data/member").exists();
     if identity_installed(data_dir).unwrap_or(false) {
         let cluster_id = cluster::identity::load_cluster_id(data_dir)
@@ -123,23 +116,14 @@ pub fn ensure_seed_identity(
     })?;
 
     let voter_host_ips = initial_voters.iter().map(|node| node.host_ip).collect();
-    let endpoint_identity = config.uses_node_ports();
     cluster::join::persist_voter_cache(
         data_dir,
         &cluster::join::ClusterVoterCache {
             cluster_id: cluster_id.clone(),
             voter_host_ips,
-            voter_endpoints: if endpoint_identity {
-                initial_voters.clone()
-            } else {
-                Vec::new()
-            },
+            voter_endpoints: initial_voters.clone(),
             initial_voter_host_ips: initial_voters.iter().map(|node| node.host_ip).collect(),
-            initial_voter_endpoints: if endpoint_identity {
-                initial_voters
-            } else {
-                Vec::new()
-            },
+            initial_voter_endpoints: initial_voters,
             api_port: config.api_port,
             etcd_client_port: config.etcd_client_port,
             etcd_peer_port: config.etcd_peer_port,
@@ -215,18 +199,16 @@ pub async fn join_once_via(
         .map_err(|error| Error::invalid_config(error.to_string()))?;
     let mut bases = config
         .cluster
-        .resolved_nodes()
-        .map_err(|error| Error::invalid_config(error.to_string()))?
+        .voter_api_endpoints()
         .into_iter()
-        .map(|node| format!("https://{}", node.api_address()))
+        .map(|node| format!("https://{node}"))
         .collect::<Vec<_>>();
     if let Some(address) = preferred_address {
         let default_port = config
             .cluster
-            .resolved_nodes()
-            .map_err(|error| Error::invalid_config(error.to_string()))?
+            .voter_api_endpoints()
             .first()
-            .map(|node| node.api_port)
+            .map(|node| node.port())
             .ok_or_else(|| Error::invalid_config("cluster.nodes is empty"))?;
         let preferred = normalize_join_base(address, default_port)?;
         bases.retain(|base| base != &preferred);
@@ -433,22 +415,17 @@ fn validate_join_payload(
             ));
         }
     }
-    let configured = config
+    let (_, master) = config
         .cluster
-        .resolved_nodes()
+        .master_node()
         .map_err(|error| Error::invalid_config(error.to_string()))?;
-    let topology_matches = if config.cluster.uses_node_ports() {
-        payload.initial_voter_endpoints == configured
-    } else {
-        payload.initial_voter_host_ips
-            == configured
-                .iter()
-                .map(|node| node.host_ip)
-                .collect::<Vec<_>>()
-    };
-    if !topology_matches {
+    if payload.initial_voter_endpoints.len() != 1
+        || payload.initial_voter_endpoints[0].host_ip != master.endpoint.host_ip()
+        || payload.initial_voter_endpoints[0].api_port
+            != master.endpoint.explicit_api_port().unwrap_or(3000)
+    {
         return Err(Error::external(
-            "cluster join response does not match the configured initial voters",
+            "cluster join response was not initialized by the configured master",
         ));
     }
     Ok(())
@@ -560,11 +537,25 @@ mod tests {
     fn cluster_config() -> ClusterConfig {
         ClusterConfig {
             name: "test".to_string(),
-            nodes: vec!["10.20.0.11:3101".parse().unwrap()],
+            nodes: [(
+                "node1".to_string(),
+                crate::config::ClusterNodeConfig {
+                    endpoint: crate::config::ClusterEndpointConfig::Endpoint(
+                        "10.20.0.11:3101".parse().unwrap(),
+                    ),
+                    subnet: "172.22.1.0/24".to_string(),
+                    role: NodeRole::Master,
+                },
+            )]
+            .into(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3101,
+            gateway_port: 41001,
+            etcd_client_port: 41002,
+            etcd_peer_port: 41003,
             shared_registry: Some("registry.example.com/maestro".to_string()),
             join_secret: Some("x".repeat(32)),
+            selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
         }
     }
@@ -578,7 +569,7 @@ mod tests {
         let config = cluster_config();
         let first = ensure_seed_identity(
             &config,
-            NodeRole::Hybrid,
+            NodeRole::Master,
             &root,
             "10.20.0.11".parse().unwrap(),
         )
@@ -594,11 +585,15 @@ mod tests {
             .expect("seed voter cache");
         assert_eq!(
             cache.initial_voter_endpoints,
-            config.resolved_nodes().unwrap()
+            vec![
+                config
+                    .local_endpoint("10.20.0.11".parse().unwrap(), NodeRole::Master)
+                    .unwrap()
+            ]
         );
         let second = ensure_seed_identity(
             &config,
-            NodeRole::Hybrid,
+            NodeRole::Master,
             &root,
             "10.20.0.11".parse().unwrap(),
         )
@@ -617,7 +612,7 @@ mod tests {
         let cluster_id = cluster::identity::create_cluster_id(&root).unwrap();
         let identity = ensure_seed_identity(
             &cluster_config(),
-            NodeRole::Hybrid,
+            NodeRole::Master,
             &root,
             "10.20.0.11".parse().unwrap(),
         )
@@ -629,23 +624,18 @@ mod tests {
     }
 
     #[test]
-    fn only_first_configured_voter_can_initialize_cluster() {
+    fn only_master_can_initialize_cluster() {
         let root = std::env::temp_dir().join(format!(
             "maestro-auto-seed-reject-{}",
             crate::utils::nanoid::unique_id(10)
         ));
-        let mut config = cluster_config();
-        config.nodes = vec![
-            "10.20.0.11:3101".parse().unwrap(),
-            "10.20.0.12:3201".parse().unwrap(),
-            "10.20.0.13:3301".parse().unwrap(),
-        ];
+        let config = cluster_config();
         assert!(
             ensure_seed_identity(
                 &config,
-                NodeRole::Hybrid,
+                NodeRole::Voter,
                 &root,
-                "10.20.0.12".parse().unwrap(),
+                "10.20.0.11".parse().unwrap(),
             )
             .is_err()
         );
@@ -725,14 +715,41 @@ mod tests {
         let mut config = StartConfig {
             cluster: ClusterConfig {
                 name: "test".to_string(),
-                nodes: vec![format!("127.0.0.1:{port}").parse().unwrap()],
-                api_port: port,
+                nodes: [
+                    (
+                        "node1".to_string(),
+                        crate::config::ClusterNodeConfig {
+                            endpoint: crate::config::ClusterEndpointConfig::Endpoint(
+                                format!("127.0.0.1:{port}").parse().unwrap(),
+                            ),
+                            subnet: "172.22.1.0/24".to_string(),
+                            role: NodeRole::Master,
+                        },
+                    ),
+                    (
+                        "node2".to_string(),
+                        crate::config::ClusterNodeConfig {
+                            endpoint: crate::config::ClusterEndpointConfig::Endpoint(
+                                "127.0.0.2:39001".parse().unwrap(),
+                            ),
+                            subnet: "172.22.2.0/24".to_string(),
+                            role: NodeRole::Worker,
+                        },
+                    ),
+                ]
+                .into(),
+                api_port: 39001,
+                gateway_port: 39002,
+                etcd_client_port: 39003,
+                etcd_peer_port: 39004,
                 control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
                 shared_registry: Some("registry.invalid/maestro".to_string()),
                 join_secret: Some(secret),
+                selected_node: Some("node2".to_string()),
                 ..ClusterConfig::default()
             },
             node: crate::config::NodeConfig {
+                name: Some("node2".to_string()),
                 role: NodeRole::Worker,
             },
             subnet: Some("172.22.2.0/24".to_string()),

@@ -157,7 +157,9 @@ pub fn generate_cluster_node_certs_for_endpoint(
         &format!(
             "maestro-{}-{suffix}",
             match role {
-                crate::cluster::NodeRole::Hybrid | crate::cluster::NodeRole::Voter => "voter",
+                crate::cluster::NodeRole::Hybrid
+                | crate::cluster::NodeRole::Master
+                | crate::cluster::NodeRole::Voter => "voter",
                 crate::cluster::NodeRole::Worker => "worker",
             },
         ),

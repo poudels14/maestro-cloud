@@ -307,9 +307,16 @@ async fn call_rollout_endpoint(
 }
 
 pub(super) fn parse_cluster_config(raw: &str) -> Result<ClusterConfig> {
-    let parsed = json5::from_str(raw)
+    parse_cluster_config_with_diagnostics(raw).map(|(config, _)| config)
+}
+
+pub(super) fn parse_cluster_config_with_diagnostics(
+    raw: &str,
+) -> Result<(ClusterConfig, Vec<String>)> {
+    let value = json5::from_str(raw)
         .map_err(|err| Error::invalid_config(format!("failed to parse config: {err}")))?;
-    Ok(parsed)
+    crate::config::deserialize_config_value(value)
+        .map_err(|err| Error::invalid_config(format!("failed to parse config: {err}")))
 }
 
 pub(super) fn validate_service_template(
@@ -317,10 +324,12 @@ pub(super) fn validate_service_template(
     template: &ServiceTemplate,
 ) -> Result<()> {
     let id = service_id.trim();
-    crate::validation::validate_service_id(id, "service id").map_err(Error::invalid_config)?;
+    crate::validation::validate_service_id(id, "service id").map_err(|error| {
+        Error::invalid_config(format!("field `services.{service_id}` is invalid: {error}"))
+    })?;
     if template.name.trim().is_empty() {
         return Err(Error::invalid_config(format!(
-            "service `{service_id}` has empty name"
+            "field `services.{service_id}.name` is invalid: cannot be empty"
         )));
     }
     crate::validation::validate_service_provider_config(
@@ -328,10 +337,27 @@ pub(super) fn validate_service_template(
         &template.image,
         &template.deploy,
     )
-    .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+    .map_err(|error| service_validation_error(service_id, &error))?;
     crate::validation::validate_ingress_config(&template.ingress)
-        .map_err(|err| Error::invalid_config(format!("service `{service_id}` {err}")))?;
+        .map_err(|error| service_validation_error(service_id, &error))?;
     Ok(())
+}
+
+fn service_validation_error(service_id: &str, message: &str) -> Error {
+    let relative_path = message
+        .split_once([' ', '(', '`'])
+        .map(|(path, _)| path)
+        .filter(|path| {
+            matches!(
+                path.split('.').next(),
+                Some("build" | "image" | "deploy" | "ingress")
+            )
+        });
+    let path = relative_path.map_or_else(
+        || format!("services.{service_id}"),
+        |path| format!("services.{service_id}.{path}"),
+    );
+    Error::invalid_config(format!("field `{path}` is invalid: {message}"))
 }
 
 fn normalize_base_url(host: &str) -> Result<String> {
