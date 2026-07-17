@@ -257,19 +257,25 @@
 
             route_imds=$(${pkgs.iproute2}/bin/ip -4 route show table 100 169.254.169.254/32 2>/dev/null || true)
             route_ntp=$(${pkgs.iproute2}/bin/ip -4 route show table 100 169.254.169.123/32 2>/dev/null || true)
+            route_dns=$(${pkgs.iproute2}/bin/ip -4 route show table 100 169.254.169.253/32 2>/dev/null || true)
             rule_imds=$(${pkgs.iproute2}/bin/ip -4 rule show to 169.254.169.254/32 2>/dev/null || true)
             rule_ntp=$(${pkgs.iproute2}/bin/ip -4 rule show to 169.254.169.123/32 2>/dev/null || true)
+            rule_dns=$(${pkgs.iproute2}/bin/ip -4 rule show to 169.254.169.253/32 2>/dev/null || true)
 
             matches "$route_imds" "dev $iface" || changed=1
             matches "$route_ntp" "dev $iface" || changed=1
+            matches "$route_dns" "dev $iface" || changed=1
             matches "$rule_imds" "lookup 100" || changed=1
             matches "$rule_ntp" "lookup 100" || changed=1
+            matches "$rule_dns" "lookup 100" || changed=1
 
             ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.254/32 dev "$iface" scope link
             ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.123/32 dev "$iface" scope link
+            ${pkgs.iproute2}/bin/ip -4 route replace table 100 169.254.169.253/32 dev "$iface" scope link
 
             ${pkgs.iproute2}/bin/ip -4 rule add pref 100 to 169.254.169.254/32 table 100 2>/dev/null || true
             ${pkgs.iproute2}/bin/ip -4 rule add pref 101 to 169.254.169.123/32 table 100 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip -4 rule add pref 102 to 169.254.169.253/32 table 100 2>/dev/null || true
 
             if [ "$changed" -eq 1 ]; then
               printf '%s\n' "$iface" > "$state_file"

@@ -27,7 +27,7 @@ pub struct FirewallConfig {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ServiceEgressAllow {
     pub service_id: String,
-    pub source: Ipv4Addr,
+    pub source: String,
     pub cidr: String,
     pub ports: Vec<u16>,
 }
@@ -97,7 +97,7 @@ pub fn service_allows_for_source(
         .iter()
         .map(|rule| ServiceEgressAllow {
             service_id: service_id.to_string(),
-            source,
+            source: source.to_string(),
             cidr: rule.cidr.clone(),
             ports: rule.ports.clone(),
         })
@@ -105,18 +105,23 @@ pub fn service_allows_for_source(
 }
 
 pub fn dns_allows_for_resolvers(
-    source: Ipv4Addr,
+    container_subnet: &str,
+    dns_source: Ipv4Addr,
     resolvers: &[Ipv4Addr],
 ) -> Vec<ServiceEgressAllow> {
-    resolvers
-        .iter()
-        .map(|resolver| ServiceEgressAllow {
-            service_id: "maestro-dns".to_string(),
-            source,
-            cidr: format!("{resolver}/32"),
-            ports: vec![53],
-        })
-        .collect()
+    let mut allows = vec![ServiceEgressAllow {
+        service_id: "maestro-dns-clients".to_string(),
+        source: container_subnet.to_string(),
+        cidr: format!("{dns_source}/32"),
+        ports: vec![53],
+    }];
+    allows.extend(resolvers.iter().map(|resolver| ServiceEgressAllow {
+        service_id: "maestro-dns-upstream".to_string(),
+        source: dns_source.to_string(),
+        cidr: format!("{resolver}/32"),
+        ports: vec![53],
+    }));
+    allows
 }
 
 pub async fn apply(config: &FirewallConfig) -> Result<()> {
@@ -217,10 +222,18 @@ fn render_nft_rules(
     );
 
     for rule in system_allows.iter().chain(service_allows) {
+        if rule.source.contains('/') {
+            crate::cluster::network::Ipv4Cidr::parse(&rule.source)
+                .map_err(|error| anyhow!("invalid scoped egress allow source: {error}"))?;
+        } else {
+            rule.source
+                .parse::<Ipv4Addr>()
+                .map_err(|_| anyhow!("invalid scoped egress allow source `{}`", rule.source))?;
+        }
         let cidr = crate::cluster::network::Ipv4Cidr::parse(&rule.cidr)
-            .map_err(|error| anyhow!("invalid service egress allow CIDR: {error}"))?;
+            .map_err(|error| anyhow!("invalid scoped egress allow CIDR: {error}"))?;
         if rule.ports.contains(&0) {
-            return Err(anyhow!("service egress allow contains port 0"));
+            return Err(anyhow!("scoped egress allow contains port 0"));
         }
         if rule.ports.is_empty() {
             script.push_str(&format!(
@@ -429,7 +442,7 @@ mod tests {
             &[],
             &[ServiceEgressAllow {
                 service_id: "api".to_string(),
-                source: "172.22.1.42".parse().unwrap(),
+                source: "172.22.1.42".to_string(),
                 cidr: "10.0.10.0/24".to_string(),
                 ports: vec![5432],
             }],
@@ -454,7 +467,7 @@ mod tests {
             &[],
             &[ServiceEgressAllow {
                 service_id: "worker".to_string(),
-                source: "172.22.1.43".parse().unwrap(),
+                source: "172.22.1.43".to_string(),
                 cidr: "10.0.20.0/24".to_string(),
                 ports: vec![],
             }],
@@ -465,9 +478,10 @@ mod tests {
     }
 
     #[test]
-    fn dns_allow_is_limited_to_dns_container_and_port() {
+    fn dns_allows_cover_both_legs_and_only_dns_port() {
         let dns_source = "172.22.1.254".parse().unwrap();
-        let system_allows = dns_allows_for_resolvers(dns_source, &["10.0.0.2".parse().unwrap()]);
+        let system_allows =
+            dns_allows_for_resolvers("172.22.1.0/24", dns_source, &["10.0.0.2".parse().unwrap()]);
         let script = render_nft_rules(
             DEFAULT_TABLE_NAME,
             "172.22.1.0/24",
@@ -478,13 +492,15 @@ mod tests {
         )
         .unwrap();
 
-        let tcp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 tcp dport { 53 } accept";
-        let udp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 udp dport { 53 } accept";
+        let client_tcp = "ip saddr 172.22.1.0/24 ip daddr 172.22.1.254/32 tcp dport { 53 } accept";
+        let client_udp = "ip saddr 172.22.1.0/24 ip daddr 172.22.1.254/32 udp dport { 53 } accept";
+        let upstream_tcp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 tcp dport { 53 } accept";
+        let upstream_udp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 udp dport { 53 } accept";
         let deny = "ip saddr 172.22.1.0/24 ip daddr { 10.0.0.0/8 } reject";
-        assert!(script.contains(tcp));
-        assert!(script.contains(udp));
-        assert!(script.find(tcp).unwrap() < script.find(deny).unwrap());
-        assert!(script.find(udp).unwrap() < script.find(deny).unwrap());
+        for allow in [client_tcp, client_udp, upstream_tcp, upstream_udp] {
+            assert!(script.contains(allow));
+            assert!(script.find(allow).unwrap() < script.find(deny).unwrap());
+        }
         assert!(!script.contains("ip saddr 172.22.1.0/24 ip daddr 10.0.0.2/32 accept"));
     }
 }
