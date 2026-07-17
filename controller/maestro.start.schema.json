@@ -84,7 +84,7 @@
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["endpoint", "subnet", "role"],
+            "required": ["endpoint", "subnet"],
             "properties": {
               "endpoint": {
                 "type": "string",
@@ -101,7 +101,8 @@
               "role": {
                 "type": "string",
                 "enum": ["master", "hybrid", "voter", "worker"],
-                "description": "Exactly one node must be master. Master and hybrid nodes vote and run workloads; voters are control-plane-only; workers run workloads only."
+                "default": "hybrid",
+                "description": "Defaults to hybrid. Exactly one node must be master. Master and hybrid nodes vote and run workloads; voters are control-plane-only; workers run workloads only."
               }
             }
           },
@@ -113,16 +114,16 @@
           "items": {
             "type": "string"
           },
+          "description": "Optional private IPv4 source allowlist for cluster joins. When omitted, the signed join secret is the admission boundary.",
           "default": []
         },
         "controlAllowCidrs": {
           "$ref": "#/properties/cluster/properties/control-allow-cidrs"
         },
-        "shared-registry": {
-          "type": "string"
-        },
-        "sharedRegistry": {
-          "$ref": "#/properties/cluster/properties/shared-registry"
+        "image-registry": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base container-image namespace shared by all nodes. Maestro appends /<service-id>:<deployment-id>."
         },
         "join-secret": {
           "type": "string",

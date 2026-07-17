@@ -5,14 +5,17 @@
   "cluster": {
     "name": "my-cluster"
     // For multi-node mode, add a comma after "my-cluster" and declare every
-    // node in one shared map. Exactly one node must have role "master".
+    // node in one shared map. Exactly one node must have role "master";
+    // the role of every other node defaults to "hybrid".
     // "nodes": {
     //   "node1": { "endpoint": "10.20.0.11", "subnet": "172.22.1.0/24", "role": "master" },
-    //   "node2": { "endpoint": "10.20.0.12", "subnet": "172.22.2.0/24", "role": "hybrid" },
-    //   "node3": { "endpoint": "10.20.0.13:3100", "subnet": "172.22.3.0/24", "role": "hybrid" }
+    //   "node2": { "endpoint": "10.20.0.12", "subnet": "172.22.2.0/24" },
+    //   "node3": { "endpoint": "10.20.0.13:3100", "subnet": "172.22.3.0/24" }
     // },
+    // Optional extra source restriction for signed cluster joins:
     // "control-allow-cidrs": ["10.20.0.0/24"],
-    // "shared-registry": "ghcr.io/acme",
+    // Shared base image namespace; Maestro appends /<service-id>:<deployment-id>.
+    // "image-registry": "ghcr.io/acme",
     // "join-secret": "replace-with-a-random-secret-of-at-least-32-characters"
   },
   // Required in multi-node mode; use "node2" on the second machine, etc.

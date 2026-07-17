@@ -470,7 +470,7 @@ impl FormingEtcdCluster {
             etcd_client_port: cluster.nodes[0].etcd_client_port,
             etcd_peer_port: cluster.nodes[0].etcd_peer_port,
             control_allow_cidrs: vec!["127.0.0.1/32".to_string()],
-            shared_registry: Some("registry.invalid/maestro".to_string()),
+            image_registry: Some("registry.invalid/maestro".to_string()),
             join_secret: Some("integration-auto-formation-secret".to_string()),
             selected_node: Some("node1".to_string()),
             ..crate::config::ClusterConfig::default()

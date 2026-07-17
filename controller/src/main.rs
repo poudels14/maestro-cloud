@@ -88,11 +88,6 @@ enum ConfigCommand {
         #[arg(help = "Config source: file path, file://path, or aws-secret://secret-name")]
         source: String,
     },
-    /// Verify a config source and report missing, invalid, and ignored fields
-    Verify {
-        #[arg(help = "Config source: file path, file://path, or aws-secret://secret-name")]
-        source: String,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1058,7 +1053,7 @@ async fn run() -> crate::error::Result<bool> {
                     gateway_port: local_endpoint.gateway_port,
                     etcd_client_port: local_endpoint.etcd_client_port,
                     etcd_peer_port: local_endpoint.etcd_peer_port,
-                    shared_registry: cfg.cluster.shared_registry.clone(),
+                    shared_registry: cfg.cluster.image_registry.clone(),
                     labels: cfg.cluster.labels.clone(),
                     identity_api_port: local_endpoint.identity_api_port,
                 })
@@ -2175,7 +2170,7 @@ async fn run() -> crate::error::Result<bool> {
         }
         Some(CliCommand::Config { command }) => match command {
             ConfigCommand::Init => cli::config::run_init().map(|()| false),
-            ConfigCommand::Validate { source } | ConfigCommand::Verify { source } => {
+            ConfigCommand::Validate { source } => {
                 cli::config::run_validate(&source).await.map(|()| false)
             }
         },

@@ -65,7 +65,7 @@ aws-sdk-secretsmanager = { version = "1.109.0", default-features = false, featur
   "default-https-client",
   "rt-tokio"
 ] }
-aws-config = "1.9.0"
+aws-config = { version = "1.9.0", features = ["credentials-login"] }
 jsonwebtoken = { version = "10.4.0", default-features = false, features = ["aws_lc_rs"] }
 rcgen = { version = "0.14.7", features = ["pem"] }
 rustls = { version = "0.23.37", features = ["ring"] }

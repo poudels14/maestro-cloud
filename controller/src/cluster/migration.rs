@@ -94,7 +94,7 @@ pub async fn publish_legacy_images(
     }
     let registry = shared_registry.trim().trim_end_matches('/');
     if registry.is_empty() {
-        bail!("cluster.shared-registry is required to publish migrated local images");
+        bail!("cluster.image-registry is required to publish migrated local images");
     }
 
     for service_id in store.list_service_ids().await? {

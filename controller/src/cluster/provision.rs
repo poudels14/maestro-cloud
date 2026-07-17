@@ -553,7 +553,7 @@ mod tests {
             gateway_port: 41001,
             etcd_client_port: 41002,
             etcd_peer_port: 41003,
-            shared_registry: Some("registry.example.com/maestro".to_string()),
+            image_registry: Some("registry.example.com/maestro".to_string()),
             join_secret: Some("x".repeat(32)),
             selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
@@ -743,7 +743,7 @@ mod tests {
                 etcd_client_port: 39003,
                 etcd_peer_port: 39004,
                 control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
-                shared_registry: Some("registry.invalid/maestro".to_string()),
+                image_registry: Some("registry.invalid/maestro".to_string()),
                 join_secret: Some(secret),
                 selected_node: Some("node2".to_string()),
                 ..ClusterConfig::default()
