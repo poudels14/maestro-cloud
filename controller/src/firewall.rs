@@ -20,6 +20,7 @@ pub struct FirewallConfig {
     pub subnet: Option<String>,
     pub deny: Vec<String>,
     pub allow: Vec<String>,
+    pub system_allows: Vec<ServiceEgressAllow>,
     pub service_allows: Vec<ServiceEgressAllow>,
 }
 
@@ -103,6 +104,21 @@ pub fn service_allows_for_source(
         .collect()
 }
 
+pub fn dns_allows_for_resolvers(
+    source: Ipv4Addr,
+    resolvers: &[Ipv4Addr],
+) -> Vec<ServiceEgressAllow> {
+    resolvers
+        .iter()
+        .map(|resolver| ServiceEgressAllow {
+            service_id: "maestro-dns".to_string(),
+            source,
+            cidr: format!("{resolver}/32"),
+            ports: vec![53],
+        })
+        .collect()
+}
+
 pub async fn apply(config: &FirewallConfig) -> Result<()> {
     if config.deny.is_empty() {
         let _ = delete_table(&config.table_name).await;
@@ -118,6 +134,7 @@ pub async fn apply(config: &FirewallConfig) -> Result<()> {
         subnet,
         &config.deny,
         &config.allow,
+        &config.system_allows,
         &config.service_allows,
     )?;
     replace_table(&config.table_name, &script).await
@@ -179,6 +196,7 @@ fn render_nft_rules(
     subnet: &str,
     deny: &[String],
     allow: &[String],
+    system_allows: &[ServiceEgressAllow],
     service_allows: &[ServiceEgressAllow],
 ) -> Result<String> {
     if table_name.is_empty()
@@ -198,7 +216,7 @@ fn render_nft_rules(
          add chain inet {table_name} forward {{ type filter hook forward priority -50; policy accept; }}\n"
     );
 
-    for rule in service_allows {
+    for rule in system_allows.iter().chain(service_allows) {
         let cidr = crate::cluster::network::Ipv4Cidr::parse(&rule.cidr)
             .map_err(|error| anyhow!("invalid service egress allow CIDR: {error}"))?;
         if rule.ports.contains(&0) {
@@ -359,6 +377,7 @@ mod tests {
             ],
             &[],
             &[],
+            &[],
         )
         .unwrap();
 
@@ -376,6 +395,7 @@ mod tests {
             &["10.0.0.0/8".to_string()],
             &["10.1.2.3".to_string()],
             &[],
+            &[],
         )
         .unwrap();
 
@@ -392,6 +412,7 @@ mod tests {
             &["10.0.0.0/8".to_string()],
             &[],
             &[],
+            &[],
         )
         .unwrap();
         assert!(script.starts_with("add table inet maestro_egress_3101\n"));
@@ -404,6 +425,7 @@ mod tests {
             DEFAULT_TABLE_NAME,
             "172.22.1.0/24",
             &["10.0.0.0/8".to_string()],
+            &[],
             &[],
             &[ServiceEgressAllow {
                 service_id: "api".to_string(),
@@ -429,6 +451,7 @@ mod tests {
             "172.22.1.0/24",
             &["10.0.0.0/8".to_string()],
             &[],
+            &[],
             &[ServiceEgressAllow {
                 service_id: "worker".to_string(),
                 source: "172.22.1.43".parse().unwrap(),
@@ -439,5 +462,29 @@ mod tests {
         .unwrap();
 
         assert!(script.contains("ip saddr 172.22.1.43 ip daddr 10.0.20.0/24 accept"));
+    }
+
+    #[test]
+    fn dns_allow_is_limited_to_dns_container_and_port() {
+        let dns_source = "172.22.1.254".parse().unwrap();
+        let system_allows = dns_allows_for_resolvers(dns_source, &["10.0.0.2".parse().unwrap()]);
+        let script = render_nft_rules(
+            DEFAULT_TABLE_NAME,
+            "172.22.1.0/24",
+            &["10.0.0.0/8".to_string()],
+            &[],
+            &system_allows,
+            &[],
+        )
+        .unwrap();
+
+        let tcp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 tcp dport { 53 } accept";
+        let udp = "ip saddr 172.22.1.254 ip daddr 10.0.0.2/32 udp dport { 53 } accept";
+        let deny = "ip saddr 172.22.1.0/24 ip daddr { 10.0.0.0/8 } reject";
+        assert!(script.contains(tcp));
+        assert!(script.contains(udp));
+        assert!(script.find(tcp).unwrap() < script.find(deny).unwrap());
+        assert!(script.find(udp).unwrap() < script.find(deny).unwrap());
+        assert!(!script.contains("ip saddr 172.22.1.0/24 ip daddr 10.0.0.2/32 accept"));
     }
 }

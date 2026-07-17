@@ -1370,6 +1370,50 @@ async fn run() -> crate::error::Result<bool> {
                 }
             }
 
+            let dns_enabled = deployment_config.cluster.is_some()
+                || deployment_config.tailscale_authkey.is_some();
+            let dns_upstreams = if dns_enabled {
+                deployment::dns::load_host_resolvers().map_err(|error| {
+                    Error::external(format!("failed to load host DNS resolvers: {error}"))
+                })?
+            } else {
+                Vec::new()
+            };
+            let dns_source = if dns_enabled {
+                let subnet = deployment_config.subnet.as_deref().ok_or_else(|| {
+                    Error::invalid_config("container subnet is required when DNS is enabled")
+                })?;
+                Some(
+                    cluster::network::Ipv4Cidr::parse(subnet)
+                        .map_err(|error| {
+                            Error::invalid_config(format!(
+                                "invalid container subnet for DNS firewall access: {error}"
+                            ))
+                        })?
+                        .system_address_from_end(1)
+                        .ok_or_else(|| {
+                            Error::invalid_config(format!(
+                                "container subnet `{subnet}` has no address for the DNS container"
+                            ))
+                        })?,
+                )
+            } else {
+                None
+            };
+            if !dns_upstreams.is_empty() {
+                logger.emit(
+                    "info",
+                    &format!(
+                        "DNS forwarding through host resolver(s): {}",
+                        dns_upstreams
+                            .iter()
+                            .map(Ipv4Addr::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+            }
+
             let firewall_config = firewall::FirewallConfig {
                 table_name: deployment_config
                     .cluster
@@ -1382,6 +1426,9 @@ async fn run() -> crate::error::Result<bool> {
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
                 allow: egress_allow,
+                system_allows: dns_source
+                    .map(|source| firewall::dns_allows_for_resolvers(source, &dns_upstreams))
+                    .unwrap_or_default(),
                 service_allows: Vec::new(),
             };
             let firewall_manager = firewall::FirewallManager::new(firewall_config.clone());
@@ -1410,6 +1457,7 @@ async fn run() -> crate::error::Result<bool> {
             let system_info = tokio::select! {
                 info = deployment::start_system_jobs(
                     &deployment_config,
+                    &dns_upstreams,
                     &runtime,
                     &log_sender,
                     &logger,
