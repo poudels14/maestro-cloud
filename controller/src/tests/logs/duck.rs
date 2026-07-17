@@ -176,13 +176,14 @@ async fn ingress_traffic_groups_ip_path_and_status() {
         }]
     );
     assert_eq!(blocked.by_path[0].value, "/wp-admin");
-    assert!(
+    assert_eq!(
         store
             .read_tail("maestro-ingress", 10)
             .await
             .expect("read raw ingress logs")
-            .is_empty(),
-        "access records should be discarded after aggregation"
+            .len(),
+        5,
+        "access records are kept as raw logs alongside aggregation"
     );
     store
         .append(&[entry(
@@ -197,7 +198,9 @@ async fn ingress_traffic_groups_ip_path_and_status() {
         store
             .read_tail("maestro-ingress", 10)
             .await
-            .expect("read ingress diagnostic")[0]
+            .expect("read ingress diagnostic")
+            .last()
+            .expect("ingress diagnostic entry")
             .text,
         "provider configuration reloaded"
     );
