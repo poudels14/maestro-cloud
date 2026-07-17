@@ -190,6 +190,7 @@ fn system_log_tags(config: &ControllerConfig) -> Vec<String> {
 
 pub async fn start_system_jobs(
     config: &ControllerConfig,
+    dns_upstreams: &[std::net::Ipv4Addr],
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
     logger: &Logger,
@@ -339,6 +340,7 @@ pub async fn start_system_jobs(
         } else {
             53
         },
+        dns_upstreams,
     );
 
     let network_cidr = runtime.inspect_network_cidr(&config.network).await;
