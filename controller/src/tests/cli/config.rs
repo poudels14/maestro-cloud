@@ -208,6 +208,65 @@ async fn services_template_validates_as_services_config() {
 }
 
 #[tokio::test]
+async fn services_config_validates_service_egress_allow() {
+    let path = temp_path("validate-service-egress", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            services: {
+                api: {
+                    name: "API",
+                    image: "example/api:latest",
+                    deploy: {
+                        egress: {
+                            allow: [{ cidr: "10.0.10.0/24", ports: [5432] }]
+                        }
+                    }
+                }
+            }
+        }"#,
+    )
+    .expect("write");
+
+    run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect("service egress allow should validate");
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn services_config_reports_invalid_service_egress_path() {
+    let path = temp_path("validate-invalid-service-egress", "jsonc");
+    std::fs::write(
+        &path,
+        r#"{
+            services: {
+                api: {
+                    name: "API",
+                    image: "example/api:latest",
+                    deploy: {
+                        egress: {
+                            allow: [{ cidr: "10.0.10.1/24", ports: [5432] }]
+                        }
+                    }
+                }
+            }
+        }"#,
+    )
+    .expect("write");
+
+    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+        .await
+        .expect_err("non-canonical CIDR should fail validation");
+    assert!(
+        error
+            .to_string()
+            .contains("services.api.deploy.egress.allow[0].cidr")
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn validate_rejects_unrecognized_config() {
     let path = temp_path("validate-unknown", "jsonc");
     std::fs::write(&path, r#"{"foo":1}"#).expect("write");
@@ -437,13 +496,29 @@ fn services_config_diagnostics_list_nested_ignored_field_paths() {
                 api: {
                     name: "API",
                     image: "example/api:latest",
-                    deploy: { replicas: 1, replicaCount: 2 }
+                    deploy: {
+                        replicas: 1,
+                        replicaCount: 2,
+                        egress: {
+                            allow: [{
+                                cidr: "10.0.10.0/24",
+                                ports: [5432],
+                                protocol: "tcp"
+                            }]
+                        }
+                    }
                 }
             }
         }"#,
     )
     .expect("config should otherwise be valid");
-    assert_eq!(ignored_fields, ["services.api.deploy.replicaCount"]);
+    assert_eq!(
+        ignored_fields,
+        [
+            "services.api.deploy.egress.allow.0.protocol",
+            "services.api.deploy.replicaCount"
+        ]
+    );
 }
 
 #[test]
@@ -644,7 +719,8 @@ fn start_schema_matches_serialized_config_fields() {
 fn services_schema_matches_serialized_config_fields() {
     use crate::deployment::types::{
         Command, DepotConfig, EnvConfig, IngressConfig, SecretKeyMeta, SecretsConfig,
-        ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, VolumeMount, VolumeOwner,
+        ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceEgressConfig,
+        ServiceEgressRule, VolumeMount, VolumeOwner,
     };
 
     let env = EnvConfig {
@@ -711,6 +787,12 @@ fn services_schema_matches_serialized_config_fields() {
                     "west".to_string(),
                 )]),
             }),
+            egress: ServiceEgressConfig {
+                allow: vec![ServiceEgressRule {
+                    cidr: "10.0.10.0/24".to_string(),
+                    ports: vec![5432],
+                }],
+            },
         },
         ingress: Some(IngressConfig {
             host: Some("api.example.test".to_string()),
@@ -743,6 +825,18 @@ fn services_schema_matches_serialized_config_fields() {
     assert_object_keys(
         &model["deploy"]["nodeAffinity"],
         &definitions["deploy"]["properties"]["nodeAffinity"],
+        &[],
+        &[],
+    );
+    assert_object_keys(
+        &model["deploy"]["egress"],
+        &definitions["deploy"]["properties"]["egress"],
+        &[],
+        &[],
+    );
+    assert_object_keys(
+        &model["deploy"]["egress"]["allow"][0],
+        &definitions["deploy"]["properties"]["egress"]["properties"]["allow"]["items"],
         &[],
         &[],
     );

@@ -146,6 +146,38 @@
             }
           }
         },
+        "egress": {
+          "type": "object",
+          "description": "Per-service exceptions to the node's global egress deny list.",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "required": ["cidr"],
+                "additionalProperties": false,
+                "properties": {
+                  "cidr": {
+                    "type": "string",
+                    "description": "Canonical IPv4 destination CIDR."
+                  },
+                  "ports": {
+                    "type": "array",
+                    "description": "Optional TCP and UDP destination ports. Empty or omitted permits all ports.",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "default": []
+                  }
+                }
+              }
+            }
+          }
+        },
         "env": {
           "$ref": "#/$defs/envConfig"
         },

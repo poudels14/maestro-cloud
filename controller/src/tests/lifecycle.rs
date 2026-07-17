@@ -848,6 +848,7 @@ fn docker_service(id: &str, replicas: u32) -> ServiceConfig {
             secrets: None,
             volumes: vec![],
             node_affinity: None,
+            egress: Default::default(),
         },
         ingress: None,
     }

@@ -35,6 +35,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             secrets: None,
             volumes: vec![],
             node_affinity: None,
+            egress: Default::default(),
             healthcheck_interval: 60,
         },
         ingress: None,
@@ -61,6 +62,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             secrets: None,
             volumes: vec![],
             node_affinity: None,
+            egress: Default::default(),
             healthcheck_interval: 60,
         },
         ingress: None,
@@ -203,6 +205,24 @@ fn build_service_config_changes_when_config_changes() {
         .expect("hash should succeed");
     let changed = build_service_config(sample_patch_request("svc-1", "Service 1 Updated"))
         .expect("hash should succeed");
+
+    assert_ne!(original.version, changed.version);
+}
+
+#[test]
+fn build_service_config_changes_when_egress_changes() {
+    let original = build_service_config(sample_patch_request("svc-1", "Service 1"))
+        .expect("hash should succeed");
+    let mut request = sample_patch_request("svc-1", "Service 1");
+    request
+        .deploy
+        .egress
+        .allow
+        .push(crate::deployment::types::ServiceEgressRule {
+            cidr: "10.0.10.0/24".to_string(),
+            ports: vec![5432],
+        });
+    let changed = build_service_config(request).expect("hash should succeed");
 
     assert_ne!(original.version, changed.version);
 }

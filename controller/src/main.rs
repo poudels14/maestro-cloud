@@ -1382,10 +1382,14 @@ async fn run() -> crate::error::Result<bool> {
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
                 allow: egress_allow,
+                service_allows: Vec::new(),
             };
-            firewall::apply(&firewall_config).await.map_err(|err| {
+            let firewall_manager = firewall::FirewallManager::new(firewall_config.clone());
+            firewall_manager.apply().await.map_err(|err| {
                 Error::external(format!("failed to apply egress firewall: {err}"))
             })?;
+            let service_egress_firewall =
+                (!firewall_config.deny.is_empty()).then(|| firewall_manager.clone());
             if !firewall_config.deny.is_empty() {
                 logger.emit(
                     "info",
@@ -1395,7 +1399,7 @@ async fn run() -> crate::error::Result<bool> {
                     ),
                 );
                 background_handles.push(firewall::spawn_reconciler(
-                    firewall_config,
+                    firewall_manager,
                     logger.clone(),
                     signal_tx.subscribe(),
                 ));
@@ -1716,13 +1720,16 @@ async fn run() -> crate::error::Result<bool> {
                     )));
                 }
                 if cluster.role.runs_workloads() {
-                    let executor = cluster::executor::EngineReplicaExecutor::new(
+                    let mut executor = cluster::executor::EngineReplicaExecutor::new(
                         &deployment_config,
                         runtime.clone(),
                         store.clone(),
                         assignment_store.clone(),
                         Some(log_sender.clone()),
                     )?;
+                    if let Some(firewall) = service_egress_firewall.clone() {
+                        executor.set_egress_firewall(firewall);
+                    }
                     let reconciler = cluster::reconciler::AssignmentReconciler::new(
                         cluster.node_id.clone(),
                         assignment_store.clone(),
@@ -1822,6 +1829,9 @@ async fn run() -> crate::error::Result<bool> {
                 Some(system_info.dns_manager),
                 system_info.nameserver_ip,
             );
+            if !cluster_mode && let Some(firewall) = service_egress_firewall {
+                controller.set_egress_firewall(firewall);
+            }
             if cluster_mode && let Some(elector) = &leader_elector {
                 controller
                     .observe_leadership(cluster::elector::LeaderElector::watch(elector.as_ref()));

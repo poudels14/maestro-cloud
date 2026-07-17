@@ -1358,6 +1358,7 @@ impl Server {
                         secrets: None,
                         volumes: vec![],
                         node_affinity: None,
+                        egress: Default::default(),
                     },
                     ingress: None,
                 },
@@ -3998,6 +3999,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
             "exposePorts": &deploy.expose_ports,
             "command": &deploy.command,
             "healthcheckPath": &deploy.healthcheck_path,
+            "egress": &deploy.egress,
             "env": &deploy.env,
             "secretsHash": &secrets_hash,
             "secretsSource": &secrets_source,
@@ -4167,6 +4169,20 @@ async fn compute_rollout_diff(
                 .command
                 .as_ref()
                 .map(|c| c.command.clone()),
+        });
+    }
+
+    if old.deploy.egress != new_config.deploy.egress {
+        changes.push(RolloutChange {
+            field: "egress.allow".into(),
+            from: Some(
+                serde_json::to_string(&old.deploy.egress.allow)
+                    .map_err(|error| error.to_string())?,
+            ),
+            to: Some(
+                serde_json::to_string(&new_config.deploy.egress.allow)
+                    .map_err(|error| error.to_string())?,
+            ),
         });
     }
 

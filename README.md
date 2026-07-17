@@ -209,6 +209,36 @@ To use Depot for a service build, set `depot.token` in `maestro.jsonc` and
 `build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is
 missing, Maestro falls back to the default local builder automatically.
 
+## Per-service egress exceptions
+
+Use `deploy.egress.allow` to exempt only one service from a matching global
+`egress.deny` rule. Each rule requires a canonical IPv4 CIDR and can optionally
+limit the destination ports:
+
+```jsonc
+{
+  "services": {
+    "api": {
+      "name": "API",
+      "image": "example/api:latest",
+      "deploy": {
+        "egress": {
+          "allow": [
+            { "cidr": "10.0.10.0/24", "ports": [5432] }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Configured ports apply to both TCP and UDP. When `ports` is empty or omitted,
+the service can use any port in that destination CIDR. The exception follows all
+replicas of the service across restarts, rolling deployments, and cluster nodes.
+It has no effect unless the destination would otherwise be covered by the node's
+global egress deny list.
+
 ## External Secrets
 
 Maestro can load environment variables and secrets from external providers.

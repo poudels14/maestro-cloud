@@ -44,6 +44,7 @@ pub struct EngineReplicaExecutor {
     engine: Arc<Engine>,
     logger: Logger,
     log_sender: Option<flume::Sender<LogEntry>>,
+    egress_firewall: Option<crate::firewall::FirewallManager>,
     running: BTreeMap<String, RunningReplica>,
 }
 
@@ -96,12 +97,63 @@ impl EngineReplicaExecutor {
             engine: Arc::new(Engine::new(provider, supervisor, config.data_dir.clone())),
             logger: Logger::new(log_sender.clone()),
             log_sender,
+            egress_firewall: None,
             running: BTreeMap::new(),
         })
     }
 
+    pub fn set_egress_firewall(&mut self, firewall: crate::firewall::FirewallManager) {
+        self.egress_firewall = Some(firewall);
+    }
+
     pub fn actual(&self) -> &BTreeMap<String, RunningReplica> {
         &self.running
+    }
+
+    pub async fn reconcile_egress(&self, desired: &AssignmentManifest) -> Result<()> {
+        let Some(firewall) = &self.egress_firewall else {
+            return Ok(());
+        };
+        let mut configs = BTreeMap::new();
+        let mut allows = Vec::new();
+        for assignment in &desired.assignments {
+            let key = (
+                assignment.service_id.clone(),
+                assignment.deployment_id.clone(),
+            );
+            if !configs.contains_key(&key) {
+                let deployment_ref = Deployment {
+                    service_id: assignment.service_id.clone(),
+                    id: assignment.deployment_id.clone(),
+                    replica_index: assignment.replica_index,
+                };
+                let deployment = self
+                    .store
+                    .read_service_deployment(&deployment_ref)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "assigned deployment `{}` for service `{}` no longer exists",
+                            assignment.deployment_id,
+                            assignment.service_id
+                        )
+                    })?;
+                configs.insert(key.clone(), deployment.config.deploy.egress);
+            }
+            let egress = configs.get(&key).expect("egress config was cached");
+            if egress.allow.is_empty() {
+                continue;
+            }
+            let source = assignment
+                .container_ip
+                .ok_or_else(|| anyhow!("assignment has no reserved workload address"))?;
+            allows.extend(crate::firewall::service_allows_for_source(
+                &assignment.service_id,
+                source,
+                egress,
+            ));
+        }
+        firewall.replace_service_allows(allows).await
     }
 
     pub async fn discover(&mut self, desired: &AssignmentManifest) -> Result<()> {

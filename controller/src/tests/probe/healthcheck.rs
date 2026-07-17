@@ -172,6 +172,7 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 secrets: None,
                 volumes: vec![],
                 node_affinity: None,
+                egress: Default::default(),
                 healthcheck_interval: 60,
             },
             ingress: ingress_port.map(|port| crate::deployment::types::IngressConfig {
