@@ -476,7 +476,33 @@ aws secretsmanager create-secret \
 
 ```bash
 #!/bin/bash
-echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+set -euo pipefail
+
+# amazon-init runs user data at every boot. Track the initial NixOS transition so
+# that critical AMI differences can be applied by rebooting without a reboot loop.
+bootstrap_state=/var/lib/maestro-bootstrap
+pending_system="$bootstrap_state/pending-system"
+complete="$bootstrap_state/complete"
+mkdir -p "$bootstrap_state"
+
+if [ -s "$pending_system" ]; then
+  expected=$(cat "$pending_system")
+  current=$(readlink -f /run/current-system)
+
+  if [ "$current" = "$expected" ]; then
+    mv "$pending_system" "$complete"
+    exit 0
+  fi
+
+  echo "Maestro target generation did not boot: $expected" >&2
+  exit 1
+fi
+
+[ -e "$complete" ] && exit 0
+
+# Enable flakes for this bootstrap without writing through NixOS's immutable
+# /etc/nix/nix.conf symlink. The setting is declared persistently below.
+export NIX_CONFIG='experimental-features = nix-command flakes'
 
 mkdir -p /etc/maestro
 cat > /etc/maestro/flake.nix << 'EOF'
@@ -508,10 +534,18 @@ cat > /etc/maestro/flake.nix << 'EOF'
 }
 EOF
 
-nixos-rebuild switch --flake /etc/maestro#default
+nixos-rebuild boot --flake /etc/maestro#default
+readlink -f /nix/var/nix/profiles/system > "$pending_system"
+systemctl reboot
 ```
 
 Replace `<your-secret-id>` with the secret name from step 1.
+
+The initial configuration is installed as the next boot generation instead of
+being switched into the running AMI. This supports AMIs whose critical system
+services differ from the pinned Maestro configuration. After the target generation
+boots successfully, the persistent marker prevents `amazon-init` from rebooting the
+instance again.
 
 Forward local port 3001 to the instance with SSH or Session Manager, configure a
 context for it, then trigger updates remotely:
