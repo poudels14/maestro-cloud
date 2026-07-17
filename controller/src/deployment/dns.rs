@@ -19,6 +19,21 @@ pub fn load_host_resolvers() -> Result<Vec<Ipv4Addr>> {
     load_host_resolvers_from_paths(&paths)
 }
 
+pub fn validate_host_resolvers(
+    resolvers: &[Ipv4Addr],
+    container_subnet: crate::cluster::network::Ipv4Cidr,
+) -> Result<()> {
+    if let Some(resolver) = resolvers
+        .iter()
+        .find(|resolver| container_subnet.contains(**resolver))
+    {
+        bail!(
+            "host DNS resolver `{resolver}` overlaps container subnet `{container_subnet}`; choose a non-overlapping subnet"
+        );
+    }
+    Ok(())
+}
+
 fn load_host_resolvers_from_paths(paths: &[&Path]) -> Result<Vec<Ipv4Addr>> {
     let mut read_errors = Vec::new();
     for path in paths {
@@ -288,6 +303,18 @@ mod tests {
             .to_string();
         assert!(error.contains("no usable non-loopback IPv4 nameserver"));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn host_resolver_validation_rejects_container_subnet_overlap() {
+        let subnet = crate::cluster::network::Ipv4Cidr::parse("10.3.0.0/24").unwrap();
+        let error = validate_host_resolvers(&["10.3.0.2".parse().unwrap()], subnet)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("host DNS resolver `10.3.0.2` overlaps container subnet"));
+        assert!(error.contains("choose a non-overlapping subnet"));
+        validate_host_resolvers(&["10.0.0.2".parse().unwrap()], subnet).unwrap();
     }
 
     #[test]
