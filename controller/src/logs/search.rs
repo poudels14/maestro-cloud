@@ -1,9 +1,3 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SqlDialect {
-    Sqlite,
-    DuckDb,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum LogSearchValue {
     Text(String),
@@ -90,9 +84,9 @@ impl std::str::FromStr for LogSearchQuery {
 }
 
 impl LogSearchQuery {
-    pub(crate) fn compile(&self, dialect: SqlDialect) -> CompiledLogSearch {
+    pub(crate) fn compile(&self) -> CompiledLogSearch {
         let mut values = Vec::new();
-        let sql = compile_expression(&self.expression, dialect, &mut values);
+        let sql = compile_expression(&self.expression, &mut values);
         CompiledLogSearch { sql, values }
     }
 }
@@ -364,34 +358,26 @@ fn token_label(token: &Token) -> String {
     }
 }
 
-fn compile_expression(
-    expression: &Expression,
-    dialect: SqlDialect,
-    values: &mut Vec<LogSearchValue>,
-) -> String {
+fn compile_expression(expression: &Expression, values: &mut Vec<LogSearchValue>) -> String {
     match expression {
         Expression::And(left, right) => format!(
             "({} AND {})",
-            compile_expression(left, dialect, values),
-            compile_expression(right, dialect, values)
+            compile_expression(left, values),
+            compile_expression(right, values)
         ),
         Expression::Or(left, right) => format!(
             "({} OR {})",
-            compile_expression(left, dialect, values),
-            compile_expression(right, dialect, values)
+            compile_expression(left, values),
+            compile_expression(right, values)
         ),
         Expression::Not(inner) => {
-            format!("(NOT {})", compile_expression(inner, dialect, values))
+            format!("(NOT {})", compile_expression(inner, values))
         }
-        Expression::Predicate(predicate) => compile_predicate(predicate, dialect, values),
+        Expression::Predicate(predicate) => compile_predicate(predicate, values),
     }
 }
 
-fn compile_predicate(
-    predicate: &Predicate,
-    dialect: SqlDialect,
-    values: &mut Vec<LogSearchValue>,
-) -> String {
+fn compile_predicate(predicate: &Predicate, values: &mut Vec<LogSearchValue>) -> String {
     match predicate {
         Predicate::Text(value) => {
             let value = if contains_wildcard(value) {
@@ -407,19 +393,15 @@ fn compile_predicate(
                 "message" => "text".to_string(),
                 "source" => "source".to_string(),
                 "service" => "source".to_string(),
-                "@http.status_code" | "@http.response.status_code" => {
-                    canonical_status_expression(dialect)
-                }
-                attribute if attribute.starts_with('@') => {
-                    attribute_expression(&attribute[1..], dialect)
-                }
+                "@http.status_code" | "@http.response.status_code" => canonical_status_expression(),
+                attribute if attribute.starts_with('@') => attribute_expression(&attribute[1..]),
                 _ => unreachable!("field names are validated by the parser"),
             };
             if name == "service" {
                 return compile_service_match(value, values);
             }
             let case_insensitive = matches!(name.as_str(), "level" | "status" | "message");
-            compile_field_value(&expression, value, case_insensitive, dialect, values)
+            compile_field_value(&expression, value, case_insensitive, values)
         }
     }
 }
@@ -440,7 +422,6 @@ fn compile_field_value(
     expression: &str,
     value: &FieldValue,
     case_insensitive: bool,
-    dialect: SqlDialect,
     values: &mut Vec<LogSearchValue>,
 ) -> String {
     match value {
@@ -448,10 +429,7 @@ fn compile_field_value(
         FieldValue::Range { start, end } => {
             values.push(LogSearchValue::Number(*start));
             values.push(LogSearchValue::Number(*end));
-            format!(
-                "({} BETWEEN ? AND ?)",
-                numeric_expression(expression, dialect)
-            )
+            format!("({} BETWEEN ? AND ?)", numeric_expression(expression))
         }
         FieldValue::Compare { operator, value } => {
             values.push(LogSearchValue::Number(*value));
@@ -461,7 +439,7 @@ fn compile_field_value(
                 Comparison::Less => "<",
                 Comparison::LessOrEqual => "<=",
             };
-            format!("({} {operator} ?)", numeric_expression(expression, dialect))
+            format!("({} {operator} ?)", numeric_expression(expression))
         }
     }
 }
@@ -524,11 +502,8 @@ pub(crate) fn sql_like_prefix(value: &str) -> String {
     pattern
 }
 
-fn numeric_expression(expression: &str, dialect: SqlDialect) -> String {
-    match dialect {
-        SqlDialect::Sqlite => format!("CAST({expression} AS REAL)"),
-        SqlDialect::DuckDb => format!("TRY_CAST({expression} AS DOUBLE)"),
-    }
+fn numeric_expression(expression: &str) -> String {
+    format!("TRY_CAST({expression} AS DOUBLE)")
 }
 
 fn finite_number(value: &str) -> Result<f64, ()> {
@@ -536,31 +511,20 @@ fn finite_number(value: &str) -> Result<f64, ()> {
     value.is_finite().then_some(value).ok_or(())
 }
 
-fn attribute_expression(attribute: &str, dialect: SqlDialect) -> String {
+fn attribute_expression(attribute: &str) -> String {
     let path = format!("$.\"{attribute}\"");
-    match dialect {
-        SqlDialect::Sqlite => format!(
-            "(SELECT json_extract(attribute.value, '$[1]') \
-             FROM json_each(attributes_json) attribute \
-             WHERE json_extract(attribute.value, '$[0]') = '{attribute}' LIMIT 1)"
-        ),
-        SqlDialect::DuckDb => format!("json_extract_string(attributes_json, '{path}')"),
-    }
+    format!("json_extract_string(attributes_json, '{path}')")
 }
 
-pub(crate) fn http_status_class_expression(dialect: SqlDialect) -> String {
-    let status = canonical_status_expression(dialect);
-    let cast = match dialect {
-        SqlDialect::Sqlite => "CAST",
-        SqlDialect::DuckDb => "TRY_CAST",
-    };
+pub(crate) fn http_status_class_expression() -> String {
+    let status = canonical_status_expression();
     format!(
-        "CASE WHEN {cast}({status} AS INTEGER) BETWEEN 100 AND 599 \
+        "CASE WHEN TRY_CAST({status} AS INTEGER) BETWEEN 100 AND 599 \
          THEN substr({status}, 1, 1) || 'xx' END"
     )
 }
 
-fn canonical_status_expression(dialect: SqlDialect) -> String {
+fn canonical_status_expression() -> String {
     const KEYS: &[&str] = &[
         "http.status_code",
         "http.response.status_code",
@@ -578,7 +542,7 @@ fn canonical_status_expression(dialect: SqlDialect) -> String {
     format!(
         "COALESCE({})",
         KEYS.iter()
-            .map(|key| attribute_expression(key, dialect))
+            .map(|key| attribute_expression(key))
             .collect::<Vec<_>>()
             .join(", ")
     )
@@ -596,7 +560,7 @@ mod tests {
             r#"level:error (@http.status_code:[500 TO 599] OR @http.status_code:429) -message:"health check""#,
         )
         .expect("query");
-        let compiled = query.compile(SqlDialect::DuckDb);
+        let compiled = query.compile();
         assert!(compiled.sql.contains("level"));
         assert!(compiled.sql.contains("BETWEEN ? AND ?"));
         assert!(compiled.sql.contains("NOT"));
@@ -608,12 +572,10 @@ mod tests {
         let query = "@http.status_code:503"
             .parse::<LogSearchQuery>()
             .expect("query");
-        for dialect in [SqlDialect::Sqlite, SqlDialect::DuckDb] {
-            let compiled = query.compile(dialect);
-            assert!(compiled.sql.contains("http.status_code"));
-            assert!(compiled.sql.contains("DownstreamStatus"));
-            assert_eq!(compiled.values, vec![LogSearchValue::Text("503".into())]);
-        }
+        let compiled = query.compile();
+        assert!(compiled.sql.contains("http.status_code"));
+        assert!(compiled.sql.contains("DownstreamStatus"));
+        assert_eq!(compiled.values, vec![LogSearchValue::Text("503".into())]);
     }
 
     #[test]
@@ -621,7 +583,7 @@ mod tests {
         assert_eq!(sql_like_prefix("api_v2/%"), r"api\_v2/\%%");
         let query = "service:api_v2".parse::<LogSearchQuery>().expect("query");
         assert_eq!(
-            query.compile(SqlDialect::Sqlite).values,
+            query.compile().values,
             vec![
                 LogSearchValue::Text("api_v2".into()),
                 LogSearchValue::Text(r"api\_v2/%".into()),

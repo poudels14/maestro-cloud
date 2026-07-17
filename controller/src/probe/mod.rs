@@ -72,111 +72,79 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let log_backup = masked_config
         .as_ref()
         .and_then(|config| config.log_backup.clone());
-    let use_duckdb = env_bool("MAESTRO_DUCKDB", true);
     let controller_stats: crate::cluster_stats::SharedControllerStats =
         Arc::new(std::sync::RwLock::new(None));
     let backup_stats: crate::cluster_stats::SharedBackupStats = Arc::new(std::sync::RwLock::new(
         crate::cluster_stats::BackupStatsSnapshot {
-            configured: log_backup.is_some() && use_duckdb,
+            configured: log_backup.is_some(),
             ..crate::cluster_stats::BackupStatsSnapshot::default()
         },
     ));
 
-    let storage_mode = if use_duckdb { "duckdb" } else { "sqlite" }.to_string();
     let data_root = std::env::var_os("MAESTRO_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/data"));
-    let log_store = if use_duckdb {
-        let duck = Arc::new(
-            crate::logs::DuckLogStore::open(&data_root)
-                .expect("failed to open probe DuckDB stores"),
-        );
-        match duck.load_backup_stats().await {
-            Ok(Some(mut saved)) => {
-                saved.configured = log_backup.is_some();
-                *backup_stats.write().unwrap_or_else(|err| err.into_inner()) = saved;
-            }
-            Ok(None) => {}
-            Err(err) => eprintln!("failed to restore backup stats: {err:#}"),
+    let log_store = Arc::new(
+        crate::logs::DuckLogStore::open(&data_root).expect("failed to open probe DuckDB stores"),
+    );
+    match log_store.load_backup_stats().await {
+        Ok(Some(mut saved)) => {
+            saved.configured = log_backup.is_some();
+            *backup_stats.write().unwrap_or_else(|err| err.into_inner()) = saved;
         }
-        tokio::spawn(migrate_legacy_logs(
-            duck.clone(),
-            store.clone(),
-            data_root.clone(),
-        ));
-        let rollover_store = duck.clone();
-        tokio::spawn(async move {
-            let period = Duration::from_secs(60 * 60);
-            let mut interval =
-                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                if let Err(err) = rollover_store.rollover().await {
-                    eprintln!("DuckDB rollover failed: {err}");
-                }
-            }
-        });
-        let cleanup_store = duck.clone();
-        let retention_days = log_backup
-            .as_ref()
-            .and_then(|config| config.retention_days)
-            .map(i64::from)
-            .filter(|days| *days > 0);
-        tokio::spawn(async move {
-            let period = Duration::from_secs(24 * 60 * 60);
-            let mut interval =
-                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                if let Err(err) = cleanup_store
-                    .cleanup_old_metrics(7 * 24 * 60 * 60 * 1000)
-                    .await
-                {
-                    eprintln!("DuckDB metrics cleanup failed: {err}");
-                }
-                if let Some(days) = retention_days {
-                    let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::days(days);
-                    if let Err(err) = cleanup_store.prune_backed_up_before(cutoff).await {
-                        eprintln!("Parquet retention cleanup failed: {err}");
-                    }
-                }
-            }
-        });
-        if let Some(settings) = log_backup.as_ref() {
-            let config = backup::BackupConfig::from_config(
-                &data_root,
-                &cluster_name,
-                local_node_id.as_deref(),
-                settings,
-            )?;
-            tokio::spawn(backup::run(duck.clone(), config, backup_stats.clone()));
+        Ok(None) => {}
+        Err(err) => eprintln!("failed to restore backup stats: {err:#}"),
+    }
+    let rollover_store = log_store.clone();
+    tokio::spawn(async move {
+        if let Err(err) = rollover_store.rollover().await {
+            eprintln!("initial DuckDB rollover failed: {err}");
         }
-        crate::logs::TelemetryStore::duck(duck)
-    } else {
-        let sqlite = Arc::new(
-            crate::logs::LogStore::open(&data_root.join("logs.db"))
-                .expect("failed to open probe SQLite log store"),
-        );
-        let cleanup_store = sqlite.clone();
-        tokio::spawn(async move {
-            let period = Duration::from_secs(24 * 60 * 60);
-            let mut interval =
-                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                if let Err(err) = cleanup_store
-                    .cleanup_old_metrics(7 * 24 * 60 * 60 * 1000)
-                    .await
-                {
-                    eprintln!("SQLite metrics cleanup failed: {err}");
+        let period = Duration::from_secs(60 * 60);
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(err) = rollover_store.rollover().await {
+                eprintln!("DuckDB rollover failed: {err}");
+            }
+        }
+    });
+    let cleanup_store = log_store.clone();
+    let retention_days = log_backup
+        .as_ref()
+        .and_then(|config| config.retention_days)
+        .map(i64::from)
+        .filter(|days| *days > 0);
+    tokio::spawn(async move {
+        let period = Duration::from_secs(24 * 60 * 60);
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(err) = cleanup_store
+                .cleanup_old_metrics(7 * 24 * 60 * 60 * 1000)
+                .await
+            {
+                eprintln!("DuckDB metrics cleanup failed: {err}");
+            }
+            if let Some(days) = retention_days {
+                let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::days(days);
+                if let Err(err) = cleanup_store.prune_backed_up_before(cutoff).await {
+                    eprintln!("Parquet retention cleanup failed: {err}");
                 }
             }
-        });
-        crate::logs::TelemetryStore::sqlite(sqlite)
-    };
+        }
+    });
+    if let Some(settings) = log_backup.as_ref() {
+        let config = backup::BackupConfig::from_config(
+            &data_root,
+            &cluster_name,
+            local_node_id.as_deref(),
+            settings,
+        )?;
+        tokio::spawn(backup::run(log_store.clone(), config, backup_stats.clone()));
+    }
     let traffic_log_store = log_store.clone();
     tokio::spawn(async move {
         traffic::run(traffic_log_store).await;
@@ -222,7 +190,6 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             upload_dir,
             controller_stats,
             backup_stats,
-            storage_mode,
             local_node_id: local_node_id.clone(),
         },
     );
@@ -311,12 +278,6 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     Ok(())
 }
 
-fn env_bool(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .map(|value| parse_bool(&value, default))
-        .unwrap_or(default)
-}
-
 fn read_secret_env_or_file(value_name: &str, file_name: &str) -> Option<String> {
     std::env::var(file_name)
         .ok()
@@ -324,80 +285,4 @@ fn read_secret_env_or_file(value_name: &str, file_name: &str) -> Option<String> 
         .or_else(|| std::env::var(value_name).ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-fn parse_bool(value: &str, default: bool) -> bool {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => true,
-        "0" | "false" | "no" | "off" => false,
-        _ => default,
-    }
-}
-
-async fn migrate_legacy_logs(
-    duck: Arc<crate::logs::DuckLogStore>,
-    store: Arc<dyn crate::deployment::store::ClusterStore>,
-    data_root: std::path::PathBuf,
-) {
-    let source = data_root.join("logs.db");
-    let archive_hash = sqlite_archive_hash(&source);
-    let already_migrated = matches!(
-        store.has_log_migration_marker(&archive_hash).await,
-        Ok(true)
-    );
-    if !already_migrated {
-        match duck.migrate_sqlite(&source).await {
-            Ok(count) => {
-                if count > 0 {
-                    eprintln!("migrated {count} telemetry rows from {}", source.display());
-                }
-                if source.exists()
-                    && let Err(err) = store.put_log_migration_marker(&archive_hash).await
-                {
-                    eprintln!("failed to record migration completion: {err}");
-                }
-            }
-            Err(err) => {
-                eprintln!("SQLite migration failed for {}: {err}", source.display());
-                return;
-            }
-        }
-    }
-
-    if let Err(err) = duck.rollover().await {
-        eprintln!("initial DuckDB rollover failed: {err}");
-    }
-}
-
-fn sqlite_archive_hash(path: &std::path::Path) -> String {
-    use sha2::{Digest, Sha256};
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut digest = Sha256::new();
-    digest.update(canonical.to_string_lossy().as_bytes());
-    if let Ok(metadata) = path.metadata() {
-        digest.update(metadata.len().to_le_bytes());
-        if let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
-        {
-            digest.update(duration.as_nanos().to_le_bytes());
-        }
-    }
-    format!("{:x}", digest.finalize())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_bool;
-
-    #[test]
-    fn boolean_environment_values_accept_common_spellings() {
-        for value in ["1", "true", "TRUE", "yes", "on"] {
-            assert!(parse_bool(value, false), "{value}");
-        }
-        for value in ["0", "false", "FALSE", "no", "off"] {
-            assert!(!parse_bool(value, true), "{value}");
-        }
-        assert!(parse_bool("invalid", true));
-        assert!(!parse_bool("invalid", false));
-    }
 }

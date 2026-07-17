@@ -151,7 +151,6 @@ pub struct ClusterStatsResponse {
 pub struct ProbeStatsSnapshot {
     pub version: String,
     pub uptime_ms: u64,
-    pub storage_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

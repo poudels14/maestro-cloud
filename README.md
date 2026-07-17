@@ -414,20 +414,13 @@ maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster export -
 maestro daemon dead-letters --data-dir ./data --cluster-name my-cluster purge --all
 ```
 
-### Probe storage and migration
+### Probe storage
 
 The probe stores live logs in DuckDB under `/data/duckdb` and seals completed UTC
 days into hive-partitioned Parquet files under `/data/parts`. `maestro daemon logs`
-discovers the locally running probe API and reads live data rather than opening the
-retired controller SQLite database.
-
-On first DuckDB startup, the probe automatically imports its retired `/data/logs.db`
-archive. Active controller spool databases are never migration inputs; they continue
-shipping through `/api/logs`.
-
-Set `MAESTRO_DUCKDB=false` on the controller only as a temporary rollback switch
-during the migration window. It changes the probe storage backend; it does not
-change controller spool delivery.
+discovers the locally running probe API and reads live data. The controller SQLite
+database remains a delivery spool only and continues shipping through `/api/logs`;
+it is not queried as the telemetry store.
 
 ### S3 backups
 

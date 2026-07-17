@@ -214,7 +214,6 @@ export interface ClusterStats {
   probe: {
     version: string;
     uptimeMs: number;
-    storageMode: string;
   };
   controller: ControllerStats | null;
   controllerHeartbeatAgeMs: number | null;

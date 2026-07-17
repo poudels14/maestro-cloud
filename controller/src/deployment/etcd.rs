@@ -12,8 +12,8 @@ use crate::deployment::ingress_blocklist;
 use crate::deployment::keys::{
     CLUSTER_FREEZE_KEY, CLUSTER_UPGRADE_KEY, SERVICES_PREFIX, SERVICES_ROOT,
     deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
-    deployment_deploy_secrets_key, deployment_prefix, log_migration_key, replica_state_key,
-    replica_states_prefix, service_deployment_history_key, service_deployment_history_prefix,
+    deployment_deploy_secrets_key, deployment_prefix, replica_state_key, replica_states_prefix,
+    service_deployment_history_key, service_deployment_history_prefix,
     service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
     service_info_key, service_prefix, system_restart_request_key, system_upgrade_request_key,
 };
@@ -2792,22 +2792,6 @@ impl ClusterStore for EtcdStateStore {
             .delete(system_upgrade_request_key(node_id), None)
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
-        Ok(())
-    }
-
-    async fn has_log_migration_marker(&self, archive_hash: &str) -> anyhow::Result<bool> {
-        let key = log_migration_key(archive_hash);
-        let response = self.get(key.into_bytes(), None).await?;
-        Ok(!response.kvs().is_empty())
-    }
-
-    async fn put_log_migration_marker(&self, archive_hash: &str) -> anyhow::Result<()> {
-        let key = log_migration_key(archive_hash);
-        let mut client = self.client.lock().await;
-        client
-            .put(key, current_time_millis()?.to_string(), None)
-            .await
-            .map_err(|err| anyhow!("failed to write log migration marker: {err}"))?;
         Ok(())
     }
 

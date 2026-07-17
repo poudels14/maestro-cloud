@@ -57,7 +57,7 @@ function ClusterStatsSection() {
                 <HealthRow
                   label="Probe"
                   level="healthy"
-                  value={`v${data().probe.version} · ${data().probe.storageMode}`}
+                  value={`v${data().probe.version}`}
                   detail={`uptime ${formatDuration(data().probe.uptimeMs)}`}
                 />
                 <SinkRow

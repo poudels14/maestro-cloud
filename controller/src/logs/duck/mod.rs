@@ -7,17 +7,13 @@ use duckdb::{params, params_from_iter, types::Value};
 use super::store::{LogEntry, LogOrigin};
 use super::{LogHistogramBucket, LogHistogramQuery, LogReadQuery, LogReadScope};
 
-mod compat;
 mod db;
 mod ingestion;
-mod migration;
 mod query;
 mod rollover;
 
-pub use compat::TelemetryStore;
 use db::Db;
 use ingestion::{append_log_batch, parse_service_source};
-use migration::migrate_sqlite_inner;
 use query::{
     cold_tier_has_seq_after, parquet_glob_if_present, query_blocked_ingress_traffic,
     query_cluster_ingress_traffic, query_ingress_traffic, query_log_histogram, query_logs,
@@ -58,12 +54,7 @@ CREATE TABLE IF NOT EXISTS partition_state (
     updated_at_ms BIGINT NOT NULL,
     PRIMARY KEY (tier, partition_key, seq_lo)
 );
-CREATE TABLE IF NOT EXISTS migration_progress (
-    source_path VARCHAR NOT NULL,
-    table_name VARCHAR NOT NULL,
-    last_rowid BIGINT NOT NULL,
-    PRIMARY KEY (source_path, table_name)
-);
+DROP TABLE IF EXISTS migration_progress;
 "#;
 
 const SYSTEM_SCHEMA: &str = r#"
@@ -108,12 +99,7 @@ CREATE TABLE IF NOT EXISTS partition_state (
     updated_at_ms BIGINT NOT NULL,
     PRIMARY KEY (tier, partition_key, seq_lo)
 );
-CREATE TABLE IF NOT EXISTS migration_progress (
-    source_path VARCHAR NOT NULL,
-    table_name VARCHAR NOT NULL,
-    last_rowid BIGINT NOT NULL,
-    PRIMARY KEY (source_path, table_name)
-);
+DROP TABLE IF EXISTS migration_progress;
 "#;
 
 const METRICS_SCHEMA: &str = r#"
@@ -155,12 +141,7 @@ CREATE TABLE IF NOT EXISTS probe_state (
     value_json VARCHAR NOT NULL,
     updated_at_ms BIGINT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS migration_progress (
-    source_path VARCHAR NOT NULL,
-    table_name VARCHAR NOT NULL,
-    last_rowid BIGINT NOT NULL,
-    PRIMARY KEY (source_path, table_name)
-);
+DROP TABLE IF EXISTS migration_progress;
 "#;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -296,22 +277,6 @@ impl DuckLogStore {
         })
         .await??;
         Ok(())
-    }
-
-    /// Resumably import a legacy SQLite archive without modifying it. Progress
-    /// is committed in the same DuckDB transaction as each imported batch.
-    pub async fn migrate_sqlite(&self, source: &Path) -> Result<usize> {
-        if !source.exists() {
-            return Ok(0);
-        }
-        let service = self.service.clone();
-        let system = self.system.clone();
-        let metrics = self.metrics.clone();
-        let source = source.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            migrate_sqlite_inner(&source, &service, &system, &metrics)
-        })
-        .await?
     }
 
     pub async fn read_logs(&self, query: LogReadQuery) -> Result<Vec<LogEntry>> {
