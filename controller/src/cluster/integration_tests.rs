@@ -658,10 +658,14 @@ impl FormingEtcdCluster {
         let node = self.nodes[index];
         super::ClusterRuntime {
             cluster_id: self.cluster_id.clone(),
-            node_id: format!("node-{}", index + 1),
+            node_id: format!("node{:08}", index + 1),
             instance_id: format!("instance-{}", index + 1),
             host_ip: node.host_ip,
-            role: NodeRole::Voter,
+            role: if index == 0 {
+                NodeRole::Master
+            } else {
+                NodeRole::Voter
+            },
             initial_voters: vec![self.nodes[0]],
             voter_endpoints: self.nodes.clone(),
             subnet: format!("172.30.{}.0/24", index + 1),
@@ -687,6 +691,43 @@ impl FormingEtcdCluster {
     fn container_name(&self, index: usize) -> String {
         format!("maestro-forming-etcd-{}-{}", self.run_id, index + 1)
     }
+}
+
+/// Starts the configured master as a one-member cluster with both peers offline, enables RBAC,
+/// and repeats RBAC initialization through an authenticated client to simulate a daemon restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn master_bootstrap_and_rbac_restart_do_not_require_reachable_peers() -> Result<()> {
+    let cluster = FormingEtcdCluster::start_seed()?;
+    let runtime = cluster.runtime(0);
+    assert_eq!(runtime.role, NodeRole::Master);
+    assert_eq!(cluster.nodes.len(), 3);
+
+    for peer in &cluster.nodes[1..] {
+        assert!(
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, peer.etcd_peer_port))
+                .await
+                .is_err(),
+            "configured peer unexpectedly accepted an etcd connection"
+        );
+    }
+
+    cluster.wait_for_seed().await?;
+    let endpoint = cluster.client_url(0);
+    let mut first = etcd_client::Client::connect([endpoint.clone()], None).await?;
+    // Production authenticates the no-password root user with its mTLS identity. This
+    // plain-HTTP fixture needs a password so it can reconnect after auth is enabled.
+    let root_password = "maestro-integration-root";
+    first.role_add("root").await?;
+    first.user_add("root", root_password, None).await?;
+    first.user_grant_role("root", "root").await?;
+    super::auth::bootstrap_initial_with_client(&runtime, &mut first).await?;
+
+    let options = etcd_client::ConnectOptions::new().with_user("root", root_password);
+    let mut restarted = etcd_client::Client::connect([endpoint], Some(options)).await?;
+    super::auth::bootstrap_initial_with_client(&runtime, &mut restarted).await?;
+    assert_ne!(restarted.status().await?.leader(), 0);
+    Ok(())
 }
 
 struct SingleHostHttpCluster {

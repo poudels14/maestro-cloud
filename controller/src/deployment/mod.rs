@@ -705,24 +705,7 @@ async fn init_etcd(
         let member_name =
             crate::cluster::bootstrap::member_name_for_start(cluster, &config.data_dir)
                 .expect("failed to resolve clustered etcd member name");
-        let initial_cluster = match bootstrap_action {
-            BootstrapAction::BootstrapSeed => format!("{member_name}={}", cluster.peer_url()),
-            BootstrapAction::JoinExisting(join_info) => join_info.initial_cluster.clone(),
-            BootstrapAction::Restart | BootstrapAction::ForceNewCluster => cluster
-                .initial_voters
-                .iter()
-                .map(|node| {
-                    let name = if *node == cluster.local_endpoint() {
-                        member_name.clone()
-                    } else {
-                        node.member_name()
-                    };
-                    format!("{name}={}", node.peer_url())
-                })
-                .collect::<Vec<_>>()
-                .join(","),
-            _ => unreachable!("invalid clustered voter bootstrap action"),
-        };
+        let initial_cluster = clustered_initial_cluster(cluster, &member_name, bootstrap_action);
         let state = if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
             "new"
         } else {
@@ -810,6 +793,31 @@ async fn init_etcd(
         Some(&readiness_address),
     )
     .await;
+}
+
+fn clustered_initial_cluster(
+    cluster: &crate::cluster::ClusterRuntime,
+    member_name: &str,
+    bootstrap_action: &BootstrapAction,
+) -> String {
+    match bootstrap_action {
+        BootstrapAction::BootstrapSeed => format!("{member_name}={}", cluster.peer_url()),
+        BootstrapAction::JoinExisting(join_info) => join_info.initial_cluster.clone(),
+        BootstrapAction::Restart | BootstrapAction::ForceNewCluster => cluster
+            .initial_voters
+            .iter()
+            .map(|node| {
+                let name = if *node == cluster.local_endpoint() {
+                    member_name.to_string()
+                } else {
+                    node.member_name()
+                };
+                format!("{name}={}", node.peer_url())
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => unreachable!("invalid clustered voter bootstrap action"),
+    }
 }
 
 async fn init_ingress(
@@ -2007,6 +2015,21 @@ mod tests {
             ),
             vec!["https://10.20.0.11:3003"]
         );
+    }
+
+    #[test]
+    fn bootstrap_seed_initial_cluster_contains_only_the_master() {
+        let master = cluster_runtime(NodeRole::Master);
+        let member_name = master.member_name();
+        let initial_cluster =
+            clustered_initial_cluster(&master, &member_name, &BootstrapAction::BootstrapSeed);
+
+        assert_eq!(
+            initial_cluster,
+            format!("{member_name}={}", master.peer_url())
+        );
+        assert!(!initial_cluster.contains("10.20.0.12"));
+        assert!(!initial_cluster.contains("10.20.0.13"));
     }
 
     #[test]
