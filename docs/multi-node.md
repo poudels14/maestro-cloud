@@ -41,9 +41,10 @@ Each node needs:
 - One stable, private IPv4 control address assigned to a non-Tailscale host
   interface. The addresses must be mutually routable without NAT. Use DHCP
   reservations if the hosts do not have static addresses.
-- One unique private `/24` workload subnet. Workload subnets must not overlap each
-  other, the control network, or any other routed network. These subnets remain
-  node-local; they do not need routes between hosts.
+- One private `/24` workload subnet. It must not overlap that node's control
+  network or another network routed on that host. Because workload traffic enters
+  through each node's unique gateway address, different nodes may reuse the same
+  workload `/24`.
 - Private TCP reachability between every admitted node and every other node's
   gateway port.
 
@@ -55,10 +56,10 @@ Allow these ports on the private network:
 
 | Port       | Source                                             | Destination    | Purpose                   |
 | ---------- | -------------------------------------------------- | -------------- | ------------------------- |
-| `2379/tcp` | admitted nodes and authoritative cluster subnets   | voters         | etcd client mTLS          |
-| `2380/tcp` | voters and authoritative cluster subnets           | voters         | etcd peer mTLS            |
+| `2379/tcp` | admitted nodes and local workload subnet           | voters         | etcd client mTLS          |
+| `2380/tcp` | voters and local workload subnet                   | voters         | etcd peer mTLS            |
 | `3001/tcp` | admitted nodes, operators, and prospective joiners | all nodes      | cluster HTTPS API         |
-| `3002/tcp` | admitted nodes and authoritative cluster subnets   | workload nodes | node ingress gateway mTLS |
+| `3002/tcp` | admitted nodes and local workload subnet           | workload nodes | node ingress gateway mTLS |
 
 With bare-IP nodes, these port values are configurable through the existing
 cluster port fields. With `IP:controller-port` nodes, the listed API port is the
@@ -99,8 +100,8 @@ arbitrary cross-node TCP/UDP service networking is outside this release.
 
 ## Shared configuration
 
-The original voters use the same ordered `cluster.nodes`, `cluster.subnets`,
-cluster name, join secret, JWT secret, and registry. The top-level
+The original voters use the same ordered `cluster.nodes`, cluster name, join
+secret, JWT secret, and registry. The top-level
 `subnet` and optional `node.role` describe the local node and may differ. With
 bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
 `cluster.api-port` selects the local entry and differs per node.
@@ -111,7 +112,6 @@ bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
     "name": "prod",
     "nodes": ["10.20.0.11", "10.20.0.12", "10.20.0.13"],
     "control-allow-cidrs": ["10.20.0.0/24"],
-    "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
     "gateway-port": 3002,
     "shared-registry": "ghcr.io/acme",
     "join-secret": "<high-entropy-secret-of-at-least-32-characters>",
@@ -125,10 +125,11 @@ bare-IP nodes the cluster port fields are also shared. With endpoint nodes,
 }
 ```
 
-Use `172.22.2.0/24` and `172.22.3.0/24` as the top-level subnet on the second and
-third voter. Values in angle brackets are placeholders. Keep secrets out of source
-control and deliver the complete configuration through a secret-backed config
-source such as AWS Secrets Manager.
+Each node sets only its own top-level subnet. The `/24` may be reused on multiple
+nodes because it stays behind that node's gateway, although using distinct ranges
+can make host-level troubleshooting easier. Values in angle brackets are
+placeholders. Keep secrets out of source control and deliver the complete
+configuration through a secret-backed config source such as AWS Secrets Manager.
 
 The shared fields can instead live in one AWS secret. Each node secret inherits
 that config and provides only its local values:
@@ -305,11 +306,11 @@ new workers authenticate and join automatically when their daemons start.
 
 ## Add a node
 
-Give the joiner a stable private host IP, a new workload `/24`, and the shared join
+Give the joiner a stable private host IP, a local workload `/24`, and the shared join
 secret. Its `cluster.nodes` remains the immutable original bootstrap list. Its
-`cluster.subnets` must include its local top-level subnet so local validation can
-complete; the join response installs the authenticated CA, node certificates,
-cluster identity, and current authoritative voter/subnet cache.
+top-level `subnet` is registered under its node identity during admission; the
+join response installs the authenticated CA, node certificates, cluster identity,
+and current authoritative voter cache.
 
 ### Worker
 

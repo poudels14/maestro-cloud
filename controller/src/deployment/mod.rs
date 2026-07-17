@@ -1959,7 +1959,7 @@ mod tests {
                 "10.20.0.12:3101".parse().unwrap(),
                 "10.20.0.13:3201".parse().unwrap(),
             ],
-            subnets: vec!["172.22.1.0/24".to_string()],
+            subnet: "172.22.1.0/24".to_string(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,
             gateway_port: 3002,

@@ -102,7 +102,6 @@ fn legacy_single_node_config_stays_on_the_legacy_path() {
     .expect("parse legacy start config");
 
     assert!(config.cluster.nodes.is_empty());
-    assert!(config.cluster.subnets.is_empty());
     assert_eq!(config.node.role, crate::cluster::NodeRole::Hybrid);
     assert_eq!(config.subnet.as_deref(), Some("172.22.0.0/16"));
     crate::cluster::network::validate_cluster_config(

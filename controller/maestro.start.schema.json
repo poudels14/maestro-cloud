@@ -84,13 +84,6 @@
         "bindIp": {
           "$ref": "#/properties/cluster/properties/bind-ip"
         },
-        "subnets": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
         "api-port": {
           "type": "integer",
           "minimum": 1,

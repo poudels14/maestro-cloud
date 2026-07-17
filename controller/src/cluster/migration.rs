@@ -16,7 +16,7 @@ use crate::config::ClusterConfig;
 const STATE_FILE: &str = "cluster-auto-migration.json";
 const NETWORK_MARKER_FILE: &str = "cluster-network-migration-required";
 const IMAGE_MARKER_FILE: &str = "cluster-image-migration-required";
-const BACKUP_FORMAT_VERSION: u32 = 1;
+const BACKUP_FORMAT_VERSION: u32 = 2;
 const BACKUP_SOURCE_PATH: &str = "system/etcd/data";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +32,6 @@ struct EtcdBackupManifest {
     legacy_member_name: String,
     host_ip: Ipv4Addr,
     initial_voter_host_ips: Vec<Ipv4Addr>,
-    subnets: Vec<String>,
     api_port: u16,
     etcd_client_port: u16,
     etcd_peer_port: u16,
@@ -45,7 +44,6 @@ struct AutomaticMigration {
     legacy_member_name: String,
     host_ip: Ipv4Addr,
     initial_voter_host_ips: Vec<Ipv4Addr>,
-    subnets: Vec<String>,
     api_port: u16,
     etcd_client_port: u16,
     etcd_peer_port: u16,
@@ -283,7 +281,6 @@ fn prepare(
         legacy_member_name,
         host_ip,
         initial_voter_host_ips: configured_host_ips(config),
-        subnets: config.subnets.clone(),
         api_port: config.api_port,
         etcd_client_port: config.etcd_client_port,
         etcd_peer_port: config.etcd_peer_port,
@@ -311,7 +308,6 @@ fn install(
             cluster_id: migration.cluster_id.clone(),
             voter_host_ips: vec![migration.host_ip],
             voter_endpoints: Vec::new(),
-            subnets: migration.subnets.clone(),
             initial_voter_host_ips: migration.initial_voter_host_ips.clone(),
             initial_voter_endpoints: Vec::new(),
             api_port: migration.api_port,
@@ -367,7 +363,6 @@ fn validate_state(
     if !role.is_voter()
         || migration.host_ip != host_ip
         || migration.initial_voter_host_ips != configured_host_ips(config)
-        || migration.subnets != config.subnets
         || migration.api_port != config.api_port
         || migration.etcd_client_port != config.etcd_client_port
         || migration.etcd_peer_port != config.etcd_peer_port
@@ -576,7 +571,6 @@ fn new_backup_manifest(
         legacy_member_name: legacy_member_name.to_string(),
         host_ip,
         initial_voter_host_ips: configured_host_ips(config),
-        subnets: config.subnets.clone(),
         api_port: config.api_port,
         etcd_client_port: config.etcd_client_port,
         etcd_peer_port: config.etcd_peer_port,
@@ -605,7 +599,6 @@ fn validate_backup_manifest(
         || manifest.legacy_member_name != legacy_member_name
         || manifest.host_ip != host_ip
         || manifest.initial_voter_host_ips != configured_host_ips(config)
-        || manifest.subnets != config.subnets
         || manifest.api_port != config.api_port
         || manifest.etcd_client_port != config.etcd_client_port
         || manifest.etcd_peer_port != config.etcd_peer_port
@@ -974,11 +967,6 @@ mod tests {
                 "10.20.0.12".parse().unwrap(),
                 "10.20.0.13".parse().unwrap(),
             ],
-            subnets: vec![
-                "172.22.1.0/24".to_string(),
-                "172.22.2.0/24".to_string(),
-                "172.22.3.0/24".to_string(),
-            ],
             ..ClusterConfig::default()
         }
     }
@@ -1172,7 +1160,7 @@ mod tests {
         let manifest_bytes = fs::read(backup_manifest_path(&root)).unwrap();
 
         let mut changed = config();
-        changed.subnets[0] = "172.22.10.0/24".to_string();
+        changed.api_port = 3005;
         let error = ensure_etcd_backup(&changed, &root, host_ip, &member_name, None).unwrap_err();
 
         assert!(error.to_string().contains("conflicts with this migration"));

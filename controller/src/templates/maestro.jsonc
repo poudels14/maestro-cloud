@@ -5,14 +5,13 @@
   "cluster": {
     "name": "my-cluster"
     // For multi-node mode, add a comma after "my-cluster", then uncomment the
-    // same ordered voter list and subnet list on every original node. The first
-    // voter is the one-time bootstrap seed.
+    // same ordered voter list on every original node. The first voter is the
+    // one-time bootstrap seed; each node sets its own top-level subnet.
     // "nodes": ["10.20.0.11", "10.20.0.12", "10.20.0.13"],
     // To run nodes on one host, use non-overlapping four-port blocks and set
     // api-port per local config: ["10.20.0.11:3001", "10.20.0.11:3101", "10.20.0.11:3201"].
     // "api-port": 3001,
     // "control-allow-cidrs": ["10.20.0.0/24"],
-    // "subnets": ["172.22.1.0/24", "172.22.2.0/24", "172.22.3.0/24"],
     // "gateway-port": 3002,
     // "shared-registry": "ghcr.io/acme",
     // "join-secret": "replace-with-a-random-secret-of-at-least-32-characters"

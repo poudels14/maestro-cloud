@@ -92,11 +92,8 @@ pub async fn provision_node_users(
     .await?;
     reserve_resource(
         &mut client,
-        &format!(
-            "/maetro/cluster/subnets/{}",
-            subnet.replace('.', "-").replace('/', "_")
-        ),
-        serde_json::json!({"cidr": subnet, "nodeId": null, "state": "reserved"}),
+        &format!("/maetro/cluster/subnets/{node_id}"),
+        serde_json::json!({"cidr": subnet, "nodeId": node_id, "state": "reserved"}),
         "cidr",
     )
     .await

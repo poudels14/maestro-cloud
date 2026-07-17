@@ -451,11 +451,6 @@ impl FormingEtcdCluster {
                         .unwrap()
                 })
                 .collect(),
-            subnets: vec![
-                "172.30.1.0/24".to_string(),
-                "172.30.2.0/24".to_string(),
-                "172.30.3.0/24".to_string(),
-            ],
             api_port: cluster.nodes[0].api_port,
             control_allow_cidrs: vec!["127.0.0.1/32".to_string()],
             shared_registry: Some("registry.invalid/maestro".to_string()),
@@ -650,11 +645,7 @@ impl FormingEtcdCluster {
             host_ip: node.host_ip,
             role: NodeRole::Voter,
             initial_voters: self.nodes.clone(),
-            subnets: vec![
-                "172.30.1.0/24".to_string(),
-                "172.30.2.0/24".to_string(),
-                "172.30.3.0/24".to_string(),
-            ],
+            subnet: format!("172.30.{}.0/24", index + 1),
             control_allow_cidrs: Vec::new(),
             api_port: node.api_port,
             gateway_port: node.gateway_port,

@@ -134,7 +134,6 @@ pub fn ensure_seed_identity(
             } else {
                 Vec::new()
             },
-            subnets: config.subnets.clone(),
             initial_voter_host_ips: initial_voters.iter().map(|node| node.host_ip).collect(),
             initial_voter_endpoints: if endpoint_identity {
                 initial_voters
@@ -499,7 +498,6 @@ fn install_join_payload(
             cluster_id: payload.cluster_id.clone(),
             voter_host_ips: payload.voter_host_ips.clone(),
             voter_endpoints: payload.voter_endpoints.clone(),
-            subnets: payload.subnets.clone(),
             initial_voter_host_ips: payload.initial_voter_host_ips.clone(),
             initial_voter_endpoints: payload.initial_voter_endpoints.clone(),
             api_port: payload.api_port,
@@ -563,7 +561,6 @@ mod tests {
         ClusterConfig {
             name: "test".to_string(),
             nodes: vec!["10.20.0.11:3101".parse().unwrap()],
-            subnets: vec!["172.22.1.0/24".to_string()],
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3101,
             shared_registry: Some("registry.example.com/maestro".to_string()),
@@ -689,7 +686,6 @@ mod tests {
             payload: cluster::join::JoinPayload {
                 cluster_id: cluster_id.clone(),
                 display_name: "test".to_string(),
-                subnets: vec!["172.22.2.0/24".to_string()],
                 voter_host_ips: vec![seed.host_ip],
                 voter_endpoints: vec![seed],
                 initial_voter_host_ips: vec![seed.host_ip],
@@ -730,7 +726,6 @@ mod tests {
             cluster: ClusterConfig {
                 name: "test".to_string(),
                 nodes: vec![format!("127.0.0.1:{port}").parse().unwrap()],
-                subnets: vec!["172.22.2.0/24".to_string()],
                 api_port: port,
                 control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
                 shared_registry: Some("registry.invalid/maestro".to_string()),

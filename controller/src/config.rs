@@ -216,8 +216,6 @@ pub struct ClusterConfig {
     pub nodes: Vec<ClusterNodeConfig>,
     #[serde(default, alias = "bindIp")]
     pub bind_ip: Option<Ipv4Addr>,
-    #[serde(default)]
-    pub subnets: Vec<String>,
     #[serde(default = "default_cluster_api_port", alias = "apiPort")]
     pub api_port: u16,
     #[serde(default = "default_cluster_gateway_port", alias = "gatewayPort")]
@@ -485,7 +483,6 @@ pub struct ClusterView {
     pub nodes: Vec<ClusterNodeConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bind_ip: Option<Ipv4Addr>,
-    pub subnets: Vec<String>,
     pub api_port: u16,
     pub gateway_port: u16,
     pub control_allow_cidrs: Vec<String>,
@@ -583,7 +580,6 @@ impl StartConfig {
                 name: self.cluster.name.clone(),
                 nodes: self.cluster.nodes.clone(),
                 bind_ip: self.cluster.bind_ip,
-                subnets: self.cluster.subnets.clone(),
                 api_port: self.cluster.api_port,
                 gateway_port: self.cluster.gateway_port,
                 control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
