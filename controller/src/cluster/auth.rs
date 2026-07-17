@@ -201,7 +201,6 @@ fn probe_permissions(node_id: &str) -> Vec<Permission> {
         Permission::read_write(format!("/maetro/cluster/disks/{node_id}")),
         Permission::read_write(format!("/maetro/system/upgrade-request/{node_id}")),
         Permission::read_write(format!("/maetro/system/restart-request/{node_id}")),
-        Permission::read_write("/maetro/system/log-migration/").with_prefix(),
     ]
 }
 
@@ -335,11 +334,7 @@ mod tests {
     #[test]
     fn probe_writes_are_health_or_node_local_only() {
         let writes = writable_prefixes(&probe_permissions("abc123def456"));
-        assert!(
-            writes.iter().all(|key| {
-                key.contains("abc123def456") || key == "/maetro/system/log-migration/"
-            })
-        );
+        assert!(writes.iter().all(|key| key.contains("abc123def456")));
         assert!(!writes.iter().any(|key| key.contains("/assignments/")));
         assert!(
             !writes

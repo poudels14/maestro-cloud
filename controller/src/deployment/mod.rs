@@ -1409,7 +1409,6 @@ async fn init_probe(
                 ]);
             }
             for name in [
-                "MAESTRO_DUCKDB",
                 "AWS_REGION",
                 "AWS_DEFAULT_REGION",
                 "AWS_ENDPOINT_URL_S3",

@@ -71,7 +71,6 @@ pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
 pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
 pub const CLUSTER_FREEZE_KEY: &str = "/maetro/system/cluster-freeze";
 pub const CLUSTER_UPGRADE_KEY: &str = "/maetro/cluster/upgrade/current";
-pub const SYSTEM_LOG_MIGRATION_ROOT: &str = "/maetro/system/log-migration";
 pub const SLACK_WEBHOOKS_KEY: &str = "/maetro/cluster/config/webhooks/slack";
 
 pub fn system_upgrade_request_key(node_id: Option<&str>) -> String {
@@ -86,10 +85,6 @@ pub fn system_restart_request_key(node_id: Option<&str>) -> String {
         || SYSTEM_RESTART_REQUEST_KEY.to_string(),
         |node_id| format!("{SYSTEM_RESTART_REQUEST_KEY}/{node_id}"),
     )
-}
-
-pub fn log_migration_key(archive_hash: &str) -> String {
-    format!("{SYSTEM_LOG_MIGRATION_ROOT}/{archive_hash}")
 }
 
 pub fn service_id_from_info_key(key: &str) -> Option<String> {

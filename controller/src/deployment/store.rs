@@ -584,14 +584,6 @@ pub trait ClusterStore: Send + Sync {
         bail!("delete_system_restart_request not implemented")
     }
 
-    async fn has_log_migration_marker(&self, _archive_hash: &str) -> Result<bool> {
-        Ok(false)
-    }
-
-    async fn put_log_migration_marker(&self, _archive_hash: &str) -> Result<()> {
-        Ok(())
-    }
-
     async fn list_ingress_routes(&self) -> Result<Vec<IngressRouting>> {
         bail!("list_ingress_routes not implemented")
     }

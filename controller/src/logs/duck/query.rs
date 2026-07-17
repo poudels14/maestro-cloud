@@ -7,7 +7,7 @@ use duckdb::{params, params_from_iter, types::Value};
 use super::{Db, contains_parquet, hive_component, sql_lit};
 use crate::logs::{
     LogEntry, LogHistogramBucket, LogHistogramGroupBy, LogOrigin, LogSearchQuery, LogSearchValue,
-    SqlDialect, http_status_class_expression, sql_like_prefix,
+    http_status_class_expression, sql_like_prefix,
 };
 
 #[derive(Clone, Copy)]
@@ -225,7 +225,7 @@ pub(super) fn query_logs(
         vals.push(Value::Text(o.as_str().into()));
     }
     if let Some(search) = search {
-        let compiled = search.compile(SqlDialect::DuckDb);
+        let compiled = search.compile();
         sql.push_str(" AND ");
         sql.push_str(&compiled.sql);
         vals.extend(compiled.values.into_iter().map(|value| match value {
@@ -324,7 +324,7 @@ pub(super) fn query_log_histogram(
     }
     let group_expr = match group_by {
         LogHistogramGroupBy::Level => "lower(level)".to_string(),
-        LogHistogramGroupBy::HttpStatusClass => http_status_class_expression(SqlDialect::DuckDb),
+        LogHistogramGroupBy::HttpStatusClass => http_status_class_expression(),
     };
     let mut sql = format!(
         "SELECT ts - (ts % ?) AS bucket_at_ms, {group_expr} AS grp,
@@ -355,7 +355,7 @@ pub(super) fn query_log_histogram(
         values.push(Value::Text(origin.as_str().into()));
     }
     if let Some(search) = search {
-        let compiled = search.compile(SqlDialect::DuckDb);
+        let compiled = search.compile();
         sql.push_str(" AND ");
         sql.push_str(&compiled.sql);
         values.extend(compiled.values.into_iter().map(|value| match value {

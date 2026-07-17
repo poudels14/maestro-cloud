@@ -110,7 +110,7 @@ struct ClusterNodeView {
 #[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
-    log_store: Option<Arc<crate::logs::TelemetryStore>>,
+    log_store: Option<Arc<crate::logs::DuckLogStore>>,
     jwt_secret_key: Option<String>,
     ingestion_token: Option<String>,
     internal_control_token: Option<String>,
@@ -125,7 +125,6 @@ struct AppState {
     controller_stats: crate::cluster_stats::SharedControllerStats,
     backup_stats: crate::cluster_stats::SharedBackupStats,
     probe_started_at: Instant,
-    storage_mode: String,
     local_node_id: Option<String>,
 }
 
@@ -148,14 +147,13 @@ pub(crate) struct ServerConfig {
     pub upload_dir: std::path::PathBuf,
     pub controller_stats: crate::cluster_stats::SharedControllerStats,
     pub backup_stats: crate::cluster_stats::SharedBackupStats,
-    pub storage_mode: String,
     pub local_node_id: Option<String>,
 }
 
 impl Server {
     pub(crate) fn new(
         store: Arc<dyn ClusterStore>,
-        log_store: Option<Arc<crate::logs::TelemetryStore>>,
+        log_store: Option<Arc<crate::logs::DuckLogStore>>,
         config: ServerConfig,
     ) -> Self {
         let ServerConfig {
@@ -172,7 +170,6 @@ impl Server {
             upload_dir,
             controller_stats,
             backup_stats,
-            storage_mode,
             local_node_id,
         } = config;
         cleanup_stale_cluster_request_spools(&upload_dir);
@@ -194,7 +191,6 @@ impl Server {
                 controller_stats,
                 backup_stats,
                 probe_started_at: Instant::now(),
-                storage_mode,
                 local_node_id,
             },
         }
@@ -996,7 +992,6 @@ impl Server {
                     .as_millis()
                     .try_into()
                     .unwrap_or(u64::MAX),
-                storage_mode: state.storage_mode.clone(),
             },
             controller,
             controller_heartbeat_age_ms,

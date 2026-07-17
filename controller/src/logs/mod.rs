@@ -9,13 +9,11 @@ pub mod store;
 
 pub use collector::{LogCollector, LogConfig};
 pub use datadog_sink::DatadogSink;
-pub use duck::{BackupPartition, DuckLogStore, IngestLogEntry, TelemetryStore};
+pub use duck::{BackupPartition, DuckLogStore, IngestLogEntry};
 pub(crate) use filter::healthcheck_path_tag;
 pub use http_sink::HttpSink;
 pub use search::LogSearchQuery;
-pub(crate) use search::{
-    LogSearchValue, SqlDialect, http_status_class_expression, sql_like_prefix,
-};
+pub(crate) use search::{LogSearchValue, http_status_class_expression, sql_like_prefix};
 pub use sink::SinkWorker;
 pub use store::{LogEntry, LogOrigin, LogStore, Logger};
 
