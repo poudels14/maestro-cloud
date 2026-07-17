@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::logs::Logger;
 use crate::utils::crypto::SecretString;
@@ -20,12 +20,7 @@ const START_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
     ("allowCliDeployment", "allow-cli-deployment"),
 ];
 const CLUSTER_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
-    ("bindIp", "bind-ip"),
-    ("apiPort", "api-port"),
-    ("gatewayPort", "gateway-port"),
     ("controlAllowCidrs", "control-allow-cidrs"),
-    ("etcdClientPort", "etcd-client-port"),
-    ("etcdPeerPort", "etcd-peer-port"),
     ("sharedRegistry", "shared-registry"),
     ("joinSecret", "join-secret"),
 ];
@@ -124,11 +119,40 @@ pub struct StartConfig {
     pub allow_cli_deployment: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub struct NodeConfig {
-    #[serde(default)]
+    pub name: Option<String>,
     pub role: crate::cluster::NodeRole,
+}
+
+impl Default for NodeConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            role: crate::cluster::NodeRole::Hybrid,
+        }
+    }
+}
+
+impl Serialize for NodeConfig {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.name.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Self {
+            name: Option::<String>::deserialize(deserializer)?,
+            role: crate::cluster::NodeRole::Hybrid,
+        })
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -209,22 +233,20 @@ impl std::str::FromStr for SystemType {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ClusterConfig {
     pub name: String,
     #[serde(default)]
-    pub nodes: Vec<ClusterNodeConfig>,
-    #[serde(default, alias = "bindIp")]
-    pub bind_ip: Option<Ipv4Addr>,
-    #[serde(default = "default_cluster_api_port", alias = "apiPort")]
+    pub nodes: BTreeMap<String, ClusterNodeConfig>,
+    #[serde(skip, default = "default_cluster_api_port")]
     pub api_port: u16,
-    #[serde(default = "default_cluster_gateway_port", alias = "gatewayPort")]
+    #[serde(skip, default = "default_cluster_gateway_port")]
     pub gateway_port: u16,
     #[serde(default, alias = "controlAllowCidrs")]
     pub control_allow_cidrs: Vec<String>,
-    #[serde(default = "default_etcd_client_port", alias = "etcdClientPort")]
+    #[serde(skip, default = "default_etcd_client_port")]
     pub etcd_client_port: u16,
-    #[serde(default = "default_etcd_peer_port", alias = "etcdPeerPort")]
+    #[serde(skip, default = "default_etcd_peer_port")]
     pub etcd_peer_port: u16,
     #[serde(default, alias = "sharedRegistry")]
     pub shared_registry: Option<String>,
@@ -232,16 +254,18 @@ pub struct ClusterConfig {
     pub join_secret: Option<String>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    #[serde(skip)]
+    pub(crate) selected_node: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ClusterNodeConfig {
+pub enum ClusterEndpointConfig {
     Endpoint(SocketAddrV4),
     Address(Ipv4Addr),
 }
 
-impl ClusterNodeConfig {
+impl ClusterEndpointConfig {
     pub fn host_ip(self) -> Ipv4Addr {
         match self {
             Self::Endpoint(endpoint) => *endpoint.ip(),
@@ -257,7 +281,7 @@ impl ClusterNodeConfig {
     }
 }
 
-impl fmt::Display for ClusterNodeConfig {
+impl fmt::Display for ClusterEndpointConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Endpoint(endpoint) => endpoint.fmt(formatter),
@@ -266,7 +290,7 @@ impl fmt::Display for ClusterNodeConfig {
     }
 }
 
-impl std::str::FromStr for ClusterNodeConfig {
+impl std::str::FromStr for ClusterEndpointConfig {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
@@ -284,19 +308,33 @@ impl std::str::FromStr for ClusterNodeConfig {
     }
 }
 
-impl ClusterConfig {
-    pub fn uses_node_ports(&self) -> bool {
-        self.nodes
-            .first()
-            .is_some_and(|node| node.explicit_api_port().is_some())
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ClusterNodeConfig {
+    pub endpoint: ClusterEndpointConfig,
+    pub subnet: String,
+    pub role: crate::cluster::NodeRole,
+}
 
-    pub fn resolved_nodes(&self) -> Result<Vec<crate::cluster::ClusterNodeEndpoint>> {
-        self.nodes
+impl ClusterConfig {
+    pub fn voter_api_endpoints(&self) -> Vec<SocketAddrV4> {
+        let mut voters = self
+            .nodes
             .iter()
-            .copied()
-            .map(|node| self.resolve_node(node))
-            .collect()
+            .filter(|(_, node)| node.role.is_voter())
+            .map(|(_, node)| {
+                (
+                    node.role,
+                    SocketAddrV4::new(
+                        node.endpoint.host_ip(),
+                        node.endpoint.explicit_api_port().unwrap_or(3000),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        voters
+            .sort_by_key(|(role, endpoint)| (*role != crate::cluster::NodeRole::Master, *endpoint));
+        voters.into_iter().map(|(_, endpoint)| endpoint).collect()
     }
 
     pub fn local_endpoint(
@@ -304,68 +342,83 @@ impl ClusterConfig {
         host_ip: Ipv4Addr,
         role: crate::cluster::NodeRole,
     ) -> Result<crate::cluster::ClusterNodeEndpoint> {
-        if self.uses_node_ports() {
-            if role.is_voter() {
-                let matches = self
-                    .resolved_nodes()?
-                    .into_iter()
-                    .filter(|node| node.host_ip == host_ip && node.api_port == self.api_port)
-                    .collect::<Vec<_>>();
-                return match matches.as_slice() {
-                    [node] => Ok(*node),
-                    [] => bail!(
-                        "this voter's cluster.api-port ({}) does not select a configured node endpoint on {host_ip}",
-                        self.api_port
-                    ),
-                    _ => bail!(
-                        "cluster.nodes contains duplicate endpoint `{host_ip}:{}`",
-                        self.api_port
-                    ),
-                };
-            }
-            return self.resolve_node(ClusterNodeConfig::Endpoint(SocketAddrV4::new(
-                host_ip,
-                self.api_port,
-            )));
+        let (name, node) = self.selected_node()?;
+        if node.role != role {
+            bail!("selected node `{name}` role changed after configuration was loaded");
         }
-        self.resolve_node(ClusterNodeConfig::Address(host_ip))
+        let endpoint = self.resolve_local_node(node);
+        if endpoint.host_ip != host_ip {
+            bail!(
+                "selected node `{name}` endpoint host `{}` does not match resolved local IP `{host_ip}`",
+                endpoint.host_ip
+            );
+        }
+        Ok(endpoint)
     }
 
-    fn resolve_node(&self, node: ClusterNodeConfig) -> Result<crate::cluster::ClusterNodeEndpoint> {
-        let host_ip = node.host_ip();
-        if let Some(api_port) = node.explicit_api_port() {
-            let gateway_port = api_port.checked_add(1).ok_or_else(|| {
-                anyhow!("cluster node endpoint `{node}` leaves no room for its gateway port")
-            })?;
-            let etcd_client_port = api_port.checked_add(2).ok_or_else(|| {
-                anyhow!("cluster node endpoint `{node}` leaves no room for its etcd client port")
-            })?;
-            let etcd_peer_port = api_port.checked_add(3).ok_or_else(|| {
-                anyhow!("cluster node endpoint `{node}` leaves no room for its etcd peer port")
-            })?;
-            Ok(crate::cluster::ClusterNodeEndpoint {
-                host_ip,
-                api_port,
-                gateway_port,
-                etcd_client_port,
-                etcd_peer_port,
-                identity_api_port: Some(api_port),
-            })
-        } else {
-            Ok(crate::cluster::ClusterNodeEndpoint {
-                host_ip,
-                api_port: self.api_port,
-                gateway_port: self.gateway_port,
-                etcd_client_port: self.etcd_client_port,
-                etcd_peer_port: self.etcd_peer_port,
-                identity_api_port: None,
-            })
+    pub fn selected_node(&self) -> Result<(&str, &ClusterNodeConfig)> {
+        let name = self
+            .selected_node
+            .as_deref()
+            .ok_or_else(|| anyhow!("field `node` is missing: required in cluster mode"))?;
+        let node = self.nodes.get(name).ok_or_else(|| {
+            anyhow!(
+                "field `node` is invalid: selected node `{name}` is absent from `cluster.nodes`"
+            )
+        })?;
+        Ok((name, node))
+    }
+
+    pub fn master_node(&self) -> Result<(&str, &ClusterNodeConfig)> {
+        let masters = self
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role == crate::cluster::NodeRole::Master)
+            .collect::<Vec<_>>();
+        match masters.as_slice() {
+            [(name, node)] => Ok((name.as_str(), *node)),
+            [] => bail!(
+                "field `cluster.nodes` is invalid: must contain exactly one node with role `master`"
+            ),
+            _ => bail!(
+                "field `cluster.nodes` is invalid: contains more than one node with role `master`"
+            ),
+        }
+    }
+
+    pub fn set_selected_node(&mut self, name: String) -> Result<()> {
+        let node = self.nodes.get(&name).ok_or_else(|| {
+            anyhow!(
+                "field `node` is invalid: selected node `{name}` is absent from `cluster.nodes`"
+            )
+        })?;
+        self.api_port = node.endpoint.explicit_api_port().unwrap_or(3000);
+        self.selected_node = Some(name);
+        Ok(())
+    }
+
+    pub fn set_local_ports(&mut self, gateway: u16, etcd_client: u16, etcd_peer: u16) {
+        self.gateway_port = gateway;
+        self.etcd_client_port = etcd_client;
+        self.etcd_peer_port = etcd_peer;
+    }
+
+    fn resolve_local_node(&self, node: &ClusterNodeConfig) -> crate::cluster::ClusterNodeEndpoint {
+        let host_ip = node.endpoint.host_ip();
+        let api_port = node.endpoint.explicit_api_port().unwrap_or(3000);
+        crate::cluster::ClusterNodeEndpoint {
+            host_ip,
+            api_port,
+            gateway_port: self.gateway_port,
+            etcd_client_port: self.etcd_client_port,
+            etcd_peer_port: self.etcd_peer_port,
+            identity_api_port: Some(api_port),
         }
     }
 }
 
 fn default_cluster_api_port() -> u16 {
-    3001
+    3000
 }
 
 fn default_cluster_gateway_port() -> u16 {
@@ -480,14 +533,8 @@ pub struct MaskedConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ClusterView {
     pub name: String,
-    pub nodes: Vec<ClusterNodeConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bind_ip: Option<Ipv4Addr>,
-    pub api_port: u16,
-    pub gateway_port: u16,
+    pub nodes: BTreeMap<String, ClusterNodeConfig>,
     pub control_allow_cidrs: Vec<String>,
-    pub etcd_client_port: u16,
-    pub etcd_peer_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_registry: Option<String>,
     pub join_secret: Option<String>,
@@ -497,7 +544,12 @@ pub struct ClusterView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct NodeView {
+    pub name: Option<String>,
     pub role: crate::cluster::NodeRole,
+    pub api_port: u16,
+    pub gateway_port: u16,
+    pub etcd_client_port: u16,
+    pub etcd_peer_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,23 +626,49 @@ fn mask(value: &str) -> Option<String> {
 }
 
 impl StartConfig {
+    fn hydrate_node_selection(&mut self) -> Result<()> {
+        if self.cluster.nodes.is_empty() {
+            if self.node.name.is_some() {
+                bail!("field `node` is invalid: only valid when `cluster.nodes` is configured");
+            }
+            return Ok(());
+        }
+        if self.subnet.is_some() {
+            bail!("field `subnet` is invalid: only valid outside cluster mode");
+        }
+        let name = self
+            .node
+            .name
+            .clone()
+            .ok_or_else(|| anyhow!("field `node` is missing: required in cluster mode"))?;
+        self.cluster.set_selected_node(name.clone())?;
+        let selected = self
+            .cluster
+            .nodes
+            .get(&name)
+            .expect("selected cluster node was validated");
+        self.node.role = selected.role;
+        self.subnet = Some(selected.subnet.clone());
+        Ok(())
+    }
+
     pub fn masked(&self) -> MaskedConfig {
         MaskedConfig {
             cluster: ClusterView {
                 name: self.cluster.name.clone(),
                 nodes: self.cluster.nodes.clone(),
-                bind_ip: self.cluster.bind_ip,
-                api_port: self.cluster.api_port,
-                gateway_port: self.cluster.gateway_port,
                 control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
-                etcd_client_port: self.cluster.etcd_client_port,
-                etcd_peer_port: self.cluster.etcd_peer_port,
                 shared_registry: self.cluster.shared_registry.clone(),
                 join_secret: self.cluster.join_secret.as_deref().and_then(mask),
                 labels: self.cluster.labels.clone(),
             },
             node: NodeView {
+                name: self.node.name.clone(),
                 role: self.node.role,
+                api_port: self.cluster.api_port,
+                gateway_port: self.cluster.gateway_port,
+                etcd_client_port: self.cluster.etcd_client_port,
+                etcd_peer_port: self.cluster.etcd_peer_port,
             },
             ingress: IngressView {
                 ports: self.ingress.resolved_ports(),
@@ -639,10 +717,87 @@ impl StartConfig {
 }
 
 pub async fn load_config(source: &str) -> Result<StartConfig> {
+    load_config_with_diagnostics(source)
+        .await
+        .map(|(config, _)| config)
+}
+
+pub async fn load_config_with_diagnostics(source: &str) -> Result<(StartConfig, Vec<String>)> {
     let value = load_config_value(source).await?;
-    let config: StartConfig = serde_json::from_value(value)
+    let (mut config, ignored_fields) = deserialize_config_value::<StartConfig>(value)
         .map_err(|err| anyhow!("failed to parse merged config `{source}`: {err}"))?;
-    Ok(config)
+    config.hydrate_node_selection()?;
+    Ok((config, ignored_fields))
+}
+
+pub(crate) fn deserialize_config_value<T>(value: serde_json::Value) -> Result<(T, Vec<String>)>
+where
+    T: DeserializeOwned,
+{
+    let serialized = serde_json::to_string(&value)?;
+    let mut deserializer = serde_json::Deserializer::from_str(&serialized);
+    let mut ignored_fields = BTreeSet::new();
+    let mut track = serde_path_to_error::Track::new();
+    let path_deserializer = serde_path_to_error::Deserializer::new(&mut deserializer, &mut track);
+    let result: std::result::Result<T, _> = serde_ignored::deserialize(path_deserializer, |path| {
+        let path = path
+            .to_string()
+            .split('.')
+            .filter(|segment| *segment != "?")
+            .collect::<Vec<_>>()
+            .join(".");
+        ignored_fields.insert(path);
+    });
+
+    match result {
+        Ok(config) => Ok((config, ignored_fields.into_iter().collect())),
+        Err(error) => {
+            let path = track.path().to_string();
+            bail!(format_deserialization_error(&path, &error.to_string()))
+        }
+    }
+}
+
+fn format_deserialization_error(path: &str, message: &str) -> String {
+    let path = path.trim_matches('.');
+    let message = message
+        .split_once(" at line ")
+        .map_or(message, |(message, _)| message);
+
+    for kind in ["missing field", "unknown field"] {
+        if let Some(field) = quoted_field(message, kind) {
+            let path = append_field_path(path, field);
+            if kind == "missing field" {
+                return format!("field `{path}` is missing");
+            }
+            return format!("field `{path}` is invalid: {message}");
+        }
+    }
+
+    if path.is_empty() {
+        format!("config is invalid: {message}")
+    } else {
+        format!("field `{path}` is invalid: {message}")
+    }
+}
+
+fn quoted_field<'a>(message: &'a str, kind: &str) -> Option<&'a str> {
+    let value = message.strip_prefix(kind)?.trim_start();
+    let quote = value.chars().next()?;
+    if !matches!(quote, '`' | '\'' | '"') {
+        return None;
+    }
+    value[quote.len_utf8()..].split(quote).next()
+}
+
+fn append_field_path(path: &str, field: &str) -> String {
+    if path.is_empty() {
+        field.to_string()
+    } else if path == field || path.ends_with(&format!(".{field}")) {
+        path.to_string()
+    } else {
+        format!("{path}.{field}")
+    }
 }
 
 async fn load_config_value(source: &str) -> Result<serde_json::Value> {
@@ -756,7 +911,7 @@ fn normalize_object_aliases(
     Ok(())
 }
 
-async fn read_config_source(source: &str) -> Result<String> {
+pub(crate) async fn read_config_source(source: &str) -> Result<String> {
     if let Some(path) = local_config_path(source) {
         std::fs::read_to_string(path)
             .map_err(|err| anyhow!("failed to read config file `{}`: {err}", path.display()))
@@ -840,26 +995,74 @@ mod tests {
     }
 
     #[test]
-    fn cluster_nodes_accept_bare_ips_and_controller_endpoints() {
-        let legacy: ClusterConfig =
-            serde_json::from_str(r#"{"name":"test","nodes":["10.20.0.11"]}"#).unwrap();
+    fn cluster_nodes_are_named_and_endpoint_port_is_optional() {
+        let default_port: ClusterConfig = serde_json::from_str(
+            r#"{"name":"test","nodes":{"node1":{"endpoint":"10.20.0.11","subnet":"10.1.0.0/24","role":"master"}}}"#,
+        )
+        .unwrap();
         assert_eq!(
-            legacy.nodes[0].host_ip(),
+            default_port.nodes["node1"].endpoint.host_ip(),
             "10.20.0.11".parse::<Ipv4Addr>().unwrap()
         );
-        assert_eq!(legacy.nodes[0].explicit_api_port(), None);
+        assert_eq!(
+            default_port.nodes["node1"].endpoint.explicit_api_port(),
+            None
+        );
 
         let endpoint: ClusterConfig =
-            serde_json::from_str(r#"{"name":"test","nodes":["10.20.0.11:3101"]}"#).unwrap();
+            serde_json::from_str(r#"{"name":"test","nodes":{"node1":{"endpoint":"10.20.0.11:3101","subnet":"10.1.0.0/24","role":"master"}}}"#).unwrap();
         assert_eq!(
-            endpoint.nodes[0].host_ip(),
-            "10.20.0.11".parse::<Ipv4Addr>().unwrap()
+            endpoint.nodes["node1"].endpoint.explicit_api_port(),
+            Some(3101)
         );
-        assert_eq!(endpoint.nodes[0].explicit_api_port(), Some(3101));
         assert_eq!(
-            serde_json::to_value(&endpoint).unwrap()["nodes"][0],
+            serde_json::to_value(&endpoint).unwrap()["nodes"]["node1"]["endpoint"],
             "10.20.0.11:3101"
         );
+    }
+
+    #[test]
+    fn legacy_cluster_node_shapes_are_rejected() {
+        assert!(
+            serde_json::from_str::<ClusterConfig>(r#"{"name":"test","nodes":["10.20.0.11"]}"#,)
+                .is_err()
+        );
+        assert!(
+            json5::from_str::<StartConfig>(
+                r#"{
+                    cluster: { name: "test", nodes: {} },
+                    node: { role: "hybrid" },
+                    ingress: { port: 8080 },
+                    "encryption-key": "secret"
+                }"#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn named_node_selects_role_subnet_and_default_api_port() {
+        let mut config: StartConfig = json5::from_str(
+            r#"{
+                node: "node2",
+                cluster: {
+                    name: "prod",
+                    nodes: {
+                        node1: { endpoint: "10.20.0.11", subnet: "10.1.0.0/24", role: "master" },
+                        node2: { endpoint: "10.20.0.12", subnet: "10.2.0.0/24", role: "hybrid" },
+                        node3: { endpoint: "10.20.0.13:3100", subnet: "10.3.0.0/24", role: "voter" }
+                    }
+                },
+                ingress: { port: 8080 },
+                "encryption-key": "secret"
+            }"#,
+        )
+        .unwrap();
+        config.hydrate_node_selection().unwrap();
+        assert_eq!(config.node.name.as_deref(), Some("node2"));
+        assert_eq!(config.node.role, crate::cluster::NodeRole::Hybrid);
+        assert_eq!(config.subnet.as_deref(), Some("10.2.0.0/24"));
+        assert_eq!(config.cluster.api_port, 3000);
     }
 
     #[test]
@@ -868,12 +1071,7 @@ mod tests {
             r#"{
                 cluster: {
                     name: "prod",
-                    bindIp: "10.20.0.12",
-                    apiPort: 3101,
-                    gatewayPort: 3102,
                     controlAllowCidrs: ["10.20.0.0/24"],
-                    etcdClientPort: 3103,
-                    etcdPeerPort: 3104,
                     sharedRegistry: "ghcr.io/acme",
                     joinSecret: "0123456789abcdef0123456789abcdef"
                 },
@@ -903,11 +1101,7 @@ mod tests {
         )
         .expect("camelCase aliases should deserialize");
 
-        assert_eq!(config.cluster.bind_ip.unwrap().to_string(), "10.20.0.12");
-        assert_eq!(config.cluster.api_port, 3101);
-        assert_eq!(config.cluster.gateway_port, 3102);
-        assert_eq!(config.cluster.etcd_client_port, 3103);
-        assert_eq!(config.cluster.etcd_peer_port, 3104);
+        assert_eq!(config.cluster.api_port, 3000);
         assert_eq!(config.cluster.control_allow_cidrs, vec!["10.20.0.0/24"]);
         assert_eq!(
             config.cluster.shared_registry.as_deref(),
@@ -943,8 +1137,7 @@ mod tests {
         let serialized = serde_json::to_value(config).expect("serialize startup config");
         assert!(serialized.get("encryption-key").is_some());
         assert!(serialized.get("encryptionKey").is_none());
-        assert!(serialized["cluster"].get("api-port").is_some());
-        assert!(serialized["cluster"].get("apiPort").is_none());
+        assert!(serialized["cluster"].get("api-port").is_none());
         assert!(serialized["datadog"].get("include-metrics").is_some());
         assert!(serialized["datadog"].get("includeMetrics").is_none());
         assert!(serialized["log-backup"].get("kms-key-id").is_some());
@@ -963,7 +1156,7 @@ mod tests {
             r#"{
                 cluster: {
                     name: "prod",
-                    "api-port": 3001,
+                    "shared-registry": "registry.example/base",
                     labels: { apiPort: "label-must-not-be-normalized" }
                 },
                 ingress: { port: 8080 },
@@ -975,14 +1168,17 @@ mod tests {
             &node,
             r#"{
                 "$extends": "base.jsonc",
-                cluster: { apiPort: 3101 },
+                cluster: { sharedRegistry: "registry.example/node" },
                 encryptionKey: "node-key"
             }"#,
         )
         .unwrap();
 
         let config = load_config(node.to_str().unwrap()).await.unwrap();
-        assert_eq!(config.cluster.api_port, 3101);
+        assert_eq!(
+            config.cluster.shared_registry.as_deref(),
+            Some("registry.example/node")
+        );
         assert_eq!(config.encryption_key, "node-key");
         assert_eq!(
             config.cluster.labels.get("apiPort").map(String::as_str),
@@ -1000,7 +1196,7 @@ mod tests {
         std::fs::write(
             &config_path,
             r#"{
-                cluster: { name: "prod", "api-port": 3001, apiPort: 3101 },
+                cluster: { name: "prod", "shared-registry": "one", sharedRegistry: "two" },
                 ingress: { port: 8080 },
                 encryptionKey: "secret"
             }"#,
@@ -1010,11 +1206,9 @@ mod tests {
         let error = load_config(config_path.to_str().unwrap())
             .await
             .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("both `config.cluster.api-port` and `config.cluster.apiPort` are set")
-        );
+        assert!(error.to_string().contains(
+            "both `config.cluster.shared-registry` and `config.cluster.sharedRegistry` are set"
+        ));
 
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -1032,11 +1226,13 @@ mod tests {
             r#"{
                 cluster: {
                     name: "prod",
-                    nodes: ["10.20.0.11:3001", "10.20.0.12:3101"],
+                    nodes: {
+                        node1: { endpoint: "10.20.0.11", subnet: "172.22.1.0/24", role: "master" },
+                        node2: { endpoint: "10.20.0.12:3101", subnet: "172.22.2.0/24", role: "worker" }
+                    },
                     labels: { environment: "prod", region: "us-west-2" }
                 },
                 ingress: { port: 8080 },
-                subnet: "172.22.1.0/24",
                 "encryption-key": "base-key",
                 tags: ["base"],
                 tailscale: {
@@ -1065,9 +1261,7 @@ mod tests {
             &node,
             r#"{
                 "$extends": "shared.jsonc",
-                cluster: { "api-port": 3101 },
-                node: { role: "worker" },
-                subnet: "172.22.2.0/24",
+                node: "node2",
                 cloudflare: { tunnel: { token: "node-token" } }
             }"#,
         )

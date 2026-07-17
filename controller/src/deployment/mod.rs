@@ -156,12 +156,14 @@ struct SystemJobCapabilities {
 
 fn system_job_capabilities(role: Option<crate::cluster::NodeRole>) -> SystemJobCapabilities {
     match role {
-        None | Some(crate::cluster::NodeRole::Hybrid) => SystemJobCapabilities {
-            local_etcd: true,
-            ingress: true,
-            gateway: role.is_some(),
-            admin: true,
-        },
+        None | Some(crate::cluster::NodeRole::Hybrid) | Some(crate::cluster::NodeRole::Master) => {
+            SystemJobCapabilities {
+                local_etcd: true,
+                ingress: true,
+                gateway: role.is_some(),
+                admin: true,
+            }
+        }
         Some(crate::cluster::NodeRole::Voter) => SystemJobCapabilities {
             local_etcd: true,
             ingress: false,
@@ -1959,6 +1961,11 @@ mod tests {
                 "10.20.0.12:3101".parse().unwrap(),
                 "10.20.0.13:3201".parse().unwrap(),
             ],
+            voter_endpoints: vec![
+                "10.20.0.11:3001".parse().unwrap(),
+                "10.20.0.12:3101".parse().unwrap(),
+                "10.20.0.13:3201".parse().unwrap(),
+            ],
             subnet: "172.22.1.0/24".to_string(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,
@@ -2048,6 +2055,15 @@ mod tests {
     fn node_roles_select_only_required_system_jobs() {
         assert_eq!(
             system_job_capabilities(Some(NodeRole::Hybrid)),
+            SystemJobCapabilities {
+                local_etcd: true,
+                ingress: true,
+                gateway: true,
+                admin: true,
+            }
+        );
+        assert_eq!(
+            system_job_capabilities(Some(NodeRole::Master)),
             SystemJobCapabilities {
                 local_etcd: true,
                 ingress: true,

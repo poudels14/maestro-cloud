@@ -750,7 +750,7 @@ async fn create_or_validate_reservation(
 
 fn remote_endpoints(runtime: &ClusterRuntime) -> Vec<String> {
     runtime
-        .initial_voters
+        .voter_endpoints
         .iter()
         .filter(|node| **node != runtime.local_endpoint())
         .map(|node| node.client_url())
@@ -892,6 +892,7 @@ mod tests {
             host_ip: "10.20.0.11".parse().unwrap(),
             role: NodeRole::Voter,
             initial_voters: vec!["10.20.0.11".parse().unwrap()],
+            voter_endpoints: vec!["10.20.0.11".parse().unwrap()],
             subnet: "172.22.1.0/24".to_string(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,

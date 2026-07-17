@@ -109,17 +109,18 @@ pub enum LeadershipState {
 pub enum NodeRole {
     #[default]
     Hybrid,
+    Master,
     Voter,
     Worker,
 }
 
 impl NodeRole {
     pub fn is_voter(self) -> bool {
-        matches!(self, Self::Hybrid | Self::Voter)
+        matches!(self, Self::Hybrid | Self::Master | Self::Voter)
     }
 
     pub fn runs_workloads(self) -> bool {
-        matches!(self, Self::Hybrid | Self::Worker)
+        matches!(self, Self::Hybrid | Self::Master | Self::Worker)
     }
 }
 
@@ -127,6 +128,7 @@ impl std::fmt::Display for NodeRole {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Hybrid => "hybrid",
+            Self::Master => "master",
             Self::Voter => "voter",
             Self::Worker => "worker",
         })
@@ -139,10 +141,11 @@ impl std::str::FromStr for NodeRole {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "hybrid" => Ok(Self::Hybrid),
+            "master" => Ok(Self::Master),
             "voter" => Ok(Self::Voter),
             "worker" => Ok(Self::Worker),
             _ => Err(format!(
-                "invalid node role `{value}`; expected hybrid, voter, or worker"
+                "invalid node role `{value}`; expected master, hybrid, voter, or worker"
             )),
         }
     }
@@ -156,6 +159,7 @@ pub struct ClusterRuntime {
     pub host_ip: Ipv4Addr,
     pub role: NodeRole,
     pub initial_voters: Vec<ClusterNodeEndpoint>,
+    pub voter_endpoints: Vec<ClusterNodeEndpoint>,
     pub subnet: String,
     pub control_allow_cidrs: Vec<String>,
     pub api_port: u16,
@@ -180,11 +184,11 @@ impl ClusterRuntime {
     }
 
     pub fn is_seed(&self) -> bool {
-        self.initial_voters.first() == Some(&self.local_endpoint())
+        self.role == NodeRole::Master
     }
 
     pub fn client_endpoints(&self) -> Vec<String> {
-        self.initial_voters
+        self.voter_endpoints
             .iter()
             .map(|node| node.client_url())
             .collect()

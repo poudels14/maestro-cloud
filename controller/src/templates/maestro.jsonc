@@ -4,24 +4,23 @@
   // "$extends": "aws-secret://maestro/production/common",
   "cluster": {
     "name": "my-cluster"
-    // For multi-node mode, add a comma after "my-cluster", then uncomment the
-    // same ordered voter list on every original node. The first voter is the
-    // one-time bootstrap seed; each node sets its own top-level subnet.
-    // "nodes": ["10.20.0.11", "10.20.0.12", "10.20.0.13"],
-    // To run nodes on one host, use non-overlapping four-port blocks and set
-    // api-port per local config: ["10.20.0.11:3001", "10.20.0.11:3101", "10.20.0.11:3201"].
-    // "api-port": 3001,
+    // For multi-node mode, add a comma after "my-cluster" and declare every
+    // node in one shared map. Exactly one node must have role "master".
+    // "nodes": {
+    //   "node1": { "endpoint": "10.20.0.11", "subnet": "172.22.1.0/24", "role": "master" },
+    //   "node2": { "endpoint": "10.20.0.12", "subnet": "172.22.2.0/24", "role": "hybrid" },
+    //   "node3": { "endpoint": "10.20.0.13:3100", "subnet": "172.22.3.0/24", "role": "hybrid" }
+    // },
     // "control-allow-cidrs": ["10.20.0.0/24"],
-    // "gateway-port": 3002,
     // "shared-registry": "ghcr.io/acme",
     // "join-secret": "replace-with-a-random-secret-of-at-least-32-characters"
   },
-  // This node votes and runs workloads by default. Set "voter" for a
-  // control-plane-only node or "worker" for a workload-only node.
-  // "node": { "role": "hybrid" },
+  // Required in multi-node mode; use "node2" on the second machine, etc.
+  // "node": "node1",
   "ingress": {
     "port": 8080
   },
+  // Standalone mode only. In cluster mode, subnet comes from cluster.nodes.
   "subnet": "172.22.1.0/24",
   "egress": {
     "deny": []

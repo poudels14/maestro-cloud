@@ -83,10 +83,15 @@ enum CliCommand {
 enum ConfigCommand {
     /// Create a starter config file (interactive — choose cluster or services)
     Init,
-    /// Validate a local config file (auto-detects cluster vs services)
+    /// Validate a config source (auto-detects cluster vs services)
     Validate {
-        #[arg(help = "Path to the config file to validate")]
-        path: PathBuf,
+        #[arg(help = "Config source: file path, file://path, or aws-secret://secret-name")]
+        source: String,
+    },
+    /// Verify a config source and report missing, invalid, and ignored fields
+    Verify {
+        #[arg(help = "Config source: file path, file://path, or aws-secret://secret-name")]
+        source: String,
     },
 }
 
@@ -160,7 +165,7 @@ enum ClusterCommand {
         #[arg(long = "data-dir", help = "Base Maestro data directory")]
         data_dir: PathBuf,
     },
-    /// Initialize the shared cluster identity and CA on cluster.nodes[0]
+    /// Initialize the shared cluster identity and CA on the configured master
     InitCa {
         #[arg(
             long = "config",
@@ -185,7 +190,7 @@ enum ClusterCommand {
         host_ip: Ipv4Addr,
         #[arg(
             long = "api-port",
-            help = "Node API port when using IP:port identities"
+            help = "Node API port (defaults to a matching configured endpoint or 3000)"
         )]
         api_port: Option<u16>,
         #[arg(long = "node-id", help = "Prepared 12-character node identity")]
@@ -195,7 +200,7 @@ enum ClusterCommand {
         #[arg(
             long = "role",
             default_value = "worker",
-            help = "hybrid, voter, or worker"
+            help = "master, hybrid, voter, or worker"
         )]
         role: cluster::NodeRole,
         #[arg(long = "output", help = "Output directory for the certificate bundle")]
@@ -229,7 +234,7 @@ enum ClusterCommand {
         host_ip: Ipv4Addr,
         #[arg(
             long = "api-port",
-            help = "Node API port when using IP:port identities"
+            help = "Node API port (defaults to a matching configured endpoint or 3000)"
         )]
         api_port: Option<u16>,
         #[arg(long)]
@@ -385,7 +390,10 @@ struct StartArgs {
         help = "Container network subnet CIDR (e.g., 172.22.0.0/16)"
     )]
     subnet: Option<String>,
-    #[arg(long = "role", help = "Local node role: hybrid, voter, or worker")]
+    #[arg(
+        long = "role",
+        help = "Local node role: master, hybrid, voter, or worker"
+    )]
     role: Option<cluster::NodeRole>,
     #[arg(
         long = "egress-deny",
@@ -506,6 +514,11 @@ fn apply_start_config_overrides(cfg: &mut config::StartConfig, overrides: StartC
     }
     if let Some(role) = overrides.role {
         cfg.node.role = role;
+        if let Some(name) = cfg.node.name.as_deref()
+            && let Some(node) = cfg.cluster.nodes.get_mut(name)
+        {
+            node.role = role;
+        }
     }
     if let Some(secret) = overrides.jwt_secret_key {
         cfg.jwt_secret_key = Some(secret);
@@ -559,8 +572,13 @@ fn apply_start_config_overrides(cfg: &mut config::StartConfig, overrides: StartC
             datadog.include_tailscale_logs = false;
         }
     }
-    if overrides.subnet.is_some() {
-        cfg.subnet = overrides.subnet;
+    if let Some(subnet) = overrides.subnet {
+        cfg.subnet = Some(subnet.clone());
+        if let Some(name) = cfg.node.name.as_deref()
+            && let Some(node) = cfg.cluster.nodes.get_mut(name)
+        {
+            node.subnet = subnet;
+        }
     }
     if !overrides.egress_deny.is_empty() {
         cfg.egress.deny = overrides.egress_deny;
@@ -882,6 +900,27 @@ async fn run() -> crate::error::Result<bool> {
             })?;
             verify_encryption_key(&data_dir, &cfg.encryption_key)?;
             let _lock = acquire_lock(&data_dir)?;
+            if !cfg.cluster.nodes.is_empty() {
+                let (_, selected) = cfg
+                    .cluster
+                    .selected_node()
+                    .map_err(|error| Error::invalid_config(error.to_string()))?;
+                let ports = cluster::network::load_or_allocate_cluster_ports(
+                    &data_dir,
+                    selected.endpoint.host_ip(),
+                    cfg.cluster.api_port,
+                )
+                .map_err(|error| Error::invalid_config(error.to_string()))?;
+                cfg.cluster
+                    .set_local_ports(ports.gateway, ports.etcd_client, ports.etcd_peer);
+                eprintln!(
+                    "[maestro]: cluster ports: API {}, gateway {}, etcd client {}, etcd peer {}",
+                    cfg.cluster.api_port,
+                    cfg.cluster.gateway_port,
+                    cfg.cluster.etcd_client_port,
+                    cfg.cluster.etcd_peer_port
+                );
+            }
             if automatic_legacy_migration {
                 let legacy_etcd =
                     cluster::migration::legacy_etcd_container_name(&cfg.cluster, &data_dir)
@@ -926,17 +965,7 @@ async fn run() -> crate::error::Result<bool> {
                 )
                 .map_err(|error| Error::invalid_config(error.to_string()))?
                 .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
-                let local_endpoint = cfg
-                    .cluster
-                    .local_endpoint(host_ip, cfg.node.role)
-                    .map_err(|error| Error::invalid_config(error.to_string()))?;
-                let is_seed = cfg.node.role.is_voter()
-                    && cfg
-                        .cluster
-                        .resolved_nodes()
-                        .map_err(|error| Error::invalid_config(error.to_string()))?
-                        .first()
-                        == Some(&local_endpoint);
+                let is_seed = cfg.node.role == cluster::NodeRole::Master;
                 if is_seed {
                     let identity = cluster::provision::ensure_seed_identity(
                         &cfg.cluster,
@@ -998,16 +1027,31 @@ async fn run() -> crate::error::Result<bool> {
                     .cluster
                     .local_endpoint(host_ip, cfg.node.role)
                     .map_err(|err| Error::invalid_config(err.to_string()))?;
+                let voter_cache = cluster::join::load_voter_cache(&data_dir, &cluster_id)
+                    .map_err(|err| Error::invalid_config(err.to_string()))?
+                    .ok_or_else(|| {
+                        Error::invalid_config("cluster voter cache is missing after provisioning")
+                    })?;
+                let initial_voters = voter_cache.initial_voter_endpoints;
+                if initial_voters.is_empty() {
+                    return Err(Error::invalid_config(
+                        "cluster voter cache has no initial voter endpoints",
+                    ));
+                }
+                let voter_endpoints = voter_cache.voter_endpoints;
+                if voter_endpoints.is_empty() {
+                    return Err(Error::invalid_config(
+                        "cluster voter cache has no current voter endpoints",
+                    ));
+                }
                 Some(cluster::ClusterRuntime {
                     cluster_id,
                     node_id,
                     instance_id: cluster::identity::new_instance_id(),
                     host_ip,
                     role: cfg.node.role,
-                    initial_voters: cfg
-                        .cluster
-                        .resolved_nodes()
-                        .map_err(|err| Error::invalid_config(err.to_string()))?,
+                    initial_voters,
+                    voter_endpoints,
                     subnet: cfg.subnet.clone().expect("validated cluster subnet"),
                     control_allow_cidrs: cfg.cluster.control_allow_cidrs.clone(),
                     api_port: local_endpoint.api_port,
@@ -1028,7 +1072,7 @@ async fn run() -> crate::error::Result<bool> {
             let etcd_port = if let Some(cluster) = &cluster_runtime {
                 if etcd_port.is_some_and(|port| port != cluster.etcd_client_port) {
                     return Err(Error::invalid_input(
-                        "--etcd-port conflicts with cluster.etcd-client-port",
+                        "--etcd-port conflicts with the persisted automatic etcd client port",
                     ));
                 }
                 cluster.etcd_client_port
@@ -2131,8 +2175,8 @@ async fn run() -> crate::error::Result<bool> {
         }
         Some(CliCommand::Config { command }) => match command {
             ConfigCommand::Init => cli::config::run_init().map(|()| false),
-            ConfigCommand::Validate { path } => {
-                cli::config::run_validate(&path).await.map(|()| false)
+            ConfigCommand::Validate { source } | ConfigCommand::Verify { source } => {
+                cli::config::run_validate(&source).await.map(|()| false)
             }
         },
     }
@@ -2363,9 +2407,9 @@ async fn enable_legacy_cluster(
         config.node.role,
     )
     .map_err(|err| Error::invalid_config(err.to_string()))?;
-    if config.cluster.nodes.is_empty() || !config.node.role.is_voter() {
+    if config.cluster.nodes.is_empty() || config.node.role != cluster::NodeRole::Master {
         return Err(Error::invalid_config(
-            "cluster enable requires a voter with one or three configured initial voter IPs",
+            "cluster enable requires the configured master node",
         ));
     }
     if config
@@ -2441,9 +2485,9 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
             "cluster.nodes is required for multi-node CA initialization",
         ));
     }
-    if !config.node.role.is_voter() {
+    if config.node.role != cluster::NodeRole::Master {
         return Err(Error::invalid_config(
-            "cluster init-ca must run on a hybrid or voter node",
+            "cluster init-ca must run on the configured master node",
         ));
     }
     let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
@@ -2460,14 +2504,14 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
         .cluster
         .local_endpoint(host_ip, config.node.role)
         .map_err(|err| Error::invalid_config(err.to_string()))?;
-    let voter_endpoints = config
+    let (master_name, master) = config
         .cluster
-        .resolved_nodes()
+        .master_node()
         .map_err(|err| Error::invalid_config(err.to_string()))?;
-    if voter_endpoints.first() != Some(&local_endpoint) {
+    if master.endpoint.host_ip() != local_endpoint.host_ip {
         return Err(Error::invalid_config(format!(
-            "cluster init-ca must run on cluster.nodes[0] ({}), resolved this node as {}",
-            config.cluster.nodes[0],
+            "cluster init-ca must run on master node `{master_name}` ({}), resolved this node as {}",
+            master.endpoint,
             local_endpoint.api_address()
         )));
     }
@@ -2485,27 +2529,34 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
     utils::certs::write_cluster_ca(&ca_dir, &ca)
         .map_err(|err| Error::internal(format!("failed to persist cluster CA: {err}")))?;
     let provision_dir = data_dir.join("system/cluster-provision");
-    for voter in &voter_endpoints {
+    for voter in config
+        .cluster
+        .nodes
+        .values()
+        .filter(|node| node.role.is_voter())
+    {
+        let host_ip = voter.endpoint.host_ip();
+        let api_port = voter.endpoint.explicit_api_port().unwrap_or(3000);
         let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
             &ca,
-            voter.host_ip,
-            voter.identity_api_port,
-            cluster::NodeRole::Voter,
+            host_ip,
+            Some(api_port),
+            voter.role,
         )
         .map_err(|err| {
             Error::internal(format!(
                 "failed to issue certificates for {}: {err}",
-                voter.api_address()
+                voter.endpoint
             ))
         })?;
-        let voter_dir = provision_dir.join(voter.identity_suffix());
+        let voter_dir = provision_dir.join(format!("{:08x}-{api_port:04x}", u32::from(host_ip)));
         utils::certs::write_etcd_certs(&voter_dir, &certs).map_err(|err| {
             Error::internal(format!(
                 "failed to persist certificates for {}: {err}",
-                voter.api_address()
+                voter.endpoint
             ))
         })?;
-        if *voter == local_endpoint {
+        if host_ip == local_endpoint.host_ip && api_port == local_endpoint.api_port {
             utils::certs::write_etcd_certs(&data_dir.join("system/certs"), &certs).map_err(
                 |err| Error::internal(format!("failed to install seed certificates: {err}")),
             )?;
@@ -2571,23 +2622,25 @@ async fn issue_cluster_node(
     let ca = utils::certs::load_cluster_ca(&data_dir.join("system/certs/cluster-ca")).map_err(
         |err| Error::invalid_config(format!("failed to load initialized cluster CA: {err}")),
     )?;
-    let identity_api_port = if config.cluster.uses_node_ports() {
-        Some(api_port.ok_or_else(|| {
-            Error::invalid_input("--api-port is required when cluster.nodes uses IP:port")
-        })?)
-    } else {
-        None
-    };
-    if role == cluster::NodeRole::Worker
-        && config
+    let resolved_api_port = api_port.unwrap_or_else(|| {
+        config
             .cluster
-            .resolved_nodes()
-            .map_err(|err| Error::invalid_config(err.to_string()))?
-            .iter()
-            .any(|node| node.host_ip == host_ip && node.identity_api_port == identity_api_port)
+            .nodes
+            .values()
+            .find(|node| node.endpoint.host_ip() == host_ip)
+            .and_then(|node| node.endpoint.explicit_api_port())
+            .unwrap_or(3000)
+    });
+    let identity_api_port = Some(resolved_api_port);
+    if role == cluster::NodeRole::Worker
+        && config.cluster.nodes.values().any(|node| {
+            node.role.is_voter()
+                && node.endpoint.host_ip() == host_ip
+                && node.endpoint.explicit_api_port().unwrap_or(3000) == resolved_api_port
+        })
     {
         return Err(Error::invalid_input(
-            "a worker endpoint cannot also be listed as an initial voter in cluster.nodes",
+            "a worker endpoint cannot also be configured as a voter in cluster.nodes",
         ));
     }
     let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
@@ -2601,14 +2654,14 @@ async fn issue_cluster_node(
         utils::certs::read_etcd_certs(&data_dir.join("system/certs")).map_err(|err| {
             Error::invalid_config(format!("failed to load issuer node certificate: {err}"))
         })?;
+    let cluster_id = cluster::identity::load_cluster_id(&data_dir)
+        .map_err(|err| Error::invalid_config(err.to_string()))?;
+    let voter_endpoints = cluster::join::load_voter_cache(&data_dir, &cluster_id)
+        .map_err(|err| Error::invalid_config(err.to_string()))?
+        .ok_or_else(|| Error::invalid_config("cluster voter cache is missing"))?
+        .client_endpoints();
     cluster::auth::provision_node_users(
-        &config
-            .cluster
-            .resolved_nodes()
-            .map_err(|err| Error::invalid_config(err.to_string()))?
-            .into_iter()
-            .map(cluster::ClusterNodeEndpoint::client_url)
-            .collect::<Vec<_>>(),
+        &voter_endpoints,
         deployment::build_etcd_tls_options(Some(&issuer_certs))
             .expect("cluster certificate produces TLS options"),
         host_ip,
@@ -2714,7 +2767,6 @@ mod start_config_override_tests {
         let mut config: crate::config::StartConfig = json5::from_str(
             r#"{
                 cluster: { name: "config-name" },
-                node: { role: "hybrid" },
                 ingress: { port: 8080 },
                 subnet: "172.22.1.0/24",
                 egress: {

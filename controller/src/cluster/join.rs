@@ -12,8 +12,8 @@ use chacha20poly1305::{
     aead::{Aead, Generate, KeyInit, Payload},
 };
 use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, MemberAddOptions, PutOptions, TlsOptions, Txn,
-    TxnOp,
+    Client, Compare, CompareOp, ConnectOptions, GetOptions, MemberAddOptions, PutOptions,
+    TlsOptions, Txn, TxnOp,
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -317,12 +317,6 @@ impl JoinCoordinator {
         }
 
         validate_reservations(&mut client, &request, existing_intent.is_some()).await?;
-        let admission =
-            if voter_admission_required(&self.runtime, &request, existing_intent.is_some()) {
-                Some(read_matching_admission(&mut client, &request, &requested_intent).await?)
-            } else {
-                None
-            };
         let mut comparisons = vec![
             leadership_compare(token),
             Compare::version(nonce_key.as_str(), CompareOp::Equal, 0),
@@ -339,10 +333,6 @@ impl JoinCoordinator {
                 serde_json::to_vec(&requested_intent)?,
                 None,
             ));
-            if let Some((key, value)) = admission {
-                comparisons.push(Compare::value(key.as_str(), CompareOp::Equal, value));
-                operations.push(TxnOp::delete(key, None));
-            }
         } else if let Some(existing_intent) = &existing_intent {
             comparisons.push(Compare::value(
                 intent_key.as_str(),
@@ -640,16 +630,6 @@ impl JoinCoordinator {
     }
 }
 
-fn voter_admission_required(
-    runtime: &ClusterRuntime,
-    request: &JoinRequest,
-    existing_intent: bool,
-) -> bool {
-    request.role.is_voter()
-        && !existing_intent
-        && !runtime.initial_voters.contains(&request.endpoint())
-}
-
 pub fn create_ca_discovery_response(
     secret: &str,
     cluster_name: &str,
@@ -777,33 +757,6 @@ fn same_join_identity(left: &JoinIntent, right: &JoinIntent) -> bool {
         && left.public_key_sha256 == right.public_key_sha256
 }
 
-async fn read_matching_admission(
-    client: &mut Client,
-    request: &JoinRequest,
-    intent: &JoinIntent,
-) -> Result<(String, Vec<u8>)> {
-    let key = format!("{ADMISSION_PREFIX}{}", request.node_id);
-    let response = client.get(key.as_str(), None).await?;
-    let entry = response
-        .kvs()
-        .first()
-        .ok_or_else(|| anyhow!("voter join has no matching one-time admission"))?;
-    let admission: JoinAdmission = serde_json::from_slice(entry.value())?;
-    if admission.node_id != intent.node_id
-        || admission.role != intent.role
-        || admission.cluster_host_ip != intent.cluster_host_ip
-        || (admission.cluster_api_port != 0
-            && admission.cluster_api_port != intent.cluster_api_port)
-        || (admission.identity_api_port.is_some()
-            && admission.identity_api_port != intent.identity_api_port)
-        || admission.subnet != intent.subnet
-        || admission.public_key_sha256 != intent.public_key_sha256
-    {
-        bail!("voter admission does not match the signed join identity");
-    }
-    Ok((key, entry.value().to_vec()))
-}
-
 async fn validate_reservations(
     client: &mut Client,
     request: &JoinRequest,
@@ -844,6 +797,26 @@ async fn validate_reservations(
                 != Some(request.node_id.as_str())
         {
             bail!("node already has a different workload subnet reservation");
+        }
+    }
+    let requested_subnet = crate::cluster::network::Ipv4Cidr::parse(&request.subnet)?;
+    let existing_subnets = client
+        .get(
+            "/maetro/cluster/subnets/",
+            Some(GetOptions::new().with_prefix()),
+        )
+        .await?;
+    for entry in existing_subnets.kvs() {
+        let value: serde_json::Value = serde_json::from_slice(entry.value())?;
+        if value.get("nodeId").and_then(serde_json::Value::as_str) == Some(request.node_id.as_str())
+        {
+            continue;
+        }
+        let Some(cidr) = value.get("cidr").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if requested_subnet.overlaps(crate::cluster::network::Ipv4Cidr::parse(cidr)?) {
+            bail!("workload subnet overlaps a subnet reserved by another node");
         }
     }
     Ok(())
@@ -962,44 +935,63 @@ async fn authoritative_voters(
     client: &mut Client,
     runtime: &ClusterRuntime,
 ) -> Result<Vec<ClusterNodeEndpoint>> {
+    let reservations = client
+        .get(
+            "/maetro/cluster/control-addresses/",
+            Some(GetOptions::new().with_prefix()),
+        )
+        .await?
+        .kvs()
+        .iter()
+        .map(|entry| serde_json::from_slice::<serde_json::Value>(entry.value()))
+        .collect::<Result<Vec<_>, _>>()?;
     let members = client.member_list().await?;
     let mut voter_endpoints = BTreeSet::new();
     for member in members.members() {
         for peer_url in member.peer_urls() {
             let (host_ip, peer_port) = peer_address(peer_url)?;
             let configured = runtime
-                .initial_voters
+                .voter_endpoints
                 .iter()
                 .find(|node| node.host_ip == host_ip && node.etcd_peer_port == peer_port)
                 .copied();
             let endpoint = if let Some(configured) = configured {
                 configured
-            } else if runtime.identity_api_port.is_some() {
-                let api_port = peer_port.checked_sub(3).ok_or_else(|| {
-                    anyhow!("etcd peer port `{peer_port}` cannot map to a node API port")
-                })?;
-                ClusterNodeEndpoint {
-                    host_ip,
-                    api_port,
-                    gateway_port: api_port + 1,
-                    etcd_client_port: api_port + 2,
-                    etcd_peer_port: peer_port,
-                    identity_api_port: Some(api_port),
-                }
             } else {
-                ClusterNodeEndpoint {
-                    host_ip,
-                    api_port: runtime.api_port,
-                    gateway_port: runtime.gateway_port,
-                    etcd_client_port: runtime.etcd_client_port,
-                    etcd_peer_port: peer_port,
-                    identity_api_port: None,
-                }
+                reservations
+                    .iter()
+                    .find_map(|value| endpoint_from_reservation(value, host_ip, peer_port))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "etcd member {host_ip}:{peer_port} has no matching control-port reservation"
+                        )
+                    })?
             };
             voter_endpoints.insert(endpoint);
         }
     }
     Ok(voter_endpoints.into_iter().collect())
+}
+
+fn endpoint_from_reservation(
+    value: &serde_json::Value,
+    host_ip: Ipv4Addr,
+    peer_port: u16,
+) -> Option<ClusterNodeEndpoint> {
+    if value.get("hostIp")?.as_str()?.parse::<Ipv4Addr>().ok()? != host_ip
+        || u16::try_from(value.get("etcdPeerPort")?.as_u64()?).ok()? != peer_port
+    {
+        return None;
+    }
+    let api_port = u16::try_from(value.get("apiPort")?.as_u64()?).ok()?;
+    Some(ClusterNodeEndpoint {
+        host_ip,
+        api_port,
+        gateway_port: u16::try_from(value.get("gatewayPort")?.as_u64()?).ok()?,
+        etcd_client_port: u16::try_from(value.get("etcdClientPort")?.as_u64()?).ok()?,
+        etcd_peer_port: peer_port,
+        identity_api_port: Some(api_port),
+    })
 }
 
 fn peer_address(peer_url: &str) -> Result<(Ipv4Addr, u16)> {
@@ -1247,13 +1239,6 @@ pub fn validate_request_shape(request: &JoinRequest, now_ms: i64) -> Result<()> 
         .is_some_and(|port| port != request.cluster_api_port)
     {
         bail!("join endpoint identity does not match the cluster API port");
-    }
-    if request.identity_api_port.is_some()
-        && (request.cluster_gateway_port != request.cluster_api_port.saturating_add(1)
-            || request.etcd_client_port != request.cluster_api_port.saturating_add(2)
-            || request.etcd_peer_port != request.cluster_api_port.saturating_add(3))
-    {
-        bail!("IP:port nodes must map gateway and etcd to API port +1, +2, and +3");
     }
     let subnet = crate::cluster::network::Ipv4Cidr::parse(&request.subnet)?;
     if subnet.prefix() != 24 || !subnet.is_private() {
@@ -1629,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_join_ports_are_fenced_to_the_controller_port() {
+    fn endpoint_join_accepts_independent_internal_ports() {
         let key = StaticSecret::random();
         let mut request = create_join_request(
             &key,
@@ -1641,53 +1626,11 @@ mod tests {
             None,
             1_000,
         );
-        validate_request_shape(&request, 1_000).expect("valid mapped ports");
+        validate_request_shape(&request, 1_000).expect("valid distinct ports");
         request.etcd_peer_port = 2380;
+        validate_request_shape(&request, 1_000).expect("independent etcd peer port");
+        request.etcd_peer_port = request.cluster_api_port;
         assert!(validate_request_shape(&request, 1_000).is_err());
-    }
-
-    #[test]
-    fn configured_original_voters_do_not_need_manual_admission() {
-        let private = StaticSecret::random();
-        let mut request = create_join_request(
-            &private,
-            "node123abcde".to_string(),
-            "node-a".to_string(),
-            NodeRole::Hybrid,
-            "10.20.0.12:3101".parse().unwrap(),
-            "172.22.2.0/24".to_string(),
-            None,
-            1_000,
-        );
-        let runtime = ClusterRuntime {
-            cluster_id: "0123456789abcdef0123456789abcdef".to_string(),
-            node_id: "seed123abcde".to_string(),
-            instance_id: "instance".to_string(),
-            host_ip: "10.20.0.11".parse().unwrap(),
-            role: NodeRole::Hybrid,
-            initial_voters: vec![
-                "10.20.0.11:3001".parse().unwrap(),
-                "10.20.0.12:3101".parse().unwrap(),
-                "10.20.0.13:3201".parse().unwrap(),
-            ],
-            subnet: "172.22.1.0/24".to_string(),
-            control_allow_cidrs: Vec::new(),
-            api_port: 3001,
-            gateway_port: 3002,
-            etcd_client_port: 3003,
-            etcd_peer_port: 3004,
-            shared_registry: None,
-            labels: Default::default(),
-            identity_api_port: Some(3001),
-        };
-        assert!(!voter_admission_required(&runtime, &request, false));
-
-        request.cluster_api_port = 3301;
-        request.identity_api_port = Some(3301);
-        request.cluster_gateway_port = 3302;
-        request.etcd_client_port = 3303;
-        request.etcd_peer_port = 3304;
-        assert!(voter_admission_required(&runtime, &request, false));
     }
 
     #[test]

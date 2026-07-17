@@ -1,11 +1,12 @@
 import { For, Show, createSignal } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
-import { clusterNodesQuery } from "../../lib/queries";
+import { clusterConfigQuery, clusterNodesQuery } from "../../lib/queries";
 import { setNodeDrain } from "../../lib/api";
 
 function NodesSection() {
   const nodes = useQuery(() => clusterNodesQuery());
+  const config = useQuery(() => clusterConfigQuery());
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -38,6 +39,25 @@ function NodesSection() {
               {message()}
             </div>
           )}
+        </Show>
+        <Show
+          when={
+            config.data?.node.role === "master" &&
+            (nodes.data?.filter((node) => node.alive).length ?? 0) <
+              Object.keys(config.data?.cluster.nodes ?? {}).length
+          }
+        >
+          <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
+            <div class="font-medium">Cluster formation is waiting for configured nodes.</div>
+            <div class="mt-1 text-amber-800">
+              {nodes.data?.filter((node) => node.alive).length ?? 0} of{" "}
+              {Object.keys(config.data?.cluster.nodes ?? {}).length} nodes are connected. In the AWS
+              security group, allow inbound TCP {config.data?.node["api-port"]},{" "}
+              {config.data?.node["gateway-port"]}, {config.data?.node["etcd-client-port"]}, and{" "}
+              {config.data?.node["etcd-peer-port"]} from the cluster's private security group, then
+              start the remaining nodes.
+            </div>
+          </div>
         </Show>
         <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
           <div class="grid grid-cols-[minmax(9rem,1.4fr)_7rem_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500">
