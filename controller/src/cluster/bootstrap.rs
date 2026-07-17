@@ -656,18 +656,13 @@ async fn seed_bootstrap_records(client: &mut Client, runtime: &ClusterRuntime) -
         )
         .await?;
     }
-    for subnet in &runtime.subnets {
-        let key = format!(
-            "/maetro/cluster/subnets/{}",
-            subnet.replace('.', "-").replace('/', "_")
-        );
-        let value = serde_json::json!({
-            "cidr": subnet,
-            "nodeId": null,
-            "state": "reserved"
-        });
-        create_or_validate_reservation(client, &key, &value, "cidr").await?;
-    }
+    let key = format!("/maetro/cluster/subnets/{}", runtime.node_id);
+    let value = serde_json::json!({
+        "cidr": runtime.subnet,
+        "nodeId": runtime.node_id,
+        "state": "reserved"
+    });
+    create_or_validate_reservation(client, &key, &value, "cidr").await?;
     let members = client.member_list().await?;
     for member in members
         .members()
@@ -897,7 +892,7 @@ mod tests {
             host_ip: "10.20.0.11".parse().unwrap(),
             role: NodeRole::Voter,
             initial_voters: vec!["10.20.0.11".parse().unwrap()],
-            subnets: vec!["172.22.1.0/24".to_string()],
+            subnet: "172.22.1.0/24".to_string(),
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,
             gateway_port: 3002,

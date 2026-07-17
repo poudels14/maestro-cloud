@@ -151,10 +151,7 @@ impl EtcdNodeRegistry {
             "/maetro/cluster/control-addresses/{:08x}",
             u32::from(info.cluster_host_ip)
         );
-        let subnet_key = format!(
-            "/maetro/cluster/subnets/{}",
-            info.subnet.replace('.', "-").replace('/', "_")
-        );
+        let subnet_key = format!("/maetro/cluster/subnets/{}", self.node_id);
         let value = serde_json::to_vec(info)?;
         let mut client = self.client.lock().await;
         let previous_record_response = client.get(record_key.clone(), None).await?;

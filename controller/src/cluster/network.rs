@@ -195,34 +195,20 @@ pub fn validate_cluster_config(
             );
         }
     }
-    if config.subnets.len() < config.nodes.len() {
-        bail!("cluster.subnets must include a Docker /24 for every initial voter");
+    let local_subnet = local_subnet
+        .ok_or_else(|| anyhow::anyhow!("local workload subnet is required in cluster mode"))?;
+    let local = Ipv4Cidr::parse(local_subnet)?;
+    if local.prefix() != 24 {
+        bail!("local workload subnet `{local_subnet}` must be an IPv4 /24");
     }
-    let mut parsed_subnets = Vec::new();
-    for subnet in &config.subnets {
-        let parsed = Ipv4Cidr::parse(subnet)?;
-        if parsed.prefix() != 24 {
-            bail!("cluster Docker subnet `{subnet}` must be an IPv4 /24");
-        }
-        if !parsed.is_private() {
-            bail!("cluster Docker subnet `{subnet}` must be private IPv4 space");
-        }
-        if parsed_subnets
-            .iter()
-            .any(|existing: &Ipv4Cidr| existing.overlaps(parsed))
-        {
-            bail!("cluster Docker subnet `{subnet}` overlaps another configured subnet");
-        }
-        parsed_subnets.push(parsed);
+    if !local.is_private() {
+        bail!("local workload subnet `{local_subnet}` must be private IPv4 space");
     }
     for voter in &resolved_nodes {
-        if parsed_subnets
-            .iter()
-            .any(|subnet| subnet.contains(voter.host_ip))
-        {
+        if local.contains(voter.host_ip) {
             bail!(
-                "cluster voter IP `{}` overlaps a workload Docker subnet",
-                voter.host_ip
+                "cluster voter IP `{}` overlaps local workload subnet `{local_subnet}`",
+                voter.host_ip,
             );
         }
     }
@@ -238,11 +224,10 @@ pub fn validate_cluster_config(
         if !control.is_private() {
             bail!("cluster control CIDR `{control}` must be private IPv4 space");
         }
-        if parsed_subnets
-            .iter()
-            .any(|subnet| subnet.overlaps(*control))
-        {
-            bail!("cluster control CIDR `{control}` overlaps a workload Docker subnet");
+        if local.overlaps(*control) {
+            bail!(
+                "cluster control CIDR `{control}` overlaps local workload subnet `{local_subnet}`"
+            );
         }
     }
     for voter in &resolved_nodes {
@@ -254,12 +239,6 @@ pub fn validate_cluster_config(
                 "cluster voter IP `{}` is absent from cluster.control-allow-cidrs",
                 voter.host_ip
             );
-        }
-    }
-    if let Some(local_subnet) = local_subnet {
-        let local = Ipv4Cidr::parse(local_subnet)?;
-        if !parsed_subnets.contains(&local) {
-            bail!("local subnet `{local_subnet}` is absent from cluster.subnets");
         }
     }
     if config.shared_registry.is_none() {
@@ -276,6 +255,7 @@ pub fn resolve_cluster_host_ip(
     config: &ClusterConfig,
     data_dir: &Path,
     role: NodeRole,
+    local_subnet: Option<&str>,
 ) -> Result<Option<Ipv4Addr>> {
     if config.nodes.is_empty() {
         return Ok(None);
@@ -332,10 +312,10 @@ pub fn resolve_cluster_host_ip(
             );
         }
     }
-    for subnet in &config.subnets {
-        if Ipv4Cidr::parse(subnet)?.contains(resolved) {
-            bail!("resolved cluster host IP `{resolved}` overlaps workload subnet `{subnet}`");
-        }
+    if let Some(subnet) = local_subnet
+        && Ipv4Cidr::parse(subnet)?.contains(resolved)
+    {
+        bail!("resolved cluster host IP `{resolved}` overlaps local workload subnet `{subnet}`");
     }
     if !config
         .control_allow_cidrs
@@ -495,11 +475,6 @@ mod tests {
                 "10.20.0.12".parse().unwrap(),
                 "10.20.0.13".parse().unwrap(),
             ],
-            subnets: vec![
-                "172.22.1.0/24".to_string(),
-                "172.22.2.0/24".to_string(),
-                "172.22.3.0/24".to_string(),
-            ],
             control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
             api_port: 3001,
             gateway_port: 3002,
@@ -564,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn clustered_networks_are_separate_and_complete() {
+    fn local_cluster_network_is_separate_and_complete() {
         let config = valid_cluster_config();
         validate_cluster_config(&config, Some("172.22.2.0/24"), NodeRole::Hybrid)
             .expect("valid cluster");

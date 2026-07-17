@@ -898,6 +898,7 @@ async fn run() -> crate::error::Result<bool> {
                     &cfg.cluster,
                     &data_dir,
                     cfg.node.role,
+                    cfg.subnet.as_deref(),
                 )
                 .map_err(|error| Error::invalid_config(error.to_string()))?
                 .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
@@ -921,6 +922,7 @@ async fn run() -> crate::error::Result<bool> {
                     &cfg.cluster,
                     &data_dir,
                     cfg.node.role,
+                    cfg.subnet.as_deref(),
                 )
                 .map_err(|error| Error::invalid_config(error.to_string()))?
                 .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
@@ -964,12 +966,11 @@ async fn run() -> crate::error::Result<bool> {
                     &cfg.cluster,
                     &data_dir,
                     cfg.node.role,
+                    cfg.subnet.as_deref(),
                 )
                 .map_err(|err| Error::invalid_config(err.to_string()))?
                 .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
                 let cluster_id = cluster::identity::load_cluster_id(&data_dir)
-                    .map_err(|err| Error::invalid_config(err.to_string()))?;
-                let voter_cache = cluster::join::load_voter_cache(&data_dir, &cluster_id)
                     .map_err(|err| Error::invalid_config(err.to_string()))?;
                 let node_id = cluster::identity::load_or_create_node_id(&data_dir)
                     .map_err(|err| Error::invalid_config(err.to_string()))?;
@@ -1007,10 +1008,7 @@ async fn run() -> crate::error::Result<bool> {
                         .cluster
                         .resolved_nodes()
                         .map_err(|err| Error::invalid_config(err.to_string()))?,
-                    subnets: voter_cache
-                        .as_ref()
-                        .map(|cache| cache.subnets.clone())
-                        .unwrap_or_else(|| cfg.cluster.subnets.clone()),
+                    subnet: cfg.subnet.clone().expect("validated cluster subnet"),
                     control_allow_cidrs: cfg.cluster.control_allow_cidrs.clone(),
                     api_port: local_endpoint.api_port,
                     gateway_port: local_endpoint.gateway_port,
@@ -2402,10 +2400,14 @@ async fn enable_legacy_cluster(
                 "failed to stop legacy etcd container `{legacy_etcd}`: {error}"
             ))
         })?;
-    let host_ip =
-        cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir, config.node.role)
-            .map_err(|err| Error::invalid_config(err.to_string()))?
-            .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+    let host_ip = cluster::network::resolve_cluster_host_ip(
+        &config.cluster,
+        &data_dir,
+        config.node.role,
+        config.subnet.as_deref(),
+    )
+    .map_err(|err| Error::invalid_config(err.to_string()))?
+    .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
     let migration =
         cluster::migration::migrate(&config.cluster, config.node.role, &data_dir, host_ip)
             .map_err(|error| Error::invalid_config(error.to_string()))?;
@@ -2446,10 +2448,14 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
     }
     let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
     std::fs::create_dir_all(&data_dir)?;
-    let host_ip =
-        cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir, config.node.role)
-            .map_err(|err| Error::invalid_config(err.to_string()))?
-            .ok_or_else(|| Error::invalid_config("cluster host IP was not resolved"))?;
+    let host_ip = cluster::network::resolve_cluster_host_ip(
+        &config.cluster,
+        &data_dir,
+        config.node.role,
+        config.subnet.as_deref(),
+    )
+    .map_err(|err| Error::invalid_config(err.to_string()))?
+    .ok_or_else(|| Error::invalid_config("cluster host IP was not resolved"))?;
     let local_endpoint = config
         .cluster
         .local_endpoint(host_ip, config.node.role)
@@ -2549,15 +2555,16 @@ async fn issue_cluster_node(
     }
     let subnet = cluster::network::Ipv4Cidr::parse(subnet)
         .map_err(|err| Error::invalid_input(err.to_string()))?;
-    if subnet.prefix() != 24
-        || !config
-            .cluster
-            .subnets
-            .iter()
-            .any(|value| value == &subnet.to_string())
+    if subnet.prefix() != 24 || !subnet.is_private() {
+        return Err(Error::invalid_input("--subnet must be a private IPv4 /24"));
+    }
+    if subnet.contains(host_ip)
+        || config.cluster.control_allow_cidrs.iter().any(|cidr| {
+            cluster::network::Ipv4Cidr::parse(cidr).is_ok_and(|control| subnet.overlaps(control))
+        })
     {
         return Err(Error::invalid_input(
-            "--subnet must be a configured cluster.subnets IPv4 /24",
+            "--subnet must not overlap the node host IP or cluster control network",
         ));
     }
     let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());

@@ -540,9 +540,7 @@ mod tests {
             host_ip: endpoint.host_ip,
             role: crate::cluster::NodeRole::Hybrid,
             initial_voters: voters.to_vec(),
-            subnets: (0..voters.len())
-                .map(|offset| format!("172.22.{}.0/24", offset + 1))
-                .collect(),
+            subnet: format!("172.22.{}.0/24", index + 1),
             control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
             api_port: endpoint.api_port,
             gateway_port: endpoint.gateway_port,

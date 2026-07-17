@@ -12,8 +12,8 @@ use chacha20poly1305::{
     aead::{Aead, Generate, KeyInit, Payload},
 };
 use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, GetOptions, MemberAddOptions, PutOptions,
-    TlsOptions, Txn, TxnOp,
+    Client, Compare, CompareOp, ConnectOptions, MemberAddOptions, PutOptions, TlsOptions, Txn,
+    TxnOp,
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -97,7 +97,6 @@ pub struct JoinEnvelope {
 pub struct JoinPayload {
     pub cluster_id: String,
     pub display_name: String,
-    pub subnets: Vec<String>,
     pub voter_host_ips: Vec<Ipv4Addr>,
     #[serde(default)]
     pub voter_endpoints: Vec<ClusterNodeEndpoint>,
@@ -391,7 +390,7 @@ impl JoinCoordinator {
             request.role,
         )?;
         let meta = read_cluster_meta(&mut client).await?;
-        let (voter_endpoints, subnets) = authoritative_topology(&mut client, &self.runtime).await?;
+        let voter_endpoints = authoritative_voters(&mut client, &self.runtime).await?;
         let voter_host_ips = voter_endpoints
             .iter()
             .map(|node| node.host_ip)
@@ -402,7 +401,6 @@ impl JoinCoordinator {
                 cluster_id: meta.cluster_id.clone(),
                 voter_host_ips: voter_host_ips.clone(),
                 voter_endpoints: voter_endpoints.clone(),
-                subnets: subnets.clone(),
                 initial_voter_host_ips: meta.initial_voter_host_ips.clone(),
                 initial_voter_endpoints: meta.initial_voter_endpoints.clone(),
                 api_port: self.runtime.api_port,
@@ -413,7 +411,6 @@ impl JoinCoordinator {
         let payload = JoinPayload {
             cluster_id: meta.cluster_id,
             display_name: self.display_name.clone(),
-            subnets,
             voter_host_ips,
             voter_endpoints,
             initial_voter_host_ips: meta.initial_voter_host_ips,
@@ -531,7 +528,7 @@ impl JoinCoordinator {
                 ),
                 None,
             ),
-            TxnOp::delete(subnet_reservation_key(&record.last_info.subnet), None),
+            TxnOp::delete(subnet_reservation_key(node_id), None),
             TxnOp::delete(format!("{ADMISSION_PREFIX}{node_id}"), None),
             TxnOp::delete(format!("{JOIN_INTENT_PREFIX}{node_id}"), None),
             TxnOp::put(
@@ -554,7 +551,7 @@ impl JoinCoordinator {
             bail!("leadership changed while cleaning removed node state");
         }
         let meta = read_cluster_meta(&mut client).await?;
-        let (voter_endpoints, subnets) = authoritative_topology(&mut client, &self.runtime).await?;
+        let voter_endpoints = authoritative_voters(&mut client, &self.runtime).await?;
         let voter_host_ips = voter_endpoints.iter().map(|node| node.host_ip).collect();
         persist_voter_cache(
             &self.data_dir,
@@ -562,7 +559,6 @@ impl JoinCoordinator {
                 cluster_id: meta.cluster_id,
                 voter_host_ips,
                 voter_endpoints,
-                subnets,
                 initial_voter_host_ips: meta.initial_voter_host_ips,
                 initial_voter_endpoints: meta.initial_voter_endpoints,
                 api_port: self.runtime.api_port,
@@ -838,29 +834,16 @@ async fn validate_reservations(
             bail!("cluster host IP is already claimed");
         }
     }
-    let requested_subnet = crate::cluster::network::Ipv4Cidr::parse(&request.subnet)?;
-    let reservations = client
-        .get(
-            "/maetro/cluster/subnets/",
-            Some(GetOptions::new().with_prefix()),
-        )
+    let subnet = client
+        .get(subnet_reservation_key(&request.node_id), None)
         .await?;
-    for existing in reservations.kvs() {
+    if let Some(existing) = subnet.kvs().first() {
         let value: serde_json::Value = serde_json::from_slice(existing.value())?;
-        let Some(cidr) = value.get("cidr").and_then(serde_json::Value::as_str) else {
-            bail!("invalid durable subnet reservation");
-        };
-        let parsed = crate::cluster::network::Ipv4Cidr::parse(cidr)?;
-        if parsed == requested_subnet {
-            if value
-                .get("nodeId")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|node_id| node_id != request.node_id)
-            {
-                bail!("Docker subnet is already reserved by another node");
-            }
-        } else if parsed.overlaps(requested_subnet) {
-            bail!("Docker subnet overlaps an existing cluster reservation");
+        if value.get("cidr").and_then(serde_json::Value::as_str) != Some(request.subnet.as_str())
+            || value.get("nodeId").and_then(serde_json::Value::as_str)
+                != Some(request.node_id.as_str())
+        {
+            bail!("node already has a different workload subnet reservation");
         }
     }
     Ok(())
@@ -897,7 +880,7 @@ async fn reserve_join_resources(
             control_reservation,
         ),
         (
-            subnet_reservation_key(&request.subnet),
+            subnet_reservation_key(&request.node_id),
             serde_json::json!({
                 "cidr": request.subnet,
                 "nodeId": request.node_id,
@@ -975,10 +958,10 @@ async fn read_cluster_meta(client: &mut Client) -> Result<crate::cluster::Cluste
     Ok(serde_json::from_slice(entry.value())?)
 }
 
-async fn authoritative_topology(
+async fn authoritative_voters(
     client: &mut Client,
     runtime: &ClusterRuntime,
-) -> Result<(Vec<ClusterNodeEndpoint>, Vec<String>)> {
+) -> Result<Vec<ClusterNodeEndpoint>> {
     let members = client.member_list().await?;
     let mut voter_endpoints = BTreeSet::new();
     for member in members.members() {
@@ -1016,23 +999,7 @@ async fn authoritative_topology(
             voter_endpoints.insert(endpoint);
         }
     }
-    let response = client
-        .get(
-            "/maetro/cluster/subnets/",
-            Some(GetOptions::new().with_prefix()),
-        )
-        .await?;
-    let mut subnets = BTreeSet::new();
-    for entry in response.kvs() {
-        let value: serde_json::Value = serde_json::from_slice(entry.value())?;
-        if let Some(cidr) = value.get("cidr").and_then(serde_json::Value::as_str) {
-            subnets.insert(cidr.to_string());
-        }
-    }
-    Ok((
-        voter_endpoints.into_iter().collect(),
-        subnets.into_iter().collect(),
-    ))
+    Ok(voter_endpoints.into_iter().collect())
 }
 
 fn peer_address(peer_url: &str) -> Result<(Ipv4Addr, u16)> {
@@ -1057,11 +1024,8 @@ fn control_reservation_key(host_ip: Ipv4Addr, identity_api_port: Option<u16>) ->
     format!("/maetro/cluster/control-addresses/{suffix}")
 }
 
-fn subnet_reservation_key(subnet: &str) -> String {
-    format!(
-        "/maetro/cluster/subnets/{}",
-        subnet.replace('.', "-").replace('/', "_")
-    )
+fn subnet_reservation_key(node_id: &str) -> String {
+    format!("/maetro/cluster/subnets/{node_id}")
 }
 
 fn leadership_compare(token: &LeadershipToken) -> Compare {
@@ -1104,7 +1068,6 @@ pub struct ClusterVoterCache {
     pub voter_host_ips: Vec<Ipv4Addr>,
     #[serde(default)]
     pub voter_endpoints: Vec<ClusterNodeEndpoint>,
-    pub subnets: Vec<String>,
     pub initial_voter_host_ips: Vec<Ipv4Addr>,
     #[serde(default)]
     pub initial_voter_endpoints: Vec<ClusterNodeEndpoint>,
@@ -1470,7 +1433,7 @@ pub async fn run_voter_cache_sync(
             if meta.cluster_id != runtime.cluster_id {
                 bail!("live cluster id differs from the local identity");
             }
-            let (voter_endpoints, subnets) = authoritative_topology(&mut client, &runtime).await?;
+            let voter_endpoints = authoritative_voters(&mut client, &runtime).await?;
             let voter_host_ips = voter_endpoints.iter().map(|node| node.host_ip).collect();
             persist_voter_cache(
                 &data_dir,
@@ -1478,7 +1441,6 @@ pub async fn run_voter_cache_sync(
                     cluster_id: meta.cluster_id,
                     voter_host_ips,
                     voter_endpoints,
-                    subnets,
                     initial_voter_host_ips: meta.initial_voter_host_ips,
                     initial_voter_endpoints: meta.initial_voter_endpoints,
                     api_port: runtime.api_port,
@@ -1561,7 +1523,6 @@ mod tests {
         JoinPayload {
             cluster_id: "0123456789abcdef0123456789abcdef".to_string(),
             display_name: "test".to_string(),
-            subnets: vec!["172.22.4.0/24".to_string()],
             voter_host_ips: vec!["10.20.0.11".parse().unwrap()],
             voter_endpoints: Vec::new(),
             initial_voter_host_ips: vec!["10.20.0.11".parse().unwrap()],
@@ -1709,7 +1670,7 @@ mod tests {
                 "10.20.0.12:3101".parse().unwrap(),
                 "10.20.0.13:3201".parse().unwrap(),
             ],
-            subnets: Vec::new(),
+            subnet: "172.22.1.0/24".to_string(),
             control_allow_cidrs: Vec::new(),
             api_port: 3001,
             gateway_port: 3002,
@@ -1727,6 +1688,14 @@ mod tests {
         request.etcd_client_port = 3303;
         request.etcd_peer_port = 3304;
         assert!(voter_admission_required(&runtime, &request, false));
+    }
+
+    #[test]
+    fn workload_subnet_reservations_are_scoped_to_node_identity() {
+        assert_ne!(
+            subnet_reservation_key("node00000001"),
+            subnet_reservation_key("node00000002")
+        );
     }
 
     #[test]
@@ -1757,7 +1726,6 @@ mod tests {
             cluster_id: cluster_id.to_string(),
             voter_host_ips: vec!["10.20.0.11".parse().unwrap()],
             voter_endpoints: Vec::new(),
-            subnets: vec!["172.22.1.0/24".to_string()],
             initial_voter_host_ips: vec!["10.20.0.11".parse().unwrap()],
             initial_voter_endpoints: Vec::new(),
             api_port: 3001,

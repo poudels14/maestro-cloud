@@ -156,7 +156,7 @@ pub struct ClusterRuntime {
     pub host_ip: Ipv4Addr,
     pub role: NodeRole,
     pub initial_voters: Vec<ClusterNodeEndpoint>,
-    pub subnets: Vec<String>,
+    pub subnet: String,
     pub control_allow_cidrs: Vec<String>,
     pub api_port: u16,
     pub gateway_port: u16,

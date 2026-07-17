@@ -150,9 +150,13 @@ async fn load_join_config(
     }
     let data_dir = base_data_dir.join(config.cluster.name.to_lowercase());
     std::fs::create_dir_all(&data_dir)?;
-    let host_ip =
-        cluster::network::resolve_cluster_host_ip(&config.cluster, &data_dir, config.node.role)
-            .map_err(|error| Error::invalid_config(error.to_string()))?
-            .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
+    let host_ip = cluster::network::resolve_cluster_host_ip(
+        &config.cluster,
+        &data_dir,
+        config.node.role,
+        config.subnet.as_deref(),
+    )
+    .map_err(|error| Error::invalid_config(error.to_string()))?
+    .ok_or_else(|| Error::invalid_config("failed to resolve cluster host IP"))?;
     Ok((config, data_dir, host_ip))
 }

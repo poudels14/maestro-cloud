@@ -51,8 +51,6 @@ struct UpgradeConfig {
 struct UpgradeClusterConfig {
     #[serde(default)]
     nodes: Vec<serde_json::Value>,
-    #[serde(default)]
-    subnets: Vec<String>,
 }
 
 pub async fn run_upgrade(host: &str, yes: bool) -> Result<()> {
@@ -115,7 +113,7 @@ async fn detect_upgrade_mode(client: &reqwest::Client, base: &str) -> Result<Upg
     let registered_nodes = nodes.as_ref().map(Vec::len).ok();
     let configured_nodes = config
         .as_ref()
-        .map(|config| config.cluster.nodes.len().max(config.cluster.subnets.len()))
+        .map(|config| config.cluster.nodes.len())
         .ok();
     let node_count = registered_nodes.into_iter().chain(configured_nodes).max();
 
@@ -395,7 +393,7 @@ mod tests {
             axum::http::StatusCode::OK,
             serde_json::json!([{"nodeId": "node-a"}, {"nodeId": "node-b", "alive": false}]),
             axum::http::StatusCode::OK,
-            serde_json::json!({"cluster": {"nodes": ["10.0.0.1"], "subnets": ["10.1.0.0/24"]}}),
+            serde_json::json!({"cluster": {"nodes": ["10.0.0.1"]}}),
         )
         .await
         .expect("detect multi-node mode");
@@ -403,15 +401,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upgrade_mode_uses_configured_subnets_when_cluster_status_is_unavailable() {
+    async fn upgrade_mode_uses_configured_nodes_when_cluster_status_is_unavailable() {
         let mode = detect_mode(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({"message": "election: no leader"}),
             axum::http::StatusCode::OK,
             serde_json::json!({
                 "cluster": {
-                    "nodes": ["10.0.0.1"],
-                    "subnets": ["10.1.0.0/24", "10.1.1.0/24"]
+                    "nodes": ["10.0.0.1", "10.0.0.2"]
                 }
             }),
         )
@@ -428,8 +425,7 @@ mod tests {
             axum::http::StatusCode::OK,
             serde_json::json!({
                 "cluster": {
-                    "nodes": ["10.0.0.1"],
-                    "subnets": ["10.1.0.0/24"]
+                    "nodes": ["10.0.0.1"]
                 }
             }),
         )
