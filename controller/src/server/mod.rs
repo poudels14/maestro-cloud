@@ -18,11 +18,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, delete, get, patch, post},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flate2::read::GzDecoder;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, future::join_all};
 use http_body_util::BodyExt;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -225,6 +226,11 @@ impl Server {
             .route("/api/system/restart", post(Self::restart_system))
             .route("/api/cluster", get(Self::get_cluster_info))
             .route("/api/cluster/nodes", get(Self::get_cluster_nodes))
+            .route("/api/cluster/logs", get(Self::get_cluster_logs))
+            .route(
+                "/api/cluster/logs/histogram",
+                get(Self::get_cluster_log_histogram),
+            )
             .route(
                 "/api/cluster/unschedulable",
                 get(Self::get_cluster_unschedulable),
@@ -2350,6 +2356,206 @@ impl Server {
         Ok(StatusCode::NO_CONTENT)
     }
 
+    async fn get_cluster_logs(
+        headers: HeaderMap,
+        Query(query): Query<ClusterLogsQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<ClusterLogPage>, (StatusCode, String)> {
+        validate_cluster_logs_query(&query)?;
+        let original_cursor = decode_cluster_log_cursor(query.cursor.as_deref())?;
+        let live_nodes = state
+            .store
+            .list_cluster_nodes()
+            .await
+            .map_err(internal_error)?;
+        let local_node_id = state.local_node_id.as_deref();
+
+        if query.node_id.is_some() || local_node_id.is_none() {
+            let node_id = local_node_id
+                .or(query.node_id.as_deref())
+                .unwrap_or("standalone");
+            let node_name = live_nodes
+                .iter()
+                .find(|node| node.node_id == node_id)
+                .map(|node| node.hostname.as_str())
+                .unwrap_or(node_id);
+            return read_local_cluster_logs(&state, &query, node_id, node_name)
+                .await
+                .map(Json);
+        }
+
+        let local_node_id = local_node_id.expect("checked above").to_string();
+        let nodes = if live_nodes.is_empty() {
+            return read_local_cluster_logs(&state, &query, &local_node_id, &local_node_id)
+                .await
+                .map(Json);
+        } else {
+            live_nodes
+        };
+        let authorization = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let client = cluster_http_client().map_err(internal_error)?;
+        let requests = nodes.into_iter().map(|node| {
+            let state = state.clone();
+            let query = query.clone();
+            let client = client.clone();
+            let authorization = authorization.clone();
+            let local_node_id = local_node_id.clone();
+            async move {
+                let result = if node.node_id == local_node_id {
+                    read_local_cluster_logs(&state, &query, &node.node_id, &node.hostname).await
+                } else {
+                    fetch_cluster_logs_from_node(&client, &node, &query, authorization.as_deref())
+                        .await
+                };
+                (node, result)
+            }
+        });
+
+        let mut entries = Vec::new();
+        let mut cursor = original_cursor;
+        let mut unavailable_nodes = Vec::new();
+        let mut successful_nodes = 0_usize;
+        for (node, result) in join_all(requests).await {
+            match result {
+                Ok(page) => {
+                    successful_nodes += 1;
+                    let node_cursor =
+                        decode_cluster_log_cursor(Some(&page.cursor)).map_err(|(_, error)| {
+                            (
+                                StatusCode::BAD_GATEWAY,
+                                format!(
+                                    "node `{}` returned an invalid log cursor: {error}",
+                                    node.node_id
+                                ),
+                            )
+                        })?;
+                    cursor.streams.extend(node_cursor.streams);
+                    entries.extend(page.entries);
+                }
+                Err((_, error)) => unavailable_nodes.push(ClusterLogNodeError {
+                    node_id: node.node_id,
+                    node_name: node.hostname,
+                    error,
+                }),
+            }
+        }
+        if successful_nodes == 0 {
+            let detail = unavailable_nodes
+                .first()
+                .map(|node| node.error.as_str())
+                .unwrap_or("no live nodes returned logs");
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!("failed to fetch cluster logs: {detail}"),
+            ));
+        }
+
+        entries.sort_by(cluster_log_entry_order);
+        if query.cursor.is_none() {
+            retain_log_tail(
+                &mut entries,
+                query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT),
+            );
+        }
+        Ok(Json(ClusterLogPage {
+            entries,
+            cursor: encode_cluster_log_cursor(&cursor)?,
+            partial: !unavailable_nodes.is_empty(),
+            unavailable_nodes,
+        }))
+    }
+
+    async fn get_cluster_log_histogram(
+        headers: HeaderMap,
+        Query(query): Query<ClusterLogHistogramQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<ClusterLogHistogramResponse>, (StatusCode, String)> {
+        validate_cluster_log_histogram_query(&query)?;
+        let live_nodes = state
+            .store
+            .list_cluster_nodes()
+            .await
+            .map_err(internal_error)?;
+        let local_node_id = state.local_node_id.as_deref();
+
+        if query.node_id.is_some() || local_node_id.is_none() {
+            return read_local_cluster_log_histogram(&state, &query)
+                .await
+                .map(|histogram| {
+                    Json(ClusterLogHistogramResponse {
+                        histogram,
+                        partial: false,
+                        unavailable_nodes: Vec::new(),
+                    })
+                });
+        }
+
+        let local_node_id = local_node_id.expect("checked above").to_string();
+        if live_nodes.is_empty() {
+            return read_local_cluster_log_histogram(&state, &query)
+                .await
+                .map(|histogram| {
+                    Json(ClusterLogHistogramResponse {
+                        histogram,
+                        partial: false,
+                        unavailable_nodes: Vec::new(),
+                    })
+                });
+        }
+        let authorization = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let client = cluster_http_client().map_err(internal_error)?;
+        let requests = live_nodes.into_iter().map(|node| {
+            let state = state.clone();
+            let query = query.clone();
+            let client = client.clone();
+            let authorization = authorization.clone();
+            let local_node_id = local_node_id.clone();
+            async move {
+                let result = if node.node_id == local_node_id {
+                    read_local_cluster_log_histogram(&state, &query).await
+                } else {
+                    fetch_cluster_log_histogram_from_node(
+                        &client,
+                        &node,
+                        &query,
+                        authorization.as_deref(),
+                    )
+                    .await
+                    .map(|response| response.histogram)
+                };
+                (node, result)
+            }
+        });
+
+        let mut histogram = None;
+        let mut unavailable_nodes = Vec::new();
+        for (node, result) in join_all(requests).await {
+            match result {
+                Ok(node_histogram) => merge_cluster_log_histogram(&mut histogram, node_histogram),
+                Err((_, error)) => unavailable_nodes.push(ClusterLogNodeError {
+                    node_id: node.node_id,
+                    node_name: node.hostname,
+                    error,
+                }),
+            }
+        }
+        let histogram = match histogram {
+            Some(histogram) => histogram,
+            None => read_local_cluster_log_histogram(&state, &query).await?,
+        };
+        Ok(Json(ClusterLogHistogramResponse {
+            histogram,
+            partial: !unavailable_nodes.is_empty(),
+            unavailable_nodes,
+        }))
+    }
+
     async fn get_deployment_logs(
         Path((service_id, deployment_id)): Path<(String, String)>,
         Query(query): Query<LogsQuery>,
@@ -3161,7 +3367,7 @@ fn metrics_time_range(from: Option<i64>, to: Option<i64>) -> (i64, i64) {
     (from, to)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 struct LogsQuery {
     tail: Option<usize>,
     after: Option<i64>,
@@ -3172,7 +3378,7 @@ struct LogsQuery {
     query: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 struct LogHistogramHttpQuery {
     from: Option<i64>,
     to: Option<i64>,
@@ -3182,6 +3388,72 @@ struct LogHistogramHttpQuery {
     bucket_ms: Option<i64>,
     #[serde(rename = "groupBy")]
     group_by: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogsQuery {
+    tail: Option<usize>,
+    cursor: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+    query: Option<String>,
+    node_id: Option<String>,
+    service_id: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogHistogramQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    query: Option<String>,
+    node_id: Option<String>,
+    service_id: Option<String>,
+    bucket_ms: Option<i64>,
+    group_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ClusterLogCursor {
+    streams: BTreeMap<String, i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogEntry {
+    node_id: String,
+    node_name: String,
+    service_id: String,
+    tier: String,
+    #[serde(flatten)]
+    entry: LogEntry,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogNodeError {
+    node_id: String,
+    node_name: String,
+    error: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogPage {
+    entries: Vec<ClusterLogEntry>,
+    cursor: String,
+    partial: bool,
+    unavailable_nodes: Vec<ClusterLogNodeError>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterLogHistogramResponse {
+    #[serde(flatten)]
+    histogram: LogHistogram,
+    partial: bool,
+    unavailable_nodes: Vec<ClusterLogNodeError>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3725,6 +3997,407 @@ fn join_unavailable() -> (StatusCode, String) {
         StatusCode::SERVICE_UNAVAILABLE,
         "cluster join service unavailable".to_string(),
     )
+}
+
+fn validate_cluster_log_selection(service_id: Option<&str>) -> Result<(), (StatusCode, String)> {
+    if let Some(service_id) = service_id {
+        crate::validation::validate_service_id(service_id.trim(), "serviceId")
+            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+    }
+    Ok(())
+}
+
+fn validate_cluster_logs_query(query: &ClusterLogsQuery) -> Result<(), (StatusCode, String)> {
+    validate_cluster_log_selection(query.service_id.as_deref())?;
+    let scope = cluster_log_scopes(query.service_id.as_deref())
+        .into_iter()
+        .next()
+        .expect("cluster log scopes are never empty")
+        .1;
+    build_log_read_query(
+        scope,
+        None,
+        &LogsQuery {
+            tail: query.tail,
+            after: None,
+            before: None,
+            from: query.from,
+            to: query.to,
+            phase: None,
+            query: query.query.clone(),
+        },
+        query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT),
+    )?;
+    Ok(())
+}
+
+fn validate_cluster_log_histogram_query(
+    query: &ClusterLogHistogramQuery,
+) -> Result<(), (StatusCode, String)> {
+    validate_cluster_log_selection(query.service_id.as_deref())?;
+    let scope = cluster_log_scopes(query.service_id.as_deref())
+        .into_iter()
+        .next()
+        .expect("cluster log scopes are never empty")
+        .1;
+    build_log_histogram_query(
+        scope,
+        None,
+        &LogHistogramHttpQuery {
+            from: query.from,
+            to: query.to,
+            phase: None,
+            query: query.query.clone(),
+            bucket_ms: query.bucket_ms,
+            group_by: query.group_by.clone(),
+        },
+    )?;
+    Ok(())
+}
+
+fn cluster_log_scopes(service_id: Option<&str>) -> Vec<(&'static str, LogReadScope)> {
+    match service_id.map(str::trim) {
+        None => vec![
+            ("service", LogReadScope::AllServices),
+            ("system", LogReadScope::AllSystem),
+        ],
+        Some(service_id) if is_system_service_id(service_id) => vec![(
+            "system",
+            LogReadScope::Sources(system_log_sources(service_id)),
+        )],
+        Some(service_id) => vec![("service", LogReadScope::Prefix(format!("{service_id}/")))],
+    }
+}
+
+fn is_system_service_id(service_id: &str) -> bool {
+    crate::deployment::SYSTEM_SERVICES
+        .iter()
+        .any(|service| service.id == service_id)
+}
+
+fn cluster_log_stream_key(node_id: &str, tier: &str) -> String {
+    format!("{node_id}:{tier}")
+}
+
+fn encode_cluster_log_cursor(cursor: &ClusterLogCursor) -> Result<String, (StatusCode, String)> {
+    serde_json::to_vec(cursor)
+        .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+        .map_err(internal_error)
+}
+
+fn decode_cluster_log_cursor(
+    cursor: Option<&str>,
+) -> Result<ClusterLogCursor, (StatusCode, String)> {
+    let Some(cursor) = cursor else {
+        return Ok(ClusterLogCursor::default());
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid cluster log cursor".to_string(),
+        )
+    })?;
+    let decoded: ClusterLogCursor = serde_json::from_slice(&bytes).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid cluster log cursor".to_string(),
+        )
+    })?;
+    if decoded.streams.values().any(|cursor| *cursor < 0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid cluster log cursor".to_string(),
+        ));
+    }
+    Ok(decoded)
+}
+
+async fn read_local_cluster_logs(
+    state: &AppState,
+    query: &ClusterLogsQuery,
+    node_id: &str,
+    node_name: &str,
+) -> Result<ClusterLogPage, (StatusCode, String)> {
+    let input_cursor = decode_cluster_log_cursor(query.cursor.as_deref())?;
+    let mut output_cursor = ClusterLogCursor::default();
+    let mut output = Vec::new();
+    let limit = query.tail.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT);
+    let Some(log_store) = &state.log_store else {
+        return Ok(ClusterLogPage {
+            entries: output,
+            cursor: encode_cluster_log_cursor(&output_cursor)?,
+            partial: false,
+            unavailable_nodes: Vec::new(),
+        });
+    };
+
+    for (tier, scope) in cluster_log_scopes(query.service_id.as_deref()) {
+        let stream_key = cluster_log_stream_key(node_id, tier);
+        let after = input_cursor.streams.get(&stream_key).copied();
+        let latest = log_store
+            .latest_log_seq(&scope)
+            .await
+            .map_err(internal_error)?;
+        let read = build_log_read_query(
+            scope,
+            None,
+            &LogsQuery {
+                tail: query.tail,
+                after,
+                before: None,
+                from: query.from,
+                to: query.to,
+                phase: None,
+                query: query.query.clone(),
+            },
+            limit,
+        )?;
+        let entries = log_store.read_logs(read).await.map_err(internal_error)?;
+        let last_entry_seq = entries.last().map(|entry| entry.seq);
+        let next_seq =
+            next_cluster_log_stream_cursor(after, latest, entries.len(), limit, last_entry_seq);
+        output_cursor.streams.insert(stream_key, next_seq);
+        output.extend(entries.into_iter().map(|entry| ClusterLogEntry {
+            node_id: node_id.to_string(),
+            node_name: node_name.to_string(),
+            service_id: cluster_log_entry_service_id(tier, &entry, query.service_id.as_deref()),
+            tier: tier.to_string(),
+            entry,
+        }));
+    }
+
+    output.sort_by(cluster_log_entry_order);
+    if query.cursor.is_none() {
+        retain_log_tail(&mut output, limit);
+    }
+    Ok(ClusterLogPage {
+        entries: output,
+        cursor: encode_cluster_log_cursor(&output_cursor)?,
+        partial: false,
+        unavailable_nodes: Vec::new(),
+    })
+}
+
+fn next_cluster_log_stream_cursor(
+    previous: Option<i64>,
+    latest: i64,
+    returned: usize,
+    limit: usize,
+    last_entry: Option<i64>,
+) -> i64 {
+    match previous {
+        Some(previous) if returned >= limit => last_entry.unwrap_or(previous),
+        Some(previous) => last_entry.unwrap_or(previous).max(latest),
+        None => last_entry.unwrap_or_default().max(latest),
+    }
+}
+
+fn cluster_log_entry_service_id(
+    tier: &str,
+    entry: &LogEntry,
+    selected_service_id: Option<&str>,
+) -> String {
+    if let Some(service_id) = selected_service_id {
+        return service_id.to_string();
+    }
+    if tier == "service" {
+        return entry
+            .source
+            .split('/')
+            .next()
+            .unwrap_or(entry.source.as_ref())
+            .to_string();
+    }
+    if entry.source.as_ref() == "maestro-controller" {
+        "maestro-probe".to_string()
+    } else {
+        entry.source.to_string()
+    }
+}
+
+fn cluster_log_entry_order(left: &ClusterLogEntry, right: &ClusterLogEntry) -> std::cmp::Ordering {
+    left.entry
+        .ts
+        .cmp(&right.entry.ts)
+        .then_with(|| left.node_id.cmp(&right.node_id))
+        .then_with(|| left.tier.cmp(&right.tier))
+        .then_with(|| left.entry.seq.cmp(&right.entry.seq))
+}
+
+fn retain_log_tail(entries: &mut Vec<ClusterLogEntry>, limit: usize) {
+    if entries.len() > limit {
+        entries.drain(..entries.len() - limit);
+    }
+}
+
+async fn read_local_cluster_log_histogram(
+    state: &AppState,
+    query: &ClusterLogHistogramQuery,
+) -> Result<LogHistogram, (StatusCode, String)> {
+    let mut histogram = None;
+    for (_, scope) in cluster_log_scopes(query.service_id.as_deref()) {
+        let request = build_log_histogram_query(
+            scope,
+            None,
+            &LogHistogramHttpQuery {
+                from: query.from,
+                to: query.to,
+                phase: None,
+                query: query.query.clone(),
+                bucket_ms: query.bucket_ms,
+                group_by: query.group_by.clone(),
+            },
+        )?;
+        let buckets = match &state.log_store {
+            Some(log_store) => log_store
+                .read_log_histogram(request.clone())
+                .await
+                .map_err(internal_error)?,
+            None => Vec::new(),
+        };
+        merge_cluster_log_histogram(&mut histogram, complete_log_histogram(&request, buckets));
+    }
+    histogram.ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cluster log scope is empty".to_string(),
+        )
+    })
+}
+
+fn merge_cluster_log_histogram(target: &mut Option<LogHistogram>, incoming: LogHistogram) {
+    let Some(target) = target else {
+        *target = Some(incoming);
+        return;
+    };
+    let mut incoming = incoming
+        .buckets
+        .into_iter()
+        .map(|bucket| (bucket.ts, bucket))
+        .collect::<BTreeMap<_, _>>();
+    for bucket in &mut target.buckets {
+        let Some(next) = incoming.remove(&bucket.ts) else {
+            continue;
+        };
+        bucket.count = bucket.count.saturating_add(next.count);
+        for (level, count) in next.levels {
+            let total = bucket.levels.entry(level).or_default();
+            *total = total.saturating_add(count);
+        }
+    }
+}
+
+async fn fetch_cluster_logs_from_node(
+    client: &reqwest::Client,
+    node: &crate::cluster::NodeInfo,
+    query: &ClusterLogsQuery,
+    authorization: Option<&str>,
+) -> Result<ClusterLogPage, (StatusCode, String)> {
+    let mut url = cluster_log_node_url(node, "/api/cluster/logs")?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("nodeId", &node.node_id);
+        pairs.extend_pairs(cluster_log_query_pairs(query));
+    }
+    fetch_cluster_log_json(client, url, authorization).await
+}
+
+async fn fetch_cluster_log_histogram_from_node(
+    client: &reqwest::Client,
+    node: &crate::cluster::NodeInfo,
+    query: &ClusterLogHistogramQuery,
+    authorization: Option<&str>,
+) -> Result<ClusterLogHistogramResponse, (StatusCode, String)> {
+    let mut url = cluster_log_node_url(node, "/api/cluster/logs/histogram")?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("nodeId", &node.node_id);
+        if let Some(from) = query.from {
+            pairs.append_pair("from", &from.to_string());
+        }
+        if let Some(to) = query.to {
+            pairs.append_pair("to", &to.to_string());
+        }
+        if let Some(search) = query.query.as_deref() {
+            pairs.append_pair("query", search);
+        }
+        if let Some(service_id) = query.service_id.as_deref() {
+            pairs.append_pair("serviceId", service_id);
+        }
+        if let Some(bucket_ms) = query.bucket_ms {
+            pairs.append_pair("bucketMs", &bucket_ms.to_string());
+        }
+        if let Some(group_by) = query.group_by.as_deref() {
+            pairs.append_pair("groupBy", group_by);
+        }
+    }
+    fetch_cluster_log_json(client, url, authorization).await
+}
+
+fn cluster_log_node_url(
+    node: &crate::cluster::NodeInfo,
+    path: &str,
+) -> Result<reqwest::Url, (StatusCode, String)> {
+    reqwest::Url::parse(&format!(
+        "https://{}:{}{path}",
+        node.cluster_host_ip, node.cluster_api_port
+    ))
+    .map_err(internal_error)
+}
+
+fn cluster_log_query_pairs(query: &ClusterLogsQuery) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if let Some(tail) = query.tail {
+        pairs.push(("tail".to_string(), tail.to_string()));
+    }
+    if let Some(cursor) = query.cursor.as_deref() {
+        pairs.push(("cursor".to_string(), cursor.to_string()));
+    }
+    if let Some(from) = query.from {
+        pairs.push(("from".to_string(), from.to_string()));
+    }
+    if let Some(to) = query.to {
+        pairs.push(("to".to_string(), to.to_string()));
+    }
+    if let Some(search) = query.query.as_deref() {
+        pairs.push(("query".to_string(), search.to_string()));
+    }
+    if let Some(service_id) = query.service_id.as_deref() {
+        pairs.push(("serviceId".to_string(), service_id.to_string()));
+    }
+    pairs
+}
+
+async fn fetch_cluster_log_json<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    authorization: Option<&str>,
+) -> Result<T, (StatusCode, String)> {
+    let mut request = client.get(url);
+    if let Some(authorization) = authorization {
+        request = request.header(axum::http::header::AUTHORIZATION, authorization);
+    }
+    let response = request.send().await.map_err(|error| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("failed to fetch node logs: {error}"),
+        )
+    })?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(internal_error)?;
+    if !status.is_success() {
+        let message = String::from_utf8_lossy(&body);
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("node log API returned {status}: {message}"),
+        ));
+    }
+    serde_json::from_slice(&body).map_err(|error| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("node log API returned invalid JSON: {error}"),
+        )
+    })
 }
 
 fn parse_phase(phase: Option<&str>) -> Result<Option<LogOrigin>, (StatusCode, String)> {

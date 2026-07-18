@@ -306,6 +306,75 @@ export interface LogPage {
   cursor: number;
 }
 
+export interface ClusterLogNodeError {
+  nodeId: string;
+  nodeName: string;
+  error: string;
+}
+
+export interface ClusterLogPage {
+  entries: LogEntry[];
+  cursor: string;
+  partial: boolean;
+  unavailableNodes: ClusterLogNodeError[];
+}
+
+export interface ClusterLogHistogram extends LogHistogram {
+  partial: boolean;
+  unavailableNodes: ClusterLogNodeError[];
+}
+
+export async function getClusterLogs(params: {
+  tail?: number;
+  cursor?: string;
+  nodeId?: string;
+  serviceId?: string;
+  query?: string;
+  from?: number;
+  to?: number;
+}): Promise<ClusterLogPage> {
+  const url = new URL("/api/cluster/logs", location.origin);
+  if (params.tail != null) url.searchParams.set("tail", String(params.tail));
+  if (params.cursor) url.searchParams.set("cursor", params.cursor);
+  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
+  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
+  if (params.query) url.searchParams.set("query", params.query);
+  if (params.from != null) url.searchParams.set("from", String(params.from));
+  if (params.to != null) url.searchParams.set("to", String(params.to));
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch cluster logs: ${res.statusText}`);
+  }
+  const raw = (await res.json()) as Omit<ClusterLogPage, "entries"> & {
+    entries: Record<string, unknown>[];
+  };
+  return { ...raw, entries: mapLogEntries(raw.entries) };
+}
+
+export async function getClusterLogHistogram(params: {
+  from: number;
+  to: number;
+  nodeId?: string;
+  serviceId?: string;
+  query?: string;
+  bucketMs?: number;
+}): Promise<ClusterLogHistogram> {
+  const url = new URL("/api/cluster/logs/histogram", location.origin);
+  url.searchParams.set("from", String(params.from));
+  url.searchParams.set("to", String(params.to));
+  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
+  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
+  if (params.query) url.searchParams.set("query", params.query);
+  if (params.bucketMs != null) url.searchParams.set("bucketMs", String(params.bucketMs));
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Failed to fetch cluster log histogram: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 function mapLogPage(res: Response, raw: Record<string, unknown>[]): LogPage {
   const entries = mapLogEntries(raw);
   const header = Number(res.headers.get("x-maestro-log-cursor"));
@@ -333,6 +402,10 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
       source: entry.source as string | undefined,
       origin: entry.origin as string | undefined,
       hostname,
+      nodeId: entry.nodeId as string | undefined,
+      nodeName: entry.nodeName as string | undefined,
+      serviceId: entry.serviceId as string | undefined,
+      tier: entry.tier as LogEntry["tier"],
       tags,
       attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
     };

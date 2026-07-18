@@ -867,6 +867,106 @@ fn log_query_is_validated_before_store_access() {
 }
 
 #[test]
+fn cluster_log_cursor_tracks_independent_node_tiers() {
+    let cursor = ClusterLogCursor {
+        streams: BTreeMap::from([
+            (cluster_log_stream_key("node-a", "service"), 41),
+            (cluster_log_stream_key("node-a", "system"), 12),
+            (cluster_log_stream_key("node-b", "service"), 99),
+        ]),
+    };
+    let encoded = encode_cluster_log_cursor(&cursor).expect("encode cursor");
+    assert_eq!(
+        decode_cluster_log_cursor(Some(&encoded))
+            .expect("decode cursor")
+            .streams,
+        cursor.streams
+    );
+    assert!(decode_cluster_log_cursor(Some("not-base64!")).is_err());
+
+    let invalid = ClusterLogCursor {
+        streams: BTreeMap::from([("node-a:service".to_string(), -1)]),
+    };
+    let invalid = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&invalid).expect("serialize cursor"));
+    assert!(decode_cluster_log_cursor(Some(&invalid)).is_err());
+}
+
+#[test]
+fn cluster_log_cursor_catches_up_without_skipping_a_full_page() {
+    assert_eq!(
+        next_cluster_log_stream_cursor(Some(10), 40, 0, 500, None),
+        40,
+        "an empty filtered page advances to the storage watermark"
+    );
+    assert_eq!(
+        next_cluster_log_stream_cursor(Some(10), 900, 500, 500, Some(510)),
+        510,
+        "a full page advances only to its last returned entry"
+    );
+    assert_eq!(
+        next_cluster_log_stream_cursor(Some(510), 900, 390, 500, Some(900)),
+        900,
+        "the final partial page catches up to the storage watermark"
+    );
+}
+
+#[test]
+fn cluster_log_service_filter_selects_the_correct_tier() {
+    assert_eq!(
+        cluster_log_scopes(None),
+        vec![
+            ("service", LogReadScope::AllServices),
+            ("system", LogReadScope::AllSystem)
+        ]
+    );
+    assert_eq!(
+        cluster_log_scopes(Some("api")),
+        vec![("service", LogReadScope::Prefix("api/".to_string()))]
+    );
+    assert_eq!(
+        cluster_log_scopes(Some("maestro-probe")),
+        vec![(
+            "system",
+            LogReadScope::Sources(vec![
+                "maestro-probe".to_string(),
+                "maestro-controller".to_string()
+            ])
+        )]
+    );
+}
+
+#[test]
+fn cluster_log_histograms_are_summed_by_bucket_and_level() {
+    let mut target = Some(LogHistogram {
+        from: 0,
+        to: 120_000,
+        bucket_ms: 60_000,
+        buckets: vec![LogHistogramBucket {
+            ts: 0,
+            count: 2,
+            levels: BTreeMap::from([("info".to_string(), 2)]),
+        }],
+    });
+    merge_cluster_log_histogram(
+        &mut target,
+        LogHistogram {
+            from: 0,
+            to: 120_000,
+            bucket_ms: 60_000,
+            buckets: vec![LogHistogramBucket {
+                ts: 0,
+                count: 4,
+                levels: BTreeMap::from([("error".to_string(), 1), ("info".to_string(), 3)]),
+            }],
+        },
+    );
+    let bucket = &target.expect("merged histogram").buckets[0];
+    assert_eq!(bucket.count, 6);
+    assert_eq!(bucket.levels.get("info"), Some(&5));
+    assert_eq!(bucket.levels.get("error"), Some(&1));
+}
+
+#[test]
 fn log_histogram_uses_bounded_adaptive_buckets_and_fills_gaps() {
     let to = 1_700_000_400_000;
     let one_hour = build_log_histogram_query(

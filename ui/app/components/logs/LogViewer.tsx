@@ -13,6 +13,8 @@ import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import {
+  getClusterLogHistogram,
+  getClusterLogs,
   getLogs,
   getServiceLogHistogram,
   getServiceLogs,
@@ -41,6 +43,7 @@ import { logQueryPills, removeLogQueryPill } from "./logQueryPills";
 const COL = {
   time: "sm:w-[118px]",
   host: "sm:w-[112px]",
+  service: "sm:w-[124px]",
   level: "sm:w-[52px]",
   method: "sm:w-[60px]",
   status: "sm:w-[56px]"
@@ -69,13 +72,18 @@ type SelectedLogBucket = {
 };
 
 function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
-  const existing = new Set(current.map((entry) => entry.seq));
+  const existing = new Set(current.map(logEntryKey));
   const unique = incoming.filter((entry) => {
-    if (existing.has(entry.seq)) return false;
-    existing.add(entry.seq);
+    const key = logEntryKey(entry);
+    if (existing.has(key)) return false;
+    existing.add(key);
     return true;
   });
   return prepend ? [...unique, ...current] : [...current, ...unique];
+}
+
+function logEntryKey(entry: LogEntry) {
+  return `${entry.nodeId ?? "local"}:${entry.tier ?? "logs"}:${entry.seq}`;
 }
 
 function quoteLogQueryValue(value: string) {
@@ -118,6 +126,7 @@ function LogViewer(props: {
   onQueryChange?: (query: string) => void;
   range?: string;
   onRangeChange?: (range: string) => void;
+  cluster?: { nodeId?: string };
 }) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -134,8 +143,9 @@ function LogViewer(props: {
     }
   };
   const [loadingMore, setLoadingMore] = createSignal(false);
-  const [expanded, setExpanded] = createSignal<Set<number>>(new Set());
-  const [pollCursor, setPollCursor] = createSignal(0);
+  const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
+  const [pollCursor, setPollCursor] = createSignal<number | string>(props.cluster ? "" : 0);
+  const [unavailableNodes, setUnavailableNodes] = createSignal<string[]>([]);
   const [internalRangeMs, setInternalRangeMs] = createSignal(TIME_RANGES[0].ms);
   const rangeMs = () => {
     if (props.onRangeChange) {
@@ -185,6 +195,7 @@ function LogViewer(props: {
 
     addValue("service", props.serviceId);
     for (const line of phaseLines()) {
+      addValue("service", line.serviceId);
       addValue("level", line.level.toLowerCase());
       addValue("status", line.level.toLowerCase());
       addValue("source", line.source);
@@ -236,7 +247,7 @@ function LogViewer(props: {
 
   const rowRequestContext = createMemo(
     () =>
-      `${props.serviceId}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
+      `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
   );
 
   const selectRange = (nextRangeMs: number) => {
@@ -294,6 +305,7 @@ function LogViewer(props: {
   };
 
   const showHost = () => {
+    if (props.cluster) return true;
     const seen = new Set<string>();
     for (const line of phaseLines()) {
       const host = line.hostname || line.source || "";
@@ -311,15 +323,24 @@ function LogViewer(props: {
     return false;
   };
 
-  const toggleExpanded = (seq: number) => {
+  const toggleExpanded = (key: string) => {
     const next = new Set(expanded());
-    if (next.has(seq)) next.delete(seq);
-    else next.add(seq);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     setExpanded(next);
   };
 
   const fetchTail = async (searchQuery: string) => {
     const { from, to } = activeTimeRange();
+    if (props.cluster)
+      return getClusterLogs({
+        tail: PAGE_SIZE,
+        nodeId: props.cluster.nodeId,
+        serviceId: props.serviceId || undefined,
+        query: searchQuery || undefined,
+        from,
+        to
+      });
     if (props.isSystem)
       return getSystemLogs(
         props.serviceId,
@@ -354,13 +375,24 @@ function LogViewer(props: {
     );
   };
 
-  const fetchAfter = async (after: number, searchQuery: string) => {
+  const fetchAfter = async (after: number | string, searchQuery: string) => {
     const { from, to } = activeTimeRange();
+    if (props.cluster)
+      return getClusterLogs({
+        tail: PAGE_SIZE,
+        cursor: typeof after === "string" ? after || undefined : undefined,
+        nodeId: props.cluster.nodeId,
+        serviceId: props.serviceId || undefined,
+        query: searchQuery || undefined,
+        from,
+        to
+      });
+    const afterSeq = typeof after === "number" ? after : undefined;
     if (props.isSystem)
       return getSystemLogs(
         props.serviceId,
         PAGE_SIZE,
-        after,
+        afterSeq,
         undefined,
         searchQuery || undefined,
         from,
@@ -371,7 +403,7 @@ function LogViewer(props: {
         props.serviceId,
         props.deploymentId,
         PAGE_SIZE,
-        after,
+        afterSeq,
         undefined,
         props.phase,
         searchQuery || undefined,
@@ -381,7 +413,7 @@ function LogViewer(props: {
     return getServiceLogs(
       props.serviceId,
       PAGE_SIZE,
-      after,
+      afterSeq,
       undefined,
       props.phase,
       searchQuery || undefined,
@@ -437,9 +469,24 @@ function LogViewer(props: {
     setHistogramLoading(true);
     setHistogramError(null);
     try {
-      const result = props.isSystem
-        ? await getSystemLogHistogram(props.serviceId, from, to, searchQuery || undefined, bucketMs)
-        : await getServiceLogHistogram(
+      const result = props.cluster
+        ? await getClusterLogHistogram({
+            from,
+            to,
+            nodeId: props.cluster.nodeId,
+            serviceId: props.serviceId || undefined,
+            query: searchQuery || undefined,
+            bucketMs
+          })
+        : props.isSystem
+          ? await getSystemLogHistogram(
+              props.serviceId,
+              from,
+              to,
+              searchQuery || undefined,
+              bucketMs
+            )
+          : await getServiceLogHistogram(
             props.serviceId,
             from,
             to,
@@ -454,6 +501,9 @@ function LogViewer(props: {
       )
         return;
       setHistogram(result);
+      if ("unavailableNodes" in result) {
+        setUnavailableNodes(result.unavailableNodes.map((node) => node.nodeName || node.nodeId));
+      }
       setHistogramError(null);
     } catch (err) {
       if (generation !== histogramGeneration) return;
@@ -467,9 +517,14 @@ function LogViewer(props: {
     try {
       const page = await fetchTail(searchQuery);
       if (generation !== fetchGeneration) return;
-      setHasMore(page.entries.length >= PAGE_SIZE);
+      setHasMore(!props.cluster && page.entries.length >= PAGE_SIZE);
       setLines(page.entries);
       setPollCursor(page.cursor);
+      setUnavailableNodes(
+        "unavailableNodes" in page
+          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
+          : []
+      );
       setError(null);
     } catch (err) {
       if (generation !== fetchGeneration) return;
@@ -487,6 +542,11 @@ function LogViewer(props: {
       const page = await fetchAfter(pollCursor(), searchQuery);
       if (requestContext !== rowRequestContext()) return;
       setPollCursor(page.cursor);
+      setUnavailableNodes(
+        "unavailableNodes" in page
+          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
+          : []
+      );
       const { from, to } = activeTimeRange();
       setLines((prev) =>
         mergeLogEntries(prev, page.entries).filter(
@@ -500,7 +560,7 @@ function LogViewer(props: {
   };
 
   const loadMore = async () => {
-    if (loadingMore()) return;
+    if (loadingMore() || props.cluster) return;
     const oldestSeq = lines()[0]?.seq;
     if (oldestSeq != null) {
       setLoadingMore(true);
@@ -533,8 +593,9 @@ function LogViewer(props: {
     on(rowRequestContext, () => {
       setLines([]);
       setHasMore(false);
-      setPollCursor(0);
-      setExpanded(new Set<number>());
+      setPollCursor(props.cluster ? "" : 0);
+      setExpanded(new Set<string>());
+      setUnavailableNodes([]);
       setLoading(true);
       const generation = ++fetchGeneration;
       fetchInitialLogs(requestQuery(), generation);
@@ -544,7 +605,7 @@ function LogViewer(props: {
   createEffect(
     on(
       () =>
-        `${props.serviceId}\0${props.phase ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
+        `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
       () => {
         void fetchHistogram();
       }
@@ -717,6 +778,12 @@ function LogViewer(props: {
           />
         </div>
       </Show>
+      <Show when={unavailableNodes().length > 0}>
+        <div class="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Logs from {unavailableNodes().join(", ")} are temporarily unavailable. Results are
+          partial.
+        </div>
+      </Show>
       <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-3">
         <LogQueryInput
           value={queryDraft()}
@@ -774,7 +841,14 @@ function LogViewer(props: {
                 <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
                 <Show when={showHost()}>
                   <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
-                    Host
+                    {props.cluster ? "Node" : "Host"}
+                  </span>
+                </Show>
+                <Show when={props.cluster}>
+                  <span
+                    class={clsx(COL.service, "shrink-0 px-2 truncate border-l border-gray-300")}
+                  >
+                    Service
                   </span>
                 </Show>
                 <span class={clsx(COL.level, "shrink-0 px-2 truncate border-l border-gray-300")}>
@@ -793,17 +867,21 @@ function LogViewer(props: {
                 </span>
               </li>
               <For each={filteredLines()}>
-                {(line, index) => (
-                  <LogRow
-                    line={line}
-                    index={index()}
-                    showHost={showHost()}
-                    showHttp={showHttp()}
-                    stream={streamView()}
-                    expanded={expanded().has(line.seq)}
-                    onToggle={() => toggleExpanded(line.seq)}
-                  />
-                )}
+                {(line, index) => {
+                  const key = () => logEntryKey(line);
+                  return (
+                    <LogRow
+                      line={line}
+                      index={index()}
+                      showHost={showHost()}
+                      showService={Boolean(props.cluster)}
+                      showHttp={showHttp()}
+                      stream={streamView()}
+                      expanded={expanded().has(key())}
+                      onToggle={() => toggleExpanded(key())}
+                    />
+                  );
+                }}
               </For>
             </ul>
           </Match>
@@ -842,12 +920,15 @@ function LogRow(props: {
   line: LogEntry;
   index: number;
   showHost: boolean;
+  showService: boolean;
   showHttp: boolean;
   stream?: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const host = () => props.line.hostname || props.line.source || "";
+  const host = () =>
+    props.line.nodeName || props.line.nodeId || props.line.hostname || props.line.source || "";
+  const service = () => props.line.serviceId || props.line.source?.split("/")[0] || "";
   const http = () => httpFields(props.line.attrs);
   return (
     <li
@@ -883,6 +964,13 @@ function LogRow(props: {
           <Show when={props.showHost}>
             <div class={clsx("min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px", COL.host)}>
               <HostCell value={host()} />
+            </div>
+          </Show>
+          <Show when={props.showService}>
+            <div
+              class={clsx("min-w-0 max-w-[140px] sm:max-w-none sm:px-2 sm:pt-px", COL.service)}
+            >
+              <HostCell value={service()} />
             </div>
           </Show>
           <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.level)}>

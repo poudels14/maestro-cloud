@@ -292,6 +292,70 @@ impl DuckLogStore {
         } = query;
         let descending = after.is_none();
         match scope {
+            LogReadScope::AllServices => {
+                let db = self.service.clone();
+                let parts = self.parts_root.join("service-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "service", cursor)? => {
+                            Vec::new()
+                        }
+                        _ if from.is_some() && to.is_some() => {
+                            service_globs_for_range(&parts, "", from.unwrap(), to.unwrap())
+                        }
+                        _ => service_glob(&parts, "").into_iter().collect(),
+                    };
+                    query_logs(
+                        &db,
+                        true,
+                        None,
+                        None,
+                        origin,
+                        search.as_ref(),
+                        from.zip(to),
+                        after,
+                        before,
+                        limit,
+                        descending,
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
+            LogReadScope::AllSystem => {
+                let db = self.system.clone();
+                let parts = self.parts_root.join("system-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = match after {
+                        Some(cursor) if !cold_tier_has_seq_after(&db, "system", cursor)? => {
+                            Vec::new()
+                        }
+                        _ if from.is_some() && to.is_some() => {
+                            system_globs_for_range(&parts, from.unwrap(), to.unwrap())
+                        }
+                        _ => parquet_glob_if_present(&parts, "date=*/part-*.parquet")
+                            .into_iter()
+                            .collect(),
+                    };
+                    query_logs(
+                        &db,
+                        false,
+                        None,
+                        None,
+                        origin,
+                        search.as_ref(),
+                        from.zip(to),
+                        after,
+                        before,
+                        limit,
+                        descending,
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
             LogReadScope::Prefix(prefix) => {
                 let db = self.service.clone();
                 let parts = self.parts_root.join("service-logs");
@@ -376,6 +440,50 @@ impl DuckLogStore {
             group_by,
         } = query;
         match scope {
+            LogReadScope::AllServices => {
+                let db = self.service.clone();
+                let parts = self.parts_root.join("service-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = service_globs_for_range(&parts, "", from, to);
+                    query_log_histogram(
+                        &db,
+                        true,
+                        None,
+                        None,
+                        origin,
+                        search.as_ref(),
+                        from,
+                        to,
+                        bucket_ms,
+                        group_by,
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
+            LogReadScope::AllSystem => {
+                let db = self.system.clone();
+                let parts = self.parts_root.join("system-logs");
+                tokio::task::spawn_blocking(move || {
+                    let _visibility = db.read_parquet()?;
+                    let cold_globs = system_globs_for_range(&parts, from, to);
+                    query_log_histogram(
+                        &db,
+                        false,
+                        None,
+                        None,
+                        origin,
+                        search.as_ref(),
+                        from,
+                        to,
+                        bucket_ms,
+                        group_by,
+                        &cold_globs,
+                    )
+                })
+                .await?
+            }
             LogReadScope::Prefix(prefix) => {
                 let db = self.service.clone();
                 let parts = self.parts_root.join("service-logs");
@@ -428,8 +536,8 @@ impl DuckLogStore {
 
     pub async fn latest_log_seq(&self, scope: &LogReadScope) -> Result<i64> {
         let db = match scope {
-            LogReadScope::Prefix(_) => self.service.clone(),
-            LogReadScope::Sources(_) => self.system.clone(),
+            LogReadScope::AllServices | LogReadScope::Prefix(_) => self.service.clone(),
+            LogReadScope::AllSystem | LogReadScope::Sources(_) => self.system.clone(),
         };
         tokio::task::spawn_blocking(move || -> Result<i64> {
             let conn = db.reader()?;

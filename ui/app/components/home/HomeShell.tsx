@@ -17,6 +17,7 @@ import { SlackWebhooks } from "../SlackWebhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
 import { HttpLogsSection } from "./HttpLogsSection";
+import { ClusterLogsSection } from "./ClusterLogsSection";
 import { IngressTrafficTab } from "../ingress/TrafficTab";
 
 function HomeShell(props: { tab: HomeTab }) {
@@ -65,15 +66,21 @@ function HomeShell(props: { tab: HomeTab }) {
         </div>
         <div
           class={clsx("flex-1 py-5 sm:py-6", {
-            "min-h-0 overflow-hidden": props.tab === "http-logs",
-            "overflow-y-auto": props.tab !== "http-logs"
+            "min-h-0 overflow-hidden": props.tab === "http-logs" || props.tab === "cluster-logs",
+            "overflow-y-auto": props.tab !== "http-logs" && props.tab !== "cluster-logs"
           })}
         >
           <div
             class={clsx("mx-auto px-4 sm:px-6", {
-              "max-w-6xl": props.tab === "traffic" || props.tab === "http-logs",
-              "max-w-4xl": props.tab !== "traffic" && props.tab !== "http-logs",
-              "h-full min-h-0": props.tab === "http-logs"
+              "max-w-6xl":
+                props.tab === "traffic" ||
+                props.tab === "http-logs" ||
+                props.tab === "cluster-logs",
+              "max-w-4xl":
+                props.tab !== "traffic" &&
+                props.tab !== "http-logs" &&
+                props.tab !== "cluster-logs",
+              "h-full min-h-0": props.tab === "http-logs" || props.tab === "cluster-logs"
             })}
           >
             <ClientOnly
@@ -105,6 +112,9 @@ function HomeShell(props: { tab: HomeTab }) {
                 </Match>
                 <Match when={props.tab === "cluster"}>
                   <NodesSection />
+                </Match>
+                <Match when={props.tab === "cluster-logs"}>
+                  <ClusterLogsSection />
                 </Match>
               </Switch>
             </ClientOnly>

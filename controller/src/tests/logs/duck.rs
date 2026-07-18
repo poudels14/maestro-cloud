@@ -446,6 +446,76 @@ async fn log_query_filters_hot_and_cold_rows_with_status_aliases() {
 }
 
 #[tokio::test]
+async fn all_log_scopes_read_every_service_and_system_source() {
+    let root = temp_root("all-scopes");
+    let store = DuckLogStore::open(&root).expect("open");
+    store
+        .append(&[
+            entry(
+                1_700_000_000_000,
+                "api/dep/replica0",
+                LogOrigin::Service,
+                "api",
+            ),
+            entry(
+                1_700_000_000_001,
+                "worker/dep/replica0",
+                LogOrigin::Service,
+                "worker",
+            ),
+            entry(
+                1_700_000_000_002,
+                "maestro-probe",
+                LogOrigin::System,
+                "probe",
+            ),
+            entry(
+                1_700_000_000_003,
+                "maestro-ingress",
+                LogOrigin::System,
+                "ingress",
+            ),
+        ])
+        .await
+        .expect("append");
+    assert_eq!(store.rollover().await.expect("rollover"), 4);
+
+    let read = |scope| crate::logs::LogReadQuery {
+        scope,
+        origin: None,
+        search: None,
+        from: None,
+        to: None,
+        after: None,
+        before: None,
+        limit: 10,
+    };
+    let services = store
+        .read_logs(read(crate::logs::LogReadScope::AllServices))
+        .await
+        .expect("all services");
+    let system = store
+        .read_logs(read(crate::logs::LogReadScope::AllSystem))
+        .await
+        .expect("all system");
+    assert_eq!(
+        services
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        ["api", "worker"]
+    );
+    assert_eq!(
+        system
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        ["probe", "ingress"]
+    );
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
 async fn log_histogram_counts_filtered_hot_and_cold_rows() {
     let root = temp_root("histogram");
     let store = DuckLogStore::open(&root).expect("open");
