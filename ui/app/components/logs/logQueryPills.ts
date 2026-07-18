@@ -130,5 +130,49 @@ function removeLogQueryPill(query: string, pill: LogQueryPill) {
   return `${before} ${after}`;
 }
 
-export { logQueryPills, removeLogQueryPill };
+function combineLogQueries(leftQuery: string, rightQuery: string) {
+  const left = leftQuery.trim();
+  const right = rightQuery.trim();
+  if (!left) return right;
+  if (!right) return left;
+  const groupedLeft = /\bOR\b/.test(left) ? `(${left})` : left;
+  const groupedRight = /\bOR\b/.test(right) ? `(${right})` : right;
+  return `${groupedLeft} AND ${groupedRight}`;
+}
+
+function quoteLogQueryValue(value: string) {
+  if (/^[^\s:()[\]"]+$/.test(value)) return value;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function withLogHistogramGroupFilter(
+  currentQuery: string,
+  groupBy: "level" | "status",
+  group: string
+) {
+  const statusClass = /^([1-5])xx$/.exec(group.toLowerCase());
+  if (groupBy === "status" && !statusClass) return currentQuery;
+
+  let next = currentQuery.trim();
+  const replacedFields =
+    groupBy === "status"
+      ? new Set(["@http.status_code", "@http.response.status_code"])
+      : new Set(["level", "status"]);
+  const existing = logQueryPills(next)
+    .filter((pill) => pill.prefix.length === 0 && replacedFields.has(pill.field))
+    .sort((left, right) => right.removeStart - left.removeStart);
+  for (const pill of existing) next = removeLogQueryPill(next, pill);
+
+  const filter = statusClass
+    ? `@http.status_code:[${statusClass[1]}00 TO ${statusClass[1]}99]`
+    : `level:${quoteLogQueryValue(group)}`;
+  return combineLogQueries(next, filter);
+}
+
+export {
+  combineLogQueries,
+  logQueryPills,
+  removeLogQueryPill,
+  withLogHistogramGroupFilter
+};
 export type { LogQueryPill };

@@ -4,6 +4,9 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::logs::LogOrigin;
 
+const INGRESS_LOG_TYPE_ATTR: &str = "maestro.log_type";
+const INGRESS_ACCESS_LOG_TYPE: &str = "ingress_access";
+
 pub struct ParsedLine {
     pub ts: Option<u64>,
     pub level: Option<String>,
@@ -309,6 +312,17 @@ fn json_attr_value(value: &serde_json::Value) -> String {
 }
 
 fn normalize_ingress_access_log_attrs(attrs: &mut Vec<(String, String)>) {
+    let is_access_log = ["RequestMethod", "RequestPath", "DownstreamStatus"]
+        .into_iter()
+        .all(|name| find_attr(attrs, name).is_some());
+    attrs.retain(|(name, _)| name != INGRESS_LOG_TYPE_ATTR);
+    if is_access_log {
+        attrs.push((
+            INGRESS_LOG_TYPE_ATTR.to_string(),
+            INGRESS_ACCESS_LOG_TYPE.to_string(),
+        ));
+    }
+
     let direct = find_attr(attrs, "ClientHost").and_then(parse_ip);
     let forwarded = direct
         .filter(|address| is_internal_proxy_address(*address))
