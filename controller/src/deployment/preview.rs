@@ -118,6 +118,7 @@ mod tests {
                 healthcheck_path: None,
                 healthcheck_interval: 60,
                 replicas: 3,
+                exec: true,
                 max_restarts: None,
                 env: EnvConfig {
                     source: Some("aws-secret://base-env".to_string()),

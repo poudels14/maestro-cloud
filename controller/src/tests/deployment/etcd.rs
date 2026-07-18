@@ -57,6 +57,7 @@ fn deployment_with_source(
                 command: deploy_command,
                 healthcheck_path: Some("/_healthy".to_string()),
                 replicas: 1,
+                exec: true,
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
@@ -371,6 +372,7 @@ impl InMemoryStore {
                 }),
                 healthcheck_path: healthcheck_path.map(str::to_string),
                 replicas,
+                exec: true,
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
@@ -424,6 +426,7 @@ impl InMemoryStore {
                 command: None,
                 healthcheck_path: healthcheck_path.map(str::to_string),
                 replicas: 1,
+                exec: true,
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,
@@ -617,6 +620,7 @@ fn test_controller_config(data_dir: std::path::PathBuf) -> ControllerConfig {
         cloudflare_tunnel_token: None,
         cloudflare_tunnel_replicas: 1,
         slack_webhook_url: None,
+        allow_exec: false,
     }
 }
 

@@ -418,6 +418,14 @@
     },
     "allowCliDeployment": {
       "$ref": "#/properties/allow-cli-deployment"
+    },
+    "allow-exec": {
+      "type": "boolean",
+      "description": "Allow authenticated operators to open interactive exec sessions. Disabled by default.",
+      "default": false
+    },
+    "allowExec": {
+      "$ref": "#/properties/allow-exec"
     }
   }
 }

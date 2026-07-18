@@ -18,6 +18,7 @@ const START_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
     ("logBackup", "log-backup"),
     ("disableEtcdCert", "disable-etcd-cert"),
     ("allowCliDeployment", "allow-cli-deployment"),
+    ("allowExec", "allow-exec"),
 ];
 const CLUSTER_CONFIG_KEY_ALIASES: &[(&str, &str)] = &[
     ("controlAllowCidrs", "control-allow-cidrs"),
@@ -120,6 +121,8 @@ pub struct StartConfig {
     pub disable_etcd_cert: bool,
     #[serde(default, alias = "allowCliDeployment")]
     pub allow_cli_deployment: bool,
+    #[serde(default, alias = "allowExec")]
+    pub allow_exec: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -566,6 +569,8 @@ pub struct MaskedConfig {
     pub disable_etcd_cert: bool,
     #[serde(default)]
     pub allow_cli_deployment: bool,
+    #[serde(default)]
+    pub allow_exec: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -767,6 +772,7 @@ impl StartConfig {
             log_backup: self.log_backup.clone(),
             disable_etcd_cert: self.disable_etcd_cert,
             allow_cli_deployment: self.allow_cli_deployment,
+            allow_exec: self.allow_exec,
         }
     }
 }

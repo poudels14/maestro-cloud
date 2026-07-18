@@ -100,6 +100,36 @@ maestro services rollout --apply  # apply it
 maestro services redeploy my-app
 ```
 
+### 5. Open a shell in a replica
+
+Interactive exec is available on Linux clusters using the `nerdctl` runtime. Enable it
+explicitly in `maestro.jsonc` and keep the operator API reachable only through the private
+Tailscale path. When `jwt-secret-key` is configured, the CLI context must provide a valid bearer
+token; without a key, the operator API relies on the private network boundary:
+
+```jsonc
+{
+  "runtime": "nerdctl",
+  "allow-exec": true
+}
+```
+
+Then connect to the active deployment. A single running replica is selected automatically;
+multiple replicas open a picker unless `--replica` or `--node` narrows the selection.
+
+```bash
+maestro ssh my-app
+maestro ssh my-app --replica 1
+maestro ssh my-app --no-tty -- env
+maestro ssh my-app -- /bin/sh -c 'id && pwd'
+```
+
+Use `~.` at the start of a terminal line to force-detach. Set `deploy.exec` to `false` on a
+service that must never accept CLI exec sessions. Docker-runtime clusters, including Docker
+Desktop on macOS, are not supported by this command. Enabling CLI exec grants authenticated
+operators command execution inside workload containers; session metadata is logged, but terminal
+input and output are never logged.
+
 ## Log queries
 
 The log viewer search bar and `maestro logs --query` use the same server-side
@@ -175,7 +205,8 @@ The config file (`maestro.jsonc`) supports:
     },
     "include-metrics": false
   },
-  "allow-cli-deployment": false
+  "allow-cli-deployment": false,
+  "allow-exec": false
 }
 ```
 

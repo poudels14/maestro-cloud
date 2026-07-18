@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
@@ -10,6 +11,7 @@ use crate::logs::LogEntry;
 use crate::supervisor::JobCommand;
 use crate::utils::crypto::SecretString;
 
+mod containerd_exec;
 pub mod docker;
 pub mod nerdctl;
 
@@ -114,6 +116,53 @@ pub struct BuildSpec {
     pub push_to_registry: bool,
 }
 
+pub struct InteractiveExecRequest {
+    pub container: String,
+    pub command: Vec<String>,
+    pub tty: bool,
+    pub initial_size: Option<crate::exec::TerminalSize>,
+    pub session_root: PathBuf,
+}
+
+pub type ExecStdin = Pin<Box<dyn tokio::io::AsyncWrite + Send>>;
+pub type ExecOutput = Pin<Box<dyn tokio::io::AsyncRead + Send>>;
+
+#[async_trait]
+pub trait ExecControl: Send + Sync {
+    async fn resize(&self, cols: u16, rows: u16) -> Result<()>;
+    async fn wait(&self) -> Result<i32>;
+    async fn kill(&self) -> Result<()>;
+}
+
+pub struct ExecSession {
+    pub stdin: ExecStdin,
+    pub output: ExecOutput,
+    control: Arc<dyn ExecControl>,
+}
+
+impl ExecSession {
+    pub fn new(
+        stdin: impl tokio::io::AsyncWrite + Send + 'static,
+        output: impl tokio::io::AsyncRead + Send + 'static,
+        control: Arc<dyn ExecControl>,
+    ) -> Self {
+        Self {
+            stdin: Box::pin(stdin),
+            output: Box::pin(output),
+            control,
+        }
+    }
+
+    pub fn control(&self) -> Arc<dyn ExecControl> {
+        self.control.clone()
+    }
+
+    #[allow(dead_code)]
+    pub async fn kill(&self) -> Result<()> {
+        self.control.kill().await
+    }
+}
+
 #[async_trait]
 pub trait RuntimeProvider: Send + Sync {
     fn cli_name(&self) -> &str;
@@ -201,6 +250,13 @@ pub trait RuntimeProvider: Send + Sync {
     async fn push_image(&self, tag: &str) -> Result<()>;
 
     async fn exec_in_container(&self, container: &str, cmd: &[&str]) -> Result<String>;
+
+    async fn interactive_exec(&self, _request: InteractiveExecRequest) -> Result<ExecSession> {
+        bail!(
+            "interactive exec is not supported for the {} runtime",
+            self.cli_name()
+        )
+    }
 
     async fn remove_image(&self, image_id: &str) -> Result<()>;
 }

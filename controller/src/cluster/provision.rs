@@ -769,6 +769,7 @@ mod tests {
             log_backup: None,
             disable_etcd_cert: false,
             allow_cli_deployment: false,
+            allow_exec: false,
         };
         join_once(&config, &root, worker_ip)
             .await

@@ -128,6 +128,11 @@
           "minimum": 1,
           "default": 1
         },
+        "exec": {
+          "type": "boolean",
+          "description": "Allow operator CLI exec sessions when allow-exec is enabled on the cluster.",
+          "default": true
+        },
         "maxRestarts": {
           "type": "integer",
           "minimum": 0

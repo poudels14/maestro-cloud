@@ -24,6 +24,9 @@ function serviceJwt(): string | undefined {
 async function proxy(request: Request): Promise<Response> {
   const apiHost = process.env.MAESTRO_API_HOST || "http://127.0.0.1:3001";
   const url = new URL(request.url);
+  if (/^\/api\/services\/[^/]+\/exec$/.test(url.pathname)) {
+    return new Response("Not found", { status: 404 });
+  }
   const target = new URL(url.pathname + url.search, apiHost);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const headers = new Headers(request.headers);

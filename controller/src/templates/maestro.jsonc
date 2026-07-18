@@ -33,5 +33,7 @@
   // "tailscale": { "auth-key": "$CHANGE_ME" },
   "runtime": "docker",
   "tags": [],
-  "allow-cli-deployment": false
+  "allow-cli-deployment": false,
+  // Enables `maestro ssh`; keep disabled unless operator shell access is required.
+  "allow-exec": false
 }

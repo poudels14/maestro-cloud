@@ -632,6 +632,7 @@ fn start_schema_matches_serialized_config_fields() {
         }),
         disable_etcd_cert: true,
         allow_cli_deployment: true,
+        allow_exec: true,
     };
     let model = serde_json::to_value(config).expect("serialize start config");
     let schema: Value = serde_json::from_str(START_SCHEMA).expect("parse start schema");
@@ -648,6 +649,7 @@ fn start_schema_matches_serialized_config_fields() {
             "logBackup",
             "disableEtcdCert",
             "allowCliDeployment",
+            "allowExec",
         ],
     );
     assert_object_keys(
@@ -770,6 +772,7 @@ fn services_schema_matches_serialized_config_fields() {
             healthcheck_path: Some("/health".to_string()),
             healthcheck_interval: 30,
             replicas: 2,
+            exec: true,
             max_restarts: Some(5),
             env: env.clone(),
             secrets: Some(SecretsConfig {

@@ -6,6 +6,7 @@ mod config;
 mod deployment;
 mod engine;
 mod error;
+mod exec;
 mod firewall;
 mod health;
 mod logs;
@@ -77,6 +78,8 @@ enum CliCommand {
     },
     /// Stream logs from the active context
     Logs(cli::logs::RemoteLogsArgs),
+    /// Open a shell or run a command in a live service replica
+    Ssh(cli::ssh::SshArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -801,6 +804,7 @@ async fn run() -> crate::error::Result<bool> {
                     log_backup: None,
                     disable_etcd_cert: false,
                     allow_cli_deployment: false,
+                    allow_exec: false,
                 },
             };
 
@@ -1297,6 +1301,7 @@ async fn run() -> crate::error::Result<bool> {
                 cloudflare_tunnel_replicas,
                 cloudflare_tunnel_token: cfg.cloudflare.map(|cf| cf.tunnel.token),
                 slack_webhook_url: cfg.slack.map(|sl| sl.webhook_url),
+                allow_exec: cfg.allow_exec,
             };
 
             let probe_host_port = deployment_config
@@ -1703,43 +1708,52 @@ async fn run() -> crate::error::Result<bool> {
             if let Some(upgrade) = &upgrade_orchestrator {
                 background_handles.push(tokio::spawn(upgrade.clone().run(signal_tx.subscribe())));
             }
-            if let (Some(elector), Some(registry)) =
-                (leader_elector.clone(), cluster_registry.clone())
-            {
-                let join = match (
-                    deployment_config.cluster.clone(),
-                    deployment_config.join_secret.as_ref(),
-                    etcd_tls.clone(),
-                ) {
-                    (Some(cluster), Some(join_secret), Some(tls)) => {
-                        Some(cluster::join::JoinCoordinator::new(
-                            cluster,
-                            deployment_config.cluster_alias.clone(),
-                            deployment_config.data_dir.clone(),
-                            join_secret.as_str().to_string(),
-                            deployment_config.etcd_endpoints.clone(),
-                            tls,
-                        ))
-                    }
-                    _ => None,
-                };
-                let control = cluster::control::ControlServer::new(
-                    deployment_config
-                        .data_dir
-                        .join("system/control/control.sock"),
-                    deployment_config
-                        .internal_control_token
-                        .as_str()
-                        .to_string(),
-                    elector,
-                    registry,
-                    join,
-                    upgrade_orchestrator.clone(),
-                    store.clone(),
-                    logger.clone(),
-                );
-                background_handles.push(tokio::spawn(control.run(signal_tx.subscribe())));
-            }
+            let join = match (
+                deployment_config.cluster.clone(),
+                deployment_config.join_secret.as_ref(),
+                etcd_tls.clone(),
+            ) {
+                (Some(cluster), Some(join_secret), Some(tls)) => {
+                    Some(cluster::join::JoinCoordinator::new(
+                        cluster,
+                        deployment_config.cluster_alias.clone(),
+                        deployment_config.data_dir.clone(),
+                        join_secret.as_str().to_string(),
+                        deployment_config.etcd_endpoints.clone(),
+                        tls,
+                    ))
+                }
+                _ => None,
+            };
+            let local_node_id = deployment_config
+                .cluster
+                .as_ref()
+                .map(|cluster| cluster.node_id.clone());
+            let runtime_suffix = deployment_config
+                .cluster
+                .as_ref()
+                .and_then(cluster::ClusterRuntime::resource_suffix);
+            let control = cluster::control::ControlServer::new(
+                deployment_config
+                    .data_dir
+                    .join("system/control/control.sock"),
+                deployment_config
+                    .internal_control_token
+                    .as_str()
+                    .to_string(),
+                leader_elector.clone(),
+                cluster_registry.clone(),
+                join,
+                upgrade_orchestrator.clone(),
+                store.clone(),
+                runtime.clone(),
+                deployment_config.allow_exec,
+                deployment_config.data_dir.clone(),
+                local_node_id,
+                runtime_suffix,
+                logger.clone(),
+            );
+            background_handles.push(tokio::spawn(control.run(signal_tx.subscribe())));
             if let Some(cluster) = &deployment_config.cluster {
                 background_handles.push(tokio::spawn(cluster::telemetry::run_disk_reporter(
                     store.clone(),
@@ -2231,6 +2245,14 @@ async fn run() -> crate::error::Result<bool> {
         Some(CliCommand::Logs(args)) => {
             let host = cli::contexts::active_host()?;
             cli::logs::run_logs(&host, args).await.map(|()| false)
+        }
+        Some(CliCommand::Ssh(args)) => {
+            let host = cli::contexts::active_host()?;
+            let exit_code = cli::ssh::run_ssh(&host, args).await?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(false)
         }
         Some(CliCommand::Daemon {
             command:

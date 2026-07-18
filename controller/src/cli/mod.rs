@@ -12,6 +12,7 @@ pub mod redeploy;
 pub mod restart;
 pub mod rollout;
 pub mod services;
+pub mod ssh;
 pub mod up;
 pub mod upgrade;
 

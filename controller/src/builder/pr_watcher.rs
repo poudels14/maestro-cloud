@@ -871,6 +871,7 @@ mod tests {
                     healthcheck_path: None,
                     healthcheck_interval: 60,
                     replicas: 2,
+                    exec: true,
                     max_restarts: None,
                     env: EnvConfig::default(),
                     secrets: None,
