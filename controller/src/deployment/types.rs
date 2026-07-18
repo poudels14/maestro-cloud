@@ -43,6 +43,7 @@ pub struct ControllerConfig {
     pub cloudflare_tunnel_token: Option<SecretString>,
     pub cloudflare_tunnel_replicas: u32,
     pub slack_webhook_url: Option<SecretString>,
+    pub allow_exec: bool,
 }
 
 impl ControllerConfig {
@@ -366,6 +367,8 @@ pub struct ServiceDeployConfig {
     pub healthcheck_interval: u32,
     #[serde(default = "default_replicas")]
     pub replicas: u32,
+    #[serde(default = "default_true")]
+    pub exec: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
     #[serde(default, skip_serializing_if = "EnvConfig::is_empty")]
@@ -740,4 +743,8 @@ impl ServiceInfo {
 
 fn default_replicas() -> u32 {
     1
+}
+
+fn default_true() -> bool {
+    true
 }

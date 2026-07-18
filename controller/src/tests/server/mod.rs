@@ -7,6 +7,83 @@ use crate::deployment::types::{
 use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
 
+#[tokio::test]
+async fn websocket_exec_relay_bridges_length_prefixed_control_frames() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (control_server, mut control_client) = tokio::net::UnixStream::pair().unwrap();
+    let pending_control = Arc::new(tokio::sync::Mutex::new(Some(control_server)));
+    let app = Router::new().route(
+        "/exec",
+        get({
+            let pending_control = pending_control.clone();
+            move |upgrade: WebSocketUpgrade| {
+                let pending_control = pending_control.clone();
+                async move {
+                    let control = pending_control
+                        .lock()
+                        .await
+                        .take()
+                        .expect("one relay connection");
+                    let permit = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
+                    upgrade
+                        .on_upgrade(move |websocket| relay_local_exec(websocket, control, permit))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (mut websocket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/exec"))
+        .await
+        .unwrap();
+
+    websocket
+        .send(Message::Binary(
+            crate::exec::ExecFrame::Stdin(b"hello".to_vec())
+                .encode()
+                .unwrap()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::exec::read_length_prefixed(&mut control_client)
+            .await
+            .unwrap(),
+        Some(crate::exec::ExecFrame::Stdin(b"hello".to_vec()))
+    );
+    crate::exec::write_length_prefixed(
+        &mut control_client,
+        &crate::exec::ExecFrame::Output(b"world".to_vec()),
+    )
+    .await
+    .unwrap();
+    crate::exec::write_length_prefixed(&mut control_client, &crate::exec::ExecFrame::Exit(7))
+        .await
+        .unwrap();
+
+    let output = websocket.next().await.unwrap().unwrap();
+    let Message::Binary(output) = output else {
+        panic!("expected binary output frame");
+    };
+    assert_eq!(
+        crate::exec::ExecFrame::decode(&output).unwrap(),
+        crate::exec::ExecFrame::Output(b"world".to_vec())
+    );
+    let exit = websocket.next().await.unwrap().unwrap();
+    let Message::Binary(exit) = exit else {
+        panic!("expected binary exit frame");
+    };
+    assert_eq!(
+        crate::exec::ExecFrame::decode(&exit).unwrap(),
+        crate::exec::ExecFrame::Exit(7)
+    );
+    server.abort();
+}
+
 fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
     RolloutServiceRequest {
         id: id.to_string(),
@@ -31,6 +108,7 @@ fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
             }),
             healthcheck_path: Some("/_healthy".to_string()),
             replicas: 1,
+            exec: true,
             max_restarts: None,
             env: Default::default(),
             secrets: None,
@@ -59,6 +137,7 @@ fn sample_patch_request_with_image(id: &str, name: &str, image: &str) -> Rollout
             }),
             healthcheck_path: Some("/_healthy".to_string()),
             replicas: 1,
+            exec: true,
             max_restarts: None,
             env: Default::default(),
             secrets: None,
@@ -522,6 +601,108 @@ fn cluster_api_tls_accepts_optional_ca_verified_client_certificates() {
         Some(client_ca.to_str().expect("CA path")),
     )
     .expect("optional mutual TLS configuration");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn cluster_websocket_client_connects_with_probe_mtls_identity() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let host_ip = std::net::Ipv4Addr::LOCALHOST;
+    let ca = crate::utils::certs::generate_cluster_ca().expect("cluster CA");
+    let certs = crate::utils::certs::generate_cluster_node_certs(
+        &ca,
+        host_ip,
+        crate::cluster::NodeRole::Voter,
+    )
+    .expect("cluster node certificates");
+    let directory = std::env::temp_dir().join(format!(
+        "maestro-wss-mtls-test-{}",
+        crate::utils::nanoid::unique_id(12)
+    ));
+    std::fs::create_dir_all(&directory).expect("test certificate directory");
+    let ca_path = directory.join("ca.pem");
+    let api_certificate_path = directory.join("api.pem");
+    let api_key_path = directory.join("api-key.pem");
+    let client_certificate_path = directory.join("probe-client.pem");
+    let client_key_path = directory.join("probe-client-key.pem");
+    std::fs::write(&ca_path, certs.ca_pem).expect("CA certificate");
+    std::fs::write(&api_certificate_path, certs.api_cert_pem).expect("API certificate");
+    std::fs::write(&api_key_path, certs.api_key_pem).expect("API key");
+    std::fs::write(&client_certificate_path, certs.probe_client_cert_pem)
+        .expect("probe client certificate");
+    std::fs::write(&client_key_path, certs.probe_client_key_pem).expect("probe client key");
+
+    let listener = std::net::TcpListener::bind((host_ip, 0)).expect("reserve TLS port");
+    let address = listener.local_addr().expect("TLS address");
+    drop(listener);
+    let app = Router::new().route(
+        "/exec",
+        get(|upgrade: WebSocketUpgrade| async move {
+            upgrade.on_upgrade(|mut websocket| async move {
+                if let Some(Ok(message)) = websocket.recv().await {
+                    let _ = websocket.send(message).await;
+                }
+            })
+        }),
+    );
+    let server_config = build_api_tls_config(
+        api_certificate_path.to_str().expect("API certificate path"),
+        api_key_path.to_str().expect("API key path"),
+        Some(ca_path.to_str().expect("CA path")),
+    )
+    .expect("TLS server config");
+    let server_handle = axum_server::Handle::new();
+    let shutdown_handle = server_handle.clone();
+    let server = tokio::spawn(async move {
+        axum_server::bind_rustls(address, server_config)
+            .handle(server_handle)
+            .serve(app.into_make_service())
+            .await
+    });
+    let connector = tokio_tungstenite::Connector::Rustls(Arc::new(
+        cluster_ws_tls_config_from_paths(&ca_path, &client_certificate_path, &client_key_path)
+            .expect("TLS client config"),
+    ));
+    let url = format!("wss://{address}/exec");
+    let mut websocket = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match tokio_tungstenite::connect_async_tls_with_config(
+                &url,
+                None,
+                false,
+                Some(connector.clone()),
+            )
+            .await
+            {
+                Ok((websocket, _)) => break websocket,
+                Err(tokio_tungstenite::tungstenite::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::ConnectionRefused =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("mTLS WebSocket connection failed: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("TLS WebSocket server did not start");
+    let frame = crate::exec::ExecFrame::Output(b"cross-node".to_vec())
+        .encode()
+        .expect("exec frame");
+    websocket
+        .send(Message::Binary(frame.clone().into()))
+        .await
+        .expect("send WebSocket frame");
+    assert_eq!(
+        websocket.next().await.expect("echoed frame").expect("echo"),
+        Message::Binary(frame.into())
+    );
+    let _ = websocket.close(None).await;
+    shutdown_handle.shutdown();
+    server.await.expect("TLS server task").expect("TLS server");
     let _ = std::fs::remove_dir_all(directory);
 }
 

@@ -10,7 +10,9 @@ use crate::utils::cmd;
 
 use crate::config::BuilderType;
 
-use super::{BuildSpec, ManagedContainer, RunSpec, RuntimeProvider};
+use super::{
+    BuildSpec, ExecSession, InteractiveExecRequest, ManagedContainer, RunSpec, RuntimeProvider,
+};
 
 pub struct DockerRuntimeProvider;
 
@@ -321,6 +323,10 @@ impl RuntimeProvider for DockerRuntimeProvider {
         cmd::run("docker", &args).await
     }
 
+    async fn interactive_exec(&self, _request: InteractiveExecRequest) -> Result<ExecSession> {
+        anyhow::bail!("interactive exec is not supported for the docker runtime")
+    }
+
     async fn remove_image(&self, image_id: &str) -> Result<()> {
         let _ = cmd::run("docker", &["rmi", image_id]).await;
         Ok(())
@@ -364,7 +370,8 @@ fn attached_container_names(network_inspect: &str) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::attached_container_names;
+    use super::{DockerRuntimeProvider, attached_container_names};
+    use crate::runtime::{InteractiveExecRequest, RuntimeProvider};
 
     #[test]
     fn parses_attached_containers_from_network_inspect() {
@@ -373,5 +380,24 @@ mod tests {
         let mut names = attached_container_names(inspect).unwrap();
         names.sort();
         assert_eq!(names, ["app-1", "maestro-etcd-prod-a1b2"]);
+    }
+
+    #[tokio::test]
+    async fn interactive_exec_reports_docker_as_unsupported() {
+        let error = DockerRuntimeProvider
+            .interactive_exec(InteractiveExecRequest {
+                container: "app".to_string(),
+                command: vec!["/bin/sh".to_string()],
+                tty: true,
+                initial_size: None,
+                session_root: std::env::temp_dir(),
+            })
+            .await
+            .err()
+            .expect("docker interactive exec must fail");
+        assert_eq!(
+            error.to_string(),
+            "interactive exec is not supported for the docker runtime"
+        );
     }
 }

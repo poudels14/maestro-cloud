@@ -3,26 +3,30 @@ use std::{
     io::Read,
     path::Path as FsPath,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, Query, Request, State},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path, Query, Request, State,
+        ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade},
+    },
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, delete, get, patch, post},
 };
 use flate2::read::GzDecoder;
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::broadcast;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 use tokio_util::io::ReaderStream;
 
 use self::types::{
@@ -63,6 +67,9 @@ const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const INGESTION_TOKEN_HEADER: &str = "x-maestro-ingestion-token";
 const MAX_CLUSTER_WRITE_BODY_BYTES: u64 = 1024 * 1024 * 1024;
 const LOG_CURSOR_HEADER: &str = "x-maestro-log-cursor";
+const EXEC_FORWARD_HEADER: &str = "x-maestro-telemetry-forwarded";
+const EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const MAX_EXEC_SESSIONS: usize = 8;
 
 #[derive(Debug)]
 enum UpgradeVersionError {
@@ -108,6 +115,9 @@ struct ClusterNodeView {
 }
 
 #[derive(Clone)]
+struct OperatorIdentity(String);
+
+#[derive(Clone)]
 struct AppState {
     store: Arc<dyn ClusterStore>,
     log_store: Option<Arc<crate::logs::DuckLogStore>>,
@@ -126,6 +136,7 @@ struct AppState {
     backup_stats: crate::cluster_stats::SharedBackupStats,
     probe_started_at: Instant,
     local_node_id: Option<String>,
+    exec_sessions: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -192,6 +203,7 @@ impl Server {
                 backup_stats,
                 probe_started_at: Instant::now(),
                 local_node_id,
+                exec_sessions: Arc::new(Semaphore::new(MAX_EXEC_SESSIONS)),
             },
         }
     }
@@ -254,6 +266,7 @@ impl Server {
                 "/api/services/{serviceId}/deployments",
                 get(Self::list_deployments),
             )
+            .route("/api/services/{serviceId}/exec", get(Self::exec_service))
             .route(
                 "/api/services/{serviceId}/deployments/{deploymentId}/cancel",
                 patch(Self::cancel_deployment),
@@ -1356,6 +1369,7 @@ impl Server {
                         healthcheck_interval:
                             crate::deployment::types::DEFAULT_HEALTHCHECK_INTERVAL_SECS,
                         replicas,
+                        exec: true,
                         max_restarts: None,
                         env: Default::default(),
                         secrets: None,
@@ -1404,6 +1418,244 @@ impl Server {
                 .map(DeploymentListItem::new)
                 .collect(),
         ))
+    }
+
+    async fn exec_service(
+        State(state): State<AppState>,
+        Path(service_id): Path<String>,
+        Query(query): Query<ExecQuery>,
+        Extension(identity): Extension<OperatorIdentity>,
+        headers: HeaderMap,
+        upgrade: WebSocketUpgrade,
+    ) -> Result<Response, (StatusCode, String)> {
+        crate::validation::validate_service_id(&service_id, "serviceId")
+            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+        if !state
+            .masked_config
+            .as_ref()
+            .is_some_and(|config| config.allow_exec)
+        {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "CLI exec is disabled; set allow-exec to true in the cluster config".to_string(),
+            ));
+        }
+        if state
+            .masked_config
+            .as_ref()
+            .is_some_and(|config| config.runtime == "docker")
+        {
+            return Err((
+                StatusCode::NOT_IMPLEMENTED,
+                "interactive exec is not supported for the docker runtime".to_string(),
+            ));
+        }
+        let command = match query.command.as_deref() {
+            Some(encoded) => serde_json::from_str::<Vec<String>>(encoded).map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("command must be a JSON-encoded argv array: {error}"),
+                )
+            })?,
+            None => vec!["/bin/sh".to_string()],
+        };
+        if command.is_empty()
+            || command.len() > 256
+            || command.iter().map(String::len).sum::<usize>() > 64 * 1024
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "command must contain between 1 and 256 arguments totaling at most 64 KiB"
+                    .to_string(),
+            ));
+        }
+        let tty = query.tty.unwrap_or(true);
+        let initial_size = match (query.cols, query.rows) {
+            (None, None) => None,
+            (Some(cols), Some(rows)) if cols > 0 && rows > 0 => {
+                Some(crate::exec::TerminalSize { cols, rows })
+            }
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "cols and rows must be provided together and be greater than zero".to_string(),
+                ));
+            }
+        };
+
+        let deployments = state
+            .store
+            .list_service_deployments_with_replicas(&service_id)
+            .await
+            .map_err(internal_error)?;
+        let selected = if let Some(deployment_id) = query.deployment_id.as_deref() {
+            crate::validation::validate_service_id(deployment_id, "deploymentId")
+                .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+            deployments
+                .into_iter()
+                .find(|item| item.deployment.id == deployment_id)
+                .ok_or_else(|| {
+                    (
+                        StatusCode::NOT_FOUND,
+                        format!(
+                            "deployment `{deployment_id}` for service `{service_id}` was not found"
+                        ),
+                    )
+                })?
+        } else {
+            deployments
+                .into_iter()
+                .filter(|item| item.deployment.status == DeploymentStatus::Ready)
+                .max_by_key(|item| item.deployment.created_at)
+                .ok_or_else(|| {
+                    (
+                        StatusCode::NOT_FOUND,
+                        format!("service `{service_id}` has no active deployment"),
+                    )
+                })?
+        };
+        let deployment_id = selected.deployment.id.clone();
+        if !selected.deployment.config.deploy.exec {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!("CLI exec is disabled for service `{service_id}`"),
+            ));
+        }
+        if !matches!(
+            selected.deployment.status,
+            DeploymentStatus::PendingReady | DeploymentStatus::Ready | DeploymentStatus::Draining
+        ) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("deployment `{deployment_id}` is not running"),
+            ));
+        }
+        let mut placements = state
+            .store
+            .list_placement_history(Some(&service_id), Some(&deployment_id), None)
+            .await
+            .map_err(internal_error)?
+            .into_iter()
+            .filter(|placement| placement.ended_at_ms.is_none())
+            .collect::<Vec<_>>();
+        placements.sort_by_key(|placement| std::cmp::Reverse(placement.started_at_ms));
+        placements.dedup_by_key(|placement| placement.replica_index);
+        let running_replicas = if placements.is_empty() {
+            selected
+                .replicas
+                .iter()
+                .filter(|replica| {
+                    matches!(
+                        replica.status,
+                        DeploymentStatus::PendingReady
+                            | DeploymentStatus::Ready
+                            | DeploymentStatus::Draining
+                    )
+                })
+                .map(|replica| replica.replica_index)
+                .collect::<Vec<_>>()
+        } else {
+            placements
+                .iter()
+                .map(|placement| placement.replica_index)
+                .collect::<Vec<_>>()
+        };
+        let replica_index = match query.replica_index {
+            Some(replica_index) if running_replicas.contains(&replica_index) => replica_index,
+            Some(replica_index) => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "replica #{replica_index} of deployment `{deployment_id}` is not running"
+                    ),
+                ));
+            }
+            None if running_replicas.len() == 1 => running_replicas[0],
+            None if running_replicas.is_empty() => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("deployment `{deployment_id}` has no running replicas"),
+                ));
+            }
+            None => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "replicaIndex is required when more than one replica is running".to_string(),
+                ));
+            }
+        };
+        let placement = placements
+            .into_iter()
+            .find(|placement| placement.replica_index == replica_index);
+        let permit = state
+            .exec_sessions
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("this node already has {MAX_EXEC_SESSIONS} active exec sessions"),
+                )
+            })?;
+        let exec_command = crate::cluster::control::ControlCommand::ExecSession {
+            service_id: service_id.clone(),
+            deployment_id: deployment_id.clone(),
+            replica_index,
+            argv: command.clone(),
+            tty,
+            initial_size,
+            client: identity.0,
+        };
+        let is_remote = placement.as_ref().is_some_and(|placement| {
+            state
+                .local_node_id
+                .as_deref()
+                .is_some_and(|local| placement.node_id != local)
+        });
+        if is_remote {
+            if headers.contains_key(EXEC_FORWARD_HEADER) {
+                return Err((
+                    StatusCode::LOOP_DETECTED,
+                    "exec forwarding loop detected".to_string(),
+                ));
+            }
+            let placement = placement.expect("remote exec has a placement");
+            let remote = connect_remote_exec(
+                &placement,
+                &service_id,
+                &deployment_id,
+                replica_index,
+                &command,
+                tty,
+                initial_size,
+                &headers,
+                state.local_node_id.as_deref(),
+            )
+            .await
+            .map_err(internal_error)?;
+            Ok(upgrade
+                .on_upgrade(move |websocket| relay_remote_exec(websocket, remote, permit))
+                .into_response())
+        } else {
+            let socket = state.control_socket.as_deref().ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "daemon control socket is unavailable".to_string(),
+                )
+            })?;
+            let token = state.internal_control_token.as_deref().ok_or_else(|| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "daemon control authentication is unavailable".to_string(),
+                )
+            })?;
+            let control = crate::cluster::control::open_exec_stream(socket, token, exec_command)
+                .await
+                .map_err(exec_http_error)?;
+            Ok(upgrade
+                .on_upgrade(move |websocket| relay_local_exec(websocket, control, permit))
+                .into_response())
+        }
     }
 
     async fn cancel_deployment(
@@ -2925,6 +3177,17 @@ struct PlacementQuery {
     replica_index: Option<u32>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecQuery {
+    deployment_id: Option<String>,
+    replica_index: Option<u32>,
+    command: Option<String>,
+    tty: Option<bool>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
 async fn cluster_node_views(
     state: &AppState,
 ) -> Result<Vec<ClusterNodeView>, (StatusCode, String)> {
@@ -3086,6 +3349,258 @@ fn cluster_http_client() -> anyhow::Result<reqwest::Client> {
         .https_only(true)
         .timeout(std::time::Duration::from_secs(30))
         .build()?)
+}
+
+async fn connect_remote_exec(
+    placement: &crate::cluster::PlacementHistory,
+    service_id: &str,
+    deployment_id: &str,
+    replica_index: u32,
+    command: &[String],
+    tty: bool,
+    initial_size: Option<crate::exec::TerminalSize>,
+    headers: &HeaderMap,
+    local_node_id: Option<&str>,
+) -> anyhow::Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut url = reqwest::Url::parse(&format!(
+        "wss://{}:{}/api/services/{service_id}/exec",
+        placement.cluster_host_ip, placement.cluster_api_port
+    ))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("deploymentId", deployment_id);
+        query.append_pair("replicaIndex", &replica_index.to_string());
+        query.append_pair("command", &serde_json::to_string(command)?);
+        query.append_pair("tty", if tty { "true" } else { "false" });
+        if let Some(size) = initial_size {
+            query.append_pair("cols", &size.cols.to_string());
+            query.append_pair("rows", &size.rows.to_string());
+        }
+    }
+    let mut request = url.as_str().into_client_request()?;
+    if let Some(authorization) = headers.get(axum::http::header::AUTHORIZATION) {
+        request
+            .headers_mut()
+            .insert(axum::http::header::AUTHORIZATION, authorization.clone());
+    }
+    request.headers_mut().insert(
+        EXEC_FORWARD_HEADER,
+        HeaderValue::from_str(local_node_id.unwrap_or("standalone"))?,
+    );
+    let connector = tokio_tungstenite::Connector::Rustls(Arc::new(cluster_ws_tls_config()?));
+    let (websocket, _) =
+        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
+            .await?;
+    Ok(websocket)
+}
+
+fn cluster_ws_tls_config() -> anyhow::Result<rustls::ClientConfig> {
+    cluster_ws_tls_config_from_paths(
+        std::path::Path::new("/certs/ca.pem"),
+        std::path::Path::new("/certs/probe-client.pem"),
+        std::path::Path::new("/certs/probe-client-key.pem"),
+    )
+}
+
+fn cluster_ws_tls_config_from_paths(
+    ca_path: &std::path::Path,
+    certificate_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> anyhow::Result<rustls::ClientConfig> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
+    let ca_pem = std::fs::read(ca_path)?;
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(&ca_pem) {
+        roots.add(certificate?)?;
+    }
+    let certificate_pem = std::fs::read(certificate_path)?;
+    let certificates =
+        CertificateDer::pem_slice_iter(&certificate_pem).collect::<Result<Vec<_>, _>>()?;
+    let key = PrivateKeyDer::from_pem_file(key_path)?;
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(certificates, key)?)
+}
+
+async fn relay_local_exec(
+    websocket: WebSocket,
+    control: tokio::net::UnixStream,
+    _permit: OwnedSemaphorePermit,
+) {
+    let (mut websocket_writer, mut websocket_reader) = websocket.split();
+    let (mut control_reader, mut control_writer) = control.into_split();
+    let idle = tokio::time::sleep(EXEC_IDLE_TIMEOUT);
+    tokio::pin!(idle);
+    loop {
+        tokio::select! {
+            incoming = websocket_reader.next() => {
+                idle.as_mut().reset(tokio::time::Instant::now() + EXEC_IDLE_TIMEOUT);
+                match incoming {
+                    Some(Ok(AxumWsMessage::Binary(encoded))) => {
+                        match crate::exec::ExecFrame::decode(&encoded) {
+                            Ok(crate::exec::ExecFrame::Stdin(_)
+                                | crate::exec::ExecFrame::Resize(_)
+                                | crate::exec::ExecFrame::Ping) => {
+                                if let Ok(frame) = crate::exec::ExecFrame::decode(&encoded)
+                                    && crate::exec::write_length_prefixed(&mut control_writer, &frame).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            _ => {
+                                let _ = send_axum_exec_error(&mut websocket_writer, "client sent an invalid exec frame").await;
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(AxumWsMessage::Ping(payload))) => {
+                        if websocket_writer.send(AxumWsMessage::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(AxumWsMessage::Pong(_))) => {}
+                    Some(Ok(AxumWsMessage::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(AxumWsMessage::Text(_))) => {
+                        let _ = send_axum_exec_error(&mut websocket_writer, "exec accepts binary frames only").await;
+                        break;
+                    }
+                }
+            }
+            frame = crate::exec::read_length_prefixed(&mut control_reader) => {
+                idle.as_mut().reset(tokio::time::Instant::now() + EXEC_IDLE_TIMEOUT);
+                match frame {
+                    Ok(Some(frame)) => {
+                        let terminal = frame.terminal();
+                        let encoded = match frame.encode() {
+                            Ok(encoded) => encoded,
+                            Err(_) => break,
+                        };
+                        if websocket_writer.send(AxumWsMessage::Binary(encoded.into())).await.is_err() {
+                            break;
+                        }
+                        if terminal {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = send_axum_exec_error(&mut websocket_writer, "controller exec stream closed unexpectedly").await;
+                        break;
+                    }
+                    Err(error) => {
+                        let _ = send_axum_exec_error(&mut websocket_writer, &error.to_string()).await;
+                        break;
+                    }
+                }
+            }
+            _ = &mut idle => {
+                let _ = send_axum_exec_error(&mut websocket_writer, "exec session idle timeout").await;
+                break;
+            }
+        }
+    }
+    let _ = control_writer.shutdown().await;
+    let _ = websocket_writer.close().await;
+}
+
+async fn relay_remote_exec(
+    websocket: WebSocket,
+    remote: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    _permit: OwnedSemaphorePermit,
+) {
+    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
+
+    let (mut client_writer, mut client_reader) = websocket.split();
+    let (mut remote_writer, mut remote_reader) = remote.split();
+    let idle = tokio::time::sleep(EXEC_IDLE_TIMEOUT);
+    tokio::pin!(idle);
+    loop {
+        tokio::select! {
+            incoming = client_reader.next() => {
+                idle.as_mut().reset(tokio::time::Instant::now() + EXEC_IDLE_TIMEOUT);
+                match incoming {
+                    Some(Ok(AxumWsMessage::Binary(encoded))) => {
+                        if remote_writer.send(TungsteniteMessage::Binary(encoded)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(AxumWsMessage::Ping(payload))) => {
+                        if client_writer.send(AxumWsMessage::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(AxumWsMessage::Pong(_))) => {}
+                    Some(Ok(AxumWsMessage::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(AxumWsMessage::Text(_))) => {
+                        let _ = send_axum_exec_error(&mut client_writer, "exec accepts binary frames only").await;
+                        break;
+                    }
+                }
+            }
+            incoming = remote_reader.next() => {
+                idle.as_mut().reset(tokio::time::Instant::now() + EXEC_IDLE_TIMEOUT);
+                match incoming {
+                    Some(Ok(TungsteniteMessage::Binary(encoded))) => {
+                        let terminal = crate::exec::ExecFrame::decode(&encoded)
+                            .is_ok_and(|frame| frame.terminal());
+                        if client_writer.send(AxumWsMessage::Binary(encoded)).await.is_err() {
+                            break;
+                        }
+                        if terminal {
+                            break;
+                        }
+                    }
+                    Some(Ok(TungsteniteMessage::Ping(payload))) => {
+                        if remote_writer.send(TungsteniteMessage::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(TungsteniteMessage::Pong(_))) => {}
+                    Some(Ok(TungsteniteMessage::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(TungsteniteMessage::Text(_) | TungsteniteMessage::Frame(_))) => {
+                        let _ = send_axum_exec_error(&mut client_writer, "remote exec sent a non-binary frame").await;
+                        break;
+                    }
+                }
+            }
+            _ = &mut idle => {
+                let _ = send_axum_exec_error(&mut client_writer, "exec session idle timeout").await;
+                break;
+            }
+        }
+    }
+    let _ = remote_writer.close().await;
+    let _ = client_writer.close().await;
+}
+
+async fn send_axum_exec_error<S>(writer: &mut S, message: &str) -> Result<(), axum::Error>
+where
+    S: futures_util::Sink<AxumWsMessage, Error = axum::Error> + Unpin,
+{
+    let encoded = crate::exec::ExecFrame::Error(message.to_string())
+        .encode()
+        .unwrap_or_else(|_| vec![4]);
+    writer.send(AxumWsMessage::Binary(encoded.into())).await
+}
+
+fn exec_http_error(error: impl std::fmt::Display) -> (StatusCode, String) {
+    let message = error.to_string();
+    let status = if message.contains("disabled") {
+        StatusCode::FORBIDDEN
+    } else if message.contains("not supported") {
+        StatusCode::NOT_IMPLEMENTED
+    } else if message.contains("not found") || message.contains("not running") {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, message)
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
@@ -3356,10 +3871,13 @@ fn logs_response(entries: Vec<LogEntry>, cursor: i64) -> Response {
 
 async fn require_jwt(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
     let Some(secret) = state.jwt_secret_key.as_ref() else {
+        request
+            .extensions_mut()
+            .insert(OperatorIdentity("operator".to_string()));
         return Ok(next.run(request).await);
     };
     let token = request
@@ -3373,19 +3891,26 @@ async fn require_jwt(
                 "missing or invalid Authorization header".to_string(),
             )
         })?;
-    validate_jwt(token, secret).map_err(|err| {
+    let claims = validate_jwt(token, secret).map_err(|err| {
         (
             StatusCode::UNAUTHORIZED,
             format!("invalid auth token: {err}"),
         )
     })?;
+    let identity = claims
+        .get("sub")
+        .and_then(serde_json::Value::as_str)
+        .filter(|subject| !subject.trim().is_empty())
+        .unwrap_or("operator")
+        .to_string();
+    request.extensions_mut().insert(OperatorIdentity(identity));
     Ok(next.run(request).await)
 }
 
-fn validate_jwt(token: &str, secret: &str) -> jsonwebtoken::errors::Result<()> {
+fn validate_jwt(token: &str, secret: &str) -> jsonwebtoken::errors::Result<serde_json::Value> {
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).map(|_| ())
+    jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation).map(|data| data.claims)
 }
 
 struct SpooledClusterRequest {
@@ -4032,6 +4557,7 @@ fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig,
             "exposePorts": &deploy.expose_ports,
             "command": &deploy.command,
             "healthcheckPath": &deploy.healthcheck_path,
+            "exec": deploy.exec,
             "egress": &deploy.egress,
             "env": &deploy.env,
             "secretsHash": &secrets_hash,

@@ -167,6 +167,7 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
                 command: None,
                 healthcheck_path: Some("/health".to_string()),
                 replicas: 1,
+                exec: true,
                 max_restarts: None,
                 env: Default::default(),
                 secrets: None,

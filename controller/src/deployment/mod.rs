@@ -1294,20 +1294,18 @@ async fn init_probe(
         write_private_file(&jwt_key_path, secret).expect("failed to write probe JWT key");
     }
     let control_dir = config.data_dir.join("system/control");
-    if config.cluster.is_some() {
-        std::fs::create_dir_all(&control_dir).expect("failed to create control directory");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&control_dir, std::fs::Permissions::from_mode(0o700))
-                .expect("failed to protect control directory");
-        }
-        write_private_file(
-            &control_dir.join("control-token"),
-            config.internal_control_token.as_str(),
-        )
-        .expect("failed to write internal control token");
+    std::fs::create_dir_all(&control_dir).expect("failed to create control directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&control_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("failed to protect control directory");
     }
+    write_private_file(
+        &control_dir.join("control-token"),
+        config.internal_control_token.as_str(),
+    )
+    .expect("failed to write internal control token");
     let probe_host_port = config.probe_port.expect("probe_port should be resolved");
     let etcd_scheme = if etcd_certs.is_some() {
         "https"
@@ -1361,6 +1359,12 @@ async fn init_probe(
                     "MAESTRO_CONFIG={}",
                     base64::engine::general_purpose::STANDARD.encode(&config.maestro_config)
                 ),
+                "-v".into(),
+                format!("{}:/run/maestro-control", control_dir.display()),
+                "-e".into(),
+                "MAESTRO_CONTROL_SOCKET=/run/maestro-control/control.sock".into(),
+                "-e".into(),
+                "MAESTRO_CONTROL_TOKEN_FILE=/run/maestro-control/control-token".into(),
             ];
             if config.cluster.is_none() {
                 probe_flags.extend([
@@ -1372,12 +1376,6 @@ async fn init_probe(
             }
             if let Some(cluster) = &config.cluster {
                 probe_flags.extend([
-                    "-v".into(),
-                    format!("{}:/run/maestro-control", control_dir.display()),
-                    "-e".into(),
-                    "MAESTRO_CONTROL_SOCKET=/run/maestro-control/control.sock".into(),
-                    "-e".into(),
-                    "MAESTRO_CONTROL_TOKEN_FILE=/run/maestro-control/control-token".into(),
                     "-p".into(),
                     format!("{}:{probe_host_port}:3002", cluster.host_ip),
                     "-e".into(),

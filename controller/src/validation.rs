@@ -422,6 +422,7 @@ mod tests {
             healthcheck_path: None,
             healthcheck_interval: crate::deployment::types::DEFAULT_HEALTHCHECK_INTERVAL_SECS,
             replicas: 1,
+            exec: true,
             max_restarts: None,
             env: Default::default(),
             secrets: None,

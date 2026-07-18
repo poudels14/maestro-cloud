@@ -6,7 +6,8 @@
       "image": "traefik/whoami",
       "deploy": {
         "healthcheckPath": "/health",
-        "replicas": 1
+        "replicas": 1,
+        "exec": true
       }
     }
   }

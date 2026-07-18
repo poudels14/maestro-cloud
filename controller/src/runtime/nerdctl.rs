@@ -12,7 +12,9 @@ use crate::utils::nanoid;
 
 use crate::config::BuilderType;
 
-use super::{BuildSpec, ManagedContainer, RunSpec, RuntimeProvider};
+use super::{
+    BuildSpec, ExecSession, InteractiveExecRequest, ManagedContainer, RunSpec, RuntimeProvider,
+};
 
 pub struct NerdctlRuntimeProvider;
 
@@ -388,6 +390,10 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         let mut args = vec!["exec", container];
         args.extend(cmd_args);
         cmd::run("nerdctl", &args).await
+    }
+
+    async fn interactive_exec(&self, request: InteractiveExecRequest) -> Result<ExecSession> {
+        super::containerd_exec::interactive_exec(request).await
     }
 
     async fn remove_image(&self, image_id: &str) -> Result<()> {

@@ -51,16 +51,20 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
     let internal_control_token =
         read_secret_env_or_file("MAESTRO_CONTROL_TOKEN", "MAESTRO_CONTROL_TOKEN_FILE");
     let control_socket = std::env::var("MAESTRO_CONTROL_SOCKET").ok();
+    let local_node_id = std::env::var("MAESTRO_NODE_ID").ok();
     let mut store =
         EtcdStateStore::new_with_endpoints(&etcd_endpoints, derived_key, etcd_tls).await?;
-    if let (Some(socket), Some(token)) = (&control_socket, &internal_control_token) {
-        store = store.with_mutation_relay(socket.clone(), token.clone());
+    if let Some((socket, token)) = mutation_relay_credentials(
+        local_node_id.as_deref(),
+        control_socket.as_deref(),
+        internal_control_token.as_deref(),
+    ) {
+        store = store.with_mutation_relay(socket.to_string(), token.to_string());
     }
     let store: Arc<dyn crate::deployment::store::ClusterStore> = Arc::new(store);
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownEvent>(4);
     let cluster_name = std::env::var("MAESTRO_CLUSTER_NAME").unwrap_or_default();
-    let local_node_id = std::env::var("MAESTRO_NODE_ID").ok();
     let masked_config = std::env::var("MAESTRO_CONFIG").ok().map(|encoded| {
         let json = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
@@ -285,4 +289,30 @@ fn read_secret_env_or_file(value_name: &str, file_name: &str) -> Option<String> 
         .or_else(|| std::env::var(value_name).ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn mutation_relay_credentials<'a>(
+    local_node_id: Option<&str>,
+    socket: Option<&'a str>,
+    token: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
+    local_node_id?;
+    Some((socket?, token?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mutation_relay_credentials;
+
+    #[test]
+    fn standalone_control_socket_does_not_enable_cluster_mutation_relay() {
+        assert_eq!(
+            mutation_relay_credentials(None, Some("/control.sock"), Some("token")),
+            None
+        );
+        assert_eq!(
+            mutation_relay_credentials(Some("node-a"), Some("/control.sock"), Some("token")),
+            Some(("/control.sock", "token"))
+        );
+    }
 }
