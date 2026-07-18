@@ -328,14 +328,22 @@ impl RuntimeProvider for DockerRuntimeProvider {
 }
 
 async fn docker_network_attached(name: &str, network: &str) -> Result<bool> {
-    let networks = cmd::run(
-        "docker",
-        &["inspect", "-f", "{{json .NetworkSettings.Networks}}", name],
-    )
-    .await?;
-    Ok(serde_json::from_str::<serde_json::Value>(networks.trim())?
-        .as_object()
-        .is_some_and(|networks| networks.contains_key(network)))
+    let backoff = ConstantBuilder::default()
+        .with_delay(Duration::from_millis(100))
+        .with_max_times(20);
+    let inspect = || async {
+        let networks = cmd::run(
+            "docker",
+            &["inspect", "-f", "{{json .NetworkSettings.Networks}}", name],
+        )
+        .await?;
+        Ok::<bool, anyhow::Error>(
+            serde_json::from_str::<serde_json::Value>(networks.trim())?
+                .as_object()
+                .is_some_and(|networks| networks.contains_key(network)),
+        )
+    };
+    inspect.retry(backoff).await
 }
 
 fn attached_container_names(network_inspect: &str) -> Result<Vec<String>> {

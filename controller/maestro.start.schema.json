@@ -207,6 +207,7 @@
           "$ref": "#/properties/tailscale/properties/auth-key"
         },
         "advertise-routes": {
+          "description": "Additional CIDRs to expose to tailnet devices, such as private VPC networks containing RDS or Redis. Maestro automatically advertises the node's container subnet separately.",
           "type": "array",
           "items": {
             "type": "string"
