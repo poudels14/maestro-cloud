@@ -2291,14 +2291,8 @@ impl ClusterStore for EtcdStateStore {
         let Some(latest) = deployments.first() else {
             return Ok(None);
         };
-        if matches!(
-            latest.status,
-            DeploymentStatus::Queued
-                | DeploymentStatus::Draining
-                | DeploymentStatus::Removed
-                | DeploymentStatus::Canceled
-                | DeploymentStatus::Terminated
-        ) {
+        let cluster_mode = self.read_cluster_meta().await?.is_some();
+        if deployment_status_is_authoritative(cluster_mode, &latest.status) {
             return Ok(Some(latest.status.clone()));
         }
 
@@ -2990,6 +2984,18 @@ impl ClusterStore for EtcdStateStore {
 
 fn compare_counter(key: &str, snapshot: &CounterSnapshot) -> Compare {
     compare_mod_revision_or_absent(key, snapshot.mod_revision)
+}
+
+fn deployment_status_is_authoritative(cluster_mode: bool, status: &DeploymentStatus) -> bool {
+    cluster_mode
+        || matches!(
+            status,
+            DeploymentStatus::Queued
+                | DeploymentStatus::Draining
+                | DeploymentStatus::Removed
+                | DeploymentStatus::Canceled
+                | DeploymentStatus::Terminated
+        )
 }
 
 fn compare_mod_revision_or_absent(key: &str, mod_revision: Option<u64>) -> Compare {

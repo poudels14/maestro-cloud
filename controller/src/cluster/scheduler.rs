@@ -262,7 +262,47 @@ pub(crate) fn ensure_workload_addresses(
         .iter()
         .map(|assignment| assignment.assignment_id.clone())
         .collect::<HashSet<_>>();
+    let current_by_id = current
+        .iter()
+        .map(|assignment| (assignment.assignment_id.as_str(), assignment))
+        .collect::<HashMap<_, _>>();
     let mut used = HashMap::<NodeId, BTreeSet<std::net::Ipv4Addr>>::new();
+    let subnets = nodes
+        .iter()
+        .filter_map(|node| {
+            crate::cluster::network::Ipv4Cidr::parse(&node.subnet)
+                .ok()
+                .map(|subnet| (node.node_id.clone(), subnet))
+        })
+        .collect::<HashMap<_, _>>();
+
+    // An assignment id is an immutable workload identity. Reserve addresses
+    // from the persisted manifest before considering newly planned workloads,
+    // otherwise assignment ordering can move a running container to a new IP.
+    let mut preserved_ids = HashSet::new();
+    for assignment in assignments.iter_mut() {
+        let Some(existing) = current_by_id
+            .get(assignment.assignment_id.as_str())
+            .filter(|existing| existing.node_id == assignment.node_id)
+        else {
+            continue;
+        };
+        let Some(address) = existing.container_ip.filter(|address| {
+            subnets
+                .get(&existing.node_id)
+                .is_none_or(|subnet| subnet.is_workload_address(*address))
+        }) else {
+            continue;
+        };
+        if used
+            .entry(existing.node_id.clone())
+            .or_default()
+            .insert(address)
+        {
+            assignment.container_ip = Some(address);
+            preserved_ids.insert(assignment.assignment_id.clone());
+        }
+    }
 
     // Do not immediately reuse an address from an assignment being replaced.
     // Its old container can remain alive while the replacement becomes ready.
@@ -277,16 +317,11 @@ pub(crate) fn ensure_workload_addresses(
         }
     }
 
-    let subnets = nodes
-        .iter()
-        .filter_map(|node| {
-            crate::cluster::network::Ipv4Cidr::parse(&node.subnet)
-                .ok()
-                .map(|subnet| (node.node_id.clone(), subnet))
-        })
-        .collect::<HashMap<_, _>>();
     let mut unassigned = Vec::new();
     for assignment in assignments.iter_mut() {
+        if preserved_ids.contains(&assignment.assignment_id) {
+            continue;
+        }
         let Some(subnet) = subnets.get(&assignment.node_id).copied() else {
             // A held assignment can outlive its node's registry lease during
             // the failure grace period. Preserve its previously fenced address
@@ -730,6 +765,57 @@ mod tests {
         );
         assert_eq!(
             replacements[0].container_ip,
+            Some("172.20.1.3".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn new_assignment_cannot_steal_a_running_assignments_address() {
+        let running = Assignment {
+            assignment_id: "running".to_string(),
+            placement_epoch: 1,
+            service_id: "z-service".to_string(),
+            deployment_id: "dep1".to_string(),
+            replica_index: 0,
+            node_id: "node-a".to_string(),
+            container_ip: Some("172.20.1.2".parse().unwrap()),
+            replaces_assignment_id: None,
+            created_at_ms: 0,
+        };
+        let new = Assignment {
+            assignment_id: "new".to_string(),
+            placement_epoch: 1,
+            service_id: "a-service".to_string(),
+            deployment_id: "dep1".to_string(),
+            replica_index: 0,
+            node_id: "node-a".to_string(),
+            container_ip: None,
+            replaces_assignment_id: None,
+            created_at_ms: 1,
+        };
+        let mut planned = vec![new, running.clone()];
+
+        assert!(
+            ensure_workload_addresses(
+                &mut planned,
+                &[node("node-a", true, &[])],
+                std::slice::from_ref(&running),
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            planned
+                .iter()
+                .find(|assignment| assignment.assignment_id == running.assignment_id)
+                .and_then(|assignment| assignment.container_ip),
+            running.container_ip
+        );
+        assert_eq!(
+            planned
+                .iter()
+                .find(|assignment| assignment.assignment_id == "new")
+                .and_then(|assignment| assignment.container_ip),
             Some("172.20.1.3".parse().unwrap())
         );
     }

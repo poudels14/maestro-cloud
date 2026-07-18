@@ -1,4 +1,7 @@
-use super::{is_missing_election_leader_message, is_terminal_replica_failure};
+use super::{
+    deployment_status_is_authoritative, is_missing_election_leader_message,
+    is_terminal_replica_failure,
+};
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity};
@@ -53,6 +56,22 @@ fn only_exhausted_crashes_are_retained_as_terminal_replica_failures() {
     assert!(is_terminal_replica_failure(&state));
     state.status = DeploymentStatus::Ready;
     assert!(!is_terminal_replica_failure(&state));
+}
+
+#[test]
+fn cluster_service_status_follows_the_leader_committed_deployment_status() {
+    for status in [
+        DeploymentStatus::Building,
+        DeploymentStatus::PendingReady,
+        DeploymentStatus::Ready,
+        DeploymentStatus::Crashed,
+    ] {
+        assert!(deployment_status_is_authoritative(true, &status));
+    }
+    assert!(!deployment_status_is_authoritative(
+        false,
+        &DeploymentStatus::PendingReady
+    ));
 }
 
 fn deployment_with_source(
