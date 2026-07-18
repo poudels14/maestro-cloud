@@ -24,9 +24,9 @@ fn temp_path(label: &str, ext: &str) -> PathBuf {
 #[test]
 fn write_template_refuses_overwrite() {
     let path = temp_path("write-overwrite", "jsonc");
-    write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect("first create should work");
+    write_template(&path, DEFAULT_SERVICES_TEMPLATE).expect("first create should work");
     let err =
-        write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect_err("second create should fail");
+        write_template(&path, DEFAULT_SERVICES_TEMPLATE).expect_err("second create should fail");
     assert!(err.to_string().contains("already exists"));
     let _ = std::fs::remove_file(path);
 }
@@ -199,7 +199,7 @@ fn datadog_healthcheck_filter_is_opt_in() {
 #[tokio::test]
 async fn services_template_validates_as_services_config() {
     let path = temp_path("validate-services", "jsonc");
-    write_template(&path, DEFAULT_CLUSTER_TEMPLATE).expect("write");
+    write_template(&path, DEFAULT_SERVICES_TEMPLATE).expect("write");
     run_validate(path.to_str().expect("UTF-8 temp path"))
         .await
         .expect("cluster template should validate as services config");

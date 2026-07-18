@@ -41,18 +41,18 @@ The binary is written to `target/release/maestro`.
 
 ```bash
 maestro config init   # choose "cluster" to create maestro.jsonc
-maestro config init   # choose "services" to create maestro.cluster.jsonc
+maestro config init   # choose "services" to create maestro.services.jsonc
 ```
 
 Set a strong `encryption-key` in `maestro.jsonc`, then edit
-`maestro.cluster.jsonc` with the services you want to deploy.
+`maestro.services.jsonc` with the services you want to deploy.
 
 Validate both files before starting or deploying. The command reports the exact
 path of missing or invalid fields and lists fields that Maestro will ignore:
 
 ```bash
 maestro config validate maestro.jsonc
-maestro config validate maestro.cluster.jsonc
+maestro config validate maestro.services.jsonc
 # Uses the standard AWS credential chain and reads the secret string:
 maestro config validate aws-secret://maestro/production/node1
 ```
@@ -244,7 +244,7 @@ The instance IAM role must allow `secretsmanager:GetSecretValue` for the node
 secret and every AWS secret referenced through `$extends`.
 
 To use Depot for a service build, set `depot.token` in `maestro.jsonc` and
-`build.depot.project` in that service's `maestro.cluster.jsonc` entry. If either is
+`build.depot.project` in that service's `maestro.services.jsonc` entry. If either is
 missing, Maestro falls back to the default local builder automatically.
 
 ## Per-service egress exceptions
