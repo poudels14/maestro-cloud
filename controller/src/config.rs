@@ -412,7 +412,6 @@ impl ClusterConfig {
             gateway_port: self.gateway_port,
             etcd_client_port: self.etcd_client_port,
             etcd_peer_port: self.etcd_peer_port,
-            identity_api_port: Some(api_port),
         }
     }
 }

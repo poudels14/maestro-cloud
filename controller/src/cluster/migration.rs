@@ -302,7 +302,6 @@ fn install(
         gateway_port: config.gateway_port,
         etcd_client_port: migration.etcd_client_port,
         etcd_peer_port: migration.etcd_peer_port,
-        identity_api_port: Some(migration.api_port),
     };
     crate::cluster::identity::persist_cluster_id(data_dir, &migration.cluster_id)?;
     crate::cluster::bootstrap::prepare_legacy_migration(

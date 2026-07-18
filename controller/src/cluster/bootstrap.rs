@@ -380,7 +380,6 @@ pub async fn wait_for_admission(
                             response.member_list(),
                             replacement.id(),
                             &member_name,
-                            runtime.identity_api_port.is_some(),
                         )?,
                     };
                     replace_join_info(data_dir, &join_info)?;
@@ -395,7 +394,6 @@ pub async fn wait_for_admission(
                         member_list.members(),
                         member.id(),
                         &member_name,
-                        runtime.identity_api_port.is_some(),
                     )?,
                 };
                 replace_join_info(data_dir, &join_info)?;
@@ -420,7 +418,6 @@ pub async fn wait_for_admission(
                         response.member_list(),
                         member.id(),
                         &member_name,
-                        runtime.identity_api_port.is_some(),
                     )?,
                 };
                 replace_join_info(data_dir, &join_info)?;
@@ -490,11 +487,7 @@ pub async fn write_cluster_meta(
             .iter()
             .map(|node| node.host_ip)
             .collect(),
-        initial_voter_endpoints: if runtime.identity_api_port.is_some() {
-            runtime.initial_voters.clone()
-        } else {
-            Vec::new()
-        },
+        initial_voter_endpoints: runtime.initial_voters.clone(),
     };
     let value = serde_json::to_vec(&meta)?;
     let response = client.get("/maetro/system/cluster-meta", None).await?;
@@ -549,11 +542,7 @@ pub async fn validate_cluster_meta(
             .iter()
             .map(|node| node.host_ip)
             .collect(),
-        initial_voter_endpoints: if runtime.identity_api_port.is_some() {
-            runtime.initial_voters.clone()
-        } else {
-            Vec::new()
-        },
+        initial_voter_endpoints: runtime.initial_voters.clone(),
     };
     if existing != expected {
         bail!("durable cluster metadata does not match local configuration");
@@ -561,15 +550,10 @@ pub async fn validate_cluster_meta(
     Ok(())
 }
 
-pub fn member_name(ip: std::net::Ipv4Addr) -> String {
-    format!("maestro-{:08x}", u32::from(ip))
-}
-
 pub(crate) fn format_initial_cluster(
     members: &[Member],
     self_id: u64,
     self_name: &str,
-    endpoint_identity: bool,
 ) -> Result<String> {
     let mut entries = Vec::new();
     for member in members {
@@ -582,7 +566,7 @@ pub(crate) fn format_initial_cluster(
         } else if !member.name().is_empty() {
             member.name().to_string()
         } else {
-            member_name_for_peer(peer_url, endpoint_identity)?
+            member_name_for_peer(peer_url)?
         };
         entries.push(format!("{name}={peer_url}"));
     }
@@ -590,11 +574,8 @@ pub(crate) fn format_initial_cluster(
     Ok(entries.join(","))
 }
 
-fn member_name_for_peer(peer_url: &str, endpoint_identity: bool) -> Result<String> {
+fn member_name_for_peer(peer_url: &str) -> Result<String> {
     let host_ip = peer_ip(peer_url)?;
-    if !endpoint_identity {
-        return Ok(member_name(host_ip));
-    }
     let port = peer_url
         .rsplit_once(':')
         .and_then(|(_, port)| port.parse::<u16>().ok())
@@ -602,7 +583,10 @@ fn member_name_for_peer(peer_url: &str, endpoint_identity: bool) -> Result<Strin
     let api_port = port
         .checked_sub(3)
         .ok_or_else(|| anyhow!("etcd peer URL `{peer_url}` cannot map to a node API port"))?;
-    Ok(format!("maestro-{:08x}-{api_port:04x}", u32::from(host_ip)))
+    Ok(format!(
+        "maestro-{}",
+        crate::cluster::identity::endpoint_identity_suffix(host_ip, api_port)
+    ))
 }
 
 fn peer_ip(peer_url: &str) -> Result<std::net::Ipv4Addr> {
@@ -618,43 +602,22 @@ fn peer_ip(peer_url: &str) -> Result<std::net::Ipv4Addr> {
         .with_context(|| format!("invalid IPv4 peer URL `{peer_url}`"))
 }
 
-async fn seed_bootstrap_records(client: &mut Client, runtime: &ClusterRuntime) -> Result<()> {
+pub(super) async fn seed_bootstrap_records(
+    client: &mut Client,
+    runtime: &ClusterRuntime,
+) -> Result<()> {
     for node in &runtime.initial_voters {
-        let key = format!(
-            "/maetro/cluster/control-addresses/{}",
-            node.identity_suffix()
-        );
-        let value = node.identity_api_port.map_or_else(
-            || {
-                serde_json::json!({
-                    "hostIp": node.host_ip,
-                    "nodeId": null,
-                    "state": "reserved"
-                })
-            },
-            |_| {
-                serde_json::json!({
-                    "hostIp": node.host_ip,
-                    "apiPort": node.api_port,
-                    "gatewayPort": node.gateway_port,
-                    "etcdClientPort": node.etcd_client_port,
-                    "etcdPeerPort": node.etcd_peer_port,
-                    "nodeId": null,
-                    "state": "reserved"
-                })
-            },
-        );
-        create_or_validate_reservation(
-            client,
-            &key,
-            &value,
-            if node.identity_api_port.is_some() {
-                "apiPort"
-            } else {
-                "hostIp"
-            },
-        )
-        .await?;
+        let key = crate::cluster::identity::control_reservation_key(node.host_ip, node.api_port);
+        let value = serde_json::json!({
+            "hostIp": node.host_ip,
+            "apiPort": node.api_port,
+            "gatewayPort": node.gateway_port,
+            "etcdClientPort": node.etcd_client_port,
+            "etcdPeerPort": node.etcd_peer_port,
+            "nodeId": null,
+            "state": "reserved"
+        });
+        create_or_validate_reservation(client, &key, &value, "apiPort").await?;
     }
     let key = format!("/maetro/cluster/subnets/{}", runtime.node_id);
     let value = serde_json::json!({
@@ -869,14 +832,6 @@ mod tests {
     use crate::cluster::NodeRole;
 
     #[test]
-    fn member_names_are_lossless_ipv4_hex() {
-        assert_eq!(
-            member_name(std::net::Ipv4Addr::new(10, 20, 0, 11)),
-            "maestro-0a14000b"
-        );
-    }
-
-    #[test]
     fn legacy_migration_preserves_the_existing_member_name() {
         let root = std::env::temp_dir().join(format!(
             "maestro-bootstrap-migration-{}",
@@ -901,7 +856,6 @@ mod tests {
             etcd_peer_port: 2380,
             shared_registry: None,
             labels: Default::default(),
-            identity_api_port: None,
         };
         assert_eq!(
             member_name_for_start(&runtime, &root).unwrap(),
@@ -938,14 +892,10 @@ mod tests {
     }
 
     #[test]
-    fn unnamed_endpoint_members_derive_unique_names_from_peer_ports() {
+    fn unnamed_endpoint_members_derive_names_from_peer_ports() {
         assert_eq!(
-            member_name_for_peer("https://10.20.0.11:3104", true).unwrap(),
+            member_name_for_peer("https://10.20.0.11:3104").unwrap(),
             "maestro-0a14000b-0c1d"
-        );
-        assert_eq!(
-            member_name_for_peer("https://10.20.0.11:2380", false).unwrap(),
-            "maestro-0a14000b"
         );
     }
 }

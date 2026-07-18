@@ -107,7 +107,7 @@ pub fn ensure_seed_identity(
     let node_certs = certs::generate_cluster_node_certs_for_endpoint(
         &ca,
         host_ip,
-        local_endpoint.identity_api_port,
+        local_endpoint.api_port,
         role,
     )
     .map_err(|error| Error::internal(format!("failed to issue seed certificates: {error}")))?;
@@ -654,18 +654,14 @@ mod tests {
         let server_certs = certs::generate_cluster_node_certs_for_endpoint(
             &ca,
             std::net::Ipv4Addr::LOCALHOST,
-            Some(port),
+            port,
             NodeRole::Hybrid,
         )
         .expect("generate server certificate");
         let worker_ip = "127.0.0.2".parse().unwrap();
-        let worker_certs = certs::generate_cluster_node_certs_for_endpoint(
-            &ca,
-            worker_ip,
-            Some(port),
-            NodeRole::Worker,
-        )
-        .expect("generate worker certificate");
+        let worker_certs =
+            certs::generate_cluster_node_certs_for_endpoint(&ca, worker_ip, port, NodeRole::Worker)
+                .expect("generate worker certificate");
         let cluster_id = "0123456789abcdef0123456789abcdef".to_string();
         let secret = "a-random-automatic-join-test-secret".to_string();
         let state = Arc::new(JoinServerState {

@@ -634,6 +634,11 @@ mod tests {
     fn endpoint_defaults_api_to_3000_and_allows_an_override() {
         let mut config = valid_cluster_config();
         assert_eq!(config.voter_api_endpoints()[0].port(), 3000);
+        let default_node = config
+            .local_endpoint("10.20.0.11".parse().unwrap(), NodeRole::Master)
+            .unwrap();
+        assert_eq!(default_node.api_port, 3000);
+        assert_eq!(default_node.identity_suffix(), "0a14000b-0bb8");
         config.nodes.get_mut("node1").unwrap().endpoint =
             ClusterEndpointConfig::Endpoint("10.20.0.11:3101".parse().unwrap());
         config.api_port = 3101;

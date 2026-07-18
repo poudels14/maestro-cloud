@@ -1055,7 +1055,6 @@ async fn run() -> crate::error::Result<bool> {
                     etcd_peer_port: local_endpoint.etcd_peer_port,
                     shared_registry: cfg.cluster.image_registry.clone(),
                     labels: cfg.cluster.labels.clone(),
-                    identity_api_port: local_endpoint.identity_api_port,
                 })
             };
             let cluster_name = if let Some(cluster) = &cluster_runtime {
@@ -1429,14 +1428,10 @@ async fn run() -> crate::error::Result<bool> {
             ));
 
             let firewall_config = firewall::FirewallConfig {
-                table_name: deployment_config
-                    .cluster
-                    .as_ref()
-                    .and_then(|cluster| cluster.identity_api_port)
-                    .map_or_else(
-                        || firewall::DEFAULT_TABLE_NAME.to_string(),
-                        |port| format!("maestro_egress_{port}"),
-                    ),
+                table_name: deployment_config.cluster.as_ref().map_or_else(
+                    || firewall::DEFAULT_TABLE_NAME.to_string(),
+                    |cluster| format!("maestro_egress_{}", cluster.api_port),
+                ),
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
                 allow: egress_allow,
@@ -2603,10 +2598,7 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
         let host_ip = voter.endpoint.host_ip();
         let api_port = voter.endpoint.explicit_api_port().unwrap_or(3000);
         let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
-            &ca,
-            host_ip,
-            Some(api_port),
-            voter.role,
+            &ca, host_ip, api_port, voter.role,
         )
         .map_err(|err| {
             Error::internal(format!(
@@ -2614,7 +2606,9 @@ async fn init_cluster_ca(config_source: &str, base_data_dir: &Path) -> crate::er
                 voter.endpoint
             ))
         })?;
-        let voter_dir = provision_dir.join(format!("{:08x}-{api_port:04x}", u32::from(host_ip)));
+        let voter_dir = provision_dir.join(cluster::identity::endpoint_identity_suffix(
+            host_ip, api_port,
+        ));
         utils::certs::write_etcd_certs(&voter_dir, &certs).map_err(|err| {
             Error::internal(format!(
                 "failed to persist certificates for {}: {err}",
@@ -2696,7 +2690,6 @@ async fn issue_cluster_node(
             .and_then(|node| node.endpoint.explicit_api_port())
             .unwrap_or(3000)
     });
-    let identity_api_port = Some(resolved_api_port);
     if role == cluster::NodeRole::Worker
         && config.cluster.nodes.values().any(|node| {
             node.role.is_voter()
@@ -2711,7 +2704,7 @@ async fn issue_cluster_node(
     let certs = utils::certs::generate_cluster_node_certs_for_endpoint(
         &ca,
         host_ip,
-        identity_api_port,
+        resolved_api_port,
         role,
     )
     .map_err(|err| Error::internal(format!("failed to issue node certificates: {err}")))?;
@@ -2730,21 +2723,19 @@ async fn issue_cluster_node(
         deployment::build_etcd_tls_options(Some(&issuer_certs))
             .expect("cluster certificate produces TLS options"),
         host_ip,
-        identity_api_port,
+        resolved_api_port,
         node_id,
         &subnet.to_string(),
         role,
     )
     .await
     .map_err(|err| Error::external(format!("failed to provision etcd RBAC identity: {err}")))?;
-    let output = output.map(Path::to_path_buf).unwrap_or_else(|| {
-        data_dir
-            .join("system/cluster-provision")
-            .join(identity_api_port.map_or_else(
-                || format!("{:08x}", u32::from(host_ip)),
-                |port| format!("{:08x}-{port:04x}", u32::from(host_ip)),
-            ))
-    });
+    let output =
+        output.map(Path::to_path_buf).unwrap_or_else(|| {
+            data_dir.join("system/cluster-provision").join(
+                cluster::identity::endpoint_identity_suffix(host_ip, resolved_api_port),
+            )
+        });
     utils::certs::write_etcd_certs(&output, &certs).map_err(|err| {
         Error::internal(format!("failed to write node certificate bundle: {err}"))
     })?;

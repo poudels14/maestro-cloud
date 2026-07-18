@@ -473,7 +473,7 @@ pub async fn start_system_jobs(
                 &config.etcd_endpoints,
                 build_etcd_tls_options(Some(certs)).expect("cluster TLS options"),
                 cluster.host_ip,
-                cluster.identity_api_port,
+                cluster.api_port,
                 &cluster.node_id,
             )
             .await
@@ -2051,7 +2051,6 @@ mod tests {
             etcd_peer_port: 3004,
             shared_registry: Some("registry.example.com/maestro".to_string()),
             labels: Default::default(),
-            identity_api_port: Some(3001),
         }
     }
 

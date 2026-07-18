@@ -1,10 +1,22 @@
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::utils;
+
+pub fn endpoint_identity_suffix(host_ip: Ipv4Addr, api_port: u16) -> String {
+    format!("{:08x}-{api_port:04x}", u32::from(host_ip))
+}
+
+pub fn control_reservation_key(host_ip: Ipv4Addr, api_port: u16) -> String {
+    format!(
+        "/maetro/cluster/control-addresses/{}",
+        endpoint_identity_suffix(host_ip, api_port)
+    )
+}
 
 pub fn load_cluster_id(data_dir: &Path) -> Result<String> {
     let path = data_dir.join("system/cluster-id");
@@ -166,6 +178,16 @@ fn is_lower_alphanumeric(value: &str, length: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_identity_includes_the_api_port() {
+        let host_ip = Ipv4Addr::new(10, 1, 0, 11);
+        assert_eq!(endpoint_identity_suffix(host_ip, 3000), "0a01000b-0bb8");
+        assert_eq!(
+            control_reservation_key(host_ip, 3000),
+            "/maetro/cluster/control-addresses/0a01000b-0bb8"
+        );
+    }
 
     #[test]
     fn ids_are_stable_and_separate() {

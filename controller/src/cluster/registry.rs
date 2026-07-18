@@ -147,9 +147,9 @@ impl EtcdNodeRegistry {
     async fn put_registration(&self, info: &NodeInfo, lease_id: i64) -> Result<bool> {
         let key = node_key(&self.node_id);
         let record_key = node_record_key(&self.node_id);
-        let control_key = format!(
-            "/maetro/cluster/control-addresses/{:08x}",
-            u32::from(info.cluster_host_ip)
+        let control_key = crate::cluster::identity::control_reservation_key(
+            info.cluster_host_ip,
+            info.cluster_api_port,
         );
         let subnet_key = format!("/maetro/cluster/subnets/{}", self.node_id);
         let value = serde_json::to_vec(info)?;
@@ -186,11 +186,7 @@ impl EtcdNodeRegistry {
         })?;
         let control = reservation(&mut client, &control_key, &self.node_id).await?;
         let subnet = reservation(&mut client, &subnet_key, &self.node_id).await?;
-        let active_control = serde_json::to_vec(&serde_json::json!({
-            "hostIp": info.cluster_host_ip,
-            "nodeId": self.node_id,
-            "state": "active"
-        }))?;
+        let active_control = activate_reservation(&control, &self.node_id)?;
         let active_subnet = serde_json::to_vec(&serde_json::json!({
             "cidr": info.subnet,
             "nodeId": self.node_id,
@@ -573,6 +569,22 @@ async fn reservation(client: &mut Client, key: &str, node_id: &str) -> Result<Ve
     Ok(entry.value().to_vec())
 }
 
+fn activate_reservation(reservation: &[u8], node_id: &str) -> Result<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(reservation)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("cluster reservation is not an object"))?;
+    object.insert(
+        "nodeId".to_string(),
+        serde_json::Value::String(node_id.to_string()),
+    );
+    object.insert(
+        "state".to_string(),
+        serde_json::Value::String("active".to_string()),
+    );
+    Ok(serde_json::to_vec(&value)?)
+}
+
 #[cfg(test)]
 pub struct InMemoryNodeRegistry {
     node_id: NodeId,
@@ -694,6 +706,41 @@ mod tests {
 
     use super::*;
     use crate::cluster::types::NodeRole;
+
+    #[test]
+    fn endpoint_identity_uses_the_api_port_in_the_control_reservation() {
+        let host_ip = Ipv4Addr::new(10, 1, 0, 11);
+
+        assert_eq!(
+            crate::cluster::identity::control_reservation_key(host_ip, 3000),
+            "/maetro/cluster/control-addresses/0a01000b-0bb8"
+        );
+    }
+
+    #[test]
+    fn activating_a_control_reservation_preserves_automatic_ports() {
+        let reservation = serde_json::to_vec(&serde_json::json!({
+            "hostIp": "10.1.0.11",
+            "apiPort": 3000,
+            "gatewayPort": 46751,
+            "etcdClientPort": 35659,
+            "etcdPeerPort": 33207,
+            "nodeId": null,
+            "state": "reserved"
+        }))
+        .unwrap();
+
+        let active: serde_json::Value =
+            serde_json::from_slice(&activate_reservation(&reservation, "node00000001").unwrap())
+                .unwrap();
+
+        assert_eq!(active["nodeId"], "node00000001");
+        assert_eq!(active["state"], "active");
+        assert_eq!(active["apiPort"], 3000);
+        assert_eq!(active["gatewayPort"], 46751);
+        assert_eq!(active["etcdClientPort"], 35659);
+        assert_eq!(active["etcdPeerPort"], 33207);
+    }
 
     fn node_info(instance_id: &str) -> NodeInfo {
         NodeInfo {
