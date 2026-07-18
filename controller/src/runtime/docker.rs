@@ -300,6 +300,11 @@ impl RuntimeProvider for DockerRuntimeProvider {
         Ok(status.success())
     }
 
+    async fn resolve_immutable_image_reference(&self, image: &str) -> Result<String> {
+        let inspect = cmd::run("docker", &["image", "inspect", image]).await?;
+        crate::runtime::immutable_image_reference(image, &inspect)
+    }
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
         cmd::run("docker", &["tag", source, target]).await?;
         Ok(())

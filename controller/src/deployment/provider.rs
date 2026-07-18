@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use crate::builder::{BuildSource, LogTarget};
 use crate::config::BuilderType;
@@ -121,9 +121,16 @@ impl ContainerDeploymentProvider {
             self.runtime
                 .pull_image(image, log_sender.as_ref(), Some(&log_source_str))
                 .await?;
-            return Ok(BuildOutput {
-                image_tag: image.to_string(),
-            });
+            let image = self
+                .runtime
+                .resolve_immutable_image_reference(image)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to pin registry image `{image}`; use an immutable digest if the registry does not expose one"
+                    )
+                })?;
+            return Ok(BuildOutput { image_tag: image });
         };
         let log_source_str = format!("{}/{}/build", deployment.config.id, deployment.id);
         let depot_project = self.depot_project(build_config);

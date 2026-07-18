@@ -1214,6 +1214,15 @@ impl DeploymentController {
                 None => true,
                 Some(build) => build.registry.is_some(),
             };
+            let should_pull = if should_pull {
+                !self
+                    .runtime
+                    .image_exists(&build_info.docker_image_id)
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             if should_pull {
                 let log_source_str =
                     format!("{}/{}/restart", queued_deployment.service_id, deployment_id);

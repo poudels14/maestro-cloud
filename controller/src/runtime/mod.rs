@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 
 use crate::config::{BuilderType, RuntimeType};
@@ -14,6 +14,77 @@ pub mod docker;
 pub mod nerdctl;
 
 pub const MANAGED_IMAGE_LABEL: (&str, &str) = ("maestro.managed", "true");
+
+pub(crate) fn is_immutable_image_reference(image: &str) -> bool {
+    image
+        .split_once("@sha256:")
+        .is_some_and(|(repository, digest)| {
+            !repository.is_empty()
+                && digest.len() == 64
+                && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
+pub(crate) fn immutable_image_reference(image: &str, inspect_output: &str) -> Result<String> {
+    if is_immutable_image_reference(image) {
+        return Ok(image.to_string());
+    }
+
+    let inspected: serde_json::Value = serde_json::from_str(inspect_output)
+        .map_err(|error| anyhow!("failed to parse image inspection output: {error}"))?;
+    let object = inspected
+        .as_array()
+        .and_then(|items| items.first())
+        .or_else(|| inspected.as_object().map(|_| &inspected))
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow!("image inspection returned no image metadata"))?;
+    let repo_digests = object
+        .get("RepoDigests")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|reference| is_immutable_image_reference(reference))
+        .collect::<Vec<_>>();
+    let repository = image_repository(image);
+    repo_digests
+        .iter()
+        .find(|reference| digest_repository(reference) == repository)
+        .or_else(|| {
+            if repository.contains('/') {
+                None
+            } else {
+                let mut matches = repo_digests.iter().filter(|reference| {
+                    digest_repository(reference).ends_with(&format!("/{repository}"))
+                });
+                let matched = matches.next()?;
+                matches.next().is_none().then_some(matched)
+            }
+        })
+        .copied()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow!("registry image `{image}` has no matching immutable repository digest")
+        })
+}
+
+fn image_repository(image: &str) -> &str {
+    if let Some((repository, _)) = image.split_once('@') {
+        return repository;
+    }
+    let slash = image.rfind('/');
+    match image.rfind(':') {
+        Some(colon) if slash.is_none_or(|slash| colon > slash) => &image[..colon],
+        _ => image,
+    }
+}
+
+fn digest_repository(reference: &str) -> &str {
+    reference
+        .split_once('@')
+        .map(|(repository, _)| repository)
+        .unwrap_or(reference)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedContainer {
@@ -116,6 +187,13 @@ pub trait RuntimeProvider: Send + Sync {
 
     async fn image_exists(&self, _image: &str) -> Result<bool> {
         Ok(false)
+    }
+
+    async fn resolve_immutable_image_reference(&self, image: &str) -> Result<String> {
+        bail!(
+            "runtime `{}` cannot resolve immutable reference for image `{image}`",
+            self.cli_name()
+        )
     }
 
     async fn tag_image(&self, source: &str, target: &str) -> Result<()>;
