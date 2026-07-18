@@ -327,8 +327,9 @@ and chaos-test guide in [docs/multi-node.md](docs/multi-node.md).
 
 ### 1. Start with Tailscale enabled
 
-Add Tailscale to `maestro.jsonc`. Maestro automatically advertises the cluster's
-container subnet; use `advertise-routes` only for additional networks.
+Add Tailscale to `maestro.jsonc`. Maestro automatically advertises each node's
+container subnet so tailnet devices can access its containers; use
+`advertise-routes` only for additional networks.
 
 ```jsonc
 {
@@ -338,6 +339,8 @@ container subnet; use `advertise-routes` only for additional networks.
   "encryption-key": "replace-with-a-strong-secret",
   "tailscale": {
     "auth-key": "tskey-auth-...",
+    // Additional private networks such as VPC CIDRs for RDS or Redis.
+    // The node's container subnet is advertised automatically.
     "advertise-routes": []
   }
 }
@@ -347,7 +350,12 @@ container subnet; use `advertise-routes` only for additional networks.
 maestro daemon start --config maestro.jsonc --data-dir ./data --project-dir .
 ```
 
-### 2. Approve the subnet route
+### 2. Approve advertised routes
+
+Approve every route Maestro advertises. For standalone installations this includes
+the automatically discovered container subnet. For multi-node clusters, approve
+each node's container subnet plus any additional routes listed in
+`advertise-routes`.
 
 Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines, find
 `maestro-tailscale-my-cluster`, select Edit route settings, and approve the

@@ -397,12 +397,18 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
 }
 
 async fn nerdctl_container_paused(name: &str) -> Result<bool> {
-    Ok(
-        cmd::run("nerdctl", &["inspect", "-f", "{{.State.Paused}}", name])
-            .await?
-            .trim()
-            .eq_ignore_ascii_case("true"),
-    )
+    let backoff = ConstantBuilder::default()
+        .with_delay(Duration::from_millis(100))
+        .with_max_times(20);
+    let inspect = || async {
+        Ok::<bool, anyhow::Error>(
+            cmd::run("nerdctl", &["inspect", "-f", "{{.State.Paused}}", name])
+                .await?
+                .trim()
+                .eq_ignore_ascii_case("true"),
+        )
+    };
+    inspect.retry(backoff).await
 }
 
 fn attached_container_names(network_inspect: &str) -> Result<Vec<String>> {

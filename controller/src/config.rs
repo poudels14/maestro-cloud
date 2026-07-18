@@ -457,6 +457,8 @@ impl IngressConfig {
 pub struct TailscaleConfig {
     #[serde(alias = "authKey")]
     pub auth_key: String,
+    /// Additional CIDRs (for example, private VPC networks containing RDS or Redis).
+    /// Maestro automatically advertises the node's container subnet separately.
     #[serde(default, alias = "advertiseRoutes")]
     pub advertise_routes: Vec<String>,
 }

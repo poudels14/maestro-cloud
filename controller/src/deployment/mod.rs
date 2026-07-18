@@ -981,10 +981,13 @@ fn write_gateway_dynamic_config(
         ),
     )?;
     let dynamic_path = directory.join("dynamic.yml");
-    write_private_file(
-        &dynamic_path,
-        &format!(
-            r#"http:
+    write_private_file(&dynamic_path, &gateway_dynamic_config())?;
+    Ok(dynamic_path)
+}
+
+fn gateway_dynamic_config() -> String {
+    format!(
+        r#"http:
   routers:
     maestro-gateway-health:
       entryPoints:
@@ -1000,7 +1003,6 @@ fn write_gateway_dynamic_config(
         - /certs/ca.pem
       certificates:
         - /gateway/traefik-client-identity.pem
-      minVersion: VersionTLS13
 tls:
   certificates:
     - certFile: /certs/api.pem
@@ -1018,10 +1020,8 @@ tls:
           - /certs/ca.pem
         clientAuthType: RequireAndVerifyClientCert
 "#,
-            crate::cluster::traefik::GATEWAY_HEALTH_PATH
-        ),
-    )?;
-    Ok(dynamic_path)
+        crate::cluster::traefik::GATEWAY_HEALTH_PATH
+    )
 }
 
 async fn init_gateway(
@@ -1550,24 +1550,16 @@ async fn init_tailnet(
     let Some(authkey) = &config.tailscale_authkey else {
         return;
     };
-    let network_cidr = match runtime.inspect_network_cidr(&config.network).await {
-        Some(cidr) => cidr,
-        None => {
-            logger.emit(
-                "warn",
-                "failed to discover network CIDR; skipping tailscale setup",
-            );
-            return;
-        }
+    let network_cidr = runtime.inspect_network_cidr(&config.network).await;
+    let Some(routes) =
+        tailscale_advertise_routes(network_cidr.as_deref(), &config.tailscale_advertise_routes)
+    else {
+        logger.emit(
+            "warn",
+            "failed to discover network CIDR; skipping tailscale setup",
+        );
+        return;
     };
-    let mut routes = vec![network_cidr.clone()];
-    if config.cluster.is_none() {
-        for route in &config.tailscale_advertise_routes {
-            if !routes.contains(route) {
-                routes.push(route.clone());
-            }
-        }
-    }
     let advertise_routes = routes.join(",");
 
     runtime
@@ -1624,17 +1616,6 @@ async fn init_tailnet(
                     "-v".to_string(),
                     format!("{}:/data/dns", dns_dir_abs.display()),
                     "-e".to_string(),
-                    format!("TS_ROUTES={advertise_routes}"),
-                    "-e".to_string(),
-                    format!(
-                        "TS_USERSPACE={}",
-                        if config.cluster.is_some() {
-                            "false"
-                        } else {
-                            "true"
-                        }
-                    ),
-                    "-e".to_string(),
                     "TS_STATE_DIR=/var/lib/tailscale".to_string(),
                     "-e".to_string(),
                     format!("TS_HOSTNAME={ts_hostname}"),
@@ -1643,14 +1624,7 @@ async fn init_tailnet(
                     "-e".to_string(),
                     "MAESTRO_DNS_UPSTREAM=coredns".to_string(),
                 ];
-                if config.cluster.is_some() {
-                    flags.extend([
-                        "--device=/dev/net/tun".to_string(),
-                        "--cap-add=NET_ADMIN".to_string(),
-                        "--sysctl=net.ipv4.ip_forward=1".to_string(),
-                        "--sysctl=net.ipv4.conf.all.src_valid_mark=1".to_string(),
-                    ]);
-                }
+                flags.extend(tailscale_container_network_flags(&advertise_routes));
                 if let Some(ip) = static_ip {
                     flags.extend(["--ip".to_string(), ip.to_string()]);
                 }
@@ -1694,10 +1668,17 @@ async fn init_tailnet(
     let set_args = vec!["tailscale", "set", &routes_arg];
     let _ = runtime.exec_in_container(container_name, &set_args).await;
 
-    logger.emit(
-        "info",
-        &format!("tailscale subnet router started, advertising routes {advertise_routes}"),
-    );
+    if advertise_routes.is_empty() {
+        logger.emit(
+            "info",
+            "tailscale userspace peer started without subnet routes",
+        );
+    } else {
+        logger.emit(
+            "info",
+            &format!("tailscale subnet router started, advertising routes {advertise_routes}"),
+        );
+    }
     let resolved_ip = static_ip
         .map(String::from)
         .or(runtime.inspect_container_ip(container_name).await);
@@ -1724,6 +1705,28 @@ async fn init_tailnet(
             config.cluster_alias
         ),
     );
+}
+
+fn tailscale_advertise_routes(
+    network_cidr: Option<&str>,
+    configured_routes: &[String],
+) -> Option<Vec<String>> {
+    let mut routes = vec![network_cidr?.to_string()];
+    for route in configured_routes {
+        if !routes.contains(route) {
+            routes.push(route.clone());
+        }
+    }
+    Some(routes)
+}
+
+fn tailscale_container_network_flags(advertise_routes: &str) -> Vec<String> {
+    vec![
+        "-e".to_string(),
+        format!("TS_ROUTES={advertise_routes}"),
+        "-e".to_string(),
+        "TS_USERSPACE=true".to_string(),
+    ]
 }
 
 async fn init_cloudflared(
@@ -1803,15 +1806,17 @@ async fn init_cloudflared(
         )
         .await;
         if gate_on_data_plane {
-            runtime
+            let gate_result = runtime
                 .set_container_network_access(
                     &container_name,
                     &config.network,
                     false,
                     Some(&static_ip),
                 )
-                .await
-                .expect("failed to disable cloudflared before data-plane validation");
+                .await;
+            if let Some(warning) = initial_cloudflared_gate_warning(&container_name, gate_result) {
+                logger.emit("warn", &warning);
+            }
         }
     }
 
@@ -1827,6 +1832,17 @@ async fn init_cloudflared(
             }
         ),
     );
+}
+
+fn initial_cloudflared_gate_warning(
+    container_name: &str,
+    result: anyhow::Result<()>,
+) -> Option<String> {
+    result.err().map(|error| {
+        format!(
+            "could not apply the initial data-plane gate to cloudflared container `{container_name}`; the connector remains unready and reconciliation will retry: {error}"
+        )
+    })
 }
 
 struct SystemIps {
@@ -2032,6 +2048,66 @@ mod tests {
         );
         assert!(!initial_cluster.contains("10.20.0.12"));
         assert!(!initial_cluster.contains("10.20.0.13"));
+    }
+
+    #[test]
+    fn clustered_tailscale_stays_in_userspace_and_advertises_its_workload_subnet() {
+        let routes =
+            tailscale_advertise_routes(Some("172.22.1.0/24"), &["10.40.0.0/16".to_string()])
+                .unwrap();
+        let flags = tailscale_container_network_flags(&routes.join(","));
+
+        assert_eq!(routes, ["172.22.1.0/24", "10.40.0.0/16"]);
+        assert_eq!(
+            flags,
+            [
+                "-e",
+                "TS_ROUTES=172.22.1.0/24,10.40.0.0/16",
+                "-e",
+                "TS_USERSPACE=true"
+            ]
+        );
+    }
+
+    #[test]
+    fn standalone_tailscale_keeps_its_existing_route_behavior() {
+        let routes = tailscale_advertise_routes(
+            Some("172.22.1.0/24"),
+            &["10.40.0.0/16".to_string(), "172.22.1.0/24".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(routes, ["172.22.1.0/24", "10.40.0.0/16"]);
+        assert!(tailscale_advertise_routes(None, &[]).is_none());
+    }
+
+    #[test]
+    fn gateway_tls_version_is_configured_only_on_tls_options() {
+        let config = gateway_dynamic_config();
+
+        assert_eq!(config.matches("minVersion: VersionTLS13").count(), 1);
+        assert!(config.contains("options:\n    cluster-gateway:\n      minVersion: VersionTLS13"));
+        let server_transport = config
+            .split_once("serversTransports:")
+            .unwrap()
+            .1
+            .split_once("tls:")
+            .unwrap()
+            .0;
+        assert!(!server_transport.contains("minVersion"));
+    }
+
+    #[test]
+    fn an_unavailable_cloudflared_container_does_not_abort_startup() {
+        let warning = initial_cloudflared_gate_warning(
+            "maestro-cloudflared-cluster-node-1",
+            Err(anyhow::anyhow!("no such object")),
+        )
+        .unwrap();
+
+        assert!(warning.contains("connector remains unready"));
+        assert!(warning.contains("reconciliation will retry"));
+        assert!(initial_cloudflared_gate_warning("cloudflared", Ok(())).is_none());
     }
 
     #[test]
