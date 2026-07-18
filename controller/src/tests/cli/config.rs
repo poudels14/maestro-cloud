@@ -401,13 +401,15 @@ async fn validate_reports_the_path_of_a_semantically_invalid_field() {
 }
 
 #[tokio::test]
-async fn validate_reports_unknown_strict_fields_as_invalid() {
-    let path = temp_path("validate-unknown-strict-field", "jsonc");
+async fn validate_accepts_unknown_cluster_fields() {
+    let path = temp_path("validate-unknown-cluster-fields", "jsonc");
     std::fs::write(
         &path,
         r#"{
             cluster: {
                 name: "test",
+                "image-registry": "registry.example.test/maestro",
+                "join-secret": "0123456789abcdef0123456789abcdef",
                 nodes: {
                     node1: {
                         endpoint: "10.0.0.10",
@@ -419,20 +421,15 @@ async fn validate_reports_unknown_strict_fields_as_invalid() {
             },
             node: "node1",
             ingress: { port: 8080 },
-            "encryption-key": "secret"
+            "encryption-key": "secret",
+            "jwt-secret-key": "0123456789abcdef0123456789abcdef"
         }"#,
     )
     .expect("write");
 
-    let error = run_validate(path.to_str().expect("UTF-8 temp path"))
+    run_validate(path.to_str().expect("UTF-8 temp path"))
         .await
-        .expect_err("unknown cluster node field should fail validation");
-    assert!(
-        error
-            .to_string()
-            .contains("cluster.nodes.node1.weight: unknown field"),
-        "unexpected error: {error}"
-    );
+        .expect("unknown cluster fields should be ignored");
     let _ = std::fs::remove_file(path);
 }
 

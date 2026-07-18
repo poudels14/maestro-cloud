@@ -269,7 +269,7 @@ impl std::str::FromStr for SystemType {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
 pub struct ClusterConfig {
     pub name: String,
     #[serde(default)]
@@ -343,7 +343,7 @@ impl std::str::FromStr for ClusterEndpointConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
 pub struct ClusterNodeConfig {
     pub endpoint: ClusterEndpointConfig,
     pub subnet: String,

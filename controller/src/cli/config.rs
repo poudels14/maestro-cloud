@@ -101,7 +101,7 @@ pub async fn run_validate(source: &str) -> Result<()> {
     if ignored_fields.is_empty() {
         println!("[maestro]: ignored fields: none");
     } else {
-        println!("[maestro]: ignored fields:");
+        println!("[maestro]: warning: ignored fields:");
         for field in ignored_fields {
             println!("  - {field}");
         }
