@@ -142,8 +142,7 @@ function ReplicaRow(props: {
     return port ? `http://${host}:${port}` : `http://${host}`;
   };
   const replicaStatusColors = () => STATUS_COLORS[props.replicaStatus] ?? STATUS_COLORS.STOPPED!;
-  const adminUrl = () =>
-    nodeAdminUrl(props.clusterInfo?.nodes, props.nodeId);
+  const adminUrl = () => nodeAdminUrl(props.clusterInfo?.nodes, props.nodeId);
 
   return (
     <div class="flex items-center gap-2 text-xs">

@@ -261,9 +261,7 @@ limit the destination ports:
       "image": "example/api:latest",
       "deploy": {
         "egress": {
-          "allow": [
-            { "cidr": "10.0.10.0/24", "ports": [5432] }
-          ]
+          "allow": [{ "cidr": "10.0.10.0/24", "ports": [5432] }]
         }
       }
     }

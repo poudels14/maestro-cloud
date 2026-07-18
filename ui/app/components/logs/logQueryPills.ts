@@ -169,10 +169,5 @@ function withLogHistogramGroupFilter(
   return combineLogQueries(next, filter);
 }
 
-export {
-  combineLogQueries,
-  logQueryPills,
-  removeLogQueryPill,
-  withLogHistogramGroupFilter
-};
+export { combineLogQueries, logQueryPills, removeLogQueryPill, withLogHistogramGroupFilter };
 export type { LogQueryPill };

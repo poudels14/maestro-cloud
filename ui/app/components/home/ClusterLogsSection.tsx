@@ -53,7 +53,8 @@ function ClusterLogsSection() {
               <For each={nodes.data ?? []}>
                 {(node) => (
                   <option value={node.nodeId} disabled={!node.alive}>
-                    {node.hostname}{node.alive ? "" : " (offline)"}
+                    {node.hostname}
+                    {node.alive ? "" : " (offline)"}
                   </option>
                 )}
               </For>
