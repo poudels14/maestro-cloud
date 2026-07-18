@@ -36,7 +36,7 @@ Maestro rejects preview-enabled service rollouts when the cluster has no `github
 
 ## Service configuration
 
-Add a `preview` block to a repository-backed service in `maestro.cluster.jsonc`:
+Add a `preview` block to a repository-backed service in `maestro.services.jsonc`:
 
 ```jsonc
 {

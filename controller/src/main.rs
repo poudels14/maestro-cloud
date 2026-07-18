@@ -38,8 +38,7 @@ use crate::{
 };
 
 const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
-const DEFAULT_CLUSTER_CONFIG_PATH: &str = "maestro.cluster.jsonc";
-const DEFAULT_SERVICE_CONFIG_PATH: &str = "maestro.service.jsonc";
+const DEFAULT_SERVICES_CONFIG_PATH: &str = "maestro.services.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 
 #[derive(Debug, Parser)]
@@ -101,7 +100,7 @@ enum ServicesCommand {
     Rollout {
         #[arg(
             long = "config",
-            help = "Path to maestro.cluster.jsonc (default: maestro.cluster.jsonc)"
+            help = "Path to maestro.services.jsonc (default: maestro.services.jsonc)"
         )]
         config: Option<PathBuf>,
         #[arg(
@@ -139,7 +138,7 @@ enum ServicesCommand {
     Up {
         #[arg(
             long = "config",
-            help = "Path to maestro.service.jsonc (default: maestro.service.jsonc)"
+            help = "Path to maestro.services.jsonc (default: maestro.services.jsonc)"
         )]
         config: Option<PathBuf>,
         #[arg(
@@ -2075,7 +2074,7 @@ async fn run() -> crate::error::Result<bool> {
                     yes,
                 } => {
                     let config_path =
-                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_CLUSTER_CONFIG_PATH));
+                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_SERVICES_CONFIG_PATH));
                     cli::rollout::run_rollout(&config_path, &host, apply, force, &services, yes)
                         .await
                         .map(|()| false)
@@ -2094,7 +2093,7 @@ async fn run() -> crate::error::Result<bool> {
                     .map(|()| false),
                 ServicesCommand::Up { config, context } => {
                     let config_path =
-                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_SERVICE_CONFIG_PATH));
+                        config.unwrap_or_else(|| PathBuf::from(DEFAULT_SERVICES_CONFIG_PATH));
                     let context_dir = context.unwrap_or_else(|| PathBuf::from("."));
                     cli::up::run_up(&host, &config_path, &context_dir)
                         .await

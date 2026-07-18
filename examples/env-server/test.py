@@ -6,7 +6,7 @@ Usage (from project root):
         --url http://127.0.0.1:8888/ \
         --host env-server.local \
         --service env-server \
-        --config examples/env-server/maestro.cluster.jsonc
+        --config examples/env-server/maestro.services.jsonc
 """
 
 import argparse
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--url", required=True, help="ingress URL")
     parser.add_argument("--host", required=True, help="Host header")
     parser.add_argument("--service", required=True, help="service id")
-    parser.add_argument("--config", required=True, help="path to maestro.cluster.jsonc")
+    parser.add_argument("--config", required=True, help="path to maestro.services.jsonc")
     parser.add_argument("--admin-host", required=True, help="maestro API host")
     args = parser.parse_args()
     run(args.url, args.host, args.service, args.config, args.admin_host)

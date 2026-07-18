@@ -5,9 +5,8 @@ use crate::config::StartConfig;
 use crate::error::{Error, Result};
 
 const DEFAULT_START_TEMPLATE: &str = include_str!("../templates/maestro.jsonc");
-const DEFAULT_CLUSTER_TEMPLATE: &str = include_str!("../templates/cluster.jsonc");
+const DEFAULT_SERVICES_TEMPLATE: &str = include_str!("../templates/services.jsonc");
 const DEFAULT_START_PATH: &str = "maestro.jsonc";
-const DEFAULT_CLUSTER_PATH: &str = "maestro.cluster.jsonc";
 
 pub async fn run_config(host: &str) -> Result<()> {
     let base = normalize_base_url(host)?;
@@ -39,7 +38,7 @@ pub async fn run_config(host: &str) -> Result<()> {
 pub fn run_init() -> Result<()> {
     let kinds = vec![
         "cluster — controller boot/start settings (maestro.jsonc)",
-        "services — service definitions to deploy (maestro.cluster.jsonc)",
+        "services — service definitions to deploy (maestro.services.jsonc)",
     ];
     let choice = inquire::Select::new("Which config do you want to create?", kinds.clone())
         .prompt()
@@ -51,7 +50,10 @@ pub fn run_init() -> Result<()> {
     if index == 0 {
         write_template(Path::new(DEFAULT_START_PATH), DEFAULT_START_TEMPLATE)
     } else {
-        write_template(Path::new(DEFAULT_CLUSTER_PATH), DEFAULT_CLUSTER_TEMPLATE)
+        write_template(
+            Path::new(crate::DEFAULT_SERVICES_CONFIG_PATH),
+            DEFAULT_SERVICES_TEMPLATE,
+        )
     }
 }
 
