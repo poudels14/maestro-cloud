@@ -124,6 +124,18 @@ pub fn dns_allows_for_resolvers(
     allows
 }
 
+pub fn unrestricted_allows_for_system_sources(sources: &[String]) -> Vec<ServiceEgressAllow> {
+    sources
+        .iter()
+        .map(|source| ServiceEgressAllow {
+            service_id: "maestro-system".to_string(),
+            source: source.clone(),
+            cidr: "0.0.0.0/0".to_string(),
+            ports: Vec::new(),
+        })
+        .collect()
+}
+
 pub async fn apply(config: &FirewallConfig) -> Result<()> {
     if config.deny.is_empty() {
         let _ = delete_table(&config.table_name).await;
@@ -218,7 +230,8 @@ fn render_nft_rules(
 
     let mut script = format!(
         "add table inet {table_name}\n\
-         add chain inet {table_name} forward {{ type filter hook forward priority -50; policy accept; }}\n"
+         add chain inet {table_name} forward {{ type filter hook forward priority -50; policy accept; }}\n\
+         add rule inet {table_name} forward ct state established,related accept\n"
     );
 
     for rule in system_allows.iter().chain(service_allows) {
@@ -415,6 +428,48 @@ mod tests {
         let allow_pos = script.find("ip daddr { 10.1.2.3 } accept").unwrap();
         let deny_pos = script.find("ip daddr { 10.0.0.0/8 } reject").unwrap();
         assert!(allow_pos < deny_pos);
+    }
+
+    #[test]
+    fn render_nft_rules_allows_replies_before_egress_denies() {
+        let script = render_nft_rules(
+            DEFAULT_TABLE_NAME,
+            "172.22.0.0/16",
+            &["10.0.0.0/8".to_string()],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        let replies = "ct state established,related accept";
+        let deny = "ip saddr 172.22.0.0/16 ip daddr { 10.0.0.0/8 } reject";
+        assert!(script.contains(replies));
+        assert!(script.find(replies).unwrap() < script.find(deny).unwrap());
+    }
+
+    #[test]
+    fn system_container_sources_are_exempt_from_egress_denies() {
+        let system_allows = unrestricted_allows_for_system_sources(&[
+            "172.22.1.251".to_string(),
+            "172.22.1.253".to_string(),
+        ]);
+        let script = render_nft_rules(
+            DEFAULT_TABLE_NAME,
+            "172.22.1.0/24",
+            &["10.0.0.0/8".to_string()],
+            &[],
+            &system_allows,
+            &[],
+        )
+        .unwrap();
+
+        let probe = "ip saddr 172.22.1.251 ip daddr 0.0.0.0/0 accept";
+        let etcd = "ip saddr 172.22.1.253 ip daddr 0.0.0.0/0 accept";
+        let deny = "ip saddr 172.22.1.0/24 ip daddr { 10.0.0.0/8 } reject";
+        assert!(script.find(probe).unwrap() < script.find(deny).unwrap());
+        assert!(script.find(etcd).unwrap() < script.find(deny).unwrap());
+        assert!(!script.contains("ip saddr 172.22.1.42 ip daddr 0.0.0.0/0 accept"));
     }
 
     #[test]

@@ -1418,6 +1418,16 @@ async fn run() -> crate::error::Result<bool> {
                 );
             }
 
+            let mut system_egress_allows = match (deployment_config.subnet.as_deref(), dns_source) {
+                (Some(subnet), Some(source)) => {
+                    firewall::dns_allows_for_resolvers(subnet, source, &dns_upstreams)
+                }
+                _ => Vec::new(),
+            };
+            system_egress_allows.extend(firewall::unrestricted_allows_for_system_sources(
+                &deployment::system_container_egress_sources(&deployment_config),
+            ));
+
             let firewall_config = firewall::FirewallConfig {
                 table_name: deployment_config
                     .cluster
@@ -1430,12 +1440,7 @@ async fn run() -> crate::error::Result<bool> {
                 subnet: deployment_config.subnet.clone(),
                 deny: egress_deny,
                 allow: egress_allow,
-                system_allows: match (deployment_config.subnet.as_deref(), dns_source) {
-                    (Some(subnet), Some(source)) => {
-                        firewall::dns_allows_for_resolvers(subnet, source, &dns_upstreams)
-                    }
-                    _ => Vec::new(),
-                },
+                system_allows: system_egress_allows,
                 service_allows: Vec::new(),
             };
             let firewall_manager = firewall::FirewallManager::new(firewall_config.clone());
