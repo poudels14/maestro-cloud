@@ -314,6 +314,10 @@ export interface LogEntry {
   source?: string;
   origin?: string;
   hostname?: string;
+  nodeId?: string;
+  nodeName?: string;
+  serviceId?: string;
+  tier?: "service" | "system";
   tags?: string[];
   attrs?: [string, string][];
 }

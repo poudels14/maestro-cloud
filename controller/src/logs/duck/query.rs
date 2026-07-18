@@ -426,6 +426,9 @@ fn row_to_entry(row: &duckdb::Row<'_>) -> duckdb::Result<LogEntry> {
 }
 
 pub(super) fn service_glob(root: &Path, prefix: &str) -> Option<PathBuf> {
+    if prefix.is_empty() {
+        return parquet_glob_if_present(root, "service_id=*/deployment_id=*/date=*/part-*.parquet");
+    }
     let parts = prefix.trim_end_matches('/').split('/').collect::<Vec<_>>();
     let (base, suffix) = match parts.as_slice() {
         [sid, did] => (
@@ -452,6 +455,18 @@ pub(super) fn service_globs_for_range(
     to: i64,
 ) -> Vec<PathBuf> {
     let dates = log_date_keys(from, to);
+    if prefix.is_empty() {
+        return dates
+            .into_iter()
+            .filter(|date| all_services_date_has_parquet(root, date))
+            .map(|date| {
+                root.join("service_id=*")
+                    .join("deployment_id=*")
+                    .join(format!("date={date}"))
+                    .join("part-*.parquet")
+            })
+            .collect();
+    }
     let parts = prefix.trim_end_matches('/').split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         [service_id, deployment_id] => {
@@ -488,6 +503,15 @@ pub(super) fn system_globs_for_range(root: &Path, from: i64, to: i64) -> Vec<Pat
             parquet_glob_if_present(&root.join(format!("date={date}")), "part-*.parquet")
         })
         .collect()
+}
+
+fn all_services_date_has_parquet(root: &Path, date: &str) -> bool {
+    std::fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| service_date_has_parquet(&entry.path(), date))
 }
 
 fn service_date_has_parquet(service_root: &Path, date: &str) -> bool {

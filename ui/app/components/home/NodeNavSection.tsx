@@ -6,15 +6,31 @@ import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
 import { clusterInfoQuery } from "../../lib/queries";
 import { isPartOfCluster } from "../../lib/systemServices";
 
-type HomeTab = "info" | "metrics" | "services" | "cluster" | "traffic" | "http-logs";
+type HomeTab =
+  | "info"
+  | "metrics"
+  | "services"
+  | "cluster"
+  | "cluster-logs"
+  | "traffic"
+  | "http-logs";
 
 function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
   const navigate = useNavigate();
   const cluster = useQuery(() => clusterInfoQuery());
 
-  const go = (to: "/" | "/metrics" | "/services" | "/cluster" | "/traffic" | "/http-logs") => {
+  const go = (
+    to:
+      | "/"
+      | "/metrics"
+      | "/services"
+      | "/cluster"
+      | "/cluster/logs"
+      | "/traffic"
+      | "/http-logs"
+  ) => {
     props.onNavigate?.();
-    if (to === "/traffic" || to === "/http-logs") {
+    if (to === "/traffic" || to === "/http-logs" || to === "/cluster/logs") {
       navigate({
         to,
         search: (previous: { range?: string }) =>
@@ -28,46 +44,56 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
   };
 
   return (
-    <SidebarSection title="Node">
-      <SidebarNavItem
-        label="Info"
-        icon={Info}
-        selected={props.active === "info"}
-        onClick={() => go("/")}
-      />
-      <SidebarNavItem
-        label="Metrics"
-        icon={Activity}
-        selected={props.active === "metrics"}
-        onClick={() => go("/metrics")}
-      />
-      <SidebarNavItem
-        label="Services"
-        icon={LayoutGrid}
-        selected={props.active === "services"}
-        onClick={() => go("/services")}
-      />
-      <SidebarNavItem
-        label="Traffic"
-        icon={ArrowLeftRight}
-        selected={props.active === "traffic"}
-        onClick={() => go("/traffic")}
-      />
-      <SidebarNavItem
-        label="HTTP logs"
-        icon={ScrollText}
-        selected={props.active === "http-logs"}
-        onClick={() => go("/http-logs")}
-      />
-      <Show when={isPartOfCluster(cluster.data)}>
+    <>
+      <SidebarSection title="Node">
         <SidebarNavItem
-          label="Cluster"
-          icon={Network}
-          selected={props.active === "cluster"}
-          onClick={() => go("/cluster")}
+          label="Info"
+          icon={Info}
+          selected={props.active === "info"}
+          onClick={() => go("/")}
         />
+        <SidebarNavItem
+          label="Metrics"
+          icon={Activity}
+          selected={props.active === "metrics"}
+          onClick={() => go("/metrics")}
+        />
+        <SidebarNavItem
+          label="Services"
+          icon={LayoutGrid}
+          selected={props.active === "services"}
+          onClick={() => go("/services")}
+        />
+        <SidebarNavItem
+          label="Traffic"
+          icon={ArrowLeftRight}
+          selected={props.active === "traffic"}
+          onClick={() => go("/traffic")}
+        />
+        <SidebarNavItem
+          label="HTTP logs"
+          icon={ScrollText}
+          selected={props.active === "http-logs"}
+          onClick={() => go("/http-logs")}
+        />
+      </SidebarSection>
+      <Show when={isPartOfCluster(cluster.data)}>
+        <SidebarSection title="Cluster">
+          <SidebarNavItem
+            label="Nodes"
+            icon={Network}
+            selected={props.active === "cluster"}
+            onClick={() => go("/cluster")}
+          />
+          <SidebarNavItem
+            label="Logs"
+            icon={ScrollText}
+            selected={props.active === "cluster-logs"}
+            onClick={() => go("/cluster/logs")}
+          />
+        </SidebarSection>
       </Show>
-    </SidebarSection>
+    </>
   );
 }
 

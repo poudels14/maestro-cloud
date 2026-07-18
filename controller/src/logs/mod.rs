@@ -19,6 +19,8 @@ pub use store::{LogEntry, LogOrigin, LogStore, Logger};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogReadScope {
+    AllServices,
+    AllSystem,
     Prefix(String),
     Sources(Vec<String>),
 }
