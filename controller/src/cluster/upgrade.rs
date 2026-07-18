@@ -20,7 +20,8 @@ use crate::{
 };
 
 const DRAIN_TIMEOUT_MS: i64 = 60_000;
-const VERIFY_TIMEOUT_MS: i64 = 120_000;
+const UPGRADE_VERIFY_TIMEOUT_MS: i64 = 6 * 60 * 60 * 1_000;
+const RESTART_VERIFY_TIMEOUT_MS: i64 = 120_000;
 const UPGRADE_RETRY_MS: i64 = 15_000;
 
 #[derive(Clone)]
@@ -899,7 +900,11 @@ fn upgrade_timed_out(run: &UpgradeRun, now_ms: i64) -> bool {
         .current_node()
         .and_then(|node| node.upgrade_started_at_ms)
         .unwrap_or(run.phase_started_at_ms);
-    now_ms.saturating_sub(started_at_ms) >= VERIFY_TIMEOUT_MS
+    let timeout_ms = match run.kind {
+        ClusterMaintenanceKind::Upgrade => UPGRADE_VERIFY_TIMEOUT_MS,
+        ClusterMaintenanceKind::Restart => RESTART_VERIFY_TIMEOUT_MS,
+    };
+    now_ms.saturating_sub(started_at_ms) >= timeout_ms
 }
 
 fn node_completed_action(run: &UpgradeRun, node: &NodeInfo) -> bool {
@@ -1031,7 +1036,18 @@ mod tests {
             Some("worker".to_string()),
             "retry".to_string(),
         );
-        assert!(upgrade_timed_out(&run, 121_000));
+        assert!(!upgrade_timed_out(
+            &run,
+            1_000 + UPGRADE_VERIFY_TIMEOUT_MS - 1
+        ));
+        assert!(upgrade_timed_out(&run, 1_000 + UPGRADE_VERIFY_TIMEOUT_MS));
+
+        run.kind = ClusterMaintenanceKind::Restart;
+        assert!(!upgrade_timed_out(
+            &run,
+            1_000 + RESTART_VERIFY_TIMEOUT_MS - 1
+        ));
+        assert!(upgrade_timed_out(&run, 1_000 + RESTART_VERIFY_TIMEOUT_MS));
     }
 
     #[test]
