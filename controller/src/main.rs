@@ -77,8 +77,8 @@ enum CliCommand {
     },
     /// Stream logs from the active context
     Logs(cli::logs::RemoteLogsArgs),
-    /// Open a shell or run a command in a live service replica
-    Ssh(cli::ssh::SshArgs),
+    /// Run a command in a live service replica
+    Exec(cli::exec::ExecArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -2235,9 +2235,9 @@ async fn run() -> crate::error::Result<bool> {
             let host = cli::contexts::active_host()?;
             cli::logs::run_logs(&host, args).await.map(|()| false)
         }
-        Some(CliCommand::Ssh(args)) => {
+        Some(CliCommand::Exec(args)) => {
             let host = cli::contexts::active_host()?;
-            let exit_code = cli::ssh::run_ssh(&host, args).await?;
+            let exit_code = cli::exec::run_exec(&host, args).await?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

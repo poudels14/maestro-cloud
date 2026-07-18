@@ -796,7 +796,11 @@ impl LeaderLoop {
                 let draining = deployments
                     .iter()
                     .filter(|deployment| {
-                        deployment.status == DeploymentStatus::Ready && deployment.id != incoming.id
+                        should_drain_superseded_deployment(
+                            &deployment.id,
+                            &deployment.status,
+                            &incoming.id,
+                        )
                     })
                     .map(|deployment| Deployment {
                         service_id: service_id.clone(),
@@ -975,6 +979,18 @@ fn deployment_order(status: &DeploymentStatus) -> u8 {
         DeploymentStatus::Building => 3,
         _ => 4,
     }
+}
+
+fn should_drain_superseded_deployment(
+    deployment_id: &str,
+    status: &DeploymentStatus,
+    incoming_id: &str,
+) -> bool {
+    deployment_id != incoming_id
+        && matches!(
+            status,
+            DeploymentStatus::Ready | DeploymentStatus::PendingReady | DeploymentStatus::Building
+        )
 }
 
 fn hold_scaled_down_assignments(
@@ -1243,5 +1259,39 @@ mod tests {
 
         assert_eq!(completed.len(), 2);
         assert!(exclusions.is_empty());
+    }
+
+    #[test]
+    fn successful_rollout_drains_every_superseded_active_deployment() {
+        for status in [
+            DeploymentStatus::Ready,
+            DeploymentStatus::PendingReady,
+            DeploymentStatus::Building,
+        ] {
+            assert!(should_drain_superseded_deployment(
+                "superseded",
+                &status,
+                "incoming"
+            ));
+        }
+        for status in [
+            DeploymentStatus::Queued,
+            DeploymentStatus::Draining,
+            DeploymentStatus::Crashed,
+            DeploymentStatus::Terminated,
+            DeploymentStatus::Removed,
+            DeploymentStatus::Canceled,
+        ] {
+            assert!(!should_drain_superseded_deployment(
+                "superseded",
+                &status,
+                "incoming"
+            ));
+        }
+        assert!(!should_drain_superseded_deployment(
+            "incoming",
+            &DeploymentStatus::PendingReady,
+            "incoming"
+        ));
     }
 }

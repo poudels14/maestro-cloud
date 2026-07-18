@@ -100,7 +100,7 @@ maestro services rollout --apply  # apply it
 maestro services redeploy my-app
 ```
 
-### 5. Open a shell in a replica
+### 5. Execute a command in a replica
 
 Interactive exec is available on Linux clusters using the `nerdctl` runtime. Enable it
 explicitly in `maestro.jsonc` and keep the operator API reachable only through the private
@@ -118,10 +118,10 @@ Then connect to the active deployment. A single running replica is selected auto
 multiple replicas open a picker unless `--replica` or `--node` narrows the selection.
 
 ```bash
-maestro ssh my-app
-maestro ssh my-app --replica 1
-maestro ssh my-app --no-tty -- env
-maestro ssh my-app -- /bin/sh -c 'id && pwd'
+maestro exec my-app
+maestro exec my-app --replica 1
+maestro exec my-app --no-tty -- env
+maestro exec my-app -- /bin/sh -c 'id && pwd'
 ```
 
 Use `~.` at the start of a terminal line to force-detach. Set `deploy.exec` to `false` on a

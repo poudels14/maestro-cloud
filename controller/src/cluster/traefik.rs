@@ -205,46 +205,45 @@ impl EtcdTrafficManager {
             self.verify_staged(&staged).await?;
         }
 
-        let mut cutover_ops = Vec::new();
+        let mut desired_router_entries = BTreeMap::<String, Vec<u8>>::new();
+        let mut router_prefixes = BTreeSet::new();
+        let mut metadata_ops = Vec::new();
         let router_prefix = format!("traefik/http/routers/{service_id}");
-        cutover_ops.push(TxnOp::delete(
-            format!("{router_prefix}/"),
-            Some(DeleteOptions::new().with_prefix()),
-        ));
-        cutover_ops.push(TxnOp::delete(
-            format!("traefik/http/routers/{service_id}-aff-"),
-            Some(DeleteOptions::new().with_prefix()),
-        ));
+        router_prefixes.insert(format!("{router_prefix}/"));
+        router_prefixes.insert(format!("traefik/http/routers/{service_id}-aff-"));
         let mut gateway_nodes = active_node_ids.iter().cloned().collect::<BTreeSet<_>>();
         if let Some(current) = &current {
             gateway_nodes.extend(current.active_node_ids.iter().cloned());
         }
         for node_id in &gateway_nodes {
-            cutover_ops.push(TxnOp::delete(
-                format!("{}/{service_id}/", gateway_router_prefix(node_id)),
-                Some(DeleteOptions::new().with_prefix()),
-            ));
+            router_prefixes.insert(format!("{}/{service_id}/", gateway_router_prefix(node_id)));
         }
         if let Some(ingress) = ingress
             && !targets.is_empty()
         {
             let rule = ingress_rule(cluster_name, service_id, ingress)?;
             let service_label = format!("{service_id}-g-{generation_id}");
-            cutover_ops.extend([
-                put(format!("{router_prefix}/rule"), rule.clone()),
-                put(format!("{router_prefix}/service"), service_label.clone()),
-                put(format!("{router_prefix}/entryPoints/0"), "web"),
-                put(format!("{router_prefix}/entryPoints/1"), "internal"),
-                put(format!("{router_prefix}/priority"), "10"),
-                put_json(
-                    format!("{SERVICE_MAP_PREFIX}{service_label}"),
-                    &TraefikServiceIdentity {
-                        service_id: service_id.to_string(),
-                        deployment_id: deployment_id.to_string(),
-                        node_id: None,
-                    },
-                )?,
+            desired_router_entries.extend([
+                (format!("{router_prefix}/rule"), rule.clone().into_bytes()),
+                (
+                    format!("{router_prefix}/service"),
+                    service_label.clone().into_bytes(),
+                ),
+                (format!("{router_prefix}/entryPoints/0"), b"web".to_vec()),
+                (
+                    format!("{router_prefix}/entryPoints/1"),
+                    b"internal".to_vec(),
+                ),
+                (format!("{router_prefix}/priority"), b"10".to_vec()),
             ]);
+            metadata_ops.push(put_json(
+                format!("{SERVICE_MAP_PREFIX}{service_label}"),
+                &TraefikServiceIdentity {
+                    service_id: service_id.to_string(),
+                    deployment_id: deployment_id.to_string(),
+                    node_id: None,
+                },
+            )?);
             let mut by_node = BTreeMap::<&str, Vec<&RoutingTarget>>::new();
             for target in &targets {
                 by_node
@@ -256,36 +255,65 @@ impl EtcdTrafficManager {
                 let affinity_label = format!("{service_label}-aff-{node_id}");
                 let affinity_router = format!("{router_prefix}-aff-{node_id}");
                 let gateway_router = format!("{}/{service_id}", gateway_router_prefix(node_id));
-                cutover_ops.extend([
-                    put(
+                desired_router_entries.extend([
+                    (
                         format!("{affinity_router}/rule"),
-                        affinity_rule(cluster_name, service_id, ingress, node_id)?,
+                        affinity_rule(cluster_name, service_id, ingress, node_id)?.into_bytes(),
                     ),
-                    put(format!("{affinity_router}/service"), affinity_label.clone()),
-                    put(format!("{affinity_router}/entryPoints/0"), "web"),
-                    put(format!("{affinity_router}/entryPoints/1"), "internal"),
-                    put(format!("{affinity_router}/priority"), "100"),
-                    put_json(
-                        format!("{SERVICE_MAP_PREFIX}{affinity_label}"),
-                        &TraefikServiceIdentity {
-                            service_id: service_id.to_string(),
-                            deployment_id: deployment_id.to_string(),
-                            node_id: Some(node_id.to_string()),
-                        },
-                    )?,
-                    put(format!("{gateway_router}/rule"), rule.clone()),
-                    put(format!("{gateway_router}/service"), service_label.clone()),
-                    put(format!("{gateway_router}/entryPoints/0"), "gateway"),
-                    put(format!("{gateway_router}/tls"), "true"),
-                    put(format!("{gateway_router}/tls/options"), GATEWAY_TRANSPORT),
-                    put(format!("{gateway_router}/priority"), "10"),
-                    put(
+                    (
+                        format!("{affinity_router}/service"),
+                        affinity_label.clone().into_bytes(),
+                    ),
+                    (format!("{affinity_router}/entryPoints/0"), b"web".to_vec()),
+                    (
+                        format!("{affinity_router}/entryPoints/1"),
+                        b"internal".to_vec(),
+                    ),
+                    (format!("{affinity_router}/priority"), b"100".to_vec()),
+                    (format!("{gateway_router}/rule"), rule.clone().into_bytes()),
+                    (
+                        format!("{gateway_router}/service"),
+                        service_label.clone().into_bytes(),
+                    ),
+                    (
+                        format!("{gateway_router}/entryPoints/0"),
+                        b"gateway".to_vec(),
+                    ),
+                    (format!("{gateway_router}/tls"), b"true".to_vec()),
+                    (
+                        format!("{gateway_router}/tls/options"),
+                        GATEWAY_TRANSPORT.as_bytes().to_vec(),
+                    ),
+                    (format!("{gateway_router}/priority"), b"10".to_vec()),
+                    (
                         format!("{gateway_router}/middlewares/0"),
-                        service_label.clone(),
+                        service_label.clone().into_bytes(),
                     ),
                 ]);
+                metadata_ops.push(put_json(
+                    format!("{SERVICE_MAP_PREFIX}{affinity_label}"),
+                    &TraefikServiceIdentity {
+                        service_id: service_id.to_string(),
+                        deployment_id: deployment_id.to_string(),
+                        node_id: Some(node_id.to_string()),
+                    },
+                )?);
             }
         }
+        let existing_router_keys = self.router_keys(&router_prefixes).await?;
+        let router_plan = router_cutover_plan(existing_router_keys, desired_router_entries);
+        let mut cutover_ops = router_plan
+            .stale_keys
+            .into_iter()
+            .map(|key| TxnOp::delete(key, None))
+            .collect::<Vec<_>>();
+        cutover_ops.extend(
+            router_plan
+                .desired_entries
+                .into_iter()
+                .map(|(key, value)| TxnOp::put(key, value, None)),
+        );
+        cutover_ops.extend(metadata_ops);
         cutover_ops.extend([
             put_json(traffic_key(service_id), &generation)?,
             put_json(dns_key(service_id), &dns)?,
@@ -317,6 +345,23 @@ impl EtcdTrafficManager {
             bail!("leadership or traffic-generation fence rejected atomic cutover");
         }
         Ok(generation)
+    }
+
+    async fn router_keys(&self, prefixes: &BTreeSet<String>) -> Result<BTreeSet<String>> {
+        let mut keys = BTreeSet::new();
+        let mut client = self.client.lock().await;
+        for prefix in prefixes {
+            let response = client
+                .get(
+                    prefix.as_str(),
+                    Some(GetOptions::new().with_prefix().with_keys_only()),
+                )
+                .await?;
+            for entry in response.kvs() {
+                keys.insert(std::str::from_utf8(entry.key())?.to_string());
+            }
+        }
+        Ok(keys)
     }
 
     pub async fn reconcile_ingress_blocklist(&self, token: &LeadershipToken) -> Result<()> {
@@ -871,16 +916,31 @@ fn gateway_router_prefix(node_id: &str) -> String {
     format!("{GATEWAY_PREFIX}{node_id}/http/routers")
 }
 
+struct RouterCutoverPlan {
+    stale_keys: BTreeSet<String>,
+    desired_entries: BTreeMap<String, Vec<u8>>,
+}
+
+fn router_cutover_plan(
+    existing: BTreeSet<String>,
+    desired_entries: BTreeMap<String, Vec<u8>>,
+) -> RouterCutoverPlan {
+    let stale_keys = existing
+        .into_iter()
+        .filter(|key| !desired_entries.contains_key(key))
+        .collect();
+    RouterCutoverPlan {
+        stale_keys,
+        desired_entries,
+    }
+}
+
 fn leadership_compare(token: &LeadershipToken) -> Compare {
     Compare::create_revision(
         token.election_key.clone(),
         CompareOp::Equal,
         token.create_revision,
     )
-}
-
-fn put(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> TxnOp {
-    TxnOp::put(key, value, None)
 }
 
 fn put_json(key: impl Into<Vec<u8>>, value: &impl serde::Serialize) -> Result<TxnOp> {
@@ -1070,5 +1130,32 @@ mod tests {
         let one = generation_id("web", "dep", 1, &["a".to_string(), "b".to_string()]);
         let two = generation_id("web", "dep", 1, &["b".to_string(), "a".to_string()]);
         assert_eq!(one, two);
+    }
+
+    #[test]
+    fn router_cutover_never_deletes_a_key_it_writes() {
+        let existing = BTreeSet::from([
+            "traefik/http/routers/web/rule".to_string(),
+            "traefik/http/routers/web/obsolete".to_string(),
+        ]);
+        let desired = BTreeMap::from([(
+            "traefik/http/routers/web/rule".to_string(),
+            b"Host(`web.local`)".to_vec(),
+        )]);
+
+        let plan = router_cutover_plan(existing, desired);
+        assert_eq!(
+            plan.stale_keys,
+            BTreeSet::from(["traefik/http/routers/web/obsolete".to_string()])
+        );
+        assert!(
+            plan.stale_keys
+                .iter()
+                .all(|key| !plan.desired_entries.contains_key(key))
+        );
+        assert_eq!(
+            plan.desired_entries["traefik/http/routers/web/rule"],
+            b"Host(`web.local`)"
+        );
     }
 }
