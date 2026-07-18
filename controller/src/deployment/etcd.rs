@@ -611,6 +611,7 @@ impl EtcdStateStore {
                 Some(GetOptions::new().with_prefix()),
             )
             .await?;
+        let mut terminal_states = std::collections::BTreeMap::<u32, ReplicaState>::new();
         for kv in cluster_response.kvs() {
             let state = serde_json::from_slice::<ReplicaState>(kv.value())
                 .map_err(|err| anyhow!("invalid scheduled replica state JSON: {err}"))?;
@@ -641,14 +642,38 @@ impl EtcdStateStore {
                         })
                 });
                 if !desired {
+                    if is_terminal_replica_failure(&state) {
+                        let replace =
+                            terminal_states
+                                .get(&state.replica_index)
+                                .is_none_or(|existing| {
+                                    state.restart_attempts > existing.restart_attempts
+                                });
+                        if replace {
+                            terminal_states.insert(state.replica_index, state);
+                        }
+                    }
                     continue;
                 }
+                states.push(state);
+            }
+        }
+        for (replica_index, state) in terminal_states {
+            if !states
+                .iter()
+                .any(|existing| existing.replica_index == replica_index)
+            {
                 states.push(state);
             }
         }
         states.sort_by_key(|s| s.replica_index);
         Ok(states)
     }
+}
+
+fn is_terminal_replica_failure(state: &ReplicaState) -> bool {
+    state.status == DeploymentStatus::Crashed
+        && state.restart_attempts >= crate::health::MAX_REPLICA_RESTART_ATTEMPTS
 }
 
 #[async_trait]

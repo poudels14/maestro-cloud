@@ -122,8 +122,11 @@ impl LeaderLoop {
             .flat_map(|manifest| manifest.assignments.iter().cloned())
             .collect::<Vec<_>>();
         let replica_states = self.assignments.list_replica_states().await?;
-        let (services, mut validation_errors) =
-            self.schedule_specs(&replica_states, now_ms).await?;
+        self.fail_exhausted_deployments(token, &current, &replica_states)
+            .await?;
+        let (services, mut validation_errors) = self
+            .schedule_specs(&replica_states, &current, now_ms)
+            .await?;
         let drain_specs = services.clone();
         let drain_node_states = node_states.clone();
         let current_for_drains = current.clone();
@@ -329,6 +332,7 @@ impl LeaderLoop {
     async fn schedule_specs(
         &self,
         replica_states: &[ReplicaState],
+        current: &[Assignment],
         now_ms: i64,
     ) -> Result<(Vec<ServiceScheduleSpec>, Vec<UnschedulableReplica>)> {
         let mut specs = Vec::new();
@@ -390,6 +394,22 @@ impl LeaderLoop {
                 .iter()
                 .map(|deployment| deployment.id.as_str())
                 .collect::<HashSet<_>>();
+            let exhausted_slots = deployments
+                .iter()
+                .flat_map(|deployment| {
+                    (0..info.effective_replicas())
+                        .filter(|replica_index| {
+                            current_replica_exhausted(
+                                current,
+                                replica_states,
+                                &service_id,
+                                &deployment.id,
+                                *replica_index,
+                            )
+                        })
+                        .map(|replica_index| (deployment.id.clone(), replica_index))
+                })
+                .collect();
             let unhealthy_slots = replica_states
                 .iter()
                 .filter(|state| state.status == DeploymentStatus::Crashed)
@@ -424,9 +444,63 @@ impl LeaderLoop {
                     info.config.deploy.node_affinity.clone()
                 },
                 unhealthy_slots,
+                exhausted_slots,
             });
         }
         Ok((specs, errors))
+    }
+
+    async fn fail_exhausted_deployments(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        current: &[Assignment],
+        replica_states: &[ReplicaState],
+    ) -> Result<()> {
+        for info in self.store.list_service_infos().await? {
+            let desired = info.effective_replicas();
+            for deployment in self.store.list_service_deployments(&info.config.id).await? {
+                if !matches!(
+                    deployment.status,
+                    DeploymentStatus::Building
+                        | DeploymentStatus::PendingReady
+                        | DeploymentStatus::Ready
+                ) || !all_current_replicas_exhausted(
+                    current,
+                    replica_states,
+                    &info.config.id,
+                    &deployment.id,
+                    desired,
+                ) {
+                    continue;
+                }
+                let deployment_ref = Deployment {
+                    service_id: info.config.id.clone(),
+                    id: deployment.id.clone(),
+                    replica_index: 0,
+                };
+                self.store
+                    .update_deployment_status_fenced(
+                        token,
+                        &deployment_ref,
+                        DeploymentStatus::Crashed,
+                    )
+                    .await?;
+                let reason = format!(
+                    "all {desired} replicas exhausted {} start attempts",
+                    crate::health::MAX_REPLICA_RESTART_ATTEMPTS
+                );
+                self.logger.emit(
+                    "error",
+                    &format!(
+                        "deployment `{}/{}` crashed: {reason}",
+                        info.config.id, deployment.id
+                    ),
+                );
+                self.slack
+                    .notify_deployment_crashed(&info.config.id, &deployment.id, &reason);
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -993,6 +1067,51 @@ fn should_drain_superseded_deployment(
         )
 }
 
+fn current_replica_exhausted(
+    assignments: &[Assignment],
+    states: &[ReplicaState],
+    service_id: &str,
+    deployment_id: &str,
+    replica_index: u32,
+) -> bool {
+    let Some(assignment) = assignments
+        .iter()
+        .filter(|assignment| {
+            assignment.service_id == service_id
+                && assignment.deployment_id == deployment_id
+                && assignment.replica_index == replica_index
+        })
+        .max_by_key(|assignment| assignment.placement_epoch)
+    else {
+        return false;
+    };
+    states.iter().any(|state| {
+        state.node_id.as_ref() == Some(&assignment.node_id)
+            && state.assignment_id.as_deref() == Some(assignment.assignment_id.as_str())
+            && state.status == DeploymentStatus::Crashed
+            && state.restart_attempts >= crate::health::MAX_REPLICA_RESTART_ATTEMPTS
+    })
+}
+
+fn all_current_replicas_exhausted(
+    assignments: &[Assignment],
+    states: &[ReplicaState],
+    service_id: &str,
+    deployment_id: &str,
+    replicas: u32,
+) -> bool {
+    replicas > 0
+        && (0..replicas).all(|replica_index| {
+            current_replica_exhausted(
+                assignments,
+                states,
+                service_id,
+                deployment_id,
+                replica_index,
+            )
+        })
+}
+
 fn hold_scaled_down_assignments(
     planned: &mut Vec<Assignment>,
     current: &[Assignment],
@@ -1149,6 +1268,7 @@ mod tests {
             }],
             node_affinity: None,
             unhealthy_slots: BTreeSet::new(),
+            exhausted_slots: BTreeSet::new(),
         }
     }
 
@@ -1292,6 +1412,43 @@ mod tests {
             "incoming",
             &DeploymentStatus::PendingReady,
             "incoming"
+        ));
+    }
+
+    #[test]
+    fn deployment_crashes_only_after_every_current_replica_exhausts_its_budget() {
+        let assignments = vec![assignment(0), assignment(1)];
+        let mut states = vec![
+            state(0, DeploymentStatus::Crashed),
+            state(1, DeploymentStatus::Crashed),
+        ];
+        states[0].restart_attempts = crate::health::MAX_REPLICA_RESTART_ATTEMPTS;
+        states[1].restart_attempts = crate::health::MAX_REPLICA_RESTART_ATTEMPTS - 1;
+
+        assert!(!all_current_replicas_exhausted(
+            &assignments,
+            &states,
+            "web",
+            "dep1",
+            2
+        ));
+
+        states[1].restart_attempts = crate::health::MAX_REPLICA_RESTART_ATTEMPTS;
+        assert!(all_current_replicas_exhausted(
+            &assignments,
+            &states,
+            "web",
+            "dep1",
+            2
+        ));
+
+        states[1].assignment_id = Some("superseded-assignment".to_string());
+        assert!(!all_current_replicas_exhausted(
+            &assignments,
+            &states,
+            "web",
+            "dep1",
+            2
         ));
     }
 }

@@ -473,6 +473,7 @@ pub struct ServiceScheduleSpec {
     pub groups: Vec<DeploymentGroup>,
     pub node_affinity: Option<NodeAffinity>,
     pub unhealthy_slots: BTreeSet<(String, NodeId, u32, String)>,
+    pub exhausted_slots: BTreeSet<(String, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

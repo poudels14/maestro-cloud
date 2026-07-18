@@ -1,4 +1,4 @@
-use super::is_missing_election_leader_message;
+use super::{is_missing_election_leader_message, is_terminal_replica_failure};
 use crate::deployment::controller::DeploymentController;
 use crate::deployment::keys::{service_deployment_history_key, service_id_from_history_key};
 use crate::deployment::provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity};
@@ -31,6 +31,28 @@ fn missing_election_leader_is_an_empty_optional_value() {
 #[test]
 fn other_etcd_errors_are_not_hidden_as_a_missing_leader() {
     assert!(!is_missing_election_leader_message("etcd unavailable"));
+}
+
+#[test]
+fn only_exhausted_crashes_are_retained_as_terminal_replica_failures() {
+    let mut state = ReplicaState {
+        service_id: Some("svc".to_string()),
+        deployment_id: Some("deployment".to_string()),
+        replica_index: 0,
+        status: DeploymentStatus::Crashed,
+        healthcheck_failures: 0,
+        restart_attempts: crate::health::MAX_REPLICA_RESTART_ATTEMPTS - 1,
+        node_id: Some("node-a".to_string()),
+        assignment_id: Some("assignment-a".to_string()),
+        endpoint: None,
+        error: Some("image pull failed".to_string()),
+    };
+
+    assert!(!is_terminal_replica_failure(&state));
+    state.restart_attempts = crate::health::MAX_REPLICA_RESTART_ATTEMPTS;
+    assert!(is_terminal_replica_failure(&state));
+    state.status = DeploymentStatus::Ready;
+    assert!(!is_terminal_replica_failure(&state));
 }
 
 fn deployment_with_source(
