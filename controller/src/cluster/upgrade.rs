@@ -138,6 +138,7 @@ impl ClusterUpgradeOrchestrator {
         if nodes.is_empty() {
             bail!("cannot {kind} a cluster without live nodes");
         }
+        let live_voter_count = nodes.iter().filter(|node| node.role.is_voter()).count();
         for service in self.store.list_service_infos().await? {
             let active_rollout = self
                 .store
@@ -220,6 +221,13 @@ impl ClusterUpgradeOrchestrator {
             if nodes.is_empty() {
                 bail!("cluster node `{selected_node_id}` is not live");
             }
+        }
+        if nodes.iter().any(|node| node.role.is_voter())
+            && !single_voter_maintenance_preserves_quorum(live_voter_count)
+        {
+            bail!(
+                "cluster {kind} cannot safely restart a voter in a two-voter cluster; add a third voter first so the remaining nodes preserve quorum"
+            );
         }
         order_nodes(&mut nodes, &token.info.node_id);
         let now_ms = now_millis();
@@ -930,6 +938,9 @@ impl ClusterUpgradeOrchestrator {
     }
 
     async fn node_healthy(&self, node: &NodeInfo) -> bool {
+        if !node.data_plane_ready {
+            return false;
+        }
         self.http
             .get(self.node_api_url(node, "/_healthy"))
             .send()
@@ -964,6 +975,10 @@ impl ClusterUpgradeOrchestrator {
             self.node_api_scheme, node.cluster_host_ip, node.cluster_api_port
         )
     }
+}
+
+fn single_voter_maintenance_preserves_quorum(live_voter_count: usize) -> bool {
+    live_voter_count != 2
 }
 
 fn order_nodes(nodes: &mut [NodeInfo], leader_node_id: &str) {
@@ -1174,6 +1189,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["worker-a", "worker-b", "hybrid", "voter", "leader"]
         );
+    }
+
+    #[test]
+    fn one_at_a_time_voter_maintenance_preserves_quorum() {
+        assert!(single_voter_maintenance_preserves_quorum(1));
+        assert!(!single_voter_maintenance_preserves_quorum(2));
+        assert!(single_voter_maintenance_preserves_quorum(3));
+        assert!(single_voter_maintenance_preserves_quorum(4));
     }
 
     #[test]

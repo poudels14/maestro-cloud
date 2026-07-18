@@ -41,6 +41,15 @@ const DEFAULT_CONFIG_PATH: &str = "maestro.jsonc";
 const DEFAULT_SERVICES_CONFIG_PATH: &str = "maestro.services.jsonc";
 const DEFAULT_API_PORT: u16 = 3001;
 
+fn should_run_follower_maintenance(
+    cluster_mode: bool,
+    leadership: Option<cluster::types::LeadershipState>,
+) -> bool {
+    cluster_mode
+        && leadership
+            .is_some_and(|state| !matches!(state, cluster::types::LeadershipState::Leading(_)))
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "maestro", version, disable_help_subcommand = true)]
 struct Cli {
@@ -1934,10 +1943,8 @@ async fn run() -> crate::error::Result<bool> {
                     .observe_leadership(cluster::elector::LeaderElector::watch(elector.as_ref()));
             }
             let deployment_shutdown_tx = signal_tx.clone();
-            let deployment_wait_shutdown_rx = signal_tx.subscribe();
 
             let result = async move {
-                let mut wait_shutdown = deployment_wait_shutdown_rx;
                 if maintenance_only {
                     let exit_reason = controller
                         .run_node_maintenance()
@@ -1947,29 +1954,21 @@ async fn run() -> crate::error::Result<bool> {
                     return Ok((exit_reason, controller));
                 }
                 loop {
-                    if let Some(elector) = &leader_elector
-                        && cluster_mode
-                    {
-                        let mut leadership =
-                            cluster::elector::LeaderElector::watch(elector.as_ref());
-                        loop {
-                            if matches!(
-                                leadership.borrow().clone(),
-                                cluster::types::LeadershipState::Leading(_)
-                            ) {
-                                break;
-                            }
-                            tokio::select! {
-                                changed = leadership.changed() => {
-                                    if changed.is_err() {
-                                        return Err(Error::external("cluster leader elector stopped"));
-                                    }
-                                }
-                                _ = wait_shutdown.recv() => {
-                                    return Ok((deployment::controller::ControllerExitReason::Shutdown, controller));
-                                }
-                            }
+                    if should_run_follower_maintenance(
+                        cluster_mode,
+                        leader_elector.as_ref().map(|elector| {
+                            cluster::elector::LeaderElector::state(elector.as_ref())
+                        }),
+                    ) {
+                        let exit_reason = controller
+                            .run_node_maintenance()
+                            .await
+                            .map_err(Error::from)?;
+                        if exit_reason == deployment::controller::ControllerExitReason::Promoted {
+                            continue;
                         }
+                        let _ = deployment_shutdown_tx.send(signal::ShutdownEvent::Graceful);
+                        return Ok((exit_reason, controller));
                     }
                     let scoped_watcher = cluster_mode.then(|| {
                         tokio::spawn(
@@ -3005,7 +3004,40 @@ mod spool_identity_tests {
 mod cluster_upgrade_cli_tests {
     use clap::Parser;
 
-    use super::{Cli, CliCommand, ClusterCommand};
+    use super::{Cli, CliCommand, ClusterCommand, should_run_follower_maintenance};
+
+    fn leadership_token() -> crate::cluster::types::LeadershipToken {
+        crate::cluster::types::LeadershipToken {
+            info: crate::cluster::types::LeaderInfo {
+                node_id: "node-a".to_string(),
+            },
+            election_key: b"election".to_vec(),
+            create_revision: 1,
+            lease_id: 1,
+        }
+    }
+
+    #[test]
+    fn follower_voters_run_node_local_maintenance_while_the_leader_coordinates() {
+        use crate::cluster::types::LeadershipState;
+
+        assert!(should_run_follower_maintenance(
+            true,
+            Some(LeadershipState::Following(Some(leadership_token().info)))
+        ));
+        assert!(should_run_follower_maintenance(
+            true,
+            Some(LeadershipState::Unknown)
+        ));
+        assert!(!should_run_follower_maintenance(
+            true,
+            Some(LeadershipState::Leading(leadership_token()))
+        ));
+        assert!(!should_run_follower_maintenance(
+            false,
+            Some(LeadershipState::Following(None))
+        ));
+    }
 
     #[test]
     fn coordinated_upgrade_does_not_require_a_version_flag() {
