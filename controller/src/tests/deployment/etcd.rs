@@ -90,7 +90,6 @@ fn command_planner_uses_image_for_deploy_when_present() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
-        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -128,7 +127,6 @@ fn clustered_deploy_command_uses_the_reserved_assignment_address() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Nerdctl),
         build_command_env: Default::default(),
-        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -164,7 +162,6 @@ fn command_planner_disables_pull_for_prepared_images() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
-        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -204,7 +201,6 @@ fn command_planner_appends_deploy_flags_to_docker_run() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
-        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,
@@ -262,7 +258,6 @@ fn secrets_mount_content_quotes_values() {
     let planner = ContainerDeploymentProvider {
         runtime: runtime::create_provider(crate::config::RuntimeType::Docker),
         build_command_env: Default::default(),
-        shared_registry: None,
         network: "test-net".to_string(),
         dns_domain: None,
         dns_server: None,

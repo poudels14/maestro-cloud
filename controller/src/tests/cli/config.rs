@@ -99,7 +99,6 @@ async fn validate_accepts_minimal_multi_node_config_with_default_roles() {
                         subnet: "172.22.3.0/24"
                     }
                 },
-                "image-registry": "registry.example.com/maestro",
                 "join-secret": "0123456789abcdef0123456789abcdef"
             },
             ingress: { port: 8080 },
@@ -379,7 +378,6 @@ async fn validate_reports_the_path_of_a_semantically_invalid_field() {
                     }
                 },
                 "control-allow-cidrs": ["10.0.0.0/8"],
-                "image-registry": "registry.example.test/maestro",
                 "join-secret": "12345678901234567890123456789012"
             },
             node: "node1",

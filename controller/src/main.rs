@@ -1061,7 +1061,6 @@ async fn run() -> crate::error::Result<bool> {
                     gateway_port: local_endpoint.gateway_port,
                     etcd_client_port: local_endpoint.etcd_client_port,
                     etcd_peer_port: local_endpoint.etcd_peer_port,
-                    shared_registry: cfg.cluster.image_registry.clone(),
                     labels: cfg.cluster.labels.clone(),
                 })
             };
@@ -1622,14 +1621,6 @@ async fn run() -> crate::error::Result<bool> {
             if deployment_config.cluster_mode()
                 && cluster::migration::image_publication_required(&deployment_config.data_dir)
             {
-                let cluster = deployment_config
-                    .cluster
-                    .as_ref()
-                    .expect("cluster mode requires cluster configuration");
-                let registry = cluster
-                    .shared_registry
-                    .as_deref()
-                    .expect("cluster validation requires a shared registry");
                 let elector = leader_elector.as_ref().ok_or_else(|| {
                     Error::external("legacy image migration requires a leader elector")
                 })?;
@@ -1643,7 +1634,6 @@ async fn run() -> crate::error::Result<bool> {
                     })?;
                 cluster::migration::publish_legacy_images(
                     &deployment_config.data_dir,
-                    registry,
                     runtime.clone(),
                     store.clone(),
                     &token,
@@ -1656,7 +1646,7 @@ async fn run() -> crate::error::Result<bool> {
                 })?;
                 logger.emit(
                     "info",
-                    "migrated service images are available in the shared registry",
+                    "migrated service images are available in their configured build registries",
                 );
             }
             let cluster_assignment_store: Option<

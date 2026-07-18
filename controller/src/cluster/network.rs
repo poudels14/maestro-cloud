@@ -331,13 +331,6 @@ pub fn validate_cluster_config(
             }
         }
     }
-    if !config
-        .image_registry
-        .as_deref()
-        .is_some_and(|registry| !registry.trim().is_empty())
-    {
-        bail!("field `cluster.image-registry` is missing or invalid: required in multi-node mode");
-    }
     match config.join_secret.as_deref() {
         Some(secret) if secret.len() >= 32 => {}
         _ => bail!(
@@ -547,7 +540,6 @@ mod tests {
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
             join_secret: Some("x".repeat(32)),
-            image_registry: Some("registry.example.com/maestro".to_string()),
             selected_node: Some("node1".to_string()),
             ..ClusterConfig::default()
         }

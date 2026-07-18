@@ -30,7 +30,6 @@ entry with the top-level `node` string:
         "role": "voter"
       }
     },
-    "image-registry": "ghcr.io/acme",
     "join-secret": "<high-entropy-secret-of-at-least-32-characters>"
   },
   "ingress": { "port": 8080 },
@@ -165,10 +164,29 @@ its name, endpoint, or subnet. Removed node identities cannot silently rejoin.
 
 ## Registry and scheduling
 
-Multi-node mode requires `cluster.image-registry`. It is a base image
-namespace: Maestro appends `/<service-id>:<deployment-id>`. Workload nodes must
-be able to pull from it, and any node that can lead builds must be able to push.
-Configure runtime registry credentials independently on every host.
+Every service that Maestro builds in multi-node mode must set `build.registry`.
+Maestro publishes the image as
+`<build.registry>/<service-id>:<deployment-id>`. A service configured with
+`image` instead of `build` continues to use that image reference directly.
+Workload nodes must be able to pull from every configured service registry, and
+any node that can lead builds must be able to push. Configure runtime registry
+credentials independently on every host.
+
+```jsonc
+{
+  "services": {
+    "api": {
+      "name": "API",
+      "build": {
+        "repo": "git@github.com:acme/api.git",
+        "dockerfile": "Dockerfile",
+        "registry": "ghcr.io/acme"
+      },
+      "deploy": {}
+    }
+  }
+}
+```
 
 The scheduler places workloads on ready `master`, `hybrid`, and `worker` nodes.
 Dedicated voters are never placement targets. Hard `deploy.nodeAffinity` rules

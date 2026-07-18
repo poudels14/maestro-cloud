@@ -284,8 +284,6 @@ pub struct ClusterConfig {
     pub etcd_client_port: u16,
     #[serde(skip, default = "default_etcd_peer_port")]
     pub etcd_peer_port: u16,
-    #[serde(default)]
-    pub image_registry: Option<String>,
     #[serde(default, alias = "joinSecret")]
     pub join_secret: Option<String>,
     #[serde(default)]
@@ -579,8 +577,6 @@ pub struct ClusterView {
     pub name: String,
     pub nodes: BTreeMap<String, ClusterNodeConfig>,
     pub control_allow_cidrs: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_registry: Option<String>,
     pub join_secret: Option<String>,
     pub labels: BTreeMap<String, String>,
 }
@@ -711,7 +707,6 @@ impl StartConfig {
                 name: self.cluster.name.clone(),
                 nodes: self.cluster.nodes.clone(),
                 control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
-                image_registry: self.cluster.image_registry.clone(),
                 join_secret: self.cluster.join_secret.as_deref().and_then(mask),
                 labels: self.cluster.labels.clone(),
             },
@@ -1243,7 +1238,6 @@ mod tests {
                 cluster: {
                     name: "prod",
                     controlAllowCidrs: ["10.20.0.0/24"],
-                    "image-registry": "ghcr.io/acme",
                     joinSecret: "0123456789abcdef0123456789abcdef"
                 },
                 ingress: { port: 8080 },
@@ -1274,10 +1268,6 @@ mod tests {
 
         assert_eq!(config.cluster.api_port, 3000);
         assert_eq!(config.cluster.control_allow_cidrs, vec!["10.20.0.0/24"]);
-        assert_eq!(
-            config.cluster.image_registry.as_deref(),
-            Some("ghcr.io/acme")
-        );
         assert_eq!(
             config.cluster.join_secret.as_deref(),
             Some("0123456789abcdef0123456789abcdef")
@@ -1327,7 +1317,6 @@ mod tests {
             r#"{
                 cluster: {
                     name: "prod",
-                    "image-registry": "registry.example/base",
                     labels: { apiPort: "label-must-not-be-normalized" }
                 },
                 ingress: { port: 8080 },
@@ -1339,17 +1328,12 @@ mod tests {
             &node,
             r#"{
                 "$extends": "base.jsonc",
-                cluster: { "image-registry": "registry.example/node" },
                 encryptionKey: "node-key"
             }"#,
         )
         .unwrap();
 
         let config = load_config(node.to_str().unwrap()).await.unwrap();
-        assert_eq!(
-            config.cluster.image_registry.as_deref(),
-            Some("registry.example/node")
-        );
         assert_eq!(config.encryption_key, "node-key");
         assert_eq!(
             config.cluster.labels.get("apiPort").map(String::as_str),

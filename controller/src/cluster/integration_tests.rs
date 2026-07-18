@@ -470,7 +470,6 @@ impl FormingEtcdCluster {
             etcd_client_port: cluster.nodes[0].etcd_client_port,
             etcd_peer_port: cluster.nodes[0].etcd_peer_port,
             control_allow_cidrs: vec!["127.0.0.1/32".to_string()],
-            image_registry: Some("registry.invalid/maestro".to_string()),
             join_secret: Some("integration-auto-formation-secret".to_string()),
             selected_node: Some("node1".to_string()),
             ..crate::config::ClusterConfig::default()
@@ -674,7 +673,6 @@ impl FormingEtcdCluster {
             gateway_port: node.gateway_port,
             etcd_client_port: node.etcd_client_port,
             etcd_peer_port: node.etcd_peer_port,
-            shared_registry: None,
             labels: BTreeMap::new(),
         }
     }
