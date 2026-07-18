@@ -43,7 +43,7 @@ pub(super) async fn interactive_exec(request: InteractiveExecRequest) -> Result<
     process.type_url = PROCESS_SPEC_TYPE.to_string();
     process.value = serde_json::to_vec(process_spec)?;
 
-    let exec_id = format!("maestro-ssh-{}", crate::utils::nanoid::unique_id(16));
+    let exec_id = format!("maestro-exec-{}", crate::utils::nanoid::unique_id(16));
     let session_dir = request.session_root.join(&exec_id);
     tokio::fs::create_dir_all(&session_dir).await?;
     protect_session_dir(&session_dir)?;

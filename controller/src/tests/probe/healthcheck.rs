@@ -191,10 +191,25 @@ fn deployment_with_ports(ingress_port: Option<u16>, expose_ports: Vec<u16>) -> S
     }
 }
 
+fn replica(index: u32) -> ReplicaState {
+    ReplicaState {
+        service_id: Some("svc".to_string()),
+        deployment_id: Some("abc123xyz9".to_string()),
+        replica_index: index,
+        status: DeploymentStatus::PendingReady,
+        healthcheck_failures: 0,
+        restart_attempts: 0,
+        node_id: None,
+        assignment_id: None,
+        endpoint: None,
+        error: None,
+    }
+}
+
 #[test]
 fn health_url_prefers_ingress_port() {
     let deployment = deployment_with_ports(Some(8080), vec![3000]);
-    let url = build_health_url_for_replica(&deployment, 0, "/health", None)
+    let url = build_health_url_for_replica(&deployment, &replica(0), "/health", None)
         .expect("ingress.port should produce health URL");
     assert_eq!(url, "http://svc-abc123:8080/health");
 }
@@ -202,14 +217,14 @@ fn health_url_prefers_ingress_port() {
 #[test]
 fn health_url_requires_ingress_port_even_when_expose_ports_exist() {
     let deployment = deployment_with_ports(None, vec![3000, 5000]);
-    let url = build_health_url_for_replica(&deployment, 0, "/health", None);
+    let url = build_health_url_for_replica(&deployment, &replica(0), "/health", None);
     assert!(url.is_none());
 }
 
 #[test]
 fn health_url_requires_explicit_port() {
     let deployment = deployment_with_ports(None, vec![]);
-    let url = build_health_url_for_replica(&deployment, 0, "/health", None);
+    let url = build_health_url_for_replica(&deployment, &replica(0), "/health", None);
     assert!(url.is_none());
 }
 
@@ -218,7 +233,7 @@ fn health_url_uses_fqdn_when_dns_domain_is_provided() {
     let deployment = deployment_with_ports(Some(8080), vec![]);
     let url = build_health_url_for_replica(
         &deployment,
-        0,
+        &replica(0),
         "/health",
         Some("cluster-1.maestro.internal"),
     )
@@ -227,6 +242,30 @@ fn health_url_uses_fqdn_when_dns_domain_is_provided() {
         url,
         "http://svc-abc123.cluster-1.maestro.internal:8080/health"
     );
+}
+
+#[test]
+fn health_url_prefers_the_assigned_container_endpoint() {
+    let deployment = deployment_with_ports(Some(8080), vec![]);
+    let mut replica = replica(0);
+    replica.endpoint = Some(crate::cluster::ReplicaEndpoint {
+        container_ip: "10.52.0.3".to_string(),
+        container_hostname: "svc-abc123".to_string(),
+        ingress_container_port: 9090,
+        gateway: crate::cluster::NodeGatewayEndpoint {
+            host_ip: "10.1.0.13".parse().expect("gateway IP"),
+            port: 37123,
+        },
+    });
+
+    let url = build_health_url_for_replica(
+        &deployment,
+        &replica,
+        "/health",
+        Some("cluster-1.maestro.internal"),
+    )
+    .expect("replica endpoint should produce health URL");
+    assert_eq!(url, "http://10.52.0.3:9090/health");
 }
 
 #[test]

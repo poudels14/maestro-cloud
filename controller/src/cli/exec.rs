@@ -13,7 +13,7 @@ use crate::deployment::types::{DeploymentStatus, DeploymentWithReplicas};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Args)]
-pub struct SshArgs {
+pub struct ExecArgs {
     #[arg(help = "Service ID")]
     pub service_id: String,
     #[arg(short = 'r', long = "replica", help = "Replica index")]
@@ -62,7 +62,7 @@ impl fmt::Display for ReplicaChoice {
     }
 }
 
-pub async fn run_ssh(host: &str, args: SshArgs) -> Result<i32> {
+pub async fn run_exec(host: &str, args: ExecArgs) -> Result<i32> {
     crate::validation::validate_service_id(&args.service_id, "service id")
         .map_err(Error::invalid_input)?;
     if let Some(deployment_id) = args.deployment.as_deref() {
@@ -126,7 +126,7 @@ pub async fn run_ssh(host: &str, args: SshArgs) -> Result<i32> {
 async fn select_deployment(
     client: &reqwest::Client,
     base: &str,
-    args: &SshArgs,
+    args: &ExecArgs,
 ) -> Result<DeploymentWithReplicas> {
     let response = client
         .get(format!(
@@ -167,7 +167,21 @@ async fn select_deployment(
     } else {
         deployments
             .into_iter()
-            .filter(|item| item.deployment.status == DeploymentStatus::Ready)
+            .filter(|item| {
+                matches!(
+                    item.deployment.status,
+                    DeploymentStatus::PendingReady
+                        | DeploymentStatus::Ready
+                        | DeploymentStatus::Draining
+                ) && item.replicas.iter().any(|replica| {
+                    matches!(
+                        replica.status,
+                        DeploymentStatus::PendingReady
+                            | DeploymentStatus::Ready
+                            | DeploymentStatus::Draining
+                    )
+                })
+            })
             .max_by_key(|item| item.deployment.created_at)
             .ok_or_else(|| Error::not_found("service has no active deployment"))
     }
@@ -520,10 +534,10 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn ssh_command_parses_replica_and_remote_argv() {
+    fn exec_command_parses_replica_and_remote_argv() {
         let cli = crate::Cli::try_parse_from([
             "maestro",
-            "ssh",
+            "exec",
             "api",
             "--replica",
             "2",
@@ -533,13 +547,14 @@ mod tests {
             "-0",
         ])
         .unwrap();
-        let Some(crate::CliCommand::Ssh(args)) = cli.command else {
-            panic!("expected ssh command");
+        let Some(crate::CliCommand::Exec(args)) = cli.command else {
+            panic!("expected exec command");
         };
         assert_eq!(args.service_id, "api");
         assert_eq!(args.replica, Some(2));
         assert!(args.no_tty);
         assert_eq!(args.command, ["env", "-0"]);
+        assert!(crate::Cli::try_parse_from(["maestro", "ssh", "api"]).is_err());
     }
 
     #[test]

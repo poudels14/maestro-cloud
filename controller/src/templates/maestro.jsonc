@@ -32,6 +32,6 @@
   "runtime": "docker",
   "tags": [],
   "allow-cli-deployment": false,
-  // Enables `maestro ssh`; keep disabled unless operator shell access is required.
+  // Enables `maestro exec`; keep disabled unless operator command access is required.
   "allow-exec": false
 }

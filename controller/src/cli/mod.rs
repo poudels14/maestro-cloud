@@ -5,6 +5,7 @@ pub mod config;
 pub mod confirm;
 pub mod contexts;
 pub mod dead_letters;
+pub mod exec;
 pub mod info;
 pub mod logs;
 pub mod nodes;
@@ -12,7 +13,6 @@ pub mod redeploy;
 pub mod restart;
 pub mod rollout;
 pub mod services;
-pub mod ssh;
 pub mod up;
 pub mod upgrade;
 

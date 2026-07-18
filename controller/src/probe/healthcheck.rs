@@ -140,12 +140,8 @@ async fn check_replicas(
         }
         last_polled.insert(key.clone(), now);
 
-        let Some(url) = build_health_url_for_replica(
-            deployment,
-            replica.replica_index,
-            health_path,
-            dns_domain,
-        ) else {
+        let Some(url) = build_health_url_for_replica(deployment, replica, health_path, dns_domain)
+        else {
             eprintln!(
                 "skipping {}/{}/replica{} healthcheck: ingress.port is not set; marking replica ready",
                 service_id, deployment.id, replica.replica_index
@@ -279,15 +275,23 @@ fn healthy_check_stagger(key: &str, interval: Duration) -> Duration {
 
 fn build_health_url_for_replica(
     deployment: &ServiceDeployment,
-    replica_index: u32,
+    replica: &ReplicaState,
     health_path: &str,
     dns_domain: Option<&str>,
 ) -> Option<String> {
-    let hostname = deployment.hostname_for_replica(replica_index);
-    let target = dns_domain
-        .map(|domain| format!("{hostname}.{domain}"))
-        .unwrap_or(hostname);
-    let port = deployment.config.ingress.as_ref().and_then(|i| i.port)?;
+    let (target, port) = if let Some(endpoint) = replica.endpoint.as_ref() {
+        (
+            endpoint.container_ip.clone(),
+            endpoint.ingress_container_port,
+        )
+    } else {
+        let hostname = deployment.hostname_for_replica(replica.replica_index);
+        let target = dns_domain
+            .map(|domain| format!("{hostname}.{domain}"))
+            .unwrap_or(hostname);
+        let port = deployment.config.ingress.as_ref().and_then(|i| i.port)?;
+        (target, port)
+    };
     Some(format!("http://{target}:{port}{health_path}"))
 }
 
