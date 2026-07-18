@@ -1,7 +1,8 @@
 use super::*;
 use crate::deployment::types::{
-    Command, DeploymentStatus, DeploymentWithReplicas, EnvConfig, SecretKeyMeta, SecretsConfig,
-    ServiceBuildConfig, ServiceConfig, ServiceDeployConfig, ServiceDeployment, mask_secret_value,
+    Command, DeploymentBuildInfo, DeploymentStatus, DeploymentWithReplicas, EnvConfig,
+    SecretKeyMeta, SecretsConfig, ServiceBuildConfig, ServiceConfig, ServiceDeployConfig,
+    ServiceDeployment, mask_secret_value,
 };
 use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
@@ -115,6 +116,46 @@ fn assert_no_config_plaintext(json: &str) {
             "API response leaked `{plaintext}`"
         );
     }
+}
+
+fn restart_candidate(id: &str, status: DeploymentStatus, image: &str) -> ServiceDeployment {
+    let mut deployment = ServiceDeployment::new(
+        build_service_config(sample_patch_request_with_image("api", "API", "app:latest")).unwrap(),
+    )
+    .unwrap();
+    deployment.id = id.to_string();
+    deployment.status = status;
+    deployment.build = Some(DeploymentBuildInfo {
+        docker_image_id: image.to_string(),
+    });
+    deployment
+}
+
+#[test]
+fn restart_prefers_the_active_ready_image_over_a_newer_failed_build() {
+    let failed = restart_candidate("failed-new", DeploymentStatus::Crashed, "app:new");
+    let active = restart_candidate("active-old", DeploymentStatus::Ready, "app:active");
+    let deployments = [failed, active];
+
+    let selected = restart_source_deployment(&deployments).unwrap();
+
+    assert_eq!(selected.id, "active-old");
+    assert_eq!(
+        selected.build.as_ref().unwrap().docker_image_id,
+        "app:active"
+    );
+}
+
+#[test]
+fn restart_falls_back_to_latest_built_image_when_service_is_stopped() {
+    let latest = restart_candidate("latest", DeploymentStatus::Terminated, "app:latest-built");
+    let older = restart_candidate("older", DeploymentStatus::Removed, "app:older");
+    let deployments = [latest, older];
+
+    assert_eq!(
+        restart_source_deployment(&deployments).unwrap().id,
+        "latest"
+    );
 }
 
 #[test]

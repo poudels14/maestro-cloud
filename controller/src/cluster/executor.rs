@@ -258,10 +258,12 @@ impl EngineReplicaExecutor {
             "{}/{}/replica{}",
             assignment.service_id, assignment.deployment_id, assignment.replica_index
         );
-        self.runtime
-            .pull_image(image, self.log_sender.as_ref(), Some(&source))
-            .await
-            .with_context(|| format!("failed to pull assigned image `{image}`"))?;
+        if !self.runtime.image_exists(image).await.unwrap_or(false) {
+            self.runtime
+                .pull_image(image, self.log_sender.as_ref(), Some(&source))
+                .await
+                .with_context(|| format!("failed to pull assigned image `{image}`"))?;
+        }
 
         let identity = ReplicaRuntimeIdentity {
             node_id: self.node_id.clone(),

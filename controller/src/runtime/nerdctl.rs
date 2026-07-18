@@ -369,6 +369,11 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
         Ok(status.success())
     }
 
+    async fn resolve_immutable_image_reference(&self, image: &str) -> Result<String> {
+        let inspect = cmd::run("nerdctl", &["image", "inspect", image]).await?;
+        crate::runtime::immutable_image_reference(image, &inspect)
+    }
+
     async fn tag_image(&self, source: &str, target: &str) -> Result<()> {
         cmd::run("nerdctl", &["tag", source, target]).await?;
         Ok(())

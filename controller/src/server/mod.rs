@@ -38,8 +38,8 @@ use crate::deployment::store::{
     UpsertServiceOutcome,
 };
 use crate::deployment::types::{
-    CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, SecretsConfig, ServiceConfig,
-    ServiceDeployConfig, ServiceDeployment,
+    CancelDeploymentOutcome, Deployment, DeploymentBuildInfo, DeploymentStatus, SecretsConfig,
+    ServiceConfig, ServiceDeployConfig, ServiceDeployment,
 };
 use crate::logs::{
     LogEntry, LogHistogram, LogHistogramBucket, LogHistogramGroupBy, LogHistogramQuery, LogOrigin,
@@ -1919,15 +1919,12 @@ impl Server {
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
-        let previous = deployments
-            .iter()
-            .find(|deployment| deployment.build.is_some())
-            .ok_or_else(|| {
-                (
-                    StatusCode::CONFLICT,
-                    format!("service `{service_id}` has no built image to restart from"),
-                )
-            })?;
+        let previous = restart_source_deployment(&deployments).ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                format!("service `{service_id}` has no built image to restart from"),
+            )
+        })?;
 
         let previous_image = previous
             .build
@@ -1935,6 +1932,16 @@ impl Server {
             .expect("previous deployment has build info")
             .docker_image_id
             .clone();
+        if previous.config.build.is_none()
+            && !crate::runtime::is_immutable_image_reference(&previous_image)
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "service `{service_id}` was deployed from mutable image `{previous_image}`; redeploy it once to pin an immutable digest before restarting"
+                ),
+            ));
+        }
         let previous_git_commit = previous.git_commit.clone();
 
         let mut config = info.config;
@@ -3083,6 +3090,19 @@ fn deployment_mutation_error(error: impl std::fmt::Display) -> (StatusCode, Stri
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, message)
     }
+}
+
+fn restart_source_deployment(deployments: &[ServiceDeployment]) -> Option<&ServiceDeployment> {
+    deployments
+        .iter()
+        .find(|deployment| {
+            deployment.status == DeploymentStatus::Ready && deployment.build.is_some()
+        })
+        .or_else(|| {
+            deployments
+                .iter()
+                .find(|deployment| deployment.build.is_some())
+        })
 }
 
 async fn reject_cluster_freeze(state: &AppState) -> Result<(), (StatusCode, String)> {

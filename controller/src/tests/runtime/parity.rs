@@ -88,3 +88,41 @@ fn nerdctl_requires_explicit_dns() {
     let provider = runtime::create_provider(RuntimeType::Nerdctl);
     assert!(provider.requires_explicit_dns());
 }
+
+#[test]
+fn image_inspection_resolves_the_requested_repository_digest() {
+    let wanted = format!("registry.example.com/team/app@sha256:{}", "a".repeat(64));
+    let other = format!("registry.example.com/team/other@sha256:{}", "b".repeat(64));
+    let inspect = serde_json::json!([{
+        "RepoDigests": [other, wanted]
+    }])
+    .to_string();
+
+    assert_eq!(
+        runtime::immutable_image_reference("registry.example.com/team/app:latest", &inspect)
+            .unwrap(),
+        wanted
+    );
+}
+
+#[test]
+fn image_inspection_accepts_docker_hub_normalization() {
+    let digest = format!("docker.io/library/nginx@sha256:{}", "c".repeat(64));
+    let inspect = serde_json::json!([{"RepoDigests": [digest]}]).to_string();
+
+    assert_eq!(
+        runtime::immutable_image_reference("nginx:latest", &inspect).unwrap(),
+        digest
+    );
+}
+
+#[test]
+fn image_inspection_rejects_a_digest_for_a_different_repository() {
+    let digest = format!("registry.example.com/team/other@sha256:{}", "d".repeat(64));
+    let inspect = serde_json::json!([{"RepoDigests": [digest]}]).to_string();
+    let error = runtime::immutable_image_reference("app:latest", &inspect)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("no matching immutable repository digest"));
+}

@@ -557,6 +557,11 @@ impl RuntimeProvider for TestRuntimeProvider {
         Ok(())
     }
 
+    async fn resolve_immutable_image_reference(&self, image: &str) -> Result<String> {
+        let repository = image.strip_suffix(":latest").unwrap_or(image);
+        Ok(format!("{repository}@sha256:{}", "a".repeat(64)))
+    }
+
     async fn tag_image(&self, _source: &str, _target: &str) -> Result<()> {
         Ok(())
     }
@@ -886,7 +891,7 @@ impl ClusterStore for InMemoryStore {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn docker_deployment_without_healthcheck_stays_building_until_container_exists() {
+async fn docker_deployment_pins_digest_and_stays_building_until_container_exists() {
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
@@ -955,7 +960,9 @@ async fn docker_deployment_without_healthcheck_stays_building_until_container_ex
             .build
             .as_ref()
             .map(|build| build.docker_image_id.as_str()),
-        Some("example/image:latest")
+        Some(
+            "example/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
     );
 
     runtime.add_container(&deployment.hostname_for_replica(0), "10.0.0.2");
