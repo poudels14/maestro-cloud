@@ -84,7 +84,6 @@ pub fn image_publication_required(data_dir: &Path) -> bool {
 
 pub async fn publish_legacy_images(
     data_dir: &Path,
-    shared_registry: &str,
     runtime: Arc<dyn crate::runtime::RuntimeProvider>,
     store: Arc<dyn crate::deployment::store::ClusterStore>,
     token: &crate::cluster::types::LeadershipToken,
@@ -92,35 +91,25 @@ pub async fn publish_legacy_images(
     if !image_publication_required(data_dir) {
         return Ok(());
     }
-    let registry = shared_registry.trim().trim_end_matches('/');
-    if registry.is_empty() {
-        bail!("cluster.image-registry is required to publish migrated local images");
-    }
 
     for service_id in store.list_service_ids().await? {
-        if let Some(mut info) = store.read_service_info(&service_id).await?
-            && let Some(source) = info.config.image.clone()
+        if let Some(info) = store.read_service_info(&service_id).await?
+            && let Some(build) = info.config.build.as_ref()
+            && build
+                .registry
+                .as_deref()
+                .is_none_or(|registry| registry.trim().is_empty())
         {
-            let digest = Sha256::digest(source.as_bytes());
-            let suffix = digest[..6]
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            let target = format!("{registry}/{service_id}:legacy-{suffix}");
-            if ensure_registry_image(runtime.as_ref(), &source, &target, true, &service_id).await? {
-                info.config.image = Some(target);
-                store
-                    .update_service_config_fenced(token, &service_id, info.config)
-                    .await?;
-            }
+            bail!(
+                "migrated service `{service_id}` requires build.registry before it can run in multi-node mode"
+            );
         }
 
         for mut deployment in store.list_service_deployments(&service_id).await? {
-            let Some(build) = deployment.build.as_ref() else {
+            let Some(build_info) = deployment.build.as_ref() else {
                 continue;
             };
-            let source = build.docker_image_id.clone();
-            let target = format!("{registry}/{service_id}:{}", deployment.id);
+            let source = build_info.docker_image_id.clone();
             let required = matches!(
                 deployment.status,
                 crate::deployment::types::DeploymentStatus::Queued
@@ -129,6 +118,32 @@ pub async fn publish_legacy_images(
                     | crate::deployment::types::DeploymentStatus::Ready
                     | crate::deployment::types::DeploymentStatus::Draining
             );
+
+            let Some(build_config) = deployment.config.build.as_ref() else {
+                if required {
+                    runtime.pull_image(&source, None, None).await.with_context(|| {
+                        format!(
+                            "runnable migrated service `{service_id}` uses prebuilt image `{source}`, which is not pullable by workload nodes"
+                        )
+                    })?;
+                }
+                continue;
+            };
+            let Some(registry) = build_config
+                .registry
+                .as_deref()
+                .map(str::trim)
+                .map(|registry| registry.trim_end_matches('/'))
+                .filter(|registry| !registry.is_empty())
+            else {
+                if required {
+                    bail!(
+                        "runnable migrated service `{service_id}` requires build.registry before it can run in multi-node mode"
+                    );
+                }
+                continue;
+            };
+            let target = format!("{registry}/{service_id}:{}", deployment.id);
             if !ensure_registry_image(runtime.as_ref(), &source, &target, required, &service_id)
                 .await?
             {

@@ -123,11 +123,6 @@
         "controlAllowCidrs": {
           "$ref": "#/properties/cluster/properties/control-allow-cidrs"
         },
-        "image-registry": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Base container-image namespace shared by all nodes. Maestro appends /<service-id>:<deployment-id>."
-        },
         "join-secret": {
           "type": "string",
           "minLength": 32,

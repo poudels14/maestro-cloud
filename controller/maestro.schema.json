@@ -74,7 +74,8 @@
         },
         "registry": {
           "type": "string",
-          "description": "Container registry URL to push built images to (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)"
+          "minLength": 1,
+          "description": "Container registry namespace to push built images to (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com/team). Required for Maestro-built services in multi-node mode."
         },
         "depot": {
           "type": "object",

@@ -854,7 +854,6 @@ mod tests {
             gateway_port: 3002,
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
-            shared_registry: None,
             labels: Default::default(),
         };
         assert_eq!(

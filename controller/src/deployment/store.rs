@@ -459,15 +459,6 @@ pub trait ClusterStore: Send + Sync {
         bail!("update_service_config not implemented")
     }
 
-    async fn update_service_config_fenced(
-        &self,
-        _token: &crate::cluster::types::LeadershipToken,
-        _service_id: &str,
-        _config: ServiceConfig,
-    ) -> Result<()> {
-        bail!("fenced update_service_config not implemented")
-    }
-
     async fn set_blocked_ingress_ip(&self, _address: &str, _blocked: bool) -> Result<Vec<String>> {
         bail!("set_blocked_ingress_ip not implemented")
     }

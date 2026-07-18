@@ -14,8 +14,6 @@
     // },
     // Optional extra source restriction for signed cluster joins:
     // "control-allow-cidrs": ["10.20.0.0/24"],
-    // Shared base image namespace; Maestro appends /<service-id>:<deployment-id>.
-    // "image-registry": "ghcr.io/acme",
     // "join-secret": "replace-with-a-random-secret-of-at-least-32-characters"
   },
   // Required in multi-node mode; use "node2" on the second machine, etc.

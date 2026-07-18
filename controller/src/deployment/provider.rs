@@ -58,7 +58,6 @@ pub(crate) fn replica_container_name(
 pub struct ContainerDeploymentProvider {
     pub runtime: Arc<dyn RuntimeProvider>,
     pub build_command_env: HashMap<String, SecretString>,
-    pub shared_registry: Option<String>,
     pub network: String,
     pub dns_domain: Option<String>,
     pub dns_server: Option<String>,
@@ -141,10 +140,7 @@ impl ContainerDeploymentProvider {
             BuilderType::Default
         };
 
-        let registry = build_config
-            .registry
-            .as_ref()
-            .or(self.shared_registry.as_ref());
+        let registry = build_config.registry.as_ref();
         let (build_tag, depot_pushed) = if let (true, Some(registry)) = (use_depot, registry) {
             let registry_tag = format!(
                 "{}/{}:{}",

@@ -2618,20 +2618,6 @@ impl ClusterStore for EtcdStateStore {
         ))
     }
 
-    async fn update_service_config_fenced(
-        &self,
-        token: &crate::cluster::types::LeadershipToken,
-        service_id: &str,
-        config: ServiceConfig,
-    ) -> anyhow::Result<()> {
-        CLUSTER_WRITE_FENCE
-            .scope(
-                token.clone(),
-                self.update_service_config(service_id, config),
-            )
-            .await
-    }
-
     async fn set_blocked_ingress_ip(
         &self,
         address: &str,

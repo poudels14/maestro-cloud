@@ -2048,7 +2048,6 @@ mod tests {
             gateway_port: 3002,
             etcd_client_port: 3003,
             etcd_peer_port: 3004,
-            shared_registry: Some("registry.example.com/maestro".to_string()),
             labels: Default::default(),
         }
     }

@@ -209,10 +209,6 @@ impl DeploymentController {
         let container_provider = ContainerDeploymentProvider {
             runtime: runtime.clone(),
             build_command_env: config.build_command_env.clone(),
-            shared_registry: config
-                .cluster
-                .as_ref()
-                .and_then(|cluster| cluster.shared_registry.clone()),
             network: config.network.clone(),
             dns_domain: dns_domain.clone(),
             dns_server,

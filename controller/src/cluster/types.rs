@@ -159,7 +159,6 @@ pub struct ClusterRuntime {
     pub gateway_port: u16,
     pub etcd_client_port: u16,
     pub etcd_peer_port: u16,
-    pub shared_registry: Option<String>,
     pub labels: BTreeMap<String, String>,
 }
 

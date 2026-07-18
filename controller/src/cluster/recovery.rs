@@ -551,7 +551,6 @@ mod tests {
             gateway_port: endpoint.gateway_port,
             etcd_client_port: endpoint.etcd_client_port,
             etcd_peer_port: endpoint.etcd_peer_port,
-            shared_registry: Some("registry.invalid/maestro".to_string()),
             labels: BTreeMap::new(),
         }
     }

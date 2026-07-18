@@ -136,6 +136,14 @@ pub fn validate_build_config(
             if dockerfile.is_empty() {
                 return Err("build.dockerfile cannot be empty".to_string());
             }
+            let registry = build
+                .registry
+                .as_ref()
+                .map(|registry| registry.trim().trim_end_matches('/').to_string())
+                .filter(|registry| !registry.is_empty());
+            if build.registry.is_some() && registry.is_none() {
+                return Err("build.registry cannot be empty".to_string());
+            }
             validate_env_config(&build.env, "build.env")?;
             validate_env_config(&build.secrets, "build.secrets")?;
             let depot = build
@@ -158,7 +166,7 @@ pub fn validate_build_config(
                     branch: build.branch.clone(),
                     dockerfile: dockerfile.to_string(),
                     watch: build.watch,
-                    registry: build.registry.clone(),
+                    registry,
                     depot,
                     env: build.env.clone(),
                     secrets: build.secrets.clone(),
@@ -176,6 +184,22 @@ pub fn validate_build_config(
         (Some(_), Some(_)) => Err("set either `build` or `image`, not both".to_string()),
         (None, None) => Err("set either `build` or `image`".to_string()),
     }
+}
+
+pub fn validate_cluster_build_registry(
+    build: &Option<ServiceBuildConfig>,
+    cluster_mode: bool,
+) -> Result<(), String> {
+    if cluster_mode
+        && build.is_some()
+        && build
+            .as_ref()
+            .and_then(|build| build.registry.as_ref())
+            .is_none()
+    {
+        return Err("build.registry is required for services built in multi-node mode".to_string());
+    }
+    Ok(())
 }
 
 pub fn validate_service_provider_config(
@@ -386,7 +410,52 @@ fn sensitive_host_path_reason(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::deployment::types::{ServiceEgressConfig, ServiceEgressRule, SessionAffinityConfig};
+    use crate::deployment::types::{
+        ServiceBuildConfig, ServiceEgressConfig, ServiceEgressRule, SessionAffinityConfig,
+    };
+
+    fn build_with_registry(registry: Option<&str>) -> Option<ServiceBuildConfig> {
+        Some(ServiceBuildConfig {
+            repo: Some("https://example.com/acme/api.git".to_string()),
+            branch: None,
+            dockerfile: "Dockerfile".to_string(),
+            watch: false,
+            registry: registry.map(ToString::to_string),
+            depot: None,
+            env: Default::default(),
+            secrets: Default::default(),
+        })
+    }
+
+    #[test]
+    fn multi_node_builds_require_a_service_registry() {
+        let build = build_with_registry(None);
+        assert!(validate_cluster_build_registry(&build, false).is_ok());
+        assert_eq!(
+            validate_cluster_build_registry(&build, true).unwrap_err(),
+            "build.registry is required for services built in multi-node mode"
+        );
+        assert!(validate_cluster_build_registry(&None, true).is_ok());
+        assert!(
+            validate_cluster_build_registry(&build_with_registry(Some("ghcr.io/acme")), true)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn build_registry_is_nonempty_and_normalized() {
+        assert!(
+            validate_build_config(&build_with_registry(Some(" / ")), &None)
+                .unwrap_err()
+                .contains("build.registry cannot be empty")
+        );
+        let (build, _) =
+            validate_build_config(&build_with_registry(Some(" ghcr.io/acme/// ")), &None).unwrap();
+        assert_eq!(
+            build.and_then(|build| build.registry),
+            Some("ghcr.io/acme".to_string())
+        );
+    }
 
     fn ingress_with_affinity_header(header: &str) -> Option<IngressConfig> {
         Some(IngressConfig {

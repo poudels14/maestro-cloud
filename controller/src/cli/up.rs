@@ -65,12 +65,16 @@ pub async fn run_up(host: &str, config_path: &Path, context_dir: &Path) -> Resul
             context_dir.display()
         )));
     }
+
+    let base_url = crate::cli::contexts::normalize_base_url(host)?;
+    let client = crate::cli::contexts::build_http_client()?;
+    let cluster_mode = crate::cli::target_uses_multinode(&client, &base_url).await?;
+    crate::cli::validate_target_build_registry(&payload.id, &payload.build, cluster_mode)?;
+
     let archive_bytes = crate::utils::archive::pack_context(context_dir)
         .map_err(|err| Error::internal(format!("failed to package context: {err}")))?;
     let archive_size = archive_bytes.len();
 
-    let base_url = crate::cli::contexts::normalize_base_url(host)?;
-    let client = crate::cli::contexts::build_http_client()?;
     let endpoint = format!("{base_url}/api/services/up");
 
     let spec_json = serde_json::to_vec(&payload)

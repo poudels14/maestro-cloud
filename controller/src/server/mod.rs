@@ -1041,6 +1041,7 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        validate_cluster_build_registry(&state, &service_config)?;
         reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
@@ -1151,6 +1152,7 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
+        validate_cluster_build_registry(&state, &service_config)?;
         reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
@@ -1275,6 +1277,10 @@ impl Server {
                 format!("invalid upload request payload: {err}"),
             )
         })?;
+        if let Err(error) = validate_cluster_build_registry(&state, &service_config) {
+            cleanup_temp();
+            return Err(error);
+        }
         reject_unconfigured_preview(&state, &service_config)?;
 
         service_config.name = format!("[up] {}", service_config.name);
@@ -2110,6 +2116,7 @@ impl Server {
         }
 
         let mut config = info.config;
+        validate_cluster_build_registry(&state, &config)?;
 
         let deployments = state
             .store
@@ -4520,6 +4527,19 @@ fn parse_json_body<T: DeserializeOwned>(
             format!("invalid JSON request body: {err}"),
         )
     })
+}
+
+fn validate_cluster_build_registry(
+    state: &AppState,
+    config: &ServiceConfig,
+) -> Result<(), (StatusCode, String)> {
+    crate::validation::validate_cluster_build_registry(&config.build, state.local_node_id.is_some())
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid service `{}`: {error}", config.id),
+            )
+        })
 }
 
 fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig, String> {

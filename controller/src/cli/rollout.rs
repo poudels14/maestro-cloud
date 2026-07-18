@@ -114,16 +114,27 @@ pub async fn run_rollout(
         return Ok(());
     }
 
+    let payloads = selected
+        .iter()
+        .map(|(service_id, service_template)| {
+            service_payload(service_id, service_template)
+                .map(|payload| (service_id.as_str(), payload))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let base_url = normalize_base_url(host)?;
     let client = crate::cli::contexts::build_http_client()?;
+    let cluster_mode = crate::cli::target_uses_multinode(&client, &base_url).await?;
+    for (service_id, payload) in &payloads {
+        crate::cli::validate_target_build_registry(service_id, &payload.build, cluster_mode)?;
+    }
 
     if !apply {
         let diff_url = format!("{base_url}/api/services/rollout/diff");
         let mut has_changes = false;
 
-        for (service_id, service_template) in &selected {
-            let payload = service_payload(service_id, service_template)?;
-            let diff = call_diff_endpoint(&client, &diff_url, &payload, service_id).await?;
+        for (service_id, payload) in &payloads {
+            let diff = call_diff_endpoint(&client, &diff_url, payload, service_id).await?;
             print_diff(&diff);
             if !matches!(diff.status.as_str(), "unchanged") {
                 has_changes = true;
@@ -136,7 +147,7 @@ pub async fn run_rollout(
         return Ok(());
     }
 
-    let selected_ids: Vec<&str> = selected.iter().map(|(id, _)| id.as_str()).collect();
+    let selected_ids: Vec<&str> = payloads.iter().map(|(id, _)| *id).collect();
     let confirmed = crate::cli::confirm::confirm_action(
         host,
         &format!("About to roll out {} service(s)", selected.len()),
@@ -164,10 +175,9 @@ pub async fn run_rollout(
         );
     }
 
-    for (service_id, service_template) in &selected {
-        let payload = service_payload(service_id, service_template)?;
+    for (service_id, payload) in &payloads {
         let response =
-            call_rollout_endpoint(&client, rollout_url.as_str(), &payload, service_id).await?;
+            call_rollout_endpoint(&client, rollout_url.as_str(), payload, service_id).await?;
 
         if response.queued {
             println!(
