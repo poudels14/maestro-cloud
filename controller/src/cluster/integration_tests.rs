@@ -1799,6 +1799,7 @@ fn scaling_plan(
             }],
             node_affinity: None,
             unhealthy_slots: BTreeSet::new(),
+            exhausted_slots: BTreeSet::new(),
         }],
         nodes,
         node_states: BTreeMap::<String, NodeState>::new(),

@@ -99,6 +99,20 @@ pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
                     .get(&slot)
                     .and_then(|values| values.first())
                     .copied();
+                if spec
+                    .exhausted_slots
+                    .contains(&(group.deployment_id.clone(), replica_index))
+                {
+                    if let Some(existing) = existing {
+                        retain_assignment(
+                            existing,
+                            &mut output.assignments,
+                            &mut deployment_load,
+                            &mut load,
+                        );
+                    }
+                    continue;
+                }
                 let unhealthy = existing.is_some_and(|assignment| {
                     spec.unhealthy_slots.contains(&(
                         group.deployment_id.clone(),
@@ -456,6 +470,7 @@ mod tests {
             }],
             node_affinity: None,
             unhealthy_slots: BTreeSet::new(),
+            exhausted_slots: BTreeSet::new(),
         }
     }
 
@@ -508,6 +523,22 @@ mod tests {
             moved.replaces_assignment_id.as_deref(),
             Some(old.assignment_id.as_str())
         );
+    }
+
+    #[test]
+    fn exhausted_slot_keeps_its_terminal_assignment() {
+        let initial = plan(input(1));
+        let failed = initial.assignments[0].clone();
+        let mut next = input(1);
+        next.current = vec![failed.clone()];
+        next.services[0]
+            .exhausted_slots
+            .insert((failed.deployment_id.clone(), failed.replica_index));
+
+        let output = plan(next);
+
+        assert_eq!(output.assignments, vec![failed]);
+        assert!(output.unschedulable.is_empty());
     }
 
     #[test]

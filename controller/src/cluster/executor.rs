@@ -216,7 +216,7 @@ impl EngineReplicaExecutor {
             state.status == DeploymentStatus::Crashed
                 && state.restart_attempts >= crate::health::MAX_REPLICA_RESTART_ATTEMPTS
         }) {
-            bail!("assignment exhausted its restart budget");
+            return Ok(());
         }
         let restart_attempts = previous_state
             .as_ref()
@@ -451,18 +451,8 @@ impl EngineReplicaExecutor {
         assignment: &Assignment,
         error: &anyhow::Error,
     ) -> Result<()> {
-        let attempts = self
-            .assignments
-            .list_replica_states()
-            .await?
-            .into_iter()
-            .find(|state| {
-                state.node_id.as_ref() == Some(&self.node_id)
-                    && state.assignment_id.as_deref() == Some(assignment.assignment_id.as_str())
-            })
-            .map(|state| state.restart_attempts)
-            .unwrap_or(0)
-            .saturating_add(1);
+        let states = self.assignments.list_replica_states().await?;
+        let attempts = next_start_failure_attempt(&states, assignment);
         let _ = self
             .assignments
             .upsert_replica_state_if_assignment(
@@ -524,6 +514,20 @@ impl EngineReplicaExecutor {
             },
         }))
     }
+}
+
+fn next_start_failure_attempt(states: &[ReplicaState], assignment: &Assignment) -> u32 {
+    states
+        .iter()
+        .filter(|state| {
+            state.service_id.as_deref() == Some(assignment.service_id.as_str())
+                && state.deployment_id.as_deref() == Some(assignment.deployment_id.as_str())
+                && state.replica_index == assignment.replica_index
+        })
+        .map(|state| state.restart_attempts)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 fn replica_log_tags(
@@ -617,5 +621,48 @@ mod tests {
                 "missing `{expected}`"
             );
         }
+    }
+
+    #[test]
+    fn start_failure_attempts_continue_across_reassigned_nodes() {
+        let assignment = Assignment {
+            assignment_id: "assignment-3".to_string(),
+            placement_epoch: 3,
+            service_id: "app".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            replica_index: 0,
+            node_id: "node-c".to_string(),
+            container_ip: None,
+            replaces_assignment_id: Some("assignment-2".to_string()),
+            created_at_ms: 3,
+        };
+        let states = [
+            ReplicaState {
+                service_id: Some("app".to_string()),
+                deployment_id: Some("deployment-1".to_string()),
+                replica_index: 0,
+                status: DeploymentStatus::Crashed,
+                healthcheck_failures: 0,
+                restart_attempts: 1,
+                node_id: Some("node-a".to_string()),
+                assignment_id: Some("assignment-1".to_string()),
+                endpoint: None,
+                error: Some("pull failed".to_string()),
+            },
+            ReplicaState {
+                service_id: Some("app".to_string()),
+                deployment_id: Some("deployment-1".to_string()),
+                replica_index: 0,
+                status: DeploymentStatus::Crashed,
+                healthcheck_failures: 0,
+                restart_attempts: 2,
+                node_id: Some("node-b".to_string()),
+                assignment_id: Some("assignment-2".to_string()),
+                endpoint: None,
+                error: Some("pull failed".to_string()),
+            },
+        ];
+
+        assert_eq!(next_start_failure_attempt(&states, &assignment), 3);
     }
 }
