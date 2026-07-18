@@ -252,6 +252,7 @@ impl RuntimeProvider for DockerRuntimeProvider {
             args.push("--build-arg".to_string());
             args.push(format!("{key}={}", value.as_str()));
         }
+        crate::runtime::append_build_secret_args(&mut args, &spec.secrets);
         for (key, value) in &spec.labels {
             args.push("--label".to_string());
             args.push(format!("{key}={value}"));

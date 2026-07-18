@@ -351,6 +351,31 @@ Same as `deploy.env.source`, but for Docker build args (`--build-arg`).
 }
 ```
 
+### `build.secrets`
+
+Passes each item to Docker, nerdctl, or Depot as an environment-backed BuildKit
+secret. The secret value is kept out of the build arguments and command line.
+
+```jsonc
+{
+  "build": {
+    "secrets": {
+      "items": { "NPM_TOKEN": "${NPM_TOKEN}" }
+    }
+  }
+}
+```
+
+Consume it from the Dockerfile with a secret mount:
+
+```dockerfile
+RUN --mount=type=secret,id=NPM_TOKEN,env=NPM_TOKEN,required=true pnpm fetch
+```
+
+This is equivalent to passing
+`--secret id=NPM_TOKEN,env=NPM_TOKEN` to the image builder. The secret is available
+only to that `RUN` instruction unless the Dockerfile explicitly persists it.
+
 ### Notes
 
 - Secrets are resolved once when a deployment starts building. All replicas use the

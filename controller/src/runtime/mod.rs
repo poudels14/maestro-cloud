@@ -116,6 +116,18 @@ pub struct BuildSpec {
     pub push_to_registry: bool,
 }
 
+pub(crate) fn append_build_secret_args(
+    args: &mut Vec<String>,
+    secrets: &HashMap<String, SecretString>,
+) {
+    let mut names = secrets.keys().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        args.push("--secret".to_string());
+        args.push(format!("id={name},env={name}"));
+    }
+}
+
 pub struct InteractiveExecRequest {
     pub container: String,
     pub command: Vec<String>,

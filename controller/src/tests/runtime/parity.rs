@@ -1,6 +1,7 @@
 use crate::config::RuntimeType;
 use crate::runtime::{self, RunSpec};
 use crate::supervisor::JobCommand;
+use crate::utils::crypto::SecretString;
 
 fn run_spec() -> RunSpec {
     RunSpec {
@@ -87,6 +88,36 @@ fn docker_does_not_require_explicit_dns() {
 fn nerdctl_requires_explicit_dns() {
     let provider = runtime::create_provider(RuntimeType::Nerdctl);
     assert!(provider.requires_explicit_dns());
+}
+
+#[test]
+fn build_secrets_are_forwarded_as_env_backed_buildkit_secrets() {
+    let secrets = std::collections::HashMap::from([
+        (
+            "NPM_TOKEN".to_string(),
+            SecretString::new("npm-secret".to_string()),
+        ),
+        (
+            "GH_TOKEN".to_string(),
+            SecretString::new("github-secret".to_string()),
+        ),
+    ]);
+    let mut args = vec!["build".to_string()];
+
+    runtime::append_build_secret_args(&mut args, &secrets);
+
+    assert_eq!(
+        args,
+        [
+            "build",
+            "--secret",
+            "id=GH_TOKEN,env=GH_TOKEN",
+            "--secret",
+            "id=NPM_TOKEN,env=NPM_TOKEN"
+        ]
+    );
+    assert!(!args.iter().any(|arg| arg.contains("npm-secret")));
+    assert!(!args.iter().any(|arg| arg.contains("github-secret")));
 }
 
 #[test]
