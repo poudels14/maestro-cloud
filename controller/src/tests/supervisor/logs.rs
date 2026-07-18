@@ -117,9 +117,22 @@ fn traefik_access_log_exposes_structured_request_fields() {
     );
     assert_eq!(find_attr(&parsed.attrs, "RouterName"), Some("app@etcd"));
     assert_eq!(
+        find_attr(&parsed.attrs, "maestro.log_type"),
+        Some("ingress_access")
+    );
+    assert_eq!(
         find_attr(&parsed.attrs, "maestro.client_ip"),
         Some("203.0.113.9")
     );
+}
+
+#[test]
+fn ingress_lifecycle_output_is_not_marked_as_an_access_log() {
+    let mut attrs = Vec::new();
+
+    normalize_ingress_access_log_attrs(&mut attrs);
+
+    assert_eq!(find_attr(&attrs, "maestro.log_type"), None);
 }
 
 #[test]

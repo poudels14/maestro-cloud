@@ -38,7 +38,12 @@ import {
 import { LogDetailPanel } from "./LogDetailPanel";
 import { LogHistogramChart } from "./LogHistogram";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
-import { logQueryPills, removeLogQueryPill } from "./logQueryPills";
+import {
+  combineLogQueries,
+  logQueryPills,
+  removeLogQueryPill,
+  withLogHistogramGroupFilter
+} from "./logQueryPills";
 
 const COL = {
   time: "sm:w-[118px]",
@@ -86,33 +91,6 @@ function logEntryKey(entry: LogEntry) {
   return `${entry.nodeId ?? "local"}:${entry.tier ?? "logs"}:${entry.seq}`;
 }
 
-function quoteLogQueryValue(value: string) {
-  if (/^[^\s:()[\]"]+$/.test(value)) return value;
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-}
-
-function mergeLogQuery(currentQuery: string, fragment: string) {
-  if (!currentQuery) return fragment;
-  if (!fragment) return currentQuery;
-  const left = /\bOR\b/.test(currentQuery) ? `(${currentQuery})` : currentQuery;
-  const right = /\bOR\b/.test(fragment) ? `(${fragment})` : fragment;
-  return `${left} ${right}`;
-}
-
-function withLogLevelFilter(currentQuery: string, level: string) {
-  let next = currentQuery.trim();
-  const existing = logQueryPills(next)
-    .filter(
-      (pill) => pill.prefix.length === 0 && (pill.field === "level" || pill.field === "status")
-    )
-    .sort((left, right) => right.removeStart - left.removeStart);
-  for (const pill of existing) next = removeLogQueryPill(next, pill);
-
-  const filter = `level:${quoteLogQueryValue(level)}`;
-  if (!next) return filter;
-  return /\bOR\b/.test(next) ? `(${next}) AND ${filter}` : `${next} AND ${filter}`;
-}
-
 function LogViewer(props: {
   serviceId: string;
   deploymentId: string | null;
@@ -121,8 +99,10 @@ function LogViewer(props: {
   phase?: "build" | "deploy";
   embedded?: boolean;
   showHistogram?: boolean;
+  histogramGroupBy?: "level" | "status";
   fillHeight?: boolean;
   query?: string;
+  requiredQuery?: string;
   onQueryChange?: (query: string) => void;
   range?: string;
   onRangeChange?: (range: string) => void;
@@ -229,11 +209,11 @@ function LogViewer(props: {
   };
 
   const requestQuery = () => {
-    return query().trim();
+    return combineLogQueries(props.requiredQuery ?? "", query());
   };
 
   const applyQuery = () => {
-    setQuery(mergeLogQuery(query(), queryDraft().trim()));
+    setQuery(combineLogQueries(query(), queryDraft()));
     setQueryDraft("");
   };
 
@@ -271,7 +251,7 @@ function LogViewer(props: {
     });
   };
 
-  const selectHistogramBucket = (bucket: LogHistogramBucket, level: string) => {
+  const selectHistogramBucket = (bucket: LogHistogramBucket, group: string) => {
     const value = histogram();
     if (!value) return;
     setSelectedBucket({
@@ -280,7 +260,7 @@ function LogViewer(props: {
       to: Math.min(value.to, bucket.ts + value.bucketMs)
     });
     setQueryDraft("");
-    setQuery(withLogLevelFilter(query(), level));
+    setQuery(withLogHistogramGroupFilter(query(), props.histogramGroupBy ?? "level", group));
   };
 
   const histogramTotal = () =>
@@ -476,7 +456,8 @@ function LogViewer(props: {
             nodeId: props.cluster.nodeId,
             serviceId: props.serviceId || undefined,
             query: searchQuery || undefined,
-            bucketMs
+            bucketMs,
+            groupBy: props.histogramGroupBy
           })
         : props.isSystem
           ? await getSystemLogHistogram(
@@ -484,16 +465,18 @@ function LogViewer(props: {
               from,
               to,
               searchQuery || undefined,
-              bucketMs
+              bucketMs,
+              props.histogramGroupBy
             )
           : await getServiceLogHistogram(
-            props.serviceId,
-            from,
-            to,
-            props.phase,
-            searchQuery || undefined,
-            bucketMs
-          );
+              props.serviceId,
+              from,
+              to,
+              props.phase,
+              searchQuery || undefined,
+              bucketMs,
+              props.histogramGroupBy
+            );
       if (
         generation !== histogramGeneration ||
         searchQuery !== requestQuery() ||

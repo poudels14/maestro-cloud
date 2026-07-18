@@ -260,7 +260,8 @@ export async function getServiceLogHistogram(
   to: number,
   phase?: "build" | "deploy",
   query?: string,
-  bucketMs?: number
+  bucketMs?: number,
+  groupBy?: "level" | "status"
 ): Promise<LogHistogram> {
   const url = new URL(
     `/api/services/${encodeURIComponent(serviceId)}/logs/histogram`,
@@ -271,6 +272,7 @@ export async function getServiceLogHistogram(
   if (phase != null) url.searchParams.set("phase", phase);
   if (query) url.searchParams.set("query", query);
   if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
+  if (groupBy) url.searchParams.set("groupBy", groupBy);
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();
@@ -359,6 +361,7 @@ export async function getClusterLogHistogram(params: {
   serviceId?: string;
   query?: string;
   bucketMs?: number;
+  groupBy?: "level" | "status";
 }): Promise<ClusterLogHistogram> {
   const url = new URL("/api/cluster/logs/histogram", location.origin);
   url.searchParams.set("from", String(params.from));
@@ -367,6 +370,7 @@ export async function getClusterLogHistogram(params: {
   if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
   if (params.query) url.searchParams.set("query", params.query);
   if (params.bucketMs != null) url.searchParams.set("bucketMs", String(params.bucketMs));
+  if (params.groupBy) url.searchParams.set("groupBy", params.groupBy);
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.text();

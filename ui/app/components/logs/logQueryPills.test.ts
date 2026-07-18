@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { logQueryPills, removeLogQueryPill } from "./logQueryPills.ts";
+import {
+  combineLogQueries,
+  logQueryPills,
+  removeLogQueryPill,
+  withLogHistogramGroupFilter
+} from "./logQueryPills.ts";
 
 test("extracts top-level field filters and preserves their values", () => {
   const pills = logQueryPills(
@@ -69,4 +74,30 @@ test("only recognizes supported reserved fields or custom attributes", () => {
   assert.deepEqual(logQueryPills("unknown:value"), []);
   assert.equal(logQueryPills("@custom.value:present").length, 1);
   assert.deepEqual(logQueryPills('message:"unterminated'), []);
+});
+
+test("keeps a required disjunction mandatory when the user query also contains OR", () => {
+  assert.equal(
+    combineLogQueries(
+      "@required.primary:true OR @required.legacy:true",
+      "@user.first:true OR @user.second:true"
+    ),
+    "(@required.primary:true OR @required.legacy:true) AND (@user.first:true OR @user.second:true)"
+  );
+  assert.equal(combineLogQueries("@required.primary:true", ""), "@required.primary:true");
+});
+
+test("maps HTTP histogram groups to status-code filters", () => {
+  assert.equal(
+    withLogHistogramGroupFilter("", "status", "5xx"),
+    "@http.status_code:[500 TO 599]"
+  );
+  assert.equal(
+    withLogHistogramGroupFilter(
+      "service:api AND @http.status_code:[400 TO 499]",
+      "status",
+      "2xx"
+    ),
+    "service:api AND @http.status_code:[200 TO 299]"
+  );
 });
