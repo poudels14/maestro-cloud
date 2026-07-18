@@ -1866,6 +1866,57 @@ fn system_ips_from_cidr(network_cidr: &str) -> Option<SystemIps> {
     })
 }
 
+pub(crate) fn system_container_egress_sources(config: &ControllerConfig) -> Vec<String> {
+    let Some(network_cidr) = config.subnet.as_deref() else {
+        return Vec::new();
+    };
+    let role = config.cluster.as_ref().map(|cluster| cluster.role);
+    let dns_enabled = config.tailscale_authkey.is_some() || config.cluster.is_some();
+    let cloudflared_replicas = if config.cloudflare_tunnel_token.is_some() {
+        config.cloudflare_tunnel_replicas
+    } else {
+        0
+    };
+    system_container_egress_sources_from_cidr(network_cidr, role, dns_enabled, cloudflared_replicas)
+}
+
+fn system_container_egress_sources_from_cidr(
+    network_cidr: &str,
+    role: Option<crate::cluster::NodeRole>,
+    dns_enabled: bool,
+    cloudflared_replicas: u32,
+) -> Vec<String> {
+    let Some(ips) = system_ips_from_cidr(network_cidr) else {
+        return Vec::new();
+    };
+    let capabilities = system_job_capabilities(role);
+    let mut sources = vec![ips.probe];
+    if dns_enabled {
+        sources.push(ips.dns);
+    }
+    if capabilities.local_etcd {
+        sources.push(ips.etcd);
+    }
+    if capabilities.ingress {
+        sources.push(ips.ingress);
+    }
+    if capabilities.admin {
+        sources.push(ips.admin);
+    }
+    if capabilities.gateway {
+        sources.push(ips.gateway);
+    }
+    if capabilities.ingress {
+        sources.extend(
+            (1..=cloudflared_replicas)
+                .filter_map(|replica| cloudflared_ip_from_cidr(network_cidr, replica)),
+        );
+    }
+    sources.sort();
+    sources.dedup();
+    sources
+}
+
 pub(crate) fn cloudflared_ip_from_cidr(network_cidr: &str, replica: u32) -> Option<String> {
     let subnet = crate::cluster::network::Ipv4Cidr::parse(network_cidr).ok()?;
     let offset = 6_u32.checked_add(replica)?;
@@ -2136,6 +2187,47 @@ mod tests {
             Some("172.22.1.247")
         );
         assert!(cloudflared_ip_from_cidr("172.22.1.0/24", 26).is_none());
+    }
+
+    #[test]
+    fn system_egress_sources_include_only_containers_started_for_the_node_role() {
+        let worker = system_container_egress_sources_from_cidr(
+            "172.22.1.0/24",
+            Some(NodeRole::Worker),
+            true,
+            2,
+        );
+
+        assert_eq!(
+            worker,
+            [
+                "172.22.1.247",
+                "172.22.1.248",
+                "172.22.1.249",
+                "172.22.1.251",
+                "172.22.1.252",
+                "172.22.1.254",
+            ]
+        );
+        assert!(!worker.contains(&"172.22.1.250".to_string()));
+        assert!(!worker.contains(&"172.22.1.253".to_string()));
+        assert!(!worker.contains(&"172.22.1.42".to_string()));
+
+        let voter = system_container_egress_sources_from_cidr(
+            "172.22.1.0/24",
+            Some(NodeRole::Voter),
+            true,
+            2,
+        );
+        assert_eq!(
+            voter,
+            [
+                "172.22.1.250",
+                "172.22.1.251",
+                "172.22.1.253",
+                "172.22.1.254",
+            ]
+        );
     }
 
     #[test]
