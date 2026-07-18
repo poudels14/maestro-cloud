@@ -311,17 +311,7 @@ impl EngineReplicaExecutor {
             .await?
             .ok_or_else(|| anyhow!("assignment job already exists"))?;
         let endpoint = self.endpoint_for(assignment, &container_hostname).await?;
-        let status = if deployment
-            .config
-            .deploy
-            .healthcheck_path
-            .as_deref()
-            .is_some_and(|path| !path.trim().is_empty())
-        {
-            DeploymentStatus::PendingReady
-        } else {
-            DeploymentStatus::Ready
-        };
+        let status = initial_replica_status(deployment.config.deploy.healthcheck_path.as_deref());
         let state = ReplicaState {
             service_id: Some(assignment.service_id.clone()),
             deployment_id: Some(assignment.deployment_id.clone()),
@@ -516,6 +506,14 @@ impl EngineReplicaExecutor {
     }
 }
 
+fn initial_replica_status(healthcheck_path: Option<&str>) -> DeploymentStatus {
+    if healthcheck_path.is_some_and(|path| !path.trim().is_empty()) {
+        DeploymentStatus::PendingReady
+    } else {
+        DeploymentStatus::Ready
+    }
+}
+
 fn next_start_failure_attempt(states: &[ReplicaState], assignment: &Assignment) -> u32 {
     states
         .iter()
@@ -585,6 +583,16 @@ fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replicas_without_a_healthcheck_are_ready_after_start() {
+        assert_eq!(initial_replica_status(None), DeploymentStatus::Ready);
+        assert_eq!(initial_replica_status(Some("  ")), DeploymentStatus::Ready);
+        assert_eq!(
+            initial_replica_status(Some("/health")),
+            DeploymentStatus::PendingReady
+        );
+    }
 
     #[test]
     fn cluster_replica_logs_include_healthcheck_and_configured_tags() {
