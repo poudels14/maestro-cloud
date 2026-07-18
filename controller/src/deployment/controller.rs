@@ -58,13 +58,37 @@ async fn wait_for_demotion(
         std::future::pending::<()>().await;
         return false;
     };
-    if receiver.changed().await.is_err() {
-        return true;
+    loop {
+        if !matches!(
+            receiver.borrow().clone(),
+            crate::cluster::types::LeadershipState::Leading(_)
+        ) {
+            return true;
+        }
+        if receiver.changed().await.is_err() {
+            return true;
+        }
     }
-    !matches!(
-        receiver.borrow().clone(),
-        crate::cluster::types::LeadershipState::Leading(_)
-    )
+}
+
+async fn wait_for_promotion(
+    receiver: &mut Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
+) -> bool {
+    let Some(receiver) = receiver else {
+        std::future::pending::<()>().await;
+        return false;
+    };
+    loop {
+        if matches!(
+            receiver.borrow().clone(),
+            crate::cluster::types::LeadershipState::Leading(_)
+        ) {
+            return true;
+        }
+        if receiver.changed().await.is_err() {
+            return false;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +96,7 @@ pub enum ControllerExitReason {
     Shutdown,
     Restart,
     Demoted,
+    Promoted,
 }
 
 struct PendingBuild {
@@ -187,6 +212,7 @@ pub struct DeploymentController {
     notified_crashed: HashSet<String>,
     leadership_rx: Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
     egress_firewall: Option<crate::firewall::FirewallManager>,
+    maintenance_requests_initialized: bool,
 }
 
 impl DeploymentController {
@@ -278,6 +304,7 @@ impl DeploymentController {
             notified_crashed: HashSet::new(),
             leadership_rx: None,
             egress_firewall: None,
+            maintenance_requests_initialized: false,
         }
     }
 
@@ -407,19 +434,7 @@ impl DeploymentController {
 
         let tmp_dir = self.config.data_dir.join("tmp");
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        let request_node_id = self
-            .config
-            .cluster
-            .as_ref()
-            .map(|cluster| cluster.node_id.as_str());
-        let _ = self
-            .store
-            .delete_system_upgrade_request(request_node_id)
-            .await;
-        let _ = self
-            .store
-            .delete_system_restart_request(request_node_id)
-            .await;
+        self.clear_stale_maintenance_requests().await;
 
         if self.config.cluster_mode() {
             self.requeue_stale_builds().await?;
@@ -504,22 +519,16 @@ impl DeploymentController {
         let mut shutdown_started = false;
         let mut exit_reason = ControllerExitReason::Shutdown;
         let mut signal_rx = self.signal_rx.resubscribe();
-        let request_node_id = self
-            .config
-            .cluster
-            .as_ref()
-            .map(|cluster| cluster.node_id.as_str());
-        let _ = self
-            .store
-            .delete_system_upgrade_request(request_node_id)
-            .await;
-        let _ = self
-            .store
-            .delete_system_restart_request(request_node_id)
-            .await;
+        self.clear_stale_maintenance_requests().await;
 
         loop {
             tokio::select! {
+                promoted = wait_for_promotion(&mut self.leadership_rx), if self.leadership_rx.is_some() => {
+                    if promoted {
+                        return Ok(ControllerExitReason::Promoted);
+                    }
+                    return Ok(ControllerExitReason::Shutdown);
+                }
                 signal = signal_rx.recv() => {
                     match signal {
                         Ok(ShutdownEvent::Graceful) => {
@@ -564,6 +573,26 @@ impl DeploymentController {
                 }
             }
         }
+    }
+
+    async fn clear_stale_maintenance_requests(&mut self) {
+        if self.maintenance_requests_initialized {
+            return;
+        }
+        let request_node_id = self
+            .config
+            .cluster
+            .as_ref()
+            .map(|cluster| cluster.node_id.as_str());
+        let _ = self
+            .store
+            .delete_system_upgrade_request(request_node_id)
+            .await;
+        let _ = self
+            .store
+            .delete_system_restart_request(request_node_id)
+            .await;
+        self.maintenance_requests_initialized = true;
     }
 
     pub(crate) async fn reconcile_deployments(&mut self) -> Result<()> {
@@ -3088,8 +3117,48 @@ mod upgrade_source_tests {
     use super::{
         parse_cargo_package_version, requested_upgrade_version,
         system_image_build_specs_for_version, validate_nixos_upgrade_source_version,
+        wait_for_demotion, wait_for_promotion,
     };
+    use crate::cluster::types::{LeaderInfo, LeadershipState, LeadershipToken};
     use crate::deployment::store::SystemUpgradeRequest;
+
+    fn leadership_token() -> LeadershipToken {
+        LeadershipToken {
+            info: LeaderInfo {
+                node_id: "node-a".to_string(),
+            },
+            election_key: b"election".to_vec(),
+            create_revision: 1,
+            lease_id: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn maintenance_and_leader_loops_handle_already_changed_leadership() {
+        let (_sender, follower) =
+            tokio::sync::watch::channel(LeadershipState::Following(Some(leadership_token().info)));
+        let mut follower = Some(follower);
+        assert!(wait_for_demotion(&mut follower).await);
+
+        let (_sender, leader) =
+            tokio::sync::watch::channel(LeadershipState::Leading(leadership_token()));
+        let mut leader = Some(leader);
+        assert!(wait_for_promotion(&mut leader).await);
+    }
+
+    #[tokio::test]
+    async fn follower_maintenance_exits_when_the_node_is_promoted() {
+        let (sender, receiver) = tokio::sync::watch::channel(LeadershipState::Following(None));
+        let mut receiver = Some(receiver);
+        let promote = async move {
+            tokio::task::yield_now().await;
+            sender
+                .send(LeadershipState::Leading(leadership_token()))
+                .expect("leadership receiver");
+        };
+        let (promoted, ()) = tokio::join!(wait_for_promotion(&mut receiver), promote);
+        assert!(promoted);
+    }
 
     #[test]
     fn reads_version_from_cargo_package_section() {
