@@ -2,8 +2,8 @@ use std::net::Ipv4Addr;
 
 use anyhow::{Result, bail};
 use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, Permission, RoleRevokePermissionOptions,
-    TlsOptions, Txn, TxnOp, UserAddOptions,
+    Client, Compare, CompareOp, ConnectOptions, GetOptions, Permission,
+    RoleRevokePermissionOptions, TlsOptions, Txn, TxnOp, UserAddOptions,
 };
 
 use crate::cluster::types::{ClusterRuntime, NodeRole};
@@ -11,6 +11,7 @@ use crate::cluster::types::{ClusterRuntime, NodeRole};
 const READY_KEY: &str = "/maetro/system/rbac-ready";
 const TRAEFIK_ROLE: &str = "maestro-traefik";
 const RBAC_VERSION: u8 = 3;
+const NODE_RECORDS_PREFIX: &str = "/maetro/cluster/node-records/";
 
 pub async fn bootstrap_initial(runtime: &ClusterRuntime, tls: TlsOptions) -> Result<()> {
     if !runtime.is_seed() {
@@ -39,9 +40,10 @@ pub(crate) async fn bootstrap_initial_with_client(
         runtime.host_ip,
         runtime.api_port,
         &runtime.node_id,
-        NodeRole::Voter,
+        runtime.role,
     )
     .await?;
+    ensure_recorded_gateway_roots(client).await?;
     client
         .put(
             READY_KEY,
@@ -108,6 +110,9 @@ async fn provision_node_users_with_client(
     role: NodeRole,
 ) -> Result<()> {
     validate_node_id(node_id)?;
+    if role.runs_workloads() {
+        ensure_gateway_root(client, node_id).await?;
+    }
     ensure_role(client, TRAEFIK_ROLE, &traefik_permissions()).await?;
     let suffix = crate::cluster::identity::endpoint_identity_suffix(host_ip, api_port);
     let daemon_user = format!(
@@ -131,6 +136,36 @@ async fn provision_node_users_with_client(
     ensure_role(client, &probe_role, &probe_permissions(node_id)).await?;
     ensure_user(client, &format!("maestro-probe-{suffix}"), &probe_role).await?;
     ensure_user(client, &format!("maestro-traefik-{suffix}"), TRAEFIK_ROLE).await
+}
+
+async fn ensure_recorded_gateway_roots(client: &mut Client) -> Result<()> {
+    let response = client
+        .get(NODE_RECORDS_PREFIX, Some(GetOptions::new().with_prefix()))
+        .await?;
+    for entry in response.kvs() {
+        let record: crate::cluster::NodeRecord = serde_json::from_slice(entry.value())?;
+        if record.last_info.role.runs_workloads() {
+            ensure_gateway_root(client, &record.last_info.node_id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_gateway_root(client: &mut Client, node_id: &str) -> Result<()> {
+    validate_node_id(node_id)?;
+    let key = gateway_root_key(node_id);
+    client
+        .txn(
+            Txn::new()
+                .when([Compare::version(key.clone(), CompareOp::Equal, 0)])
+                .and_then([TxnOp::put(key, Vec::new(), None)]),
+        )
+        .await?;
+    Ok(())
+}
+
+pub(crate) fn gateway_root_key(node_id: &str) -> String {
+    format!("maestro-gateway/{node_id}")
 }
 
 fn traefik_permissions() -> Vec<Permission> {
@@ -352,6 +387,14 @@ mod tests {
         assert!(validate_node_id("abc123def456").is_ok());
         assert!(validate_node_id("../../leader").is_err());
         assert!(validate_node_id("UPPERCASE123").is_err());
+    }
+
+    #[test]
+    fn gateway_roots_are_node_scoped() {
+        assert_eq!(
+            gateway_root_key("abc123def456"),
+            "maestro-gateway/abc123def456"
+        );
     }
 
     #[test]

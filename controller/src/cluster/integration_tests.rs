@@ -723,6 +723,14 @@ async fn master_bootstrap_and_rbac_restart_do_not_require_reachable_peers() -> R
     let options = etcd_client::ConnectOptions::new().with_user("root", root_password);
     let mut restarted = etcd_client::Client::connect([endpoint], Some(options)).await?;
     super::auth::bootstrap_initial_with_client(&runtime, &mut restarted).await?;
+    let gateway_root = restarted
+        .get(super::auth::gateway_root_key(&runtime.node_id), None)
+        .await?;
+    let gateway_root = gateway_root
+        .kvs()
+        .first()
+        .ok_or_else(|| anyhow!("node gateway root was not initialized"))?;
+    assert!(gateway_root.value().is_empty());
     assert_ne!(restarted.status().await?.leader(), 0);
     Ok(())
 }
