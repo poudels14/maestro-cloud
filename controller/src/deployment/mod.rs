@@ -1065,7 +1065,7 @@ async fn init_gateway(
         })
         .collect::<Vec<_>>()
         .join(",");
-    let root_key = format!("maestro-gateway/{}", cluster.node_id);
+    let root_key = crate::cluster::auth::gateway_root_key(&cluster.node_id);
     let image_and_args = vec![
         INGRESS_IMAGE_TAG.into(),
         "--providers.etcd=true".into(),
