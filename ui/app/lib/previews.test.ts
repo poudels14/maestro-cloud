@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import type { Service } from "./types";
-// @ts-expect-error Node's type stripping requires the explicit TypeScript extension.
 import { servicePreviews, userServices } from "./previews.ts";
 
 const service = (id: string, baseServiceId?: string, prNumber = 0): Service => ({

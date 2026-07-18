@@ -1,11 +1,13 @@
 import { For, Show, createSignal } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
-import { clusterConfigQuery, clusterNodesQuery } from "../../lib/queries";
+import { clusterConfigQuery, clusterInfoQuery, clusterNodesQuery } from "../../lib/queries";
 import { setNodeDrain } from "../../lib/api";
+import { isCurrentMaster } from "../../lib/clusterLeadership";
 
 function NodesSection() {
   const nodes = useQuery(() => clusterNodesQuery());
+  const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
   const config = useQuery(() => clusterConfigQuery());
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -80,6 +82,14 @@ function NodesSection() {
                       })}
                     />
                     <span class="truncate font-medium text-gray-800">{node.hostname}</span>
+                    <Show when={isCurrentMaster(node.nodeId, cluster.data?.leader)}>
+                      <span
+                        class="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-indigo-700"
+                        title="Current elected master"
+                      >
+                        CURRENT MASTER
+                      </span>
+                    </Show>
                   </div>
                   <div class="mt-1 truncate font-mono text-[10px] text-gray-400">{node.nodeId}</div>
                   <Show when={node.state.reason || node.dataPlaneError}>

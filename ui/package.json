@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test app/lib/previews.test.ts app/lib/nodeAdmin.test.ts app/components/logs/logQueryPills.test.ts server/lib/execProxy.test.ts",
+    "test": "vitest run",
     "start": "node .output/server/index.mjs"
   },
   "dependencies": {
@@ -25,11 +25,13 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
+    "@tanstack/router-plugin": "1.168.22",
     "@types/d3": "^7.4.3",
     "@types/node": "^22.20.1",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
-    "vite-plugin-solid": "^2.11.12"
+    "vite-plugin-solid": "^2.11.12",
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@10.11.1"
 }

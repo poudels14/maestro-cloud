@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { HomeShell } from "../components/home/HomeShell";
 
-export const Route = createFileRoute("/cluster/logs")({
+export const Route = createFileRoute("/cluster_/logs")({
   validateSearch: (
     search: Record<string, unknown>
   ): { node?: string; service?: string; query?: string; range?: string } => ({

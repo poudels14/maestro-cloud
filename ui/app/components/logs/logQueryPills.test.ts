@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { logQueryPills, removeLogQueryPill } from "./logQueryPills.ts";
 
 test("extracts top-level field filters and preserves their values", () => {
