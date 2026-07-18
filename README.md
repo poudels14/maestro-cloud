@@ -657,6 +657,17 @@ BuildKit cache instead of compiling the probe while the cluster is unavailable.
 Maestro-owned images use exact release tags such as `maestro-probe:<version>`; upgrade
 prebuilds use the version read from the updated source and never overwrite `:latest`.
 
+For coordinated upgrades, the elected leader owns the run in shared cluster state;
+the CLI only streams that state and can disconnect without canceling the upgrade.
+Each node reports its source update, validation, system rebuild, image pre-build,
+restart, and failure stages. While a node reports active upgrade work, the leader
+does not resend the node-local request. The entire node upgrade, including build,
+installation, restart, and version-and-health verification, has one six-hour
+deadline from the initial node-local request. Entering the restart stage does not
+shorten or reset that deadline. Node-reported failures terminate the run immediately
+and unfreeze the cluster. Coordinated restart operations retain their existing
+two-minute timeout.
+
 ### Step 3: Manage the service
 
 ```bash

@@ -310,6 +310,40 @@ pub enum UpgradeNodeStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemUpgradeStage {
+    UpdatingSource,
+    ValidatingSource,
+    RebuildingSystem,
+    PrebuildingImages,
+    Restarting,
+    Failed,
+}
+
+impl SystemUpgradeStage {
+    pub fn is_restarting(self) -> bool {
+        self == Self::Restarting
+    }
+
+    pub fn is_failed(self) -> bool {
+        self == Self::Failed
+    }
+}
+
+impl std::fmt::Display for SystemUpgradeStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::UpdatingSource => "updating source",
+            Self::ValidatingSource => "validating source",
+            Self::RebuildingSystem => "rebuilding system",
+            Self::PrebuildingImages => "pre-building system images",
+            Self::Restarting => "restarting",
+            Self::Failed => "failed",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeNodeStep {
@@ -326,6 +360,10 @@ pub struct UpgradeNodeStep {
     pub upgrade_started_at_ms: Option<i64>,
     #[serde(default)]
     pub last_upgrade_request_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_stage: Option<SystemUpgradeStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_started_at_ms: Option<i64>,
     pub error: Option<String>,
 }
 

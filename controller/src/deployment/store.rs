@@ -13,6 +13,8 @@ pub struct SystemUpgradeRequest {
     pub system_type: String,
     #[serde(default)]
     pub target_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 impl SystemUpgradeRequest {
@@ -20,7 +22,13 @@ impl SystemUpgradeRequest {
         Self {
             system_type: system_type.into(),
             target_version: Some(target_version.into()),
+            run_id: None,
         }
+    }
+
+    pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
+        self.run_id = run_id;
+        self
     }
 
     pub(crate) fn from_storage(value: &[u8]) -> Result<Self> {
@@ -34,6 +42,7 @@ impl SystemUpgradeRequest {
                 Ok(Self {
                     system_type: system_type.to_string(),
                     target_version: None,
+                    run_id: None,
                 })
             }
         }
@@ -42,6 +51,18 @@ impl SystemUpgradeRequest {
     pub(crate) fn to_storage(&self) -> Result<Vec<u8>> {
         Ok(serde_json::to_vec(self)?)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemUpgradeProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub target_version: String,
+    pub stage: crate::cluster::SystemUpgradeStage,
+    pub updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -561,6 +582,21 @@ pub trait ClusterStore: Send + Sync {
 
     async fn delete_system_upgrade_request(&self, _node_id: Option<&str>) -> Result<()> {
         bail!("delete_system_upgrade_request not implemented")
+    }
+
+    async fn read_system_upgrade_progress(
+        &self,
+        _node_id: Option<&str>,
+    ) -> Result<Option<SystemUpgradeProgress>> {
+        Ok(None)
+    }
+
+    async fn put_system_upgrade_progress(
+        &self,
+        _node_id: Option<&str>,
+        _progress: &SystemUpgradeProgress,
+    ) -> Result<()> {
+        bail!("put_system_upgrade_progress not implemented")
     }
 
     async fn read_system_restart_request(&self, _node_id: Option<&str>) -> Result<bool> {

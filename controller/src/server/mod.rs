@@ -2702,6 +2702,17 @@ impl Server {
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
         let request: UpgradeSystemRequest = parse_json_body(&headers, body)?;
         let requested_version = request.version.trim();
+        let run_id = request
+            .run_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|run_id| !run_id.is_empty());
+        if request.run_id.is_some() && run_id.is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "upgrade runId cannot be empty".to_string(),
+            ));
+        }
         let (current_version, target_version) = validate_upgrade_version(
             MAESTRO_VERSION,
             requested_version,
@@ -2725,7 +2736,8 @@ impl Server {
             "upgrade request system={system_type} current_version={current_version} target_version={target_version}"
         );
         let stored_request =
-            StoredSystemUpgradeRequest::new(system_type, target_version.to_string());
+            StoredSystemUpgradeRequest::new(system_type, target_version.to_string())
+                .with_run_id(run_id.map(str::to_string));
         state
             .store
             .put_system_upgrade_request(state.local_node_id.as_deref(), &stored_request)

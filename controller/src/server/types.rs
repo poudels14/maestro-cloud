@@ -177,8 +177,11 @@ pub(crate) struct BlockedIpsResponse {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct UpgradeSystemRequest {
     pub(crate) version: String,
+    #[serde(default)]
+    pub(crate) run_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
