@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test app/lib/previews.test.ts app/components/logs/logQueryPills.test.ts server/lib/execProxy.test.ts",
+    "test": "node --experimental-strip-types --test app/lib/previews.test.ts app/lib/nodeAdmin.test.ts app/components/logs/logQueryPills.test.ts server/lib/execProxy.test.ts",
     "start": "node .output/server/index.mjs"
   },
   "dependencies": {

@@ -141,6 +141,7 @@ export interface ClusterNode {
   role: "master" | "hybrid" | "voter" | "worker";
   clusterHostIp: string;
   clusterApiPort: number;
+  adminUrl?: string | null;
   subnet: string;
   dataPlaneReady: boolean;
   dataPlaneError?: string | null;

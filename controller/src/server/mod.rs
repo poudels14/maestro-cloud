@@ -108,6 +108,7 @@ struct DiskInfo {
 struct ClusterNodeView {
     #[serde(flatten)]
     info: crate::cluster::NodeInfo,
+    admin_url: Option<String>,
     state: crate::cluster::NodeState,
     alive: bool,
     last_seen_at_ms: i64,
@@ -3246,8 +3247,10 @@ async fn cluster_node_views(
             .read_cluster_node_state(&node_id)
             .await
             .map_err(internal_error)?;
+        let admin_url = node_admin_url(info.role, &info.subnet);
         views.push(ClusterNodeView {
             info,
+            admin_url,
             state: node_state,
             alive,
             last_seen_at_ms: if alive {
@@ -3261,6 +3264,16 @@ async fn cluster_node_views(
         });
     }
     Ok(views)
+}
+
+fn node_admin_url(role: crate::cluster::NodeRole, subnet: &str) -> Option<String> {
+    if role == crate::cluster::NodeRole::Worker {
+        return None;
+    }
+    let address = crate::cluster::network::Ipv4Cidr::parse(subnet)
+        .ok()?
+        .system_address_from_end(5)?;
+    Some(format!("http://{address}"))
 }
 
 async fn set_cluster_node_drain_state(

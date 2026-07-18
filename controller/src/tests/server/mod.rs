@@ -502,6 +502,22 @@ fn stats_metric_queries_parse_millisecond_ranges() {
 }
 
 #[test]
+fn node_admin_homepage_uses_the_reserved_admin_address() {
+    assert_eq!(
+        node_admin_url(crate::cluster::NodeRole::Voter, "10.51.0.0/24").as_deref(),
+        Some("http://10.51.0.250")
+    );
+    assert_eq!(
+        node_admin_url(crate::cluster::NodeRole::Master, "10.100.0.0/16").as_deref(),
+        Some("http://10.100.0.250")
+    );
+    assert_eq!(
+        node_admin_url(crate::cluster::NodeRole::Worker, "10.52.0.0/24"),
+        None
+    );
+}
+
+#[test]
 fn hs256_service_tokens_use_an_installed_crypto_provider() {
     let secret = "service-jwt-test-secret";
     let claims = serde_json::json!({

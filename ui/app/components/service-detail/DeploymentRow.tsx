@@ -5,6 +5,7 @@ import type { ClusterInfo } from "../../lib/api";
 import type { Deployment } from "../../lib/types";
 import { DeploymentMenu, STATUS_COLORS, StatusBadge, StatusDot } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
+import { nodeAdminUrl } from "../../lib/nodeAdmin";
 
 type Props = {
   deployment: Deployment;
@@ -141,6 +142,8 @@ function ReplicaRow(props: {
     return port ? `http://${host}:${port}` : `http://${host}`;
   };
   const replicaStatusColors = () => STATUS_COLORS[props.replicaStatus] ?? STATUS_COLORS.STOPPED!;
+  const adminUrl = () =>
+    nodeAdminUrl(props.clusterInfo?.nodes, props.nodeId);
 
   return (
     <div class="flex items-center gap-2 text-xs">
@@ -165,12 +168,30 @@ function ReplicaRow(props: {
       </Show>
       <Show when={props.nodeId}>
         {(nodeId) => (
-          <span
-            class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
-            title="Cluster node"
+          <Show
+            when={adminUrl()}
+            fallback={
+              <span
+                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
+                title="Cluster node"
+              >
+                <span class="font-semibold">NODE:</span> {nodeId()}
+              </span>
+            }
           >
-            {nodeId()}
-          </span>
+            {(url) => (
+              <a
+                href={url()}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => event.stopPropagation()}
+                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
+                title="Open node admin homepage"
+              >
+                <span class="font-semibold">NODE:</span> {nodeId()}
+              </a>
+            )}
+          </Show>
         )}
       </Show>
       <Show when={props.replicaStatus !== "READY"}>
