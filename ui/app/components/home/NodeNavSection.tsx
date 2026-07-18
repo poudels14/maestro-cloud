@@ -20,14 +20,7 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
   const cluster = useQuery(() => clusterInfoQuery());
 
   const go = (
-    to:
-      | "/"
-      | "/metrics"
-      | "/services"
-      | "/cluster"
-      | "/cluster/logs"
-      | "/traffic"
-      | "/http-logs"
+    to: "/" | "/metrics" | "/services" | "/cluster" | "/cluster/logs" | "/traffic" | "/http-logs"
   ) => {
     props.onNavigate?.();
     if (to === "/traffic" || to === "/http-logs" || to === "/cluster/logs") {

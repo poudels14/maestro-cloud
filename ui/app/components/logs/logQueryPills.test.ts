@@ -88,16 +88,9 @@ test("keeps a required disjunction mandatory when the user query also contains O
 });
 
 test("maps HTTP histogram groups to status-code filters", () => {
+  assert.equal(withLogHistogramGroupFilter("", "status", "5xx"), "@http.status_code:[500 TO 599]");
   assert.equal(
-    withLogHistogramGroupFilter("", "status", "5xx"),
-    "@http.status_code:[500 TO 599]"
-  );
-  assert.equal(
-    withLogHistogramGroupFilter(
-      "service:api AND @http.status_code:[400 TO 499]",
-      "status",
-      "2xx"
-    ),
+    withLogHistogramGroupFilter("service:api AND @http.status_code:[400 TO 499]", "status", "2xx"),
     "service:api AND @http.status_code:[200 TO 299]"
   );
 });

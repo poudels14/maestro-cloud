@@ -23,11 +23,7 @@ class FakeUpstream implements ExecUpstream {
   closed = false;
   listeners = new Map<string, Listener[]>();
 
-  constructor(
-    url: string,
-    protocols: string[],
-    options: { headers: Record<string, string> }
-  ) {
+  constructor(url: string, protocols: string[], options: { headers: Record<string, string> }) {
     this.url = url;
     this.protocols = protocols;
     this.options = options;

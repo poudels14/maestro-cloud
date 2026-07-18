@@ -950,9 +950,7 @@ function LogRow(props: {
             </div>
           </Show>
           <Show when={props.showService}>
-            <div
-              class={clsx("min-w-0 max-w-[140px] sm:max-w-none sm:px-2 sm:pt-px", COL.service)}
-            >
+            <div class={clsx("min-w-0 max-w-[140px] sm:max-w-none sm:px-2 sm:pt-px", COL.service)}>
               <HostCell value={service()} />
             </div>
           </Show>
