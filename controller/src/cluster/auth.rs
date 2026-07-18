@@ -169,6 +169,7 @@ fn worker_permissions(node_id: &str) -> Vec<Permission> {
         Permission::read_write(format!("/maetro/cluster/stats/{node_id}")),
         Permission::read_write(format!("/maetro/cluster/disks/{node_id}")),
         Permission::read_write(format!("/maetro/system/upgrade-request/{node_id}")),
+        Permission::read_write(format!("/maetro/system/upgrade-progress/{node_id}")),
         Permission::read_write(format!("/maetro/system/restart-request/{node_id}")),
     ]
 }
@@ -180,6 +181,7 @@ fn probe_permissions(node_id: &str) -> Vec<Permission> {
         Permission::read_write(format!("/maetro/cluster/stats/{node_id}")),
         Permission::read_write(format!("/maetro/cluster/disks/{node_id}")),
         Permission::read_write(format!("/maetro/system/upgrade-request/{node_id}")),
+        Permission::read_write(format!("/maetro/system/upgrade-progress/{node_id}")),
         Permission::read_write(format!("/maetro/system/restart-request/{node_id}")),
     ]
 }

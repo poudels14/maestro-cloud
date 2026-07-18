@@ -15,14 +15,23 @@ use crate::{
             UpgradeNodeStatus, UpgradeNodeStep, UpgradePhase, UpgradeRun,
         },
     },
-    deployment::{store::ClusterStore, types::DeploymentStatus},
+    deployment::{
+        store::{ClusterStore, SystemUpgradeProgress},
+        types::DeploymentStatus,
+    },
     logs::Logger,
 };
 
 const DRAIN_TIMEOUT_MS: i64 = 60_000;
-const UPGRADE_VERIFY_TIMEOUT_MS: i64 = 6 * 60 * 60 * 1_000;
+const UPGRADE_TIMEOUT_MS: i64 = 6 * 60 * 60 * 1_000;
 const RESTART_VERIFY_TIMEOUT_MS: i64 = 120_000;
 const UPGRADE_RETRY_MS: i64 = 15_000;
+
+enum UpgradeProgressObservation {
+    Missing,
+    Active,
+    Failed(String),
+}
 
 #[derive(Clone)]
 pub struct ClusterUpgradeOrchestrator {
@@ -243,6 +252,8 @@ impl ClusterUpgradeOrchestrator {
                     completed_at_ms: None,
                     upgrade_started_at_ms: None,
                     last_upgrade_request_at_ms: None,
+                    upgrade_stage: None,
+                    restart_started_at_ms: None,
                     error: None,
                 })
                 .collect(),
@@ -523,7 +534,30 @@ impl ClusterUpgradeOrchestrator {
             );
             return self.persist(token, &run, false).await;
         }
+        let progress = self.observe_upgrade_progress(&mut run, now_ms).await?;
+        match progress {
+            UpgradeProgressObservation::Failed(error) => {
+                return self.fail(token, run, error).await;
+            }
+            UpgradeProgressObservation::Active => {
+                if !self_restart {
+                    transition(
+                        &mut run,
+                        UpgradePhase::Verifying,
+                        now_ms,
+                        Some(node_id),
+                        "node reports active upgrade work; waiting for its next stage".to_string(),
+                    );
+                }
+                run.updated_at_ms = now_ms;
+                return self.persist(token, &run, false).await;
+            }
+            UpgradeProgressObservation::Missing => {}
+        }
         let Some(node) = live_node else {
+            if should_infer_restart_from_offline(&run) {
+                record_restart_started(&mut run, now_ms, &node_id, "node went offline");
+            }
             if self_restart {
                 run.updated_at_ms = now_ms;
             } else {
@@ -550,7 +584,10 @@ impl ClusterUpgradeOrchestrator {
             format!("{operation}-{}-{node_id}", run.run_id),
         );
         if run.kind == ClusterMaintenanceKind::Upgrade {
-            request = request.json(&serde_json::json!({ "version": run.target_version }));
+            request = request.json(&serde_json::json!({
+                "version": run.target_version,
+                "runId": run.run_id,
+            }));
         }
         if let Some(token) = self.operator_token()? {
             request = request.bearer_auth(token);
@@ -604,8 +641,12 @@ impl ClusterUpgradeOrchestrator {
                     "restart accepted; waiting for a new process instance and health".to_string()
                 }
             };
+            let status = match run.kind {
+                ClusterMaintenanceKind::Upgrade => UpgradeNodeStatus::Upgrading,
+                ClusterMaintenanceKind::Restart => UpgradeNodeStatus::Verifying,
+            };
             if let Some(node) = run.current_node_mut() {
-                node.status = UpgradeNodeStatus::Verifying;
+                node.status = status;
             }
             transition(
                 &mut run,
@@ -618,6 +659,29 @@ impl ClusterUpgradeOrchestrator {
         }
     }
 
+    async fn observe_upgrade_progress(
+        &self,
+        run: &mut UpgradeRun,
+        now_ms: i64,
+    ) -> Result<UpgradeProgressObservation> {
+        if run.kind != ClusterMaintenanceKind::Upgrade {
+            return Ok(UpgradeProgressObservation::Missing);
+        }
+        let node_id = run
+            .current_node()
+            .expect("checked current node")
+            .node_id
+            .clone();
+        let Some(progress) = self
+            .store
+            .read_system_upgrade_progress(Some(&node_id))
+            .await?
+        else {
+            return Ok(UpgradeProgressObservation::Missing);
+        };
+        Ok(apply_reported_upgrade_progress(run, progress, now_ms))
+    }
+
     async fn self_restart(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
         let now_ms = now_millis();
         let operation = run.operation_name();
@@ -626,9 +690,8 @@ impl ClusterUpgradeOrchestrator {
             .expect("checked current node")
             .node_id
             .clone();
-        if self
-            .live_node(&node_id)
-            .await?
+        let live_node = self.live_node(&node_id).await?;
+        if live_node
             .as_ref()
             .is_some_and(|node| node_completed_action(&run, node))
         {
@@ -644,7 +707,14 @@ impl ClusterUpgradeOrchestrator {
             );
             return self.persist(token, &run, false).await;
         }
-        if upgrade_timed_out(&run, now_ms) {
+        let progress = self.observe_upgrade_progress(&mut run, now_ms).await?;
+        if let UpgradeProgressObservation::Failed(error) = &progress {
+            return self.fail(token, run, error.clone()).await;
+        }
+        if live_node.is_none() && should_start_restart_deadline_for_offline(&run, &progress) {
+            record_restart_started(&mut run, now_ms, &node_id, "node went offline");
+        }
+        if node_action_timed_out(&run, now_ms) {
             return self
                 .fail(
                     token,
@@ -653,10 +723,7 @@ impl ClusterUpgradeOrchestrator {
                 )
                 .await;
         }
-        let should_retry = run
-            .current_node()
-            .and_then(|node| node.last_upgrade_request_at_ms)
-            .is_none_or(|last| now_ms.saturating_sub(last) >= UPGRADE_RETRY_MS);
+        let should_retry = upgrade_request_retry_due(&run, now_ms, &progress);
         if should_retry {
             return self.request_node_action(token, run, true).await;
         }
@@ -700,12 +767,37 @@ impl ClusterUpgradeOrchestrator {
             );
             return self.persist(token, &run, false).await;
         }
-        if upgrade_timed_out(&run, now_ms) {
+        let progress = self.observe_upgrade_progress(&mut run, now_ms).await?;
+        if let UpgradeProgressObservation::Failed(error) = &progress {
+            return self.fail(token, run, error.clone()).await;
+        }
+        if action_completed
+            && run.kind == ClusterMaintenanceKind::Upgrade
+            && run
+                .current_node()
+                .and_then(|node| node.restart_started_at_ms)
+                .is_none()
+        {
+            record_restart_started(
+                &mut run,
+                now_ms,
+                &node_id,
+                "node reported the target version",
+            );
+        }
+        if node.is_none() && should_start_restart_deadline_for_offline(&run, &progress) {
+            record_restart_started(&mut run, now_ms, &node_id, "node went offline");
+        }
+        if node_action_timed_out(&run, now_ms) {
             let message = match run.kind {
                 ClusterMaintenanceKind::Upgrade => {
                     let reported = node.map_or("offline", |node| node.version.as_str());
+                    let stage = run
+                        .current_node()
+                        .and_then(|node| node.upgrade_stage)
+                        .map_or_else(|| "unreported".to_string(), |stage| stage.to_string());
                     format!(
-                        "node `{node_id}` failed verification: expected version {}, reported {reported}, healthy={healthy}",
+                        "node `{node_id}` did not complete its upgrade within six hours: expected version {}, reported {reported}, healthy={healthy}, last stage={stage}",
                         run.target_version
                     )
                 }
@@ -717,10 +809,7 @@ impl ClusterUpgradeOrchestrator {
         }
         let should_retry = node.is_some()
             && !action_completed
-            && run
-                .current_node()
-                .and_then(|node| node.last_upgrade_request_at_ms)
-                .is_none_or(|last| now_ms.saturating_sub(last) >= UPGRADE_RETRY_MS);
+            && upgrade_request_retry_due(&run, now_ms, &progress);
         if should_retry {
             transition(
                 &mut run,
@@ -895,16 +984,109 @@ fn upgrade_order(node: &NodeInfo, leader_node_id: &str) -> u8 {
     }
 }
 
-fn upgrade_timed_out(run: &UpgradeRun, now_ms: i64) -> bool {
+fn node_action_timed_out(run: &UpgradeRun, now_ms: i64) -> bool {
     let started_at_ms = run
         .current_node()
         .and_then(|node| node.upgrade_started_at_ms)
         .unwrap_or(run.phase_started_at_ms);
     let timeout_ms = match run.kind {
-        ClusterMaintenanceKind::Upgrade => UPGRADE_VERIFY_TIMEOUT_MS,
+        ClusterMaintenanceKind::Upgrade => UPGRADE_TIMEOUT_MS,
         ClusterMaintenanceKind::Restart => RESTART_VERIFY_TIMEOUT_MS,
     };
     now_ms.saturating_sub(started_at_ms) >= timeout_ms
+}
+
+fn upgrade_request_retry_due(
+    run: &UpgradeRun,
+    now_ms: i64,
+    progress: &UpgradeProgressObservation,
+) -> bool {
+    !matches!(progress, UpgradeProgressObservation::Active)
+        && run
+            .current_node()
+            .and_then(|node| node.last_upgrade_request_at_ms)
+            .is_none_or(|last| now_ms.saturating_sub(last) >= UPGRADE_RETRY_MS)
+}
+
+fn should_infer_restart_from_offline(run: &UpgradeRun) -> bool {
+    run.kind == ClusterMaintenanceKind::Upgrade
+        && run
+            .current_node()
+            .and_then(|node| node.last_upgrade_request_at_ms)
+            .is_some()
+}
+
+fn should_start_restart_deadline_for_offline(
+    run: &UpgradeRun,
+    progress: &UpgradeProgressObservation,
+) -> bool {
+    matches!(progress, UpgradeProgressObservation::Missing)
+        && should_infer_restart_from_offline(run)
+}
+
+fn apply_reported_upgrade_progress(
+    run: &mut UpgradeRun,
+    progress: SystemUpgradeProgress,
+    now_ms: i64,
+) -> UpgradeProgressObservation {
+    let node_id = run
+        .current_node()
+        .expect("checked current node")
+        .node_id
+        .clone();
+    if progress.run_id.as_deref() != Some(run.run_id.as_str())
+        || progress.target_version != run.target_version
+    {
+        return UpgradeProgressObservation::Missing;
+    }
+    if progress.stage.is_failed() {
+        return UpgradeProgressObservation::Failed(
+            progress
+                .error
+                .unwrap_or_else(|| format!("node `{node_id}` reported an upgrade failure")),
+        );
+    }
+
+    let changed = run.current_node().and_then(|node| node.upgrade_stage) != Some(progress.stage);
+    if changed {
+        if let Some(node) = run.current_node_mut() {
+            node.upgrade_stage = Some(progress.stage);
+            node.status = if progress.stage.is_restarting() {
+                UpgradeNodeStatus::Verifying
+            } else {
+                UpgradeNodeStatus::Upgrading
+            };
+        }
+        run.updated_at_ms = now_ms;
+        run.history.push(UpgradeEvent {
+            at_ms: now_ms,
+            phase: run.phase,
+            node_id: Some(node_id.clone()),
+            message: format!("node reported upgrade stage: {}", progress.stage),
+        });
+    }
+    if progress.stage.is_restarting() {
+        record_restart_started(run, now_ms, &node_id, "node reported restart start");
+    }
+    UpgradeProgressObservation::Active
+}
+
+fn record_restart_started(run: &mut UpgradeRun, now_ms: i64, node_id: &str, reason: &str) {
+    let Some(node) = run.current_node_mut() else {
+        return;
+    };
+    if node.restart_started_at_ms.is_some() {
+        return;
+    }
+    node.restart_started_at_ms = Some(now_ms);
+    node.status = UpgradeNodeStatus::Verifying;
+    run.updated_at_ms = now_ms;
+    run.history.push(UpgradeEvent {
+        at_ms: now_ms,
+        phase: run.phase,
+        node_id: Some(node_id.to_string()),
+        message: format!("{reason}; waiting for target version and health"),
+    });
 }
 
 fn node_completed_action(run: &UpgradeRun, node: &NodeInfo) -> bool {
@@ -1002,6 +1184,162 @@ mod tests {
     }
 
     #[test]
+    fn reported_progress_is_correlated_deduplicated_and_records_restart() {
+        let mut run = UpgradeRun {
+            run_id: "run-1".to_string(),
+            kind: ClusterMaintenanceKind::Upgrade,
+            target_version: "2.0.0".to_string(),
+            requested_at_ms: 0,
+            updated_at_ms: 0,
+            requested_by_node_id: "leader".to_string(),
+            phase: UpgradePhase::Verifying,
+            phase_started_at_ms: 0,
+            current_node_index: 0,
+            nodes: vec![UpgradeNodeStep {
+                node_id: "worker".to_string(),
+                hostname: "worker".to_string(),
+                role: NodeRole::Worker,
+                from_version: "1.0.0".to_string(),
+                from_instance_id: Some("instance-worker".to_string()),
+                status: UpgradeNodeStatus::Upgrading,
+                started_at_ms: Some(0),
+                completed_at_ms: None,
+                upgrade_started_at_ms: Some(1_000),
+                last_upgrade_request_at_ms: Some(1_000),
+                upgrade_stage: None,
+                restart_started_at_ms: None,
+                error: None,
+            }],
+            history: Vec::new(),
+            failure: None,
+        };
+        let progress = |run_id: &str, stage| SystemUpgradeProgress {
+            run_id: Some(run_id.to_string()),
+            target_version: "2.0.0".to_string(),
+            stage,
+            updated_at_ms: 2_000,
+            error: None,
+        };
+
+        assert!(matches!(
+            apply_reported_upgrade_progress(
+                &mut run,
+                progress(
+                    "stale-run",
+                    crate::cluster::SystemUpgradeStage::RebuildingSystem
+                ),
+                2_000,
+            ),
+            UpgradeProgressObservation::Missing
+        ));
+        assert!(run.history.is_empty());
+
+        assert!(matches!(
+            apply_reported_upgrade_progress(
+                &mut run,
+                progress(
+                    "run-1",
+                    crate::cluster::SystemUpgradeStage::RebuildingSystem
+                ),
+                3_000,
+            ),
+            UpgradeProgressObservation::Active
+        ));
+        assert_eq!(run.history.len(), 1);
+        assert_eq!(
+            run.current_node().expect("node").restart_started_at_ms,
+            None
+        );
+        assert!(!upgrade_request_retry_due(
+            &run,
+            20_000,
+            &UpgradeProgressObservation::Active,
+        ));
+        assert!(upgrade_request_retry_due(
+            &run,
+            20_000,
+            &UpgradeProgressObservation::Missing,
+        ));
+        assert!(!should_start_restart_deadline_for_offline(
+            &run,
+            &UpgradeProgressObservation::Active,
+        ));
+        assert!(should_start_restart_deadline_for_offline(
+            &run,
+            &UpgradeProgressObservation::Missing,
+        ));
+
+        apply_reported_upgrade_progress(
+            &mut run,
+            progress(
+                "run-1",
+                crate::cluster::SystemUpgradeStage::RebuildingSystem,
+            ),
+            4_000,
+        );
+        assert_eq!(run.history.len(), 1);
+
+        apply_reported_upgrade_progress(
+            &mut run,
+            progress("run-1", crate::cluster::SystemUpgradeStage::Restarting),
+            5_000,
+        );
+        let node = run.current_node().expect("node");
+        assert_eq!(node.restart_started_at_ms, Some(5_000));
+        assert_eq!(node.status, UpgradeNodeStatus::Verifying);
+        assert_eq!(run.history.len(), 3);
+    }
+
+    #[test]
+    fn reported_upgrade_failure_is_immediately_actionable() {
+        let mut progress = SystemUpgradeProgress {
+            run_id: Some("run-1".to_string()),
+            target_version: "2.0.0".to_string(),
+            stage: crate::cluster::SystemUpgradeStage::Failed,
+            updated_at_ms: 2_000,
+            error: Some("nixos-rebuild failed".to_string()),
+        };
+        let mut run: UpgradeRun = serde_json::from_value(serde_json::json!({
+            "runId": "run-1",
+            "targetVersion": "2.0.0",
+            "requestedAtMs": 0,
+            "updatedAtMs": 0,
+            "requestedByNodeId": "leader",
+            "phase": "verifying",
+            "phaseStartedAtMs": 0,
+            "currentNodeIndex": 0,
+            "nodes": [{
+                "nodeId": "worker",
+                "hostname": "worker",
+                "role": "worker",
+                "fromVersion": "1.0.0",
+                "status": "upgrading",
+                "startedAtMs": 0,
+                "completedAtMs": null,
+                "error": null
+            }],
+            "history": [],
+            "failure": null
+        }))
+        .expect("upgrade run");
+
+        match apply_reported_upgrade_progress(&mut run, progress.clone(), 2_000) {
+            UpgradeProgressObservation::Failed(error) => {
+                assert_eq!(error, "nixos-rebuild failed")
+            }
+            _ => panic!("expected reported failure"),
+        }
+
+        progress.error = None;
+        match apply_reported_upgrade_progress(&mut run, progress, 2_000) {
+            UpgradeProgressObservation::Failed(error) => {
+                assert!(error.contains("reported an upgrade failure"))
+            }
+            _ => panic!("expected reported failure"),
+        }
+    }
+
+    #[test]
     fn retry_transitions_do_not_extend_the_version_verification_deadline() {
         let mut run = UpgradeRun {
             run_id: "run-1".to_string(),
@@ -1024,6 +1362,8 @@ mod tests {
                 completed_at_ms: None,
                 upgrade_started_at_ms: Some(1_000),
                 last_upgrade_request_at_ms: Some(10_000),
+                upgrade_stage: None,
+                restart_started_at_ms: None,
                 error: None,
             }],
             history: Vec::new(),
@@ -1036,18 +1376,29 @@ mod tests {
             Some("worker".to_string()),
             "retry".to_string(),
         );
-        assert!(!upgrade_timed_out(
+        assert!(should_infer_restart_from_offline(&run));
+        assert!(!node_action_timed_out(&run, 1_000 + UPGRADE_TIMEOUT_MS - 1));
+        assert!(node_action_timed_out(&run, 1_000 + UPGRADE_TIMEOUT_MS));
+
+        run.current_node_mut()
+            .expect("upgrade node")
+            .restart_started_at_ms = Some(50_000);
+        assert!(!node_action_timed_out(
             &run,
-            1_000 + UPGRADE_VERIFY_TIMEOUT_MS - 1
+            50_000 + RESTART_VERIFY_TIMEOUT_MS
         ));
-        assert!(upgrade_timed_out(&run, 1_000 + UPGRADE_VERIFY_TIMEOUT_MS));
+        assert!(node_action_timed_out(&run, 1_000 + UPGRADE_TIMEOUT_MS));
 
         run.kind = ClusterMaintenanceKind::Restart;
-        assert!(!upgrade_timed_out(
+        assert!(!should_infer_restart_from_offline(&run));
+        assert!(!node_action_timed_out(
             &run,
             1_000 + RESTART_VERIFY_TIMEOUT_MS - 1
         ));
-        assert!(upgrade_timed_out(&run, 1_000 + RESTART_VERIFY_TIMEOUT_MS));
+        assert!(node_action_timed_out(
+            &run,
+            1_000 + RESTART_VERIFY_TIMEOUT_MS
+        ));
     }
 
     #[test]
@@ -1074,6 +1425,8 @@ mod tests {
                 completed_at_ms: None,
                 upgrade_started_at_ms: Some(0),
                 last_upgrade_request_at_ms: Some(0),
+                upgrade_stage: None,
+                restart_started_at_ms: None,
                 error: None,
             }],
             history: Vec::new(),

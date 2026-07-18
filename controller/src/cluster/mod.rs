@@ -26,6 +26,6 @@ mod integration_tests;
 pub use types::{
     Assignment, AssignmentManifest, ClusterMaintenanceKind, ClusterMeta, ClusterNodeEndpoint,
     ClusterRuntime, LeaderInfo, NodeAffinity, NodeDiskInfo, NodeGatewayEndpoint, NodeInfo,
-    NodeRecord, NodeRole, NodeState, PlacementHistory, ReplicaEndpoint, TrafficGeneration,
-    UnschedulableReplica, UpgradeEvent, UpgradePhase, UpgradeRun,
+    NodeRecord, NodeRole, NodeState, PlacementHistory, ReplicaEndpoint, SystemUpgradeStage,
+    TrafficGeneration, UnschedulableReplica, UpgradeEvent, UpgradePhase, UpgradeRun,
 };

@@ -72,6 +72,7 @@ pub fn deployment_preview_env_key(service_id: &str, deployment_id: &str) -> Stri
 }
 
 pub const SYSTEM_UPGRADE_REQUEST_KEY: &str = "/maetro/system/upgrade-request";
+pub const SYSTEM_UPGRADE_PROGRESS_KEY: &str = "/maetro/system/upgrade-progress";
 pub const SYSTEM_RESTART_REQUEST_KEY: &str = "/maetro/system/restart-request";
 pub const CLUSTER_FREEZE_KEY: &str = "/maetro/system/cluster-freeze";
 pub const CLUSTER_UPGRADE_KEY: &str = "/maetro/cluster/upgrade/current";
@@ -81,6 +82,13 @@ pub fn system_upgrade_request_key(node_id: Option<&str>) -> String {
     node_id.map_or_else(
         || SYSTEM_UPGRADE_REQUEST_KEY.to_string(),
         |node_id| format!("{SYSTEM_UPGRADE_REQUEST_KEY}/{node_id}"),
+    )
+}
+
+pub fn system_upgrade_progress_key(node_id: Option<&str>) -> String {
+    node_id.map_or_else(
+        || SYSTEM_UPGRADE_PROGRESS_KEY.to_string(),
+        |node_id| format!("{SYSTEM_UPGRADE_PROGRESS_KEY}/{node_id}"),
     )
 }
 
@@ -116,6 +124,10 @@ mod tests {
             "/maetro/system/restart-request/node-b"
         );
         assert_eq!(system_upgrade_request_key(None), SYSTEM_UPGRADE_REQUEST_KEY);
+        assert_eq!(
+            system_upgrade_progress_key(Some("node-a")),
+            "/maetro/system/upgrade-progress/node-a"
+        );
     }
 
     #[test]

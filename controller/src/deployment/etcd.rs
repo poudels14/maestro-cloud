@@ -16,9 +16,9 @@ use crate::deployment::keys::{
     replica_state_key, replica_states_prefix, service_deployment_history_key,
     service_deployment_history_prefix, service_history_next_index_key, service_id_from_history_key,
     service_id_from_info_key, service_info_key, service_prefix, system_restart_request_key,
-    system_upgrade_request_key,
+    system_upgrade_progress_key, system_upgrade_request_key,
 };
-use crate::deployment::store::{ClusterStore, SystemUpgradeRequest};
+use crate::deployment::store::{ClusterStore, SystemUpgradeProgress, SystemUpgradeRequest};
 use crate::deployment::types::{
     CancelDeploymentOutcome, Deployment, DeploymentStatus, DeploymentWithReplicas,
     ForceQueueOutcome, IngressConfig, IngressRouting, QueuedDeployment, ReplicaState,
@@ -2817,6 +2817,34 @@ impl ClusterStore for EtcdStateStore {
             .delete(system_upgrade_request_key(node_id), None)
             .await
             .map_err(|err| anyhow!("failed to delete upgrade request: {err}"))?;
+        Ok(())
+    }
+
+    async fn read_system_upgrade_progress(
+        &self,
+        node_id: Option<&str>,
+    ) -> anyhow::Result<Option<SystemUpgradeProgress>> {
+        let response = self
+            .get(system_upgrade_progress_key(node_id).into_bytes(), None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|kv| serde_json::from_slice(kv.value()).map_err(Into::into))
+            .transpose()
+    }
+
+    async fn put_system_upgrade_progress(
+        &self,
+        node_id: Option<&str>,
+        progress: &SystemUpgradeProgress,
+    ) -> anyhow::Result<()> {
+        let value = serde_json::to_vec(progress)?;
+        let mut client = self.client.lock().await;
+        client
+            .put(system_upgrade_progress_key(node_id), value, None)
+            .await
+            .map_err(|err| anyhow!("failed to write upgrade progress: {err}"))?;
         Ok(())
     }
 

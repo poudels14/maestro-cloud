@@ -15,7 +15,7 @@ use tokio::{
 use crate::config::BuilderType;
 use crate::deployment::dns::DnsManager;
 use crate::deployment::provider::{BuildOutput, ContainerDeploymentProvider};
-use crate::deployment::store::ClusterStore;
+use crate::deployment::store::{ClusterStore, SystemUpgradeProgress, SystemUpgradeRequest};
 use crate::deployment::types::{
     ControllerConfig, Deployment, DeploymentBuildInfo, DeploymentStatus, QueuedDeployment,
     ReplicaState, ServiceDeployment,
@@ -49,6 +49,7 @@ const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 5_000;
 #[cfg(test)]
 const INGRESS_DRAIN_GRACE_PERIOD_MS: u64 = 50;
 const BUILD_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+const MAX_SHARED_UPGRADE_ERROR_CHARS: usize = 4_096;
 
 async fn wait_for_demotion(
     receiver: &mut Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
@@ -842,6 +843,68 @@ impl DeploymentController {
         requested
     }
 
+    async fn report_system_upgrade_progress(
+        &self,
+        node_id: Option<&str>,
+        request: &SystemUpgradeRequest,
+        target_version: &str,
+        stage: crate::cluster::SystemUpgradeStage,
+        error: Option<String>,
+    ) {
+        let progress = SystemUpgradeProgress {
+            run_id: request.run_id.clone(),
+            target_version: target_version.to_string(),
+            stage,
+            updated_at_ms: crate::cluster_stats::now_ms(),
+            error,
+        };
+        if let Err(err) = self
+            .store
+            .put_system_upgrade_progress(node_id, &progress)
+            .await
+        {
+            self.logger.emit(
+                "error",
+                &format!("failed to report system upgrade progress: {err}"),
+            );
+        }
+    }
+
+    async fn fail_system_upgrade(
+        &self,
+        node_id: Option<&str>,
+        request: &SystemUpgradeRequest,
+        target_version: &str,
+        error: String,
+    ) {
+        self.logger.emit("error", &error);
+        let shared_error = if error.chars().count() > MAX_SHARED_UPGRADE_ERROR_CHARS {
+            format!(
+                "{}…",
+                error
+                    .chars()
+                    .take(MAX_SHARED_UPGRADE_ERROR_CHARS)
+                    .collect::<String>()
+            )
+        } else {
+            error.clone()
+        };
+        self.report_system_upgrade_progress(
+            node_id,
+            request,
+            target_version,
+            crate::cluster::SystemUpgradeStage::Failed,
+            Some(shared_error),
+        )
+        .await;
+        if let Err(err) = self.store.delete_system_upgrade_request(node_id).await {
+            self.logger.emit(
+                "error",
+                &format!("failed to clear rejected system upgrade request: {err}"),
+            );
+        }
+    }
+
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
         let request_node_id = self
             .config
@@ -857,16 +920,26 @@ impl DeploymentController {
         let target_version = match requested_upgrade_version(&request) {
             Ok(version) => version,
             Err(err) => {
-                self.logger
-                    .emit("error", &format!("refusing system upgrade: {err}"));
-                let _ = self
-                    .store
-                    .delete_system_upgrade_request(request_node_id)
-                    .await;
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    request.target_version.as_deref().unwrap_or_default(),
+                    format!("refusing system upgrade: {err}"),
+                )
+                .await;
                 return None;
             }
         };
+        let target_version_string = target_version.to_string();
         if request.system_type == "nixos" {
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::UpdatingSource,
+                None,
+            )
+            .await;
             self.logger.emit(
                 "info",
                 &format!("starting NixOS system upgrade to Maestro {target_version}"),
@@ -876,53 +949,96 @@ impl DeploymentController {
                 .output()
                 .await;
             if let Err(err) = &flake_result {
-                self.logger
-                    .emit("error", &format!("nix flake update failed: {err}"));
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("nix flake update failed: {err}"),
+                )
+                .await;
                 return None;
             }
             let flake_output = flake_result.unwrap();
             if !flake_output.status.success() {
                 let stderr = String::from_utf8_lossy(&flake_output.stderr);
-                self.logger
-                    .emit("error", &format!("nix flake update failed: {stderr}"));
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("nix flake update failed: {stderr}"),
+                )
+                .await;
                 return None;
             }
 
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::ValidatingSource,
+                None,
+            )
+            .await;
             let upgrade_source = match self.stage_nixos_upgrade_source(&target_version).await {
                 Ok(source) => source,
                 Err(err) => {
-                    self.logger.emit(
-                        "error",
-                        &format!("refusing NixOS upgrade before rebuilding or rebooting: {err}"),
-                    );
-                    let _ = self
-                        .store
-                        .delete_system_upgrade_request(request_node_id)
-                        .await;
+                    self.fail_system_upgrade(
+                        request_node_id,
+                        &request,
+                        &target_version_string,
+                        format!("refusing NixOS upgrade before rebuilding or rebooting: {err}"),
+                    )
+                    .await;
                     return None;
                 }
             };
 
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::RebuildingSystem,
+                None,
+            )
+            .await;
             self.logger.emit("info", "running nixos-rebuild boot");
             let rebuild_result = tokio::process::Command::new("nixos-rebuild")
                 .args(["boot", "--flake", "/etc/maestro#default"])
                 .output()
                 .await;
             if let Err(err) = &rebuild_result {
-                self.logger
-                    .emit("error", &format!("nixos-rebuild failed: {err}"));
                 let _ = std::fs::remove_dir_all(&upgrade_source.path);
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("nixos-rebuild failed: {err}"),
+                )
+                .await;
                 return None;
             }
             let rebuild_output = rebuild_result.unwrap();
             if !rebuild_output.status.success() {
                 let stderr = String::from_utf8_lossy(&rebuild_output.stderr);
-                self.logger
-                    .emit("error", &format!("nixos-rebuild failed: {stderr}"));
                 let _ = std::fs::remove_dir_all(&upgrade_source.path);
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("nixos-rebuild failed: {stderr}"),
+                )
+                .await;
                 return None;
             }
 
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::PrebuildingImages,
+                None,
+            )
+            .await;
             self.logger
                 .emit("info", "NixOS rebuild complete, pre-building system images");
             for (tag, dockerfile) in system_image_build_specs_for_version(&upgrade_source.version) {
@@ -946,18 +1062,29 @@ impl DeploymentController {
                     )
                     .await;
                 if let Err(err) = result {
-                    self.logger.emit(
-                        "error",
-                        &format!(
+                    let _ = std::fs::remove_dir_all(&upgrade_source.path);
+                    self.fail_system_upgrade(
+                        request_node_id,
+                        &request,
+                        &target_version_string,
+                        format!(
                             "failed to pre-build {tag} from updated source; leaving the current system running: {err}"
                         ),
-                    );
-                    let _ = std::fs::remove_dir_all(&upgrade_source.path);
+                    )
+                    .await;
                     return None;
                 }
             }
             let _ = std::fs::remove_dir_all(&upgrade_source.path);
 
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::Restarting,
+                None,
+            )
+            .await;
             self.logger.emit(
                 "info",
                 "marking active deployments terminated before reboot",
@@ -967,9 +1094,40 @@ impl DeploymentController {
 
             self.logger
                 .emit("info", "NixOS upgrade complete, rebooting");
-            let _ = tokio::process::Command::new("reboot").output().await;
+            match tokio::process::Command::new("reboot").output().await {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    self.fail_system_upgrade(
+                        request_node_id,
+                        &request,
+                        &target_version_string,
+                        format!(
+                            "reboot command failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        ),
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    self.fail_system_upgrade(
+                        request_node_id,
+                        &request,
+                        &target_version_string,
+                        format!("failed to run reboot command: {err}"),
+                    )
+                    .await;
+                }
+            }
             None
         } else {
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::PrebuildingImages,
+                None,
+            )
+            .await;
             self.logger
                 .emit("info", "upgrade requested, rebuilding system images");
             for (tag, dockerfile) in system_image_build_specs() {
@@ -993,11 +1151,24 @@ impl DeploymentController {
                     )
                     .await;
                 if let Err(err) = result {
-                    self.logger
-                        .emit("error", &format!("failed to rebuild {tag}: {err}"));
+                    self.fail_system_upgrade(
+                        request_node_id,
+                        &request,
+                        &target_version_string,
+                        format!("failed to rebuild {tag}: {err}"),
+                    )
+                    .await;
                     return None;
                 }
             }
+            self.report_system_upgrade_progress(
+                request_node_id,
+                &request,
+                &target_version_string,
+                crate::cluster::SystemUpgradeStage::Restarting,
+                None,
+            )
+            .await;
             self.logger
                 .emit("info", "system images rebuilt, draining and restarting");
             Some(ControllerExitReason::Restart)
@@ -2960,7 +3131,8 @@ mod upgrade_source_tests {
 
     #[test]
     fn stored_upgrade_request_preserves_the_exact_target_version() {
-        let request = SystemUpgradeRequest::new("nixos", "0.3.3");
+        let request = SystemUpgradeRequest::new("nixos", "0.3.3")
+            .with_run_id(Some("upgrade-run-1".to_string()));
         let encoded = request.to_storage().expect("encode request");
         let decoded = SystemUpgradeRequest::from_storage(&encoded).expect("decode request");
 
@@ -2977,6 +3149,7 @@ mod upgrade_source_tests {
 
         assert_eq!(request.system_type, "nixos");
         assert!(request.target_version.is_none());
+        assert!(request.run_id.is_none());
         assert!(requested_upgrade_version(&request).is_err());
     }
 
