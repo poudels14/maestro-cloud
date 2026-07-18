@@ -32,12 +32,12 @@ pub(crate) async fn bootstrap_initial_with_client(
     ensure_role(client, TRAEFIK_ROLE, &traefik_permissions()).await?;
     ensure_user(client, "root", "root").await?;
     for node in &runtime.initial_voters {
-        provision_voter_transport_users(client, node.host_ip, node.identity_api_port).await?;
+        provision_voter_transport_users(client, node.host_ip, node.api_port).await?;
     }
     provision_node_users_with_client(
         client,
         runtime.host_ip,
-        runtime.identity_api_port,
+        runtime.api_port,
         &runtime.node_id,
         NodeRole::Voter,
     )
@@ -67,37 +67,24 @@ pub async fn provision_node_users(
     endpoints: &[String],
     tls: TlsOptions,
     host_ip: Ipv4Addr,
-    identity_api_port: Option<u16>,
+    api_port: u16,
     node_id: &str,
     subnet: &str,
     role: NodeRole,
 ) -> Result<()> {
     let mut client = Client::connect(endpoints, Some(ConnectOptions::new().with_tls(tls))).await?;
-    provision_node_users_with_client(&mut client, host_ip, identity_api_port, node_id, role)
-        .await?;
-    let control_reservation = identity_api_port.map_or_else(
-        || serde_json::json!({"hostIp": host_ip, "nodeId": null, "state": "reserved"}),
-        |api_port| {
-            serde_json::json!({
-                "hostIp": host_ip,
-                "apiPort": api_port,
-                "nodeId": null,
-                "state": "reserved"
-            })
-        },
-    );
+    provision_node_users_with_client(&mut client, host_ip, api_port, node_id, role).await?;
+    let control_reservation = serde_json::json!({
+        "hostIp": host_ip,
+        "apiPort": api_port,
+        "nodeId": null,
+        "state": "reserved"
+    });
     reserve_resource(
         &mut client,
-        &format!(
-            "/maetro/cluster/control-addresses/{}",
-            identity_suffix(host_ip, identity_api_port)
-        ),
+        &crate::cluster::identity::control_reservation_key(host_ip, api_port),
         control_reservation,
-        if identity_api_port.is_some() {
-            "apiPort"
-        } else {
-            "hostIp"
-        },
+        "apiPort",
     )
     .await?;
     reserve_resource(
@@ -116,13 +103,13 @@ pub fn ready_key() -> &'static str {
 async fn provision_node_users_with_client(
     client: &mut Client,
     host_ip: Ipv4Addr,
-    identity_api_port: Option<u16>,
+    api_port: u16,
     node_id: &str,
     role: NodeRole,
 ) -> Result<()> {
     validate_node_id(node_id)?;
     ensure_role(client, TRAEFIK_ROLE, &traefik_permissions()).await?;
-    let suffix = identity_suffix(host_ip, identity_api_port);
+    let suffix = crate::cluster::identity::endpoint_identity_suffix(host_ip, api_port);
     let daemon_user = format!(
         "maestro-{}-{suffix}",
         match role {
@@ -156,9 +143,9 @@ fn traefik_permissions() -> Vec<Permission> {
 async fn provision_voter_transport_users(
     client: &mut Client,
     host_ip: Ipv4Addr,
-    identity_api_port: Option<u16>,
+    api_port: u16,
 ) -> Result<()> {
-    let suffix = identity_suffix(host_ip, identity_api_port);
+    let suffix = crate::cluster::identity::endpoint_identity_suffix(host_ip, api_port);
     ensure_user(client, &format!("maestro-voter-{suffix}"), "root").await?;
     ensure_user(client, &format!("maestro-traefik-{suffix}"), TRAEFIK_ROLE).await
 }
@@ -167,25 +154,11 @@ pub async fn provision_local_voter_users(
     endpoints: &[String],
     tls: TlsOptions,
     host_ip: Ipv4Addr,
-    identity_api_port: Option<u16>,
+    api_port: u16,
     node_id: &str,
 ) -> Result<()> {
     let mut client = Client::connect(endpoints, Some(ConnectOptions::new().with_tls(tls))).await?;
-    provision_node_users_with_client(
-        &mut client,
-        host_ip,
-        identity_api_port,
-        node_id,
-        NodeRole::Voter,
-    )
-    .await
-}
-
-fn identity_suffix(host_ip: Ipv4Addr, api_port: Option<u16>) -> String {
-    api_port.map_or_else(
-        || format!("{:08x}", u32::from(host_ip)),
-        |port| format!("{:08x}-{port:04x}", u32::from(host_ip)),
-    )
+    provision_node_users_with_client(&mut client, host_ip, api_port, node_id, NodeRole::Voter).await
 }
 
 fn worker_permissions(node_id: &str) -> Vec<Permission> {

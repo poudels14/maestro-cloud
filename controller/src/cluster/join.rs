@@ -58,8 +58,6 @@ pub struct JoinRequest {
     pub role: NodeRole,
     pub cluster_host_ip: Ipv4Addr,
     pub cluster_api_port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity_api_port: Option<u16>,
     pub cluster_gateway_port: u16,
     pub etcd_client_port: u16,
     pub etcd_peer_port: u16,
@@ -78,7 +76,6 @@ impl JoinRequest {
             gateway_port: self.cluster_gateway_port,
             etcd_client_port: self.etcd_client_port,
             etcd_peer_port: self.etcd_peer_port,
-            identity_api_port: self.identity_api_port,
         }
     }
 }
@@ -117,10 +114,7 @@ pub struct JoinAdmission {
     pub node_id: String,
     pub role: NodeRole,
     pub cluster_host_ip: Ipv4Addr,
-    #[serde(default)]
     pub cluster_api_port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity_api_port: Option<u16>,
     pub subnet: String,
     pub public_key_sha256: String,
     pub created_at_ms: i64,
@@ -132,11 +126,7 @@ struct JoinIntent {
     node_id: String,
     role: NodeRole,
     cluster_host_ip: Ipv4Addr,
-    #[serde(default)]
     cluster_api_port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    identity_api_port: Option<u16>,
-    #[serde(default)]
     etcd_peer_port: u16,
     subnet: String,
     public_key_sha256: String,
@@ -275,17 +265,6 @@ impl JoinCoordinator {
         {
             bail!("join source address is outside cluster.control-allow-cidrs");
         }
-        if request.identity_api_port.is_some() != self.runtime.identity_api_port.is_some() {
-            bail!("join request uses a different cluster.nodes identity mode");
-        }
-        if request.identity_api_port.is_none()
-            && (request.cluster_api_port != self.runtime.api_port
-                || request.cluster_gateway_port != self.runtime.gateway_port
-                || request.etcd_client_port != self.runtime.etcd_client_port
-                || request.etcd_peer_port != self.runtime.etcd_peer_port)
-        {
-            bail!("bare-IP join request uses different shared cluster ports");
-        }
         let mut client = self.connect().await?;
         if !client
             .get(format!("/maetro/cluster/removed/{}", request.node_id), None)
@@ -304,7 +283,6 @@ impl JoinCoordinator {
             role: request.role,
             cluster_host_ip: request.cluster_host_ip,
             cluster_api_port: request.cluster_api_port,
-            identity_api_port: request.identity_api_port,
             etcd_peer_port: request.etcd_peer_port,
             subnet: request.subnet.clone(),
             public_key_sha256,
@@ -351,7 +329,7 @@ impl JoinCoordinator {
             &self.endpoints,
             self.tls.clone(),
             request.cluster_host_ip,
-            request.identity_api_port,
+            request.cluster_api_port,
             &request.node_id,
             &request.subnet,
             request.role,
@@ -377,7 +355,7 @@ impl JoinCoordinator {
         let certificates = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
             &ca,
             request.cluster_host_ip,
-            request.identity_api_port,
+            request.cluster_api_port,
             request.role,
         )?;
         let meta = read_cluster_meta(&mut client).await?;
@@ -465,19 +443,25 @@ impl JoinCoordinator {
             }
         }
 
+        let control_key = crate::cluster::identity::control_reservation_key(
+            record.last_info.cluster_host_ip,
+            record.last_info.cluster_api_port,
+        );
+        let control = client.get(control_key.as_str(), None).await?;
+        let control = control
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("node control reservation is missing"))?;
+        let control: serde_json::Value = serde_json::from_slice(control.value())?;
+        let etcd_peer_port = control
+            .get("etcdPeerPort")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| anyhow!("node control reservation has no valid etcd peer port"))?;
         let members = client.member_list().await?;
         let peer_url = format!(
             "https://{}:{}",
-            record.last_info.cluster_host_ip,
-            if self.runtime.identity_api_port.is_none() {
-                self.runtime.etcd_peer_port
-            } else {
-                record
-                    .last_info
-                    .cluster_api_port
-                    .checked_add(3)
-                    .ok_or_else(|| anyhow!("node API port cannot map to an etcd peer port"))?
-            }
+            record.last_info.cluster_host_ip, etcd_peer_port
         );
         if let Some(member) = members
             .members()
@@ -510,15 +494,7 @@ impl JoinCoordinator {
                 format!("/maetro/cluster/replica-states/{node_id}/"),
                 Some(etcd_client::DeleteOptions::new().with_prefix()),
             ),
-            TxnOp::delete(
-                control_reservation_key(
-                    record.last_info.cluster_host_ip,
-                    self.runtime
-                        .identity_api_port
-                        .map(|_| record.last_info.cluster_api_port),
-                ),
-                None,
-            ),
+            TxnOp::delete(control_key, None),
             TxnOp::delete(subnet_reservation_key(node_id), None),
             TxnOp::delete(format!("{ADMISSION_PREFIX}{node_id}"), None),
             TxnOp::delete(format!("{JOIN_INTENT_PREFIX}{node_id}"), None),
@@ -617,7 +593,6 @@ impl JoinCoordinator {
                 members.members(),
                 member.id(),
                 &member_name,
-                endpoint.identity_api_port.is_some(),
             )?,
         })
     }
@@ -708,14 +683,13 @@ fn ca_discovery_message(
 
 fn validate_admission(admission: &JoinAdmission) -> Result<()> {
     let key = StaticSecret::random();
-    let api_port = admission.cluster_api_port.max(1);
+    let api_port = admission.cluster_api_port;
     let request = JoinRequest {
         node_id: admission.node_id.clone(),
         hostname: "admission-validation".to_string(),
         role: admission.role,
         cluster_host_ip: admission.cluster_host_ip,
         cluster_api_port: api_port,
-        identity_api_port: admission.identity_api_port,
         cluster_gateway_port: api_port.saturating_add(1),
         etcd_client_port: api_port.saturating_add(2),
         etcd_peer_port: api_port.saturating_add(3),
@@ -741,19 +715,11 @@ async fn read_intent(client: &mut Client, key: &str) -> Result<Option<JoinIntent
 }
 
 fn same_join_identity(left: &JoinIntent, right: &JoinIntent) -> bool {
-    let same_endpoint_identity = match (left.identity_api_port, right.identity_api_port) {
-        (Some(left_port), Some(right_port)) => {
-            left_port == right_port
-                && left.cluster_api_port == right.cluster_api_port
-                && left.etcd_peer_port == right.etcd_peer_port
-        }
-        (None, None) => true,
-        _ => false,
-    };
     left.node_id == right.node_id
         && left.role == right.role
         && left.cluster_host_ip == right.cluster_host_ip
-        && same_endpoint_identity
+        && left.cluster_api_port == right.cluster_api_port
+        && left.etcd_peer_port == right.etcd_peer_port
         && left.subnet == right.subnet
         && left.public_key_sha256 == right.public_key_sha256
 }
@@ -763,15 +729,17 @@ async fn validate_reservations(
     request: &JoinRequest,
     retry: bool,
 ) -> Result<()> {
-    let control_key = control_reservation_key(request.cluster_host_ip, request.identity_api_port);
+    let control_key = crate::cluster::identity::control_reservation_key(
+        request.cluster_host_ip,
+        request.cluster_api_port,
+    );
     let control = client.get(control_key.as_str(), None).await?;
     if let Some(existing) = control.kvs().first() {
         let value: serde_json::Value = serde_json::from_slice(existing.value())?;
         if value.get("hostIp").and_then(serde_json::Value::as_str)
             != Some(request.cluster_host_ip.to_string().as_str())
-            || (request.identity_api_port.is_some()
-                && value.get("apiPort").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(request.cluster_api_port)))
+            || value.get("apiPort").and_then(serde_json::Value::as_u64)
+                != Some(u64::from(request.cluster_api_port))
             || value
                 .get("nodeId")
                 .and_then(serde_json::Value::as_str)
@@ -828,29 +796,21 @@ async fn reserve_join_resources(
     token: &LeadershipToken,
     request: &JoinRequest,
 ) -> Result<()> {
-    let control_reservation = request.identity_api_port.map_or_else(
-        || {
-            serde_json::json!({
-                "hostIp": request.cluster_host_ip,
-                "nodeId": request.node_id,
-                "state": "reserved"
-            })
-        },
-        |_| {
-            serde_json::json!({
-                "hostIp": request.cluster_host_ip,
-                "apiPort": request.cluster_api_port,
-                "gatewayPort": request.cluster_gateway_port,
-                "etcdClientPort": request.etcd_client_port,
-                "etcdPeerPort": request.etcd_peer_port,
-                "nodeId": request.node_id,
-                "state": "reserved"
-            })
-        },
-    );
+    let control_reservation = serde_json::json!({
+        "hostIp": request.cluster_host_ip,
+        "apiPort": request.cluster_api_port,
+        "gatewayPort": request.cluster_gateway_port,
+        "etcdClientPort": request.etcd_client_port,
+        "etcdPeerPort": request.etcd_peer_port,
+        "nodeId": request.node_id,
+        "state": "reserved"
+    });
     let reservations = [
         (
-            control_reservation_key(request.cluster_host_ip, request.identity_api_port),
+            crate::cluster::identity::control_reservation_key(
+                request.cluster_host_ip,
+                request.cluster_api_port,
+            ),
             control_reservation,
         ),
         (
@@ -867,20 +827,12 @@ async fn reserve_join_resources(
         if let Some(existing) = response.kvs().first() {
             let existing_value: serde_json::Value = serde_json::from_slice(existing.value())?;
             let expected_identity = if key.contains("control-addresses") {
-                if request.identity_api_port.is_some() {
-                    value.get("apiPort")
-                } else {
-                    value.get("hostIp")
-                }
+                value.get("apiPort")
             } else {
                 value.get("cidr")
             };
             let actual_identity = if key.contains("control-addresses") {
-                if request.identity_api_port.is_some() {
-                    existing_value.get("apiPort")
-                } else {
-                    existing_value.get("hostIp")
-                }
+                existing_value.get("apiPort")
             } else {
                 existing_value.get("cidr")
             };
@@ -991,7 +943,6 @@ fn endpoint_from_reservation(
         gateway_port: u16::try_from(value.get("gatewayPort")?.as_u64()?).ok()?,
         etcd_client_port: u16::try_from(value.get("etcdClientPort")?.as_u64()?).ok()?,
         etcd_peer_port: peer_port,
-        identity_api_port: Some(api_port),
     })
 }
 
@@ -1007,14 +958,6 @@ fn peer_address(peer_url: &str) -> Result<(Ipv4Addr, u16)> {
         host.parse().context("invalid etcd peer IPv4 address")?,
         port.parse().context("invalid etcd peer port")?,
     ))
-}
-
-fn control_reservation_key(host_ip: Ipv4Addr, identity_api_port: Option<u16>) -> String {
-    let suffix = identity_api_port.map_or_else(
-        || format!("{:08x}", u32::from(host_ip)),
-        |port| format!("{:08x}-{port:04x}", u32::from(host_ip)),
-    );
-    format!("/maetro/cluster/control-addresses/{suffix}")
 }
 
 fn subnet_reservation_key(node_id: &str) -> String {
@@ -1196,7 +1139,6 @@ pub fn create_join_request(
         role,
         cluster_host_ip: endpoint.host_ip,
         cluster_api_port: endpoint.api_port,
-        identity_api_port: endpoint.identity_api_port,
         cluster_gateway_port: endpoint.gateway_port,
         etcd_client_port: endpoint.etcd_client_port,
         etcd_peer_port: endpoint.etcd_peer_port,
@@ -1234,12 +1176,6 @@ pub fn validate_request_shape(request: &JoinRequest, now_ms: i64) -> Result<()> 
     ];
     if ports.contains(&0) || ports.iter().copied().collect::<BTreeSet<_>>().len() != ports.len() {
         bail!("cluster API, gateway, and etcd ports must be non-zero and distinct");
-    }
-    if request
-        .identity_api_port
-        .is_some_and(|port| port != request.cluster_api_port)
-    {
-        bail!("join endpoint identity does not match the cluster API port");
     }
     let subnet = crate::cluster::network::Ipv4Cidr::parse(&request.subnet)?;
     if subnet.prefix() != 24 || !subnet.is_private() {
@@ -1592,26 +1528,25 @@ mod tests {
     }
 
     #[test]
-    fn legacy_join_intent_retry_ignores_new_defaulted_port_fields() {
-        let mut old = JoinIntent {
+    fn join_intent_identity_includes_api_and_peer_ports() {
+        let original = JoinIntent {
             node_id: "node123abcde".to_string(),
             role: NodeRole::Voter,
             cluster_host_ip: "10.20.0.15".parse().unwrap(),
-            cluster_api_port: 0,
-            identity_api_port: None,
-            etcd_peer_port: 0,
+            cluster_api_port: 3001,
+            etcd_peer_port: 2380,
             subnet: "172.22.4.0/24".to_string(),
             public_key_sha256: "ab".repeat(32),
             member_id: None,
         };
-        let mut current = old.clone();
-        current.cluster_api_port = 3001;
-        current.etcd_peer_port = 2380;
-        assert!(same_join_identity(&old, &current));
+        assert!(same_join_identity(&original, &original));
 
-        old.identity_api_port = Some(3101);
-        current.identity_api_port = Some(3201);
-        assert!(!same_join_identity(&old, &current));
+        let mut changed = original.clone();
+        changed.cluster_api_port = 3101;
+        assert!(!same_join_identity(&original, &changed));
+        changed = original.clone();
+        changed.etcd_peer_port = 2480;
+        assert!(!same_join_identity(&original, &changed));
     }
 
     #[test]

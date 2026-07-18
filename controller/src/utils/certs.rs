@@ -128,22 +128,37 @@ pub fn generate_cluster_node_certs(
     host_ip: std::net::Ipv4Addr,
     role: crate::cluster::NodeRole,
 ) -> Result<EtcdCerts> {
-    generate_cluster_node_certs_for_endpoint(ca, host_ip, None, role)
+    generate_cluster_node_certs_with_suffix(
+        ca,
+        host_ip,
+        &format!("{:08x}", u32::from(host_ip)),
+        role,
+    )
 }
 
 pub fn generate_cluster_node_certs_for_endpoint(
     ca: &ClusterCa,
     host_ip: std::net::Ipv4Addr,
-    identity_api_port: Option<u16>,
+    api_port: u16,
+    role: crate::cluster::NodeRole,
+) -> Result<EtcdCerts> {
+    generate_cluster_node_certs_with_suffix(
+        ca,
+        host_ip,
+        &crate::cluster::identity::endpoint_identity_suffix(host_ip, api_port),
+        role,
+    )
+}
+
+fn generate_cluster_node_certs_with_suffix(
+    ca: &ClusterCa,
+    host_ip: std::net::Ipv4Addr,
+    suffix: &str,
     role: crate::cluster::NodeRole,
 ) -> Result<EtcdCerts> {
     let issuer_key = KeyPair::from_pem(&ca.key_pem)?;
     let issuer_params = cluster_ca_params();
     let issuer = Issuer::from_params(&issuer_params, &issuer_key);
-    let suffix = identity_api_port.map_or_else(
-        || format!("{:08x}", u32::from(host_ip)),
-        |port| format!("{:08x}-{port:04x}", u32::from(host_ip)),
-    );
     let member_name = format!("maestro-{suffix}");
 
     let server_key = KeyPair::generate()?;

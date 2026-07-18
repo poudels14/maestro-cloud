@@ -553,7 +553,6 @@ mod tests {
             etcd_peer_port: endpoint.etcd_peer_port,
             shared_registry: Some("registry.invalid/maestro".to_string()),
             labels: BTreeMap::new(),
-            identity_api_port: endpoint.identity_api_port,
         }
     }
 
@@ -564,7 +563,6 @@ mod tests {
             gateway_port: api_port + 1,
             etcd_client_port: api_port + 2,
             etcd_peer_port: api_port + 3,
-            identity_api_port: Some(api_port),
         }
     }
 
@@ -615,7 +613,7 @@ mod tests {
             let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
                 &ca,
                 endpoint.host_ip,
-                endpoint.identity_api_port,
+                endpoint.api_port,
                 if index == 0 {
                     crate::cluster::NodeRole::Master
                 } else {
@@ -782,7 +780,7 @@ mod tests {
         let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
             &ca,
             endpoints[0].host_ip,
-            endpoints[0].identity_api_port,
+            endpoints[0].api_port,
             crate::cluster::NodeRole::Hybrid,
         )
         .unwrap();
@@ -832,7 +830,7 @@ mod tests {
         let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
             &ca,
             endpoints[0].host_ip,
-            endpoints[0].identity_api_port,
+            endpoints[0].api_port,
             crate::cluster::NodeRole::Hybrid,
         )
         .unwrap();

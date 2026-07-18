@@ -15,7 +15,7 @@ use super::assignment_store::{
 use super::elector::{EtcdLeaderElector, LeaderElector};
 use super::executor::RunningReplica;
 use super::reconciler::{ReconcileAction, diff_assignments};
-use super::registry::{InMemoryNodeRegistry, NodeRegistry};
+use super::registry::{EtcdNodeRegistry, InMemoryNodeRegistry, NodeRegistry};
 use super::scheduler::{ScheduleInput, plan};
 use super::types::{
     Assignment, AssignmentManifest, DeploymentGroup, LeadershipState, LeadershipToken, NodeInfo,
@@ -525,7 +525,7 @@ impl FormingEtcdCluster {
         .await
         .map_err(|_| anyhow!("seed did not admit etcd learner `{member_name}`"))?;
         let initial_cluster =
-            super::bootstrap::format_initial_cluster(&members, member_id, &member_name, true)?;
+            super::bootstrap::format_initial_cluster(&members, member_id, &member_name)?;
         let join_info = super::bootstrap::JoinInfo {
             cluster_id: self.cluster_id.clone(),
             member_id,
@@ -676,7 +676,6 @@ impl FormingEtcdCluster {
             etcd_peer_port: node.etcd_peer_port,
             shared_registry: None,
             labels: BTreeMap::new(),
-            identity_api_port: node.identity_api_port,
         }
     }
 
@@ -1363,7 +1362,6 @@ fn reserve_node_endpoints(
                 gateway_port: api_port + 1,
                 etcd_client_port: api_port + 2,
                 etcd_peer_port: peer_port,
-                identity_api_port: Some(api_port),
             });
             break;
         }
@@ -2422,8 +2420,8 @@ async fn node_affinity_is_automatic_opaque_and_replayable() -> Result<()> {
 
 /// Forms a three-voter cluster from one designated seed and two serial learners. It exercises the
 /// production bootstrap state decisions and initial-cluster formatter, proves that a later-listed
-/// voter can join while the middle voter is absent, and verifies every learner catches up before
-/// promotion.
+/// voter can join while the middle voter is absent, verifies every learner catches up before
+/// promotion, and registers the seed through the reservation written by bootstrap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
@@ -2464,6 +2462,59 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     }
 
     cluster.assert_formed().await?;
+
+    let mut client = etcd_client::Client::connect([cluster.client_url(0)], None).await?;
+    super::bootstrap::seed_bootstrap_records(&mut client, &seed_runtime).await?;
+    let registry =
+        EtcdNodeRegistry::connect(&[cluster.client_url(0)], None, seed_runtime.node_id.clone())
+            .await?;
+    let info = NodeInfo {
+        node_id: seed_runtime.node_id.clone(),
+        instance_id: seed_runtime.instance_id.clone(),
+        hostname: "seed-node".to_string(),
+        role: seed_runtime.role,
+        cluster_host_ip: seed_runtime.host_ip,
+        cluster_api_port: seed_runtime.api_port,
+        cluster_gateway_port: seed_runtime.gateway_port,
+        subnet: seed_runtime.subnet.clone(),
+        tailscale_ip: None,
+        data_plane_ready: false,
+        data_plane_checked_at_ms: 0,
+        data_plane_error: None,
+        version: "integration-test".to_string(),
+        started_at_ms: 1,
+        labels: BTreeMap::new(),
+    };
+    registry.register(info.clone()).await?;
+    assert_eq!(registry.list_nodes().await?, vec![info]);
+
+    let control_key =
+        super::identity::control_reservation_key(seed_runtime.host_ip, seed_runtime.api_port);
+    let reservation = client.get(control_key, None).await?;
+    let reservation = reservation
+        .kvs()
+        .first()
+        .ok_or_else(|| anyhow!("registered control reservation disappeared"))?;
+    let reservation: serde_json::Value = serde_json::from_slice(reservation.value())?;
+    assert_eq!(reservation["nodeId"], seed_runtime.node_id);
+    assert_eq!(reservation["state"], "active");
+    assert_eq!(
+        reservation["apiPort"].as_u64(),
+        Some(u64::from(seed_runtime.api_port))
+    );
+    assert_eq!(
+        reservation["gatewayPort"].as_u64(),
+        Some(u64::from(seed_runtime.gateway_port))
+    );
+    assert_eq!(
+        reservation["etcdClientPort"].as_u64(),
+        Some(u64::from(seed_runtime.etcd_client_port))
+    );
+    assert_eq!(
+        reservation["etcdPeerPort"].as_u64(),
+        Some(u64::from(seed_runtime.etcd_peer_port))
+    );
+    registry.deregister().await?;
     Ok(())
 }
 
@@ -2963,7 +3014,6 @@ async fn surviving_etcd_member_recovers_empty_voters_without_a_backup() -> Resul
             response.member_list(),
             member_id,
             &member_name,
-            true,
         )?;
         cluster.start_replacement(index, &initial_cluster)?;
 

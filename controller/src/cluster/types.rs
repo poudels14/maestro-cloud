@@ -13,8 +13,6 @@ pub struct ClusterNodeEndpoint {
     pub gateway_port: u16,
     pub etcd_client_port: u16,
     pub etcd_peer_port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity_api_port: Option<u16>,
 }
 
 impl ClusterNodeEndpoint {
@@ -31,10 +29,7 @@ impl ClusterNodeEndpoint {
     }
 
     pub fn identity_suffix(self) -> String {
-        match self.identity_api_port {
-            Some(port) => format!("{:08x}-{port:04x}", u32::from(self.host_ip)),
-            None => format!("{:08x}", u32::from(self.host_ip)),
-        }
+        super::identity::endpoint_identity_suffix(self.host_ip, self.api_port)
     }
 
     pub fn member_name(self) -> String {
@@ -46,11 +41,10 @@ impl From<Ipv4Addr> for ClusterNodeEndpoint {
     fn from(host_ip: Ipv4Addr) -> Self {
         Self {
             host_ip,
-            api_port: 3001,
+            api_port: 3000,
             gateway_port: 3002,
             etcd_client_port: 2379,
             etcd_peer_port: 2380,
-            identity_api_port: None,
         }
     }
 }
@@ -73,7 +67,6 @@ impl std::str::FromStr for ClusterNodeEndpoint {
                 etcd_peer_port: api_port
                     .checked_add(3)
                     .ok_or_else(|| "node API port is too high".to_string())?,
-                identity_api_port: Some(api_port),
             });
         }
         value
@@ -168,7 +161,6 @@ pub struct ClusterRuntime {
     pub etcd_peer_port: u16,
     pub shared_registry: Option<String>,
     pub labels: BTreeMap<String, String>,
-    pub identity_api_port: Option<u16>,
 }
 
 impl ClusterRuntime {
@@ -179,7 +171,6 @@ impl ClusterRuntime {
             gateway_port: self.gateway_port,
             etcd_client_port: self.etcd_client_port,
             etcd_peer_port: self.etcd_peer_port,
-            identity_api_port: self.identity_api_port,
         }
     }
 
@@ -203,7 +194,7 @@ impl ClusterRuntime {
     }
 
     pub fn resource_suffix(&self) -> Option<String> {
-        self.identity_api_port.map(|port| format!("node-{port}"))
+        Some(format!("node-{}", self.api_port))
     }
 }
 
