@@ -229,6 +229,32 @@ fn command_planner_disables_pull_for_prepared_images() {
 }
 
 #[test]
+fn command_planner_allows_runtime_resolution_for_immutable_registry_images() {
+    let mut deployment = deployment_with_source(None, Some("traefik/whoami:latest"), None);
+    deployment.build = Some(DeploymentBuildInfo {
+        docker_image_id: format!("traefik/whoami@sha256:{}", "a".repeat(64)),
+    });
+
+    let planner = ContainerDeploymentProvider {
+        runtime: runtime::create_provider(crate::config::RuntimeType::Nerdctl),
+        build_command_env: Default::default(),
+        network: "test-net".to_string(),
+        dns_domain: None,
+        dns_server: None,
+        secrets_dir: std::env::temp_dir().join("maestro-test-secrets"),
+        uploads_dir: std::env::temp_dir().join("maestro-test-uploads"),
+    };
+    let deploy = planner
+        .deploy(&deployment, 0)
+        .expect("deploy command should exist");
+
+    let crate::supervisor::JobCommand::Exec { args, .. } = deploy.command else {
+        panic!("expected exec command");
+    };
+    assert!(!args.iter().any(|arg| arg == "--pull=never"));
+}
+
+#[test]
 fn command_planner_appends_deploy_flags_to_docker_run() {
     let mut deployment = deployment_with_source(None, Some("traefik/whoami"), None);
     deployment.id = "ABCDEF123456".to_string();

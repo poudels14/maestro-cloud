@@ -8,7 +8,9 @@ use crate::builder::{BuildSource, LogTarget};
 use crate::config::BuilderType;
 use crate::deployment::types::{GitCommitInfo, ServiceBuildConfig, ServiceDeployment};
 use crate::logs::LogEntry;
-use crate::runtime::{BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider};
+use crate::runtime::{
+    BuildSpec, MANAGED_IMAGE_LABEL, RunSpec, RuntimeProvider, is_immutable_image_reference,
+};
 use crate::supervisor::SecretsMount;
 use crate::utils::crypto::SecretString;
 
@@ -260,7 +262,7 @@ impl ContainerDeploymentProvider {
             );
 
             let mut extra_flags = Vec::new();
-            if built_image.is_some() {
+            if built_image.is_some() && !is_immutable_image_reference(image) {
                 extra_flags.push("--pull=never".to_string());
             }
             if let Some(dns) = &self.dns_server {
