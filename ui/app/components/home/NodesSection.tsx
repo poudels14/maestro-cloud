@@ -7,6 +7,9 @@ import { setNodeDrain } from "../../lib/api";
 import { isCurrentMaster } from "../../lib/clusterLeadership";
 import { nodeAdminLabel } from "../../lib/nodeAdmin";
 
+const nodeGridClass =
+  "grid min-w-[46rem] grid-cols-[minmax(10rem,1.6fr)_4.5rem_4.25rem_minmax(7.5rem,1fr)_minmax(7.5rem,1fr)_5.5rem] gap-3";
+
 function NodesSection() {
   const nodes = useQuery(() => clusterNodesQuery());
   const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
@@ -64,7 +67,9 @@ function NodesSection() {
           </div>
         </Show>
         <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <div class="grid min-w-[54rem] grid-cols-[minmax(9rem,1.4fr)_6rem_6rem_minmax(10rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500">
+          <div
+            class={`${nodeGridClass} border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500`}
+          >
             <span>Node</span>
             <span>Role</span>
             <span>Version</span>
@@ -74,7 +79,9 @@ function NodesSection() {
           </div>
           <For each={nodes.data ?? []}>
             {(node) => (
-              <div class="grid min-w-[54rem] grid-cols-[minmax(9rem,1.4fr)_6rem_6rem_minmax(10rem,1fr)_minmax(8rem,1fr)_7rem] items-center gap-3 border-b border-gray-100 px-4 py-3 text-xs last:border-b-0">
+              <div
+                class={`${nodeGridClass} items-center border-b border-gray-100 px-4 py-3 text-xs last:border-b-0`}
+              >
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
                     <span
@@ -106,7 +113,12 @@ function NodesSection() {
                   </Show>
                 </div>
                 <span class="text-gray-600">{node.role}</span>
-                <span class="font-mono text-[11px] text-gray-600">v{node.version}</span>
+                <span
+                  class="min-w-0 truncate font-mono text-[11px] text-gray-600"
+                  title={`v${node.version}`}
+                >
+                  v{node.version}
+                </span>
                 <Show
                   when={node.adminUrl}
                   fallback={<span class="text-[11px] text-gray-400">Unavailable</span>}
