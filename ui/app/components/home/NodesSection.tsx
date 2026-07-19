@@ -1,5 +1,5 @@
 import { For, Show, createSignal } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { clusterConfigQuery, clusterInfoQuery, clusterNodesQuery } from "../../lib/queries";
 import { setNodeDrain } from "../../lib/api";

@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import type { MaskedConfig } from "../../lib/types";
 import { clusterConfigQuery } from "../../lib/queries";
 import { SectionHeader } from "../../lib/ui";

@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { disksQuery } from "../../lib/queries";
 import type { DiskInfo } from "../../lib/types";
 import { formatBytes } from "../../lib/format";

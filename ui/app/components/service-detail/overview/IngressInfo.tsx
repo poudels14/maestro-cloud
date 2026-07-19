@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../../lib/useQuery";
 import type { Service } from "../../../lib/types";
 import { ingressRoutesQuery } from "../../../lib/queries";
 

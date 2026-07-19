@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { Activity, ArrowLeftRight, Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
 import { clusterInfoQuery } from "../../lib/queries";

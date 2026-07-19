@@ -77,21 +77,6 @@ function DeploymentRow(props: Props) {
               </span>
             </Show>
           </div>
-          <Show when={showReplicas()}>
-            <div class="mt-1.5 space-y-0.5">
-              <For each={props.deployment.replicas}>
-                {(replica) => (
-                  <ReplicaRow
-                    deployment={props.deployment}
-                    replicaIndex={replica.replicaIndex}
-                    replicaStatus={replica.status}
-                    nodeId={replica.nodeId}
-                    clusterInfo={props.clusterInfo}
-                  />
-                )}
-              </For>
-            </div>
-          </Show>
         </div>
         <div class="flex items-center gap-2 shrink-0">
           <Show
@@ -117,6 +102,21 @@ function DeploymentRow(props: Props) {
           </div>
         </div>
       </div>
+      <Show when={showReplicas()}>
+        <div class="mt-1.5 space-y-0.5 pl-5">
+          <For each={props.deployment.replicas}>
+            {(replica) => (
+              <ReplicaRow
+                deployment={props.deployment}
+                replicaIndex={replica.replicaIndex}
+                replicaStatus={replica.status}
+                nodeId={replica.nodeId}
+                clusterInfo={props.clusterInfo}
+              />
+            )}
+          </For>
+        </div>
+      </Show>
     </div>
   );
 }

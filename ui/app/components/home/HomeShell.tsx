@@ -1,6 +1,6 @@
 import { createSignal, Match, Show, Switch } from "solid-js";
 import clsx from "clsx";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
 import type { Service } from "../../lib/types";

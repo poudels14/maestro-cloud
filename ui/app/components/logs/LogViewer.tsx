@@ -505,9 +505,7 @@ function LogViewer(props: {
       setLines(page.entries);
       setPollCursor(page.cursor);
       setUnavailableNodes(
-        "unavailableNodes" in page
-          ? page.unavailableNodes.map(clusterLogNodeLabel)
-          : []
+        "unavailableNodes" in page ? page.unavailableNodes.map(clusterLogNodeLabel) : []
       );
       setError(null);
     } catch (err) {
@@ -527,9 +525,7 @@ function LogViewer(props: {
       if (requestContext !== rowRequestContext()) return;
       setPollCursor(page.cursor);
       setUnavailableNodes(
-        "unavailableNodes" in page
-          ? page.unavailableNodes.map(clusterLogNodeLabel)
-          : []
+        "unavailableNodes" in page ? page.unavailableNodes.map(clusterLogNodeLabel) : []
       );
       const { from, to } = activeTimeRange();
       setLines((prev) =>

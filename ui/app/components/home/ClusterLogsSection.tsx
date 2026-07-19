@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { clusterNodesQuery, servicesQuery } from "../../lib/queries";
 import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
@@ -50,10 +50,16 @@ function ClusterLogsSection() {
               onChange={(event) => setUrlSearch({ node: event.currentTarget.value || undefined })}
               class="min-w-44 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="">All nodes</option>
+              <option value="" selected={!search().node}>
+                All nodes
+              </option>
               <For each={nodes.data ?? []}>
                 {(node) => (
-                  <option value={node.nodeId} disabled={!node.alive}>
+                  <option
+                    value={node.nodeId}
+                    disabled={!node.alive}
+                    selected={node.nodeId === search().node}
+                  >
                     {clusterLogNodeLabel(node)}
                     {node.alive ? "" : " (offline)"}
                   </option>
@@ -70,15 +76,25 @@ function ClusterLogsSection() {
               }
               class="min-w-48 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="">All services</option>
+              <option value="" selected={!search().service}>
+                All services
+              </option>
               <optgroup label="User services">
                 <For each={userServices()}>
-                  {(service) => <option value={service.id}>{service.name}</option>}
+                  {(service) => (
+                    <option value={service.id} selected={service.id === search().service}>
+                      {service.name}
+                    </option>
+                  )}
                 </For>
               </optgroup>
               <optgroup label="System services">
                 <For each={systemServices()}>
-                  {(service) => <option value={service.id}>{service.name}</option>}
+                  {(service) => (
+                    <option value={service.id} selected={service.id === search().service}>
+                      {service.name}
+                    </option>
+                  )}
                 </For>
               </optgroup>
             </select>

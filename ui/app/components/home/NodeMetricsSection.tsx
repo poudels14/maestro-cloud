@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
 import { formatBytes, formatPercent } from "../../lib/format";
