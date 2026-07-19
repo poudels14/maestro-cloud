@@ -129,6 +129,56 @@ async fn websocket_exec_relay_bridges_length_prefixed_control_frames() {
     server.abort();
 }
 
+#[tokio::test]
+async fn websocket_exec_setup_errors_are_terminal_protocol_frames() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let app = Router::new().route(
+        "/exec",
+        get(|upgrade: WebSocketUpgrade| async move {
+            upgrade.on_upgrade(|websocket| async move {
+                reject_exec(
+                    websocket,
+                    "containerd failed to start the exec process: executable `/bin/sh` was not found",
+                )
+                .await;
+            })
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (mut websocket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/exec"))
+        .await
+        .unwrap();
+
+    let message = websocket.next().await.unwrap().unwrap();
+    let Message::Binary(encoded) = message else {
+        panic!("expected binary exec error frame");
+    };
+    assert_eq!(
+        crate::exec::ExecFrame::decode(&encoded).unwrap(),
+        crate::exec::ExecFrame::Error(
+            "containerd failed to start the exec process: executable `/bin/sh` was not found"
+                .to_string()
+        )
+    );
+    server.abort();
+}
+
+#[test]
+fn exec_errors_include_the_underlying_runtime_failure() {
+    let error = anyhow::anyhow!("executable `/bin/sh` was not found")
+        .context("containerd failed to start the exec process");
+    let message = exec_error_message(error);
+
+    assert_eq!(
+        message,
+        "containerd failed to start the exec process: executable `/bin/sh` was not found"
+    );
+}
+
 fn sample_patch_request(id: &str, name: &str) -> RolloutServiceRequest {
     RolloutServiceRequest {
         id: id.to_string(),

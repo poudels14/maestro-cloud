@@ -49,11 +49,12 @@ class FakeUpstream implements ExecUpstream {
   }
 }
 
-test("exec relay authenticates upstream and preserves messages in both directions", () => {
+test("exec relay authenticates upstream and transparently preserves messages and close", () => {
   const context: ExecProxyContext = {
     url: "ws://controller/api/services/test-service/exec?command=id",
     authorization: "Bearer service-token",
-    pending: []
+    pending: [],
+    clientClosed: false
   };
   const received: Array<Uint8Array | string> = [];
   const closes: Array<[number | undefined, string | undefined]> = [];
@@ -79,12 +80,46 @@ test("exec relay authenticates upstream and preserves messages in both direction
   assert.deepEqual(Array.from(upstream.sent[0] as Uint8Array), [1, 2, 3]);
   assert.equal(context.pending.length, 0);
 
-  upstream.emit("message", { data: new Uint8Array([4, 5]) });
-  assert.deepEqual(Array.from(received[0] as Uint8Array), [4, 5]);
+  upstream.emit("message", { data: new Uint8Array([1, 4, 5]) });
+  assert.deepEqual(Array.from(received[0] as Uint8Array), [1, 4, 5]);
 
-  upstream.emit("error");
-  assert.deepEqual(closes, [[1011, "Maestro exec relay failed"]]);
+  upstream.emit("message", {
+    data: new Uint8Array([3, 123, 34, 99, 111, 100, 101, 34, 58, 48, 125])
+  });
+  upstream.emit("message", { data: "probe text" });
+  upstream.emit("close", { code: 1000, reason: "complete" });
+  assert.deepEqual(
+    Array.from(received[1] as Uint8Array),
+    [3, 123, 34, 99, 111, 100, 101, 34, 58, 48, 125]
+  );
+  assert.equal(received[2], "probe text");
+  assert.deepEqual(closes, [[1000, "complete"]]);
 
   closeExecProxy(peer);
   assert.equal(upstream.closed, true);
+});
+
+test("exec relay closes on a transport error without manufacturing a protocol frame", () => {
+  const context: ExecProxyContext = {
+    url: "ws://controller/api/services/test-service/exec",
+    authorization: "Bearer service-token",
+    pending: [],
+    clientClosed: false
+  };
+  const received: Array<Uint8Array | string> = [];
+  const closes: Array<[number | undefined, string | undefined]> = [];
+  const peer: ExecProxyPeer = {
+    context,
+    send: (data) => received.push(data),
+    close: (code, reason) => closes.push([code, reason])
+  };
+
+  openExecProxy(peer, FakeUpstream);
+  const upstream = FakeUpstream.instance;
+  upstream.emit("error", { message: "connection refused" });
+  upstream.emit("close", { code: 1006, reason: "connection refused" });
+
+  assert.deepEqual(received, []);
+  assert.deepEqual(closes, [[1011, "exec upstream connection failed"]]);
+  assert.equal(context.clientClosed, true);
 });

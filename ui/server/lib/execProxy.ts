@@ -17,6 +17,7 @@ export interface ExecProxyContext {
   authorization: string;
   upstream?: ExecUpstream;
   pending: Uint8Array[];
+  clientClosed: boolean;
 }
 
 export interface ExecProxyPeer {
@@ -53,10 +54,14 @@ export function openExecProxy(peer: ExecProxyPeer, WebSocketClient: ExecUpstream
     forwardUpstreamMessage(peer, event.data);
   });
   upstream.addEventListener("close", (event) => {
+    if (context.clientClosed) return;
+    context.clientClosed = true;
     peer.close(event.code || 1000, event.reason);
   });
   upstream.addEventListener("error", () => {
-    peer.close(1011, "Maestro exec relay failed");
+    if (context.clientClosed) return;
+    context.clientClosed = true;
+    peer.close(1011, "exec upstream connection failed");
   });
 }
 

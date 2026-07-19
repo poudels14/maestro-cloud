@@ -44,7 +44,8 @@ export default defineWebSocketHandler({
       context: {
         url: upstreamUrl(request),
         authorization: `Bearer ${serviceJwt()}`,
-        pending: []
+        pending: [],
+        clientClosed: false
       } satisfies ExecProxyContext
     };
   },
