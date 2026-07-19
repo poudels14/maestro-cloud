@@ -2,6 +2,7 @@ import { createMemo, For } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { clusterNodesQuery, servicesQuery } from "../../lib/queries";
+import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
 import { LogViewer } from "../logs/LogViewer";
 
 type ClusterLogsSearch = {
@@ -53,7 +54,7 @@ function ClusterLogsSection() {
               <For each={nodes.data ?? []}>
                 {(node) => (
                   <option value={node.nodeId} disabled={!node.alive}>
-                    {node.hostname}
+                    {clusterLogNodeLabel(node)}
                     {node.alive ? "" : " (offline)"}
                   </option>
                 )}

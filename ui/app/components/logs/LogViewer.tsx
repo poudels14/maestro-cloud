@@ -12,6 +12,7 @@ import {
 import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
+import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
 import {
   getClusterLogHistogram,
   getClusterLogs,
@@ -485,7 +486,7 @@ function LogViewer(props: {
         return;
       setHistogram(result);
       if ("unavailableNodes" in result) {
-        setUnavailableNodes(result.unavailableNodes.map((node) => node.nodeName || node.nodeId));
+        setUnavailableNodes(result.unavailableNodes.map(clusterLogNodeLabel));
       }
       setHistogramError(null);
     } catch (err) {
@@ -505,7 +506,7 @@ function LogViewer(props: {
       setPollCursor(page.cursor);
       setUnavailableNodes(
         "unavailableNodes" in page
-          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
+          ? page.unavailableNodes.map(clusterLogNodeLabel)
           : []
       );
       setError(null);
@@ -527,7 +528,7 @@ function LogViewer(props: {
       setPollCursor(page.cursor);
       setUnavailableNodes(
         "unavailableNodes" in page
-          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
+          ? page.unavailableNodes.map(clusterLogNodeLabel)
           : []
       );
       const { from, to } = activeTimeRange();
@@ -909,8 +910,7 @@ function LogRow(props: {
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const host = () =>
-    props.line.nodeName || props.line.nodeId || props.line.hostname || props.line.source || "";
+  const host = () => clusterLogNodeLabel(props.line);
   const service = () => props.line.serviceId || props.line.source?.split("/")[0] || "";
   const http = () => httpFields(props.line.attrs);
   return (
