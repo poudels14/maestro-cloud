@@ -88,6 +88,58 @@ fn validate_upgrade_version(
     Ok((current, target, upgrade_required))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiErrorPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct ApiError {
+    status: StatusCode,
+    payload: ApiErrorPayload,
+}
+
+impl From<(StatusCode, String)> for ApiError {
+    fn from((status, message): (StatusCode, String)) -> Self {
+        let (code, details) = api_error_metadata(&message);
+        Self {
+            status,
+            payload: ApiErrorPayload {
+                code,
+                message,
+                details,
+            },
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.payload }))).into_response()
+    }
+}
+
+fn api_error_metadata(message: &str) -> (Option<&'static str>, Option<serde_json::Value>) {
+    const CLUSTER_FREEZE_PREFIX: &str = "cluster deploys are frozen by upgrade run `";
+    if let Some(value) = message.strip_prefix(CLUSTER_FREEZE_PREFIX)
+        && let Some((upgrade_run_id, reason)) = value.split_once("`: ")
+    {
+        return (
+            Some("cluster_deploys_frozen"),
+            Some(json!({
+                "upgradeRunId": upgrade_run_id,
+                "reason": reason,
+            })),
+        );
+    }
+    (None, None)
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiskInfo {
@@ -2090,7 +2142,7 @@ impl Server {
         Path(service_id): Path<String>,
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+    ) -> Result<Json<RolloutServiceResponse>, ApiError> {
         reject_cluster_freeze(&state).await?;
         let service_id = service_id.trim().to_string();
         crate::validation::validate_service_id(&service_id, "serviceId")
@@ -2106,14 +2158,16 @@ impl Server {
             return Err((
                 StatusCode::NOT_FOUND,
                 format!("service `{service_id}` not found"),
-            ));
+            )
+                .into());
         };
 
         if info.deploy_frozen && !query.force.unwrap_or(false) {
             return Err((
                 StatusCode::CONFLICT,
                 format!("deploy is frozen for service `{service_id}`; use ?force=true to override"),
-            ));
+            )
+                .into());
         }
 
         let mut config = info.config;
@@ -2158,7 +2212,7 @@ impl Server {
         Path(service_id): Path<String>,
         Query(query): Query<ForceQuery>,
         State(state): State<AppState>,
-    ) -> Result<Json<RolloutServiceResponse>, (StatusCode, String)> {
+    ) -> Result<Json<RolloutServiceResponse>, ApiError> {
         reject_cluster_freeze(&state).await?;
         let service_id = service_id.trim().to_string();
         crate::validation::validate_service_id(&service_id, "serviceId")
@@ -2174,14 +2228,16 @@ impl Server {
             return Err((
                 StatusCode::NOT_FOUND,
                 format!("service `{service_id}` not found"),
-            ));
+            )
+                .into());
         };
 
         if info.deploy_frozen && !query.force.unwrap_or(false) {
             return Err((
                 StatusCode::CONFLICT,
                 format!("deploy is frozen for service `{service_id}`; use ?force=true to override"),
-            ));
+            )
+                .into());
         }
 
         let deployments = state
@@ -2211,7 +2267,8 @@ impl Server {
                 format!(
                     "service `{service_id}` was deployed from mutable image `{previous_image}`; redeploy it once to pin an immutable digest before restarting"
                 ),
-            ));
+            )
+                .into());
         }
         let previous_git_commit = previous.git_commit.clone();
 

@@ -8,6 +8,51 @@ use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
 
 #[tokio::test]
+async fn service_mutation_errors_return_structured_json() {
+    let response = ApiError::from((
+        StatusCode::CONFLICT,
+        "cluster deploys are frozen by upgrade run `run-123`: rolling upgrade to 0.4.9".to_string(),
+    ))
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let body = to_bytes(response.into_body(), 4_096).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"]["code"], "cluster_deploys_frozen");
+    assert_eq!(
+        payload["error"]["message"],
+        "cluster deploys are frozen by upgrade run `run-123`: rolling upgrade to 0.4.9"
+    );
+    assert_eq!(payload["error"]["details"]["upgradeRunId"], "run-123");
+    assert_eq!(
+        payload["error"]["details"]["reason"],
+        "rolling upgrade to 0.4.9"
+    );
+}
+
+#[tokio::test]
+async fn generic_api_errors_use_the_http_status_without_a_redundant_code() {
+    let response = ApiError::from((
+        StatusCode::NOT_FOUND,
+        "service `missing` not found".to_string(),
+    ))
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), 4_096).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"]["message"], "service `missing` not found");
+    assert!(payload["error"].get("code").is_none());
+}
+
+#[tokio::test]
 async fn websocket_exec_relay_bridges_length_prefixed_control_frames() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;

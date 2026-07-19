@@ -16,6 +16,7 @@ import type {
   TrafficPoint,
   UnschedulableReplica
 } from "./types";
+import { apiErrorFromResponse } from "./apiError";
 
 export interface ClusterInfo {
   clusterId?: string | null;
@@ -124,14 +125,14 @@ export async function redeployService(serviceId: string, force?: boolean) {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, location.origin);
   if (force) url.searchParams.set("force", "true");
   const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to redeploy: ${res.statusText}`);
+  if (!res.ok) throw await apiErrorFromResponse(res, "Failed to redeploy");
 }
 
 export async function restartService(serviceId: string, force?: boolean) {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/restart`, location.origin);
   if (force) url.searchParams.set("force", "true");
   const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to restart: ${res.statusText}`);
+  if (!res.ok) throw await apiErrorFromResponse(res, "Failed to restart");
 }
 
 export async function freezeService(serviceId: string, frozen: boolean) {

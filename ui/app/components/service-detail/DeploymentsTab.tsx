@@ -9,6 +9,7 @@ import { ErrorBanner } from "../../lib/ui";
 import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
+import { showErrorToast } from "../AppToasts";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
@@ -50,11 +51,13 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
   }));
   const redeployMutation = useMutation(() => ({
     mutationFn: (force?: boolean) => redeployService(props.serviceId, force),
-    onSuccess: invalidate
+    onSuccess: invalidate,
+    onError: (error) => showErrorToast("Redeploy failed", error)
   }));
   const restartMutation = useMutation(() => ({
     mutationFn: (force?: boolean) => restartService(props.serviceId, force),
-    onSuccess: invalidate
+    onSuccess: invalidate,
+    onError: (error) => showErrorToast("Restart failed", error)
   }));
 
   const selectedDeployment = () => deployments.data?.find((d) => d.id === selectedId()) ?? null;

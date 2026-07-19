@@ -10,6 +10,7 @@ import { queryClient } from "../lib/queryClient";
 import { clusterInfoQuery, unschedulableQuery } from "../lib/queries";
 import { activeMaintenanceNode, maintenanceStageLabel } from "../lib/clusterMaintenance";
 import { ClientOnly } from "../components/ClientOnly";
+import { AppToasts } from "../components/AppToasts";
 import "../app.css";
 
 export const Route = createRootRoute({
@@ -49,6 +50,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <RootDocument>
         <ClientOnly>
+          <AppToasts />
           <MaintenanceBanner />
           <SchedulingBanner />
         </ClientOnly>
