@@ -179,14 +179,16 @@ fn requested_upgrade_version(
 fn validate_nixos_upgrade_source_version(
     source: &semver::Version,
     running: &semver::Version,
-    target: &semver::Version,
+    minimum: &semver::Version,
 ) -> Result<()> {
-    if target <= running {
-        bail!("requested Maestro version {target} is not newer than running version {running}");
-    }
-    if source != target {
+    if source <= running {
         bail!(
-            "updated services.maestro.source is Maestro {source}, but the upgrade requested {target}; ensure /etc/maestro resolves the requested release and retry"
+            "updated services.maestro.source is Maestro {source}, which is not newer than running version {running}"
+        );
+    }
+    if source < minimum {
+        bail!(
+            "updated services.maestro.source is Maestro {source}, which is older than the requested minimum {minimum}; update /etc/maestro and retry"
         );
     }
     Ok(())
@@ -1206,7 +1208,7 @@ impl DeploymentController {
 
     async fn stage_nixos_upgrade_source(
         &self,
-        target_version: &semver::Version,
+        minimum_version: &semver::Version,
     ) -> Result<NixosUpgradeSource> {
         let source_output =
             crate::utils::cmd::run("nix", &["eval", "--raw", NIXOS_MAESTRO_SOURCE_ATTR]).await?;
@@ -1231,7 +1233,7 @@ impl DeploymentController {
         let source_version =
             parse_cargo_package_version(&std::fs::read_to_string(&manifest_path)?)?;
         let running_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
-        validate_nixos_upgrade_source_version(&source_version, &running_version, target_version)?;
+        validate_nixos_upgrade_source_version(&source_version, &running_version, minimum_version)?;
         self.logger.emit(
             "info",
             &format!(
@@ -3199,7 +3201,7 @@ mod upgrade_source_tests {
     }
 
     #[test]
-    fn stored_upgrade_request_preserves_the_exact_target_version() {
+    fn stored_upgrade_request_preserves_the_requested_minimum_version() {
         let request = SystemUpgradeRequest::new("nixos", "0.3.3")
             .with_run_id(Some("upgrade-run-1".to_string()));
         let encoded = request.to_storage().expect("encode request");
@@ -3223,24 +3225,46 @@ mod upgrade_source_tests {
     }
 
     #[test]
-    fn nixos_upgrade_rejects_a_newer_source_that_is_not_the_requested_version() {
+    fn nixos_upgrade_rejects_a_source_below_the_requested_minimum() {
         let error = validate_nixos_upgrade_source_version(
             &semver::Version::new(0, 3, 2),
             &semver::Version::new(0, 3, 1),
             &semver::Version::new(0, 3, 3),
         )
-        .expect_err("mismatched source must be rejected");
+        .expect_err("source below the requested minimum must be rejected");
 
-        assert!(error.to_string().contains("upgrade requested 0.3.3"));
+        assert!(error.to_string().contains("requested minimum 0.3.3"));
     }
 
     #[test]
-    fn nixos_upgrade_accepts_only_the_exact_newer_target() {
+    fn nixos_upgrade_accepts_the_requested_or_a_newer_source() {
         validate_nixos_upgrade_source_version(
             &semver::Version::new(0, 3, 3),
             &semver::Version::new(0, 3, 1),
             &semver::Version::new(0, 3, 3),
         )
-        .expect("exact newer target");
+        .expect("requested source");
+        validate_nixos_upgrade_source_version(
+            &semver::Version::new(0, 3, 4),
+            &semver::Version::new(0, 3, 1),
+            &semver::Version::new(0, 3, 3),
+        )
+        .expect("source newer than the requested minimum");
+    }
+
+    #[test]
+    fn nixos_upgrade_still_requires_the_source_to_advance_the_running_version() {
+        let error = validate_nixos_upgrade_source_version(
+            &semver::Version::new(0, 3, 3),
+            &semver::Version::new(0, 3, 3),
+            &semver::Version::new(0, 3, 2),
+        )
+        .expect_err("source must advance the running version");
+
+        assert!(
+            error
+                .to_string()
+                .contains("not newer than running version 0.3.3")
+        );
     }
 }

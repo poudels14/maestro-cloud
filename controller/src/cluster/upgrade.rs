@@ -192,23 +192,15 @@ impl ClusterUpgradeOrchestrator {
         }
 
         if let Some(target) = target.as_ref() {
-            for node in &nodes {
-                let current = semver::Version::parse(&node.version).with_context(|| {
-                    format!(
-                        "node `{}` reported invalid version `{}`",
-                        node.node_id, node.version
-                    )
-                })?;
-                if target < &current {
-                    bail!(
-                        "target version {target} is older than node `{}` version {current}",
-                        node.node_id
-                    );
+            let mut pending = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                if node_requires_upgrade(&node, target)? {
+                    pending.push(node);
                 }
             }
-            nodes.retain(|node| node.version != target.to_string());
+            nodes = pending;
             if nodes.is_empty() {
-                bail!("every live cluster node already reports version {target}");
+                bail!("every live cluster node already meets minimum version {target}");
             }
         }
 
@@ -271,7 +263,7 @@ impl ClusterUpgradeOrchestrator {
                 node_id: None,
                 message: match kind {
                     ClusterMaintenanceKind::Upgrade => {
-                        format!("cluster frozen for rolling upgrade to {target_version}")
+                        format!("cluster frozen for rolling upgrade to at least {target_version}")
                     }
                     ClusterMaintenanceKind::Restart => {
                         format!("cluster frozen for rolling restart of {scope}")
@@ -283,7 +275,7 @@ impl ClusterUpgradeOrchestrator {
         let freeze = ClusterFreeze {
             reason: match kind {
                 ClusterMaintenanceKind::Upgrade => {
-                    format!("rolling upgrade to {target_version}")
+                    format!("rolling upgrade to at least {target_version}")
                 }
                 ClusterMaintenanceKind::Restart => format!("rolling restart of {scope}"),
             },
@@ -525,7 +517,7 @@ impl ClusterUpgradeOrchestrator {
         {
             let message = match run.kind {
                 ClusterMaintenanceKind::Upgrade => {
-                    "node reports the target version; verifying health".to_string()
+                    "node reports at least the requested version; verifying health".to_string()
                 }
                 ClusterMaintenanceKind::Restart => {
                     "node reports a new process instance; verifying health".to_string()
@@ -644,7 +636,8 @@ impl ClusterUpgradeOrchestrator {
         } else {
             let message = match run.kind {
                 ClusterMaintenanceKind::Upgrade => {
-                    "upgrade accepted; waiting for exact version and health".to_string()
+                    "upgrade accepted; waiting for the requested-or-newer version and health"
+                        .to_string()
                 }
                 ClusterMaintenanceKind::Restart => {
                     "restart accepted; waiting for a new process instance and health".to_string()
@@ -758,7 +751,11 @@ impl ClusterUpgradeOrchestrator {
         if action_completed && healthy {
             let message = match run.kind {
                 ClusterMaintenanceKind::Upgrade => {
-                    "target version and node health verified".to_string()
+                    let version = node
+                        .expect("completed upgrade node is live")
+                        .version
+                        .as_str();
+                    format!("node version {version} and health verified")
                 }
                 ClusterMaintenanceKind::Restart => {
                     "new process instance and node health verified".to_string()
@@ -791,7 +788,7 @@ impl ClusterUpgradeOrchestrator {
                 &mut run,
                 now_ms,
                 &node_id,
-                "node reported the target version",
+                "node reported at least the requested version",
             );
         }
         if node.is_none() && should_start_restart_deadline_for_offline(&run, &progress) {
@@ -806,7 +803,7 @@ impl ClusterUpgradeOrchestrator {
                         .and_then(|node| node.upgrade_stage)
                         .map_or_else(|| "unreported".to_string(), |stage| stage.to_string());
                     format!(
-                        "node `{node_id}` did not complete its upgrade within six hours: expected version {}, reported {reported}, healthy={healthy}, last stage={stage}",
+                        "node `{node_id}` did not complete its upgrade within six hours: expected at least version {}, reported {reported}, healthy={healthy}, last stage={stage}",
                         run.target_version
                     )
                 }
@@ -1015,6 +1012,16 @@ async fn restore_maintenance_node_states(
     Ok(restored)
 }
 
+fn node_requires_upgrade(node: &NodeInfo, minimum: &semver::Version) -> Result<bool> {
+    let current = semver::Version::parse(&node.version).with_context(|| {
+        format!(
+            "node `{}` reported invalid version `{}`",
+            node.node_id, node.version
+        )
+    })?;
+    Ok(current < *minimum)
+}
+
 fn single_voter_maintenance_preserves_quorum(live_voter_count: usize) -> bool {
     live_voter_count != 2
 }
@@ -1138,13 +1145,16 @@ fn record_restart_started(run: &mut UpgradeRun, now_ms: i64, node_id: &str, reas
         at_ms: now_ms,
         phase: run.phase,
         node_id: Some(node_id.to_string()),
-        message: format!("{reason}; waiting for target version and health"),
+        message: format!("{reason}; waiting for the requested-or-newer version and health"),
     });
 }
 
 fn node_completed_action(run: &UpgradeRun, node: &NodeInfo) -> bool {
     match run.kind {
-        ClusterMaintenanceKind::Upgrade => node.version == run.target_version,
+        ClusterMaintenanceKind::Upgrade => semver::Version::parse(&node.version)
+            .ok()
+            .zip(semver::Version::parse(&run.target_version).ok())
+            .is_some_and(|(reported, minimum)| reported >= minimum),
         ClusterMaintenanceKind::Restart => run
             .current_node()
             .and_then(|step| step.from_instance_id.as_deref())
@@ -1242,6 +1252,20 @@ mod tests {
         assert!(!UpgradePhase::Verifying.is_terminal());
         assert!(UpgradePhase::Succeeded.is_terminal());
         assert!(UpgradePhase::Failed.is_terminal());
+    }
+
+    #[test]
+    fn only_nodes_below_the_requested_minimum_require_upgrade() {
+        let minimum = semver::Version::new(2, 0, 0);
+        let mut current = node("worker", NodeRole::Worker);
+        current.version = "1.9.9".to_string();
+        assert!(node_requires_upgrade(&current, &minimum).unwrap());
+        current.version = "2.0.0".to_string();
+        assert!(!node_requires_upgrade(&current, &minimum).unwrap());
+        current.version = "2.1.0".to_string();
+        assert!(!node_requires_upgrade(&current, &minimum).unwrap());
+        current.version = "invalid".to_string();
+        assert!(node_requires_upgrade(&current, &minimum).is_err());
     }
 
     #[tokio::test]
@@ -1544,6 +1568,48 @@ mod tests {
             &run,
             1_000 + RESTART_VERIFY_TIMEOUT_MS
         ));
+    }
+
+    #[test]
+    fn upgrade_completion_accepts_the_requested_or_a_newer_version() {
+        let mut current = node("worker", NodeRole::Worker);
+        let run = UpgradeRun {
+            run_id: "upgrade-1".to_string(),
+            kind: ClusterMaintenanceKind::Upgrade,
+            target_version: "2.0.0".to_string(),
+            requested_at_ms: 0,
+            updated_at_ms: 0,
+            requested_by_node_id: "leader".to_string(),
+            phase: UpgradePhase::Verifying,
+            phase_started_at_ms: 0,
+            current_node_index: 0,
+            nodes: vec![UpgradeNodeStep {
+                node_id: "worker".to_string(),
+                hostname: "worker".to_string(),
+                role: NodeRole::Worker,
+                from_version: "1.0.0".to_string(),
+                from_instance_id: Some(current.instance_id.clone()),
+                status: UpgradeNodeStatus::Verifying,
+                started_at_ms: Some(0),
+                completed_at_ms: None,
+                upgrade_started_at_ms: Some(0),
+                last_upgrade_request_at_ms: Some(0),
+                upgrade_stage: Some(crate::cluster::SystemUpgradeStage::Restarting),
+                restart_started_at_ms: Some(0),
+                error: None,
+            }],
+            history: Vec::new(),
+            failure: None,
+        };
+
+        current.version = "1.9.9".to_string();
+        assert!(!node_completed_action(&run, &current));
+        current.version = "2.0.0".to_string();
+        assert!(node_completed_action(&run, &current));
+        current.version = "2.1.0".to_string();
+        assert!(node_completed_action(&run, &current));
+        current.version = "invalid".to_string();
+        assert!(!node_completed_action(&run, &current));
     }
 
     #[test]

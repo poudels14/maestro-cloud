@@ -65,7 +65,7 @@ pub async fn run_upgrade(host: &str, yes: bool) -> Result<()> {
 async fn run_coordinated_upgrade(host: &str, yes: bool) -> Result<()> {
     let confirmed = crate::cli::confirm::confirm_action(
         host,
-        &format!("About to roll every cluster node to Maestro {CLIENT_VERSION}"),
+        &format!("About to roll every cluster node to Maestro {CLIENT_VERSION} or newer"),
         &[
             "Deploys will be frozen for the duration of the run".to_string(),
             "Nodes will drain and restart serially".to_string(),
@@ -204,7 +204,7 @@ pub(crate) async fn stream_cluster_maintenance(
             return if run.phase == crate::cluster::UpgradePhase::Succeeded {
                 match run.kind {
                     crate::cluster::ClusterMaintenanceKind::Upgrade => println!(
-                        "[maestro]: cluster upgrade `{}` completed at version {}",
+                        "[maestro]: cluster upgrade `{}` completed at or above requested version {}",
                         run.run_id, run.target_version
                     ),
                     crate::cluster::ClusterMaintenanceKind::Restart => {
@@ -258,7 +258,7 @@ pub(crate) async fn stream_cluster_maintenance(
 pub async fn run_upgrade_system(host: &str, yes: bool) -> Result<()> {
     let confirmed = crate::cli::confirm::confirm_action(
         host,
-        &format!("About to upgrade the host operating system to Maestro {CLIENT_VERSION}"),
+        &format!("About to upgrade the host operating system to Maestro {CLIENT_VERSION} or newer"),
         &[],
         yes,
     )
@@ -294,12 +294,12 @@ pub async fn run_upgrade_system(host: &str, yes: bool) -> Result<()> {
         let target_version = payload.target_version.as_deref().unwrap_or(CLIENT_VERSION);
         if let Some(current_version) = payload.current_version.as_deref() {
             println!(
-                "[maestro]: system upgrade accepted ({current_version} -> {target_version}, system: {}), the system will update and reboot",
+                "[maestro]: system upgrade accepted ({current_version} -> {target_version} or newer, system: {}), the system will update and reboot",
                 payload.system
             );
         } else {
             println!(
-                "[maestro]: system upgrade to {target_version} accepted (system: {}), the system will update and reboot",
+                "[maestro]: system upgrade to {target_version} or newer accepted (system: {}), the system will update and reboot",
                 payload.system
             );
         }

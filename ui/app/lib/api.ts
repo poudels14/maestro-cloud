@@ -28,8 +28,24 @@ export interface ClusterInfo {
   version?: string;
   upgrading?: boolean;
   restarting?: boolean;
-  upgradeRun?: { requestedAtMs: number } | null;
+  upgradeRun?: ClusterMaintenanceRun | null;
   nodes?: ClusterNode[];
+}
+
+export interface ClusterMaintenanceNodeStep {
+  nodeId: string;
+  hostname: string;
+  status: string;
+  upgradeStage?: string | null;
+}
+
+export interface ClusterMaintenanceRun {
+  kind: "upgrade" | "restart";
+  targetVersion: string;
+  requestedAtMs: number;
+  phase: string;
+  currentNodeIndex: number;
+  nodes: ClusterMaintenanceNodeStep[];
 }
 
 export async function getClusterNodes(): Promise<ClusterNode[]> {
