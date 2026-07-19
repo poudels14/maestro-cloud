@@ -22,7 +22,7 @@ export default defineConfig({
         enabled: false
       }
     }),
-    nitro({ features: { websocket: true } }),
+    nitro({ serverDir: "server", features: { websocket: true } }),
     viteSolid({
       ssr: true,
       hot: false

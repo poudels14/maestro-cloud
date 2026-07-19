@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from dns_http import http_server_loop
 
@@ -26,11 +27,38 @@ DNS_PORT = 53
 DNS_UPSTREAM_IS_COREDNS = "MAESTRO_DNS_UPSTREAM" in os.environ
 DNS_UPSTREAM = "127.0.0.1" if DNS_UPSTREAM_IS_COREDNS else "127.0.0.11"
 DNS_UPSTREAM_PORT = 5353 if DNS_UPSTREAM_IS_COREDNS else DNS_PORT
+TAILSCALE_SOCKS5_ADDRESS = ("127.0.0.1", 1055)
+NETWORK_TIMEOUT = 5
+DNS_WORKERS = 16
+DNS_QUEUE_CAPACITY = 128
 ROOT_DOMAIN = ["maestro", "internal"]
 PEER_REFRESH_INTERVAL = 15
 # Used to verify that a peer is a maestro DNS proxy
 MAGIC_QUERY = "_maestro-dns"
 MAGIC_RESPONSE = "maestro-dns-ok"
+
+
+class BoundedWorkerPool:
+    def __init__(self, max_workers, max_queued, thread_name_prefix):
+        self._slots = threading.BoundedSemaphore(max_workers + max_queued)
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix=thread_name_prefix,
+        )
+
+    def submit(self, function, *args):
+        if not self._slots.acquire(blocking=False):
+            return False
+        try:
+            future = self._executor.submit(function, *args)
+        except Exception:
+            self._slots.release()
+            raise
+        future.add_done_callback(lambda _: self._slots.release())
+        return True
+
+    def shutdown(self):
+        self._executor.shutdown(wait=True)
 
 
 def read_name(data, offset):
@@ -79,10 +107,94 @@ def build_txt_response(query_data, qname_end, txt_value):
     return txn_id + flags + counts + question + answer
 
 
+def build_servfail_response(query_data):
+    if len(query_data) < 12:
+        return None
+    try:
+        question_count = struct.unpack("!H", query_data[4:6])[0]
+        if question_count != 1:
+            return None
+        _, qname_end = read_name(query_data, 12)
+        question_end = qname_end + 4
+        if question_end > len(query_data):
+            return None
+    except (IndexError, struct.error):
+        return None
+
+    query_flags = struct.unpack("!H", query_data[2:4])[0]
+    response_flags = 0x8000 | (query_flags & 0x7910) | 0x0080 | 0x0002
+    return (
+        query_data[:2]
+        + struct.pack("!H", response_flags)
+        + struct.pack("!HHHH", 1, 0, 0, 0)
+        + query_data[12:question_end]
+    )
+
+
 def resolve_upstream(sock, query_data, upstream_host, upstream_port=DNS_PORT):
     sock.sendto(query_data, (upstream_host, upstream_port))
     response, _ = sock.recvfrom(4096)
     return response
+
+
+def read_exact(sock, length):
+    chunks = []
+    remaining = length
+    while remaining:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise ConnectionError("peer DNS connection closed before the response completed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def connect_tailnet_tcp(peer_ip, peer_port):
+    sock = socket.create_connection(TAILSCALE_SOCKS5_ADDRESS, timeout=NETWORK_TIMEOUT)
+    try:
+        sock.sendall(b"\x05\x01\x00")
+        if read_exact(sock, 2) != b"\x05\x00":
+            raise ConnectionError("Tailscale SOCKS5 proxy rejected unauthenticated access")
+
+        try:
+            packed_ip = socket.inet_aton(peer_ip)
+        except OSError as error:
+            raise ValueError(f"invalid Tailscale IPv4 address: {peer_ip}") from error
+
+        sock.sendall(
+            b"\x05\x01\x00\x01" + packed_ip + struct.pack("!H", peer_port)
+        )
+        version, status, _, address_type = read_exact(sock, 4)
+        if version != 5:
+            raise ConnectionError(f"invalid SOCKS5 response version: {version}")
+        if status != 0:
+            raise ConnectionError(
+                f"Tailscale SOCKS5 connection to {peer_ip}:{peer_port} failed with status {status}"
+            )
+
+        if address_type == 1:
+            address_length = 4
+        elif address_type == 4:
+            address_length = 16
+        elif address_type == 3:
+            address_length = read_exact(sock, 1)[0]
+        else:
+            raise ConnectionError(f"invalid SOCKS5 address type: {address_type}")
+        read_exact(sock, address_length + 2)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def resolve_peer(query_data, peer_ip):
+    sock = connect_tailnet_tcp(peer_ip, DNS_PORT)
+    try:
+        sock.sendall(struct.pack("!H", len(query_data)) + query_data)
+        response_length = struct.unpack("!H", read_exact(sock, 2))[0]
+        return read_exact(sock, response_length)
+    finally:
+        sock.close()
 
 
 def resolve_local(sock, data, original_qname, bare_labels, canonical_cluster, qname_end, upstream=None):
@@ -93,10 +205,13 @@ def resolve_local(sock, data, original_qname, bare_labels, canonical_cluster, qn
         response = resolve_upstream(sock, rewritten, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
         return response.replace(canonical_qname, original_qname)
     else:
-        target = upstream or DNS_UPSTREAM
         bare_qname = encode_name(bare_labels)
         rewritten = data[:12] + bare_qname + data[qname_end:]
-        response = resolve_upstream(sock, rewritten, target)
+        response = (
+            resolve_peer(rewritten, upstream)
+            if upstream
+            else resolve_upstream(sock, rewritten, DNS_UPSTREAM)
+        )
         return response.replace(bare_qname, original_qname)
 
 
@@ -107,14 +222,8 @@ def verify_peer(ip):
         header = txn_id + struct.pack("!HHHHH", 0x0100, 1, 0, 0, 0)
         qtype_class = struct.pack("!HH", 16, 1)
         query = header + query_name + qtype_class
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(3)
-        try:
-            sock.sendto(query, (ip, DNS_PORT))
-            response, _ = sock.recvfrom(4096)
-            return MAGIC_RESPONSE.encode("ascii") in response
-        finally:
-            sock.close()
+        response = resolve_peer(query, ip)
+        return MAGIC_RESPONSE.encode("ascii") in response
     except Exception:
         return False
 
@@ -289,9 +398,9 @@ def handle_dns_query(data, my_cluster, my_alias, state, lock):
                         upstream_sock, data, original_qname, bare_labels, my_cluster, qname_end
                     )
                 elif peer_ip:
-                    return resolve_upstream(upstream_sock, data, peer_ip, DNS_PORT)
+                    return resolve_peer(data, peer_ip)
                 elif alias_owner and alias_owner in peers:
-                    return resolve_upstream(upstream_sock, data, peers[alias_owner], DNS_PORT)
+                    return resolve_peer(data, peers[alias_owner])
                 else:
                     return resolve_upstream(upstream_sock, data, DNS_UPSTREAM, DNS_UPSTREAM_PORT)
 
@@ -311,14 +420,10 @@ def handle_dns_query(data, my_cluster, my_alias, state, lock):
 
 def handle_tcp_client(conn, my_cluster, my_alias, state, lock):
     try:
-        conn.settimeout(5)
-        length_bytes = conn.recv(2)
-        if len(length_bytes) < 2:
-            return
+        conn.settimeout(NETWORK_TIMEOUT)
+        length_bytes = read_exact(conn, 2)
         msg_len = struct.unpack("!H", length_bytes)[0]
-        data = conn.recv(msg_len)
-        if len(data) < msg_len:
-            return
+        data = read_exact(conn, msg_len)
         response = handle_dns_query(data, my_cluster, my_alias, state, lock)
         if response:
             conn.sendall(struct.pack("!H", len(response)) + response)
@@ -328,17 +433,49 @@ def handle_tcp_client(conn, my_cluster, my_alias, state, lock):
         conn.close()
 
 
-def tcp_listener_loop(tcp_server, my_cluster, my_alias, state, lock):
+def tcp_listener_loop(tcp_server, my_cluster, my_alias, state, lock, worker_pool):
     while True:
         try:
             conn, _ = tcp_server.accept()
-            threading.Thread(
-                target=handle_tcp_client,
-                args=(conn, my_cluster, my_alias, state, lock),
-                daemon=True,
-            ).start()
+            if not worker_pool.submit(
+                handle_tcp_client,
+                conn,
+                my_cluster,
+                my_alias,
+                state,
+                lock,
+            ):
+                conn.close()
         except Exception as err:
             print(f"tcp accept error: {err}", file=sys.stderr, flush=True)
+
+
+def handle_udp_client(server, data, addr, my_cluster, my_alias, state, lock):
+    try:
+        response = handle_dns_query(data, my_cluster, my_alias, state, lock)
+        if response:
+            server.sendto(response, addr)
+    except Exception as err:
+        print(f"dns error for {addr}: {err}", file=sys.stderr, flush=True)
+
+
+def dispatch_udp_client(server, data, addr, my_cluster, my_alias, state, lock, worker_pool):
+    if worker_pool.submit(
+        handle_udp_client,
+        server,
+        data,
+        addr,
+        my_cluster,
+        my_alias,
+        state,
+        lock,
+    ):
+        return True
+
+    response = build_servfail_response(data)
+    if response:
+        server.sendto(response, addr)
+    return False
 
 
 def main():
@@ -376,9 +513,20 @@ def main():
     tcp_server.bind(("0.0.0.0", DNS_PORT))
     tcp_server.listen(16)
 
+    udp_worker_pool = BoundedWorkerPool(
+        DNS_WORKERS,
+        DNS_QUEUE_CAPACITY,
+        "dns-udp",
+    )
+    tcp_worker_pool = BoundedWorkerPool(
+        DNS_WORKERS,
+        DNS_QUEUE_CAPACITY,
+        "dns-tcp",
+    )
+
     tcp_thread = threading.Thread(
         target=tcp_listener_loop,
-        args=(tcp_server, my_cluster, my_alias, state, lock),
+        args=(tcp_server, my_cluster, my_alias, state, lock, tcp_worker_pool),
         daemon=True,
     )
     tcp_thread.start()
@@ -392,12 +540,16 @@ def main():
 
     while True:
         data, addr = server.recvfrom(4096)
-        try:
-            response = handle_dns_query(data, my_cluster, my_alias, state, lock)
-            if response:
-                server.sendto(response, addr)
-        except Exception as err:
-            print(f"dns error for {addr}: {err}", file=sys.stderr, flush=True)
+        dispatch_udp_client(
+            server,
+            data,
+            addr,
+            my_cluster,
+            my_alias,
+            state,
+            lock,
+            udp_worker_pool,
+        )
 
 
 if __name__ == "__main__":

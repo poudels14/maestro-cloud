@@ -1725,6 +1725,8 @@ fn tailscale_container_network_flags(advertise_routes: &str) -> Vec<String> {
         format!("TS_ROUTES={advertise_routes}"),
         "-e".to_string(),
         "TS_USERSPACE=true".to_string(),
+        "-e".to_string(),
+        "TS_SOCKS5_SERVER=127.0.0.1:1055".to_string(),
     ]
 }
 
@@ -2112,7 +2114,9 @@ mod tests {
                 "-e",
                 "TS_ROUTES=172.22.1.0/24,10.40.0.0/16",
                 "-e",
-                "TS_USERSPACE=true"
+                "TS_USERSPACE=true",
+                "-e",
+                "TS_SOCKS5_SERVER=127.0.0.1:1055"
             ]
         );
     }
