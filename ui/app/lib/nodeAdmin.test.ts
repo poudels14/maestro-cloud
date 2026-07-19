@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ClusterNode } from "./types";
-import { nodeAdminUrl } from "./nodeAdmin.ts";
+import { nodeAdminLabel, nodeAdminUrl } from "./nodeAdmin.ts";
 
 const node = {
   nodeId: "node-a",
@@ -22,4 +22,10 @@ test("resolves the selected replica node admin homepage", () => {
   assert.equal(nodeAdminUrl([node], "node-a"), "http://10.51.0.250");
   assert.equal(nodeAdminUrl([node], "missing"), null);
   assert.equal(nodeAdminUrl(undefined, "node-a"), null);
+});
+
+test("labels node admin URLs with only nonstandard ports", () => {
+  assert.equal(nodeAdminLabel("http://10.51.0.250"), "10.51.0.250");
+  assert.equal(nodeAdminLabel("https://admin.example.com"), "admin.example.com");
+  assert.equal(nodeAdminLabel("http://10.51.0.250:8080"), "10.51.0.250:8080");
 });

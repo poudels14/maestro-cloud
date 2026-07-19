@@ -1,9 +1,11 @@
 import { For, Show, createSignal } from "solid-js";
+import { ExternalLink } from "lucide-solid";
 import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { clusterConfigQuery, clusterInfoQuery, clusterNodesQuery } from "../../lib/queries";
 import { setNodeDrain } from "../../lib/api";
 import { isCurrentMaster } from "../../lib/clusterLeadership";
+import { nodeAdminLabel } from "../../lib/nodeAdmin";
 
 function NodesSection() {
   const nodes = useQuery(() => clusterNodesQuery());
@@ -61,17 +63,18 @@ function NodesSection() {
             </div>
           </div>
         </Show>
-        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div class="grid grid-cols-[minmax(9rem,1.4fr)_7rem_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500">
+        <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+          <div class="grid min-w-[54rem] grid-cols-[minmax(9rem,1.4fr)_6rem_6rem_minmax(10rem,1fr)_minmax(8rem,1fr)_7rem] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500">
             <span>Node</span>
             <span>Role</span>
-            <span>Control</span>
+            <span>Version</span>
+            <span>Admin</span>
             <span>Workload subnet</span>
             <span class="text-right">Action</span>
           </div>
           <For each={nodes.data ?? []}>
             {(node) => (
-              <div class="grid grid-cols-[minmax(9rem,1.4fr)_7rem_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem] items-center gap-3 border-b border-gray-100 px-4 py-3 text-xs last:border-b-0">
+              <div class="grid min-w-[54rem] grid-cols-[minmax(9rem,1.4fr)_6rem_6rem_minmax(10rem,1fr)_minmax(8rem,1fr)_7rem] items-center gap-3 border-b border-gray-100 px-4 py-3 text-xs last:border-b-0">
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
                     <span
@@ -103,9 +106,24 @@ function NodesSection() {
                   </Show>
                 </div>
                 <span class="text-gray-600">{node.role}</span>
-                <span class="font-mono text-[11px] text-gray-600">
-                  {node.clusterHostIp}:{node.clusterApiPort}
-                </span>
+                <span class="font-mono text-[11px] text-gray-600">v{node.version}</span>
+                <Show
+                  when={node.adminUrl}
+                  fallback={<span class="text-[11px] text-gray-400">Unavailable</span>}
+                >
+                  {(adminUrl) => (
+                    <a
+                      href={adminUrl()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="group inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-indigo-600 hover:decoration-indigo-300"
+                      title="Open node admin homepage"
+                    >
+                      <span class="truncate">{nodeAdminLabel(adminUrl())}</span>
+                      <ExternalLink class="size-3 shrink-0 text-gray-400 group-hover:text-indigo-500" />
+                    </a>
+                  )}
+                </Show>
                 <span class="font-mono text-[11px] text-gray-600">{node.subnet}</span>
                 <button
                   type="button"
