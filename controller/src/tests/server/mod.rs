@@ -433,25 +433,25 @@ fn validate_service_id_rejects_non_url_safe_chars() {
 
 #[test]
 fn upgrade_accepts_only_a_higher_semantic_version() {
-    let (current, target) = validate_upgrade_version("1.2.3", "1.3.0").expect("higher version");
+    let (current, target, required) =
+        validate_upgrade_version("1.2.3", "1.3.0").expect("higher version");
     assert_eq!(current.to_string(), "1.2.3");
     assert_eq!(target.to_string(), "1.3.0");
+    assert!(required);
 }
 
 #[test]
-fn upgrade_rejects_an_equal_semantic_version() {
-    assert!(matches!(
-        validate_upgrade_version("1.2.3", "1.2.3"),
-        Err(UpgradeVersionError::NotNewer { .. })
-    ));
+fn upgrade_treats_an_equal_semantic_version_as_already_satisfied() {
+    let (_, _, required) =
+        validate_upgrade_version("1.2.3", "1.2.3").expect("equal version is idempotent");
+    assert!(!required);
 }
 
 #[test]
-fn upgrade_rejects_a_lower_semantic_version() {
-    assert!(matches!(
-        validate_upgrade_version("1.2.3", "1.2.2"),
-        Err(UpgradeVersionError::NotNewer { .. })
-    ));
+fn upgrade_treats_a_lower_semantic_version_as_already_satisfied() {
+    let (_, _, required) =
+        validate_upgrade_version("1.2.3", "1.2.2").expect("lower target is idempotent");
+    assert!(!required);
 }
 
 #[test]

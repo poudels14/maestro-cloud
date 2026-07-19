@@ -76,22 +76,16 @@ const MAX_EXEC_SESSIONS: usize = 8;
 enum UpgradeVersionError {
     InvalidCurrent(semver::Error),
     InvalidTarget(semver::Error),
-    NotNewer {
-        current: semver::Version,
-        target: semver::Version,
-    },
 }
 
 fn validate_upgrade_version(
     current: &str,
     target: &str,
-) -> Result<(semver::Version, semver::Version), UpgradeVersionError> {
+) -> Result<(semver::Version, semver::Version, bool), UpgradeVersionError> {
     let current = semver::Version::parse(current).map_err(UpgradeVersionError::InvalidCurrent)?;
     let target = semver::Version::parse(target).map_err(UpgradeVersionError::InvalidTarget)?;
-    if target <= current {
-        return Err(UpgradeVersionError::NotNewer { current, target });
-    }
-    Ok((current, target))
+    let upgrade_required = target > current;
+    Ok((current, target, upgrade_required))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2920,31 +2914,39 @@ impl Server {
                 "upgrade runId cannot be empty".to_string(),
             ));
         }
-        let (current_version, target_version) = validate_upgrade_version(
-            MAESTRO_VERSION,
-            requested_version,
-        )
-        .map_err(|err| match err {
-            UpgradeVersionError::InvalidCurrent(source) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("invalid running Maestro version `{MAESTRO_VERSION}`: {source}"),
-            ),
-            UpgradeVersionError::InvalidTarget(source) => (
-                StatusCode::BAD_REQUEST,
-                format!("invalid upgrade version `{requested_version}`: {source}"),
-            ),
-            UpgradeVersionError::NotNewer { current, target } => (
-                StatusCode::CONFLICT,
-                format!("upgrade version {target} must be greater than current version {current}"),
-            ),
-        })?;
+        let (current_version, target_version, upgrade_required) =
+            validate_upgrade_version(MAESTRO_VERSION, requested_version).map_err(
+                |err| match err {
+                    UpgradeVersionError::InvalidCurrent(source) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("invalid running Maestro version `{MAESTRO_VERSION}`: {source}"),
+                    ),
+                    UpgradeVersionError::InvalidTarget(source) => (
+                        StatusCode::BAD_REQUEST,
+                        format!("invalid upgrade version `{requested_version}`: {source}"),
+                    ),
+                },
+            )?;
         let system_type = state.system_type.as_deref().unwrap_or("controller");
+        if !upgrade_required {
+            eprintln!(
+                "upgrade request already satisfied system={system_type} current_version={current_version} target_version={target_version}"
+            );
+            return Ok(Json(json!({
+                "accepted": false,
+                "alreadySatisfied": true,
+                "system": system_type,
+                "currentVersion": current_version.to_string(),
+                "targetVersion": target_version.to_string(),
+            })));
+        }
         eprintln!(
             "upgrade request system={system_type} current_version={current_version} target_version={target_version}"
         );
         let stored_request =
             StoredSystemUpgradeRequest::new(system_type, target_version.to_string())
-                .with_run_id(run_id.map(str::to_string));
+                .with_run_id(run_id.map(str::to_string))
+                .with_attempt_id(request.attempt_id);
         state
             .store
             .put_system_upgrade_request(state.local_node_id.as_deref(), &stored_request)

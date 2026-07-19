@@ -98,17 +98,31 @@ server.serve_forever()
 "#;
 
 #[derive(Clone)]
-struct RestartNodeApiState {
+struct MaintenanceNodeApiState {
     node: NodeInfo,
     registry: Arc<InMemoryNodeRegistry>,
-    requests: Arc<std::sync::Mutex<Vec<String>>>,
+    restart_requests: Arc<std::sync::Mutex<Vec<String>>>,
+    upgrade_observations: Arc<std::sync::Mutex<Vec<UpgradeObservation>>>,
+    upgrade_attempts: Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
+    fail_first_upgrade: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UpgradeObservation {
+    node_id: String,
+    drained_nodes: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct TestUpgradeRequest {
+    version: String,
 }
 
 async fn restart_test_node(
-    axum::extract::State(state): axum::extract::State<RestartNodeApiState>,
+    axum::extract::State(state): axum::extract::State<MaintenanceNodeApiState>,
 ) -> axum::Json<serde_json::Value> {
     state
-        .requests
+        .restart_requests
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .push(state.node.node_id.clone());
@@ -124,6 +138,63 @@ async fn restart_test_node(
     restarted.started_at_ms = restarted.started_at_ms.saturating_add(1);
     state.registry.insert_for_test(restarted);
     axum::Json(serde_json::json!({ "accepted": true }))
+}
+
+async fn upgrade_test_node(
+    axum::extract::State(state): axum::extract::State<MaintenanceNodeApiState>,
+    axum::Json(request): axum::Json<TestUpgradeRequest>,
+) -> std::result::Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
+    let nodes = state
+        .registry
+        .list_nodes()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut drained_nodes = Vec::new();
+    for node in nodes {
+        let node_state = state
+            .registry
+            .get_node_state(&node.node_id)
+            .await
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+        if node_state.unschedulable {
+            drained_nodes.push(node.node_id);
+        }
+    }
+    drained_nodes.sort();
+    state
+        .upgrade_observations
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(UpgradeObservation {
+            node_id: state.node.node_id.clone(),
+            drained_nodes,
+        });
+    let attempt = {
+        let mut attempts = state
+            .upgrade_attempts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let attempt = attempts.entry(state.node.node_id.clone()).or_default();
+        *attempt += 1;
+        *attempt
+    };
+    if state.fail_first_upgrade && attempt == 1 {
+        return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let mut upgraded = state
+        .registry
+        .list_nodes()
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .find(|node| node.node_id == state.node.node_id)
+        .unwrap_or(state.node);
+    upgraded.instance_id = format!("{}-upgraded-{attempt}", upgraded.instance_id);
+    upgraded.started_at_ms = upgraded.started_at_ms.saturating_add(1);
+    upgraded.version = request.version;
+    state.registry.insert_for_test(upgraded);
+    Ok(axum::Json(serde_json::json!({ "accepted": true })))
 }
 
 async fn restart_test_healthy() -> axum::http::StatusCode {
@@ -2525,20 +2596,27 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     Ok(())
 }
 
-/// Drives the production maintenance state machine against real etcd fencing and two real
-/// electors. Simulated node APIs replace their process instance on restart, allowing the test to
-/// verify worker/follower/leader order, leadership transfer, health verification, restoration,
-/// and removal of the cluster-wide deployment freeze.
+/// Drives the production rolling-upgrade state machine against real etcd fencing and two real
+/// electors. Simulated node APIs restart their controller at the requested version instead of
+/// mutating the host NixOS system. The first worker attempt fails so the test also proves that the
+/// durable cluster target advances through the healthy nodes, then retries the failed node.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
-async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Result<()> {
+async fn multinode_rolling_upgrade_retries_and_restores_nodes_serially() -> Result<()> {
     let etcd = ContainerEtcdCluster::start()?;
     etcd.wait_until_ready().await?;
-    let endpoints = reserve_node_endpoints(3, Ipv4Addr::LOCALHOST)?;
+    let endpoints = reserve_node_endpoints(4, Ipv4Addr::LOCALHOST)?;
     let registry = Arc::new(InMemoryNodeRegistry::new("test-orchestrator".to_string()));
-    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let roles = [NodeRole::Worker, NodeRole::Voter, NodeRole::Voter];
-    let node_ids = ["node-a", "node-b", "node-c"];
+    let restart_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let upgrade_observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let upgrade_attempts = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+    let roles = [
+        NodeRole::Worker,
+        NodeRole::Voter,
+        NodeRole::Voter,
+        NodeRole::Voter,
+    ];
+    let node_ids = ["node-a", "node-b", "node-c", "node-d"];
     let mut nodes = Vec::new();
     let mut api_handles = Vec::new();
     for (index, endpoint) in endpoints.iter().enumerate() {
@@ -2565,14 +2643,21 @@ async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Re
             tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, endpoint.api_port)).await?;
         let app = axum::Router::new()
             .route(
+                "/api/system/upgrade",
+                axum::routing::post(upgrade_test_node),
+            )
+            .route(
                 "/api/system/restart",
                 axum::routing::post(restart_test_node),
             )
             .route("/_healthy", axum::routing::get(restart_test_healthy))
-            .with_state(RestartNodeApiState {
+            .with_state(MaintenanceNodeApiState {
                 node,
                 registry: registry.clone(),
-                requests: requests.clone(),
+                restart_requests: restart_requests.clone(),
+                upgrade_observations: upgrade_observations.clone(),
+                upgrade_attempts: upgrade_attempts.clone(),
+                fail_first_upgrade: index == 0,
             });
         api_handles.push(tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -2627,26 +2712,29 @@ async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Re
         http,
     );
     let created = leader_orchestrator
-        .create_restart_run(&initial_token, None)
+        .create_run(&initial_token, "2.0.0")
         .await?;
-    assert_eq!(created.kind, super::ClusterMaintenanceKind::Restart);
+    assert_eq!(created.kind, super::ClusterMaintenanceKind::Upgrade);
     assert_eq!(
         created
             .nodes
             .iter()
             .map(|node| node.node_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["node-a", "node-b", "node-c"]
+        vec!["node-a", "node-b", "node-d", "node-c"]
     );
 
-    let completed = tokio::time::timeout(Duration::from_secs(45), async {
+    let completed = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             let run = store
                 .read_cluster_upgrade()
                 .await?
-                .ok_or_else(|| anyhow!("coordinated restart run disappeared"))?;
+                .ok_or_else(|| anyhow!("coordinated upgrade run disappeared"))?;
             if run.phase.is_terminal() {
                 return Result::<super::UpgradeRun>::Ok(run);
+            }
+            if store.read_cluster_freeze().await?.is_none() {
+                bail!("cluster upgrade target was cleared before every node was upgraded");
             }
             match (leader.state(), follower.state()) {
                 (LeadershipState::Leading(token), _) => {
@@ -2657,27 +2745,46 @@ async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Re
                 }
                 _ => tokio::time::sleep(Duration::from_millis(100)).await,
             }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .map_err(|_| anyhow!("coordinated restart did not finish"))??;
+    .map_err(|_| anyhow!("coordinated upgrade did not finish"))??;
     assert_eq!(completed.phase, super::UpgradePhase::Succeeded);
+    let observations = upgrade_observations
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
     assert_eq!(
-        *requests.lock().unwrap_or_else(|error| error.into_inner()),
-        vec![
-            "node-a".to_string(),
-            "node-b".to_string(),
-            "node-c".to_string()
-        ]
+        observations
+            .iter()
+            .map(|observation| observation.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["node-a", "node-b", "node-d", "node-c", "node-a"]
+    );
+    for observation in observations {
+        assert_eq!(observation.drained_nodes, vec![observation.node_id]);
+    }
+    assert_eq!(
+        *upgrade_attempts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+        BTreeMap::from([
+            ("node-a".to_string(), 2),
+            ("node-b".to_string(), 1),
+            ("node-c".to_string(), 1),
+            ("node-d".to_string(), 1),
+        ])
     );
     for node in nodes {
-        let restarted = registry
+        let upgraded = registry
             .list_nodes()
             .await?
             .into_iter()
             .find(|candidate| candidate.node_id == node.node_id)
-            .ok_or_else(|| anyhow!("restarted node `{}` disappeared", node.node_id))?;
-        assert_ne!(restarted.instance_id, node.instance_id);
+            .ok_or_else(|| anyhow!("upgraded node `{}` disappeared", node.node_id))?;
+        assert_ne!(upgraded.instance_id, node.instance_id);
+        assert_eq!(upgraded.version, "2.0.0");
         assert_eq!(
             registry.get_node_state(&node.node_id).await?,
             NodeState::default()
@@ -2719,13 +2826,10 @@ async fn coordinated_restart_drains_verifies_and_restores_nodes_serially() -> Re
     .map_err(|_| anyhow!("selected-node restart did not finish"))??;
     assert_eq!(selected_completed.phase, super::UpgradePhase::Succeeded);
     assert_eq!(
-        *requests.lock().unwrap_or_else(|error| error.into_inner()),
-        vec![
-            "node-a".to_string(),
-            "node-b".to_string(),
-            "node-c".to_string(),
-            "node-a".to_string()
-        ]
+        *restart_requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+        vec!["node-a".to_string()]
     );
     assert!(store.read_cluster_freeze().await?.is_none());
 

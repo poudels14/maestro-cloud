@@ -15,6 +15,8 @@ pub struct SystemUpgradeRequest {
     pub target_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
 }
 
 impl SystemUpgradeRequest {
@@ -23,11 +25,17 @@ impl SystemUpgradeRequest {
             system_type: system_type.into(),
             target_version: Some(target_version.into()),
             run_id: None,
+            attempt_id: None,
         }
     }
 
     pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
         self.run_id = run_id;
+        self
+    }
+
+    pub fn with_attempt_id(mut self, attempt_id: Option<String>) -> Self {
+        self.attempt_id = attempt_id;
         self
     }
 
@@ -43,6 +51,7 @@ impl SystemUpgradeRequest {
                     system_type: system_type.to_string(),
                     target_version: None,
                     run_id: None,
+                    attempt_id: None,
                 })
             }
         }
@@ -58,6 +67,8 @@ impl SystemUpgradeRequest {
 pub struct SystemUpgradeProgress {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub target_version: String,
     pub stage: crate::cluster::SystemUpgradeStage,
     pub updated_at_ms: i64,

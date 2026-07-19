@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tokio::{
     sync::{broadcast, watch},
     task::JoinHandle,
@@ -173,6 +173,29 @@ fn requested_upgrade_version(
     })?;
     semver::Version::parse(target).map_err(|err| {
         anyhow::anyhow!("upgrade request has invalid target version `{target}`: {err}")
+    })
+}
+
+fn running_version_satisfies_upgrade(
+    running_version: &str,
+    target_version: &semver::Version,
+) -> Result<bool> {
+    let running_version = semver::Version::parse(running_version).with_context(|| {
+        format!("running Maestro version `{running_version}` is not valid semantic versioning")
+    })?;
+    Ok(running_version >= *target_version)
+}
+
+fn upgrade_request_is_awaiting_restart(
+    request: &SystemUpgradeRequest,
+    target_version: &str,
+    progress: Option<&SystemUpgradeProgress>,
+) -> bool {
+    progress.is_some_and(|progress| {
+        progress.run_id == request.run_id
+            && progress.attempt_id == request.attempt_id
+            && progress.target_version == target_version
+            && progress.stage.is_restarting()
     })
 }
 
@@ -490,16 +513,14 @@ impl DeploymentController {
                     self.prune_images().await;
                 }
                 _ = sleep(POLL_INTERVAL) => {
-                    if let Some(reason) = self.check_system_upgrade().await {
-                        exit_reason = reason;
-                        if !shutdown_started {
+                    if !shutdown_started {
+                        if let Some(reason) = self.check_system_upgrade().await {
+                            exit_reason = reason;
                             self.shutdown_all(ShutdownRequest::Graceful).await;
                             shutdown_started = true;
                         }
-                    }
-                    if self.check_system_restart().await {
-                        exit_reason = ControllerExitReason::Restart;
-                        if !shutdown_started {
+                        if !shutdown_started && self.check_system_restart().await {
+                            exit_reason = ControllerExitReason::Restart;
                             self.shutdown_all(ShutdownRequest::Graceful).await;
                             shutdown_started = true;
                         }
@@ -554,16 +575,14 @@ impl DeploymentController {
                     }
                 }
                 _ = sleep(POLL_INTERVAL) => {
-                    if let Some(reason) = self.check_system_upgrade().await {
-                        exit_reason = reason;
-                        if !shutdown_started {
+                    if !shutdown_started {
+                        if let Some(reason) = self.check_system_upgrade().await {
+                            exit_reason = reason;
                             self.shutdown_all(ShutdownRequest::Graceful).await;
                             shutdown_started = true;
                         }
-                    }
-                    if self.check_system_restart().await {
-                        exit_reason = ControllerExitReason::Restart;
-                        if !shutdown_started {
+                        if !shutdown_started && self.check_system_restart().await {
+                            exit_reason = ControllerExitReason::Restart;
                             self.shutdown_all(ShutdownRequest::Graceful).await;
                             shutdown_started = true;
                         }
@@ -884,6 +903,7 @@ impl DeploymentController {
     ) {
         let progress = SystemUpgradeProgress {
             run_id: request.run_id.clone(),
+            attempt_id: request.attempt_id.clone(),
             target_version: target_version.to_string(),
             stage,
             updated_at_ms: crate::cluster_stats::now_ms(),
@@ -962,6 +982,53 @@ impl DeploymentController {
             }
         };
         let target_version_string = target_version.to_string();
+        match running_version_satisfies_upgrade(env!("CARGO_PKG_VERSION"), &target_version) {
+            Ok(true) => {
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "system upgrade request already satisfied by Maestro {}; clearing it",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                );
+                if let Err(err) = self
+                    .store
+                    .delete_system_upgrade_request(request_node_id)
+                    .await
+                {
+                    self.logger.emit(
+                        "error",
+                        &format!("failed to clear satisfied system upgrade request: {err}"),
+                    );
+                }
+                return None;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("refusing system upgrade: {err}"),
+                )
+                .await;
+                return None;
+            }
+        }
+        let progress = self
+            .store
+            .read_system_upgrade_progress(request_node_id)
+            .await
+            .ok()
+            .flatten();
+        if upgrade_request_is_awaiting_restart(&request, &target_version_string, progress.as_ref())
+        {
+            self.logger.emit(
+                "info",
+                "system upgrade already queued a reboot; waiting for shutdown",
+            );
+            return Some(ControllerExitReason::Restart);
+        }
         if request.system_type == "nixos" {
             self.report_system_upgrade_progress(
                 request_node_id,
@@ -1125,8 +1192,22 @@ impl DeploymentController {
 
             self.logger
                 .emit("info", "NixOS upgrade complete, rebooting");
+            if let Err(err) = self
+                .store
+                .delete_system_upgrade_request(request_node_id)
+                .await
+            {
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("failed to acknowledge completed NixOS upgrade before reboot: {err}"),
+                )
+                .await;
+                return None;
+            }
             match tokio::process::Command::new("reboot").output().await {
-                Ok(output) if output.status.success() => {}
+                Ok(output) if output.status.success() => Some(ControllerExitReason::Restart),
                 Ok(output) => {
                     self.fail_system_upgrade(
                         request_node_id,
@@ -1138,6 +1219,7 @@ impl DeploymentController {
                         ),
                     )
                     .await;
+                    None
                 }
                 Err(err) => {
                     self.fail_system_upgrade(
@@ -1147,9 +1229,9 @@ impl DeploymentController {
                         format!("failed to run reboot command: {err}"),
                     )
                     .await;
+                    None
                 }
             }
-            None
         } else {
             self.report_system_upgrade_progress(
                 request_node_id,
@@ -1202,6 +1284,20 @@ impl DeploymentController {
             .await;
             self.logger
                 .emit("info", "system images rebuilt, draining and restarting");
+            if let Err(err) = self
+                .store
+                .delete_system_upgrade_request(request_node_id)
+                .await
+            {
+                self.fail_system_upgrade(
+                    request_node_id,
+                    &request,
+                    &target_version_string,
+                    format!("failed to acknowledge completed system upgrade: {err}"),
+                )
+                .await;
+                return None;
+            }
             Some(ControllerExitReason::Restart)
         }
     }
@@ -3117,12 +3213,12 @@ fn prepare_volumes(deployment: &ServiceDeployment) -> std::io::Result<()> {
 #[cfg(test)]
 mod upgrade_source_tests {
     use super::{
-        parse_cargo_package_version, requested_upgrade_version,
-        system_image_build_specs_for_version, validate_nixos_upgrade_source_version,
-        wait_for_demotion, wait_for_promotion,
+        parse_cargo_package_version, requested_upgrade_version, running_version_satisfies_upgrade,
+        system_image_build_specs_for_version, upgrade_request_is_awaiting_restart,
+        validate_nixos_upgrade_source_version, wait_for_demotion, wait_for_promotion,
     };
     use crate::cluster::types::{LeaderInfo, LeadershipState, LeadershipToken};
-    use crate::deployment::store::SystemUpgradeRequest;
+    use crate::deployment::store::{SystemUpgradeProgress, SystemUpgradeRequest};
 
     fn leadership_token() -> LeadershipToken {
         LeadershipToken {
@@ -3203,7 +3299,8 @@ mod upgrade_source_tests {
     #[test]
     fn stored_upgrade_request_preserves_the_requested_minimum_version() {
         let request = SystemUpgradeRequest::new("nixos", "0.3.3")
-            .with_run_id(Some("upgrade-run-1".to_string()));
+            .with_run_id(Some("upgrade-run-1".to_string()))
+            .with_attempt_id(Some("attempt-1".to_string()));
         let encoded = request.to_storage().expect("encode request");
         let decoded = SystemUpgradeRequest::from_storage(&encoded).expect("decode request");
 
@@ -3221,7 +3318,59 @@ mod upgrade_source_tests {
         assert_eq!(request.system_type, "nixos");
         assert!(request.target_version.is_none());
         assert!(request.run_id.is_none());
+        assert!(request.attempt_id.is_none());
         assert!(requested_upgrade_version(&request).is_err());
+    }
+
+    #[test]
+    fn satisfied_upgrade_requests_do_not_run_again() {
+        let target = semver::Version::new(1, 2, 3);
+        assert!(!running_version_satisfies_upgrade("1.2.2", &target).unwrap());
+        assert!(running_version_satisfies_upgrade("1.2.3", &target).unwrap());
+        assert!(running_version_satisfies_upgrade("1.3.0", &target).unwrap());
+        assert!(running_version_satisfies_upgrade("invalid", &target).is_err());
+    }
+
+    #[test]
+    fn an_upgrade_waiting_for_restart_is_not_executed_twice() {
+        let request = SystemUpgradeRequest::new("nixos", "1.2.3")
+            .with_run_id(Some("upgrade-run-1".to_string()))
+            .with_attempt_id(Some("attempt-2".to_string()));
+        let matching = SystemUpgradeProgress {
+            run_id: Some("upgrade-run-1".to_string()),
+            attempt_id: Some("attempt-2".to_string()),
+            target_version: "1.2.3".to_string(),
+            stage: crate::cluster::SystemUpgradeStage::Restarting,
+            updated_at_ms: 10,
+            error: None,
+        };
+        assert!(upgrade_request_is_awaiting_restart(
+            &request,
+            "1.2.3",
+            Some(&matching)
+        ));
+
+        let mut stale = matching.clone();
+        stale.run_id = Some("older-run".to_string());
+        assert!(!upgrade_request_is_awaiting_restart(
+            &request,
+            "1.2.3",
+            Some(&stale)
+        ));
+        let mut previous_attempt = matching.clone();
+        previous_attempt.attempt_id = Some("attempt-1".to_string());
+        assert!(!upgrade_request_is_awaiting_restart(
+            &request,
+            "1.2.3",
+            Some(&previous_attempt)
+        ));
+        let mut still_building = matching;
+        still_building.stage = crate::cluster::SystemUpgradeStage::RebuildingSystem;
+        assert!(!upgrade_request_is_awaiting_restart(
+            &request,
+            "1.2.3",
+            Some(&still_building)
+        ));
     }
 
     #[test]

@@ -364,6 +364,8 @@ pub struct UpgradeNodeStep {
     pub upgrade_stage: Option<SystemUpgradeStage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_not_before_ms: Option<i64>,
     pub error: Option<String>,
 }
 
