@@ -28,7 +28,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Args, CommandFactory, Parser, Subcommand, error::ErrorKind};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use error::Error;
 use signal::spawn_shutdown_signal_bus;
 
@@ -298,11 +298,17 @@ enum ClusterCommand {
     },
     /// Upgrade system components
     #[command(
-        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade system"
+        after_help = "Examples:\n  maestro cluster upgrade\n  maestro cluster upgrade --batch=all\n  maestro cluster upgrade system"
     )]
     Upgrade {
         #[command(subcommand)]
         target: Option<UpgradeTarget>,
+        #[arg(
+            long,
+            value_enum,
+            help = "Upgrade batch strategy (all restarts every node in one batch)"
+        )]
+        batch: Option<UpgradeBatchArg>,
         #[arg(
             short = 'y',
             long = "yes",
@@ -315,6 +321,11 @@ enum ClusterCommand {
         #[arg(long = "upgrade-run", help = "Exact upgrade run ID")]
         upgrade_run: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum UpgradeBatchArg {
+    All,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2219,9 +2230,19 @@ async fn run() -> crate::error::Result<bool> {
                 }
                 .map(|()| false)
             }
-            ClusterCommand::Upgrade { target: _, yes } => {
+            ClusterCommand::Upgrade {
+                target: _,
+                batch,
+                yes,
+            } => {
                 let host = cli::contexts::active_host()?;
-                cli::upgrade::run_upgrade(&host, yes).await.map(|()| false)
+                let batch = match batch {
+                    Some(UpgradeBatchArg::All) => crate::cluster::UpgradeBatch::All,
+                    None => crate::cluster::UpgradeBatch::Rolling,
+                };
+                cli::upgrade::run_upgrade(&host, batch, yes)
+                    .await
+                    .map(|()| false)
             }
             ClusterCommand::Unfreeze { upgrade_run } => {
                 let host = cli::contexts::active_host()?;
@@ -3004,7 +3025,9 @@ mod spool_identity_tests {
 mod cluster_upgrade_cli_tests {
     use clap::Parser;
 
-    use super::{Cli, CliCommand, ClusterCommand, should_run_follower_maintenance};
+    use super::{
+        Cli, CliCommand, ClusterCommand, UpgradeBatchArg, should_run_follower_maintenance,
+    };
 
     fn leadership_token() -> crate::cluster::types::LeadershipToken {
         crate::cluster::types::LeadershipToken {
@@ -3048,6 +3071,7 @@ mod cluster_upgrade_cli_tests {
             Some(CliCommand::Cluster {
                 command: ClusterCommand::Upgrade {
                     target: None,
+                    batch: None,
                     yes: false,
                 }
             })
@@ -3063,6 +3087,7 @@ mod cluster_upgrade_cli_tests {
             Some(CliCommand::Cluster {
                 command: ClusterCommand::Upgrade {
                     target: Some(super::UpgradeTarget::System),
+                    batch: None,
                     yes: false,
                 }
             })
@@ -3070,6 +3095,23 @@ mod cluster_upgrade_cli_tests {
         assert!(
             Cli::try_parse_from(["maestro", "cluster", "upgrade", "--version", "0.3.4"]).is_err()
         );
+    }
+
+    #[test]
+    fn cluster_upgrade_accepts_only_the_all_batch_value() {
+        let cli = Cli::try_parse_from(["maestro", "cluster", "upgrade", "--batch=all"])
+            .expect("parse all-node upgrade batch");
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Upgrade {
+                    target: None,
+                    batch: Some(UpgradeBatchArg::All),
+                    yes: false,
+                }
+            })
+        ));
+        assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "--batch=rolling"]).is_err());
     }
 
     #[test]

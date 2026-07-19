@@ -1,6 +1,7 @@
 use std::{net::IpAddr, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
+use futures_util::future::join_all;
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use tokio::sync::broadcast;
 
@@ -11,8 +12,8 @@ use crate::{
         elector::LeaderElector,
         registry::NodeRegistry,
         types::{
-            ClusterFreeze, ClusterMaintenanceKind, LeadershipState, LeadershipToken, UpgradeEvent,
-            UpgradeNodeStatus, UpgradeNodeStep, UpgradePhase, UpgradeRun,
+            ClusterFreeze, ClusterMaintenanceKind, LeadershipState, LeadershipToken, UpgradeBatch,
+            UpgradeEvent, UpgradeNodeStatus, UpgradeNodeStep, UpgradePhase, UpgradeRun,
         },
     },
     deployment::{
@@ -106,15 +107,22 @@ impl ClusterUpgradeOrchestrator {
         }
     }
 
-    pub async fn create_run(
+    pub async fn create_run_with_batch(
         &self,
         token: &LeadershipToken,
         target_version: &str,
+        batch: UpgradeBatch,
     ) -> Result<UpgradeRun> {
         let target = semver::Version::parse(target_version.trim())
             .with_context(|| format!("invalid target version `{target_version}`"))?;
-        self.create_maintenance_run(token, ClusterMaintenanceKind::Upgrade, Some(target), None)
-            .await
+        self.create_maintenance_run(
+            token,
+            ClusterMaintenanceKind::Upgrade,
+            batch,
+            Some(target),
+            None,
+        )
+        .await
     }
 
     pub async fn create_restart_run(
@@ -122,14 +130,21 @@ impl ClusterUpgradeOrchestrator {
         token: &LeadershipToken,
         node_id: Option<&str>,
     ) -> Result<UpgradeRun> {
-        self.create_maintenance_run(token, ClusterMaintenanceKind::Restart, None, node_id)
-            .await
+        self.create_maintenance_run(
+            token,
+            ClusterMaintenanceKind::Restart,
+            UpgradeBatch::Rolling,
+            None,
+            node_id,
+        )
+        .await
     }
 
     async fn create_maintenance_run(
         &self,
         token: &LeadershipToken,
         kind: ClusterMaintenanceKind,
+        batch: UpgradeBatch,
         target: Option<semver::Version>,
         selected_node_id: Option<&str>,
     ) -> Result<UpgradeRun> {
@@ -214,7 +229,8 @@ impl ClusterUpgradeOrchestrator {
                 bail!("cluster node `{selected_node_id}` is not live");
             }
         }
-        if nodes.iter().any(|node| node.role.is_voter())
+        if batch == UpgradeBatch::Rolling
+            && nodes.iter().any(|node| node.role.is_voter())
             && !single_voter_maintenance_preserves_quorum(live_voter_count)
         {
             bail!(
@@ -232,6 +248,7 @@ impl ClusterUpgradeOrchestrator {
         let run = UpgradeRun {
             run_id: run_id.clone(),
             kind,
+            batch,
             target_version: target_version.clone(),
             requested_at_ms: now_ms,
             updated_at_ms: now_ms,
@@ -245,9 +262,14 @@ impl ClusterUpgradeOrchestrator {
                 phase: UpgradePhase::Draining,
                 node_id: None,
                 message: match kind {
-                    ClusterMaintenanceKind::Upgrade => {
-                        format!("cluster frozen for rolling upgrade to at least {target_version}")
-                    }
+                    ClusterMaintenanceKind::Upgrade => match batch {
+                        UpgradeBatch::Rolling => format!(
+                            "cluster frozen for rolling upgrade to at least {target_version}"
+                        ),
+                        UpgradeBatch::All => format!(
+                            "cluster frozen for all-node upgrade to at least {target_version}"
+                        ),
+                    },
                     ClusterMaintenanceKind::Restart => {
                         format!("cluster frozen for rolling restart of {scope}")
                     }
@@ -257,9 +279,14 @@ impl ClusterUpgradeOrchestrator {
         };
         let freeze = ClusterFreeze {
             reason: match kind {
-                ClusterMaintenanceKind::Upgrade => {
-                    format!("rolling upgrade to at least {target_version}")
-                }
+                ClusterMaintenanceKind::Upgrade => match batch {
+                    UpgradeBatch::Rolling => {
+                        format!("rolling upgrade to at least {target_version}")
+                    }
+                    UpgradeBatch::All => {
+                        format!("all-node upgrade to at least {target_version}")
+                    }
+                },
                 ClusterMaintenanceKind::Restart => format!("rolling restart of {scope}"),
             },
             upgrade_run_id: run_id,
@@ -322,6 +349,9 @@ impl ClusterUpgradeOrchestrator {
             self.restore_maintenance_nodes(token, &run).await?;
             return Ok(());
         }
+        if run.kind == ClusterMaintenanceKind::Upgrade && run.batch == UpgradeBatch::All {
+            return self.tick_all_node_batch(token, run).await;
+        }
         if run.current_node().is_none() {
             return match run.kind {
                 ClusterMaintenanceKind::Upgrade => self.reconcile_upgrade_target(token, run).await,
@@ -339,6 +369,321 @@ impl ClusterUpgradeOrchestrator {
             UpgradePhase::Restoring => self.restore(token, run).await,
             UpgradePhase::Succeeded | UpgradePhase::Failed => Ok(()),
         }
+    }
+
+    async fn tick_all_node_batch(&self, token: &LeadershipToken, run: UpgradeRun) -> Result<()> {
+        match run.phase {
+            UpgradePhase::Draining => self.prepare_all_node_batch(token, run).await,
+            UpgradePhase::UpgradeRequested => self.dispatch_all_node_batch(token, run).await,
+            UpgradePhase::AwaitingLeadershipTransfer
+            | UpgradePhase::SelfRestartPending
+            | UpgradePhase::Verifying
+            | UpgradePhase::Restoring => self.verify_all_node_batch(token, run).await,
+            UpgradePhase::Succeeded | UpgradePhase::Failed => Ok(()),
+        }
+    }
+
+    async fn prepare_all_node_batch(
+        &self,
+        token: &LeadershipToken,
+        mut run: UpgradeRun,
+    ) -> Result<()> {
+        let now_ms = now_millis();
+        for step in &run.nodes {
+            self.registry
+                .set_node_state(
+                    token,
+                    &step.node_id,
+                    NodeState {
+                        unschedulable: true,
+                        drained_at_ms: Some(now_ms),
+                        reason: Some("upgrade".to_string()),
+                    },
+                )
+                .await?;
+        }
+        run.current_node_index = run.nodes.len();
+        transition(
+            &mut run,
+            UpgradePhase::UpgradeRequested,
+            now_ms,
+            None,
+            "all target nodes made unschedulable; dispatching one upgrade batch".to_string(),
+        );
+        self.persist(token, &run, false).await
+    }
+
+    async fn dispatch_all_node_batch(
+        &self,
+        token: &LeadershipToken,
+        mut run: UpgradeRun,
+    ) -> Result<()> {
+        let now_ms = now_millis();
+        let live = self.registry.list_nodes().await?;
+        let requested = mark_all_node_batch_requests(&mut run, &live, now_ms);
+
+        transition(
+            &mut run,
+            UpgradePhase::Verifying,
+            now_ms,
+            None,
+            if requested.is_empty() {
+                "waiting for all-node upgrade targets to return online".to_string()
+            } else {
+                format!(
+                    "dispatching upgrade requests to {} node(s) in one batch",
+                    requested.len()
+                )
+            },
+        );
+
+        // Persist every request watermark before any node can restart. The all-node batch can
+        // temporarily remove etcd quorum, so there may be no opportunity to write again until the
+        // nodes return.
+        self.persist(token, &run, false).await?;
+        if requested.is_empty() {
+            return Ok(());
+        }
+
+        let (leader, followers): (Vec<_>, Vec<_>) = requested
+            .into_iter()
+            .partition(|node| node.node_id == token.info.node_id);
+        let follower_requests = followers
+            .iter()
+            .map(|node| self.send_all_node_batch_request(&run, node));
+        for result in join_all(follower_requests).await {
+            if let Err(error) = result {
+                self.logger.emit("warn", &error.to_string());
+            }
+        }
+        // The coordinator is deliberately last: every other request has reached a response or a
+        // restart-time disconnect before the local controller is allowed to stop.
+        for node in &leader {
+            if let Err(error) = self.send_all_node_batch_request(&run, node).await {
+                self.logger.emit("warn", &error.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_all_node_batch_request(&self, run: &UpgradeRun, node: &NodeInfo) -> Result<()> {
+        let step = run
+            .nodes
+            .iter()
+            .find(|step| step.node_id == node.node_id)
+            .with_context(|| format!("upgrade step for node `{}` disappeared", node.node_id))?;
+        let attempt_id = upgrade_attempt_id(&run.run_id, step);
+        let mut request = self
+            .http
+            .post(self.node_api_url(node, "/api/system/upgrade"))
+            .header(
+                "x-maestro-request-id",
+                format!("upgrade-{}-{}", run.run_id, node.node_id),
+            )
+            .json(&serde_json::json!({
+                "version": run.target_version,
+                "runId": run.run_id,
+                "attemptId": attempt_id,
+            }));
+        if let Some(token) = self.operator_token()? {
+            request = request.bearer_auth(token);
+        }
+        match request.send().await {
+            Ok(response)
+                if response.status().is_success() || response.status() == StatusCode::CONFLICT =>
+            {
+                Ok(())
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                bail!(
+                    "node `{}` rejected all-node upgrade ({status}): {body}",
+                    node.node_id
+                )
+            }
+            Err(error) => {
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "all-node upgrade request to `{}` disconnected while the node may be restarting: {error}",
+                        node.node_id
+                    ),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    async fn verify_all_node_batch(
+        &self,
+        token: &LeadershipToken,
+        mut run: UpgradeRun,
+    ) -> Result<()> {
+        let target = semver::Version::parse(&run.target_version).with_context(|| {
+            format!("invalid persisted upgrade target `{}`", run.target_version)
+        })?;
+        let now_ms = now_millis();
+        let mut live = self.registry.list_nodes().await?;
+        order_nodes(&mut live, &token.info.node_id);
+        for node in &live {
+            if run.nodes.iter().any(|step| step.node_id == node.node_id) {
+                continue;
+            }
+            self.registry
+                .set_node_state(
+                    token,
+                    &node.node_id,
+                    NodeState {
+                        unschedulable: true,
+                        drained_at_ms: Some(now_ms),
+                        reason: Some("upgrade".to_string()),
+                    },
+                )
+                .await?;
+            run.nodes.push(upgrade_step(node));
+            run.history.push(UpgradeEvent {
+                at_ms: now_ms,
+                phase: run.phase,
+                node_id: Some(node.node_id.clone()),
+                message: format!(
+                    "new live node `{}` added to active all-node upgrade target",
+                    node.node_id
+                ),
+            });
+        }
+
+        let mut all_satisfied = true;
+        let mut retry_pending = false;
+        let mut restored = Vec::new();
+        let run_id = run.run_id.clone();
+        let target_version = run.target_version.clone();
+        for index in 0..run.nodes.len() {
+            let node_id = run.nodes[index].node_id.clone();
+            let Some(node) = live.iter().find(|node| node.node_id == node_id) else {
+                all_satisfied = false;
+                continue;
+            };
+            let version_satisfied = !node_requires_upgrade(node, &target)?;
+            if version_satisfied && self.node_healthy(node).await {
+                if run.nodes[index].status != UpgradeNodeStatus::Succeeded {
+                    let step = &mut run.nodes[index];
+                    step.status = UpgradeNodeStatus::Succeeded;
+                    step.completed_at_ms = Some(now_ms);
+                    step.retry_not_before_ms = None;
+                    step.error = None;
+                    restored.push(node_id);
+                }
+                continue;
+            }
+
+            all_satisfied = false;
+            if version_satisfied {
+                run.nodes[index].status = UpgradeNodeStatus::Verifying;
+                continue;
+            }
+            let progress = self
+                .observe_all_node_batch_progress(
+                    &run_id,
+                    &target_version,
+                    &mut run.nodes[index],
+                    now_ms,
+                )
+                .await?;
+            match progress {
+                UpgradeProgressObservation::Active => continue,
+                UpgradeProgressObservation::Failed(error) => {
+                    run.nodes[index].error = Some(error);
+                }
+                UpgradeProgressObservation::Missing => {}
+            }
+            if run.nodes[index]
+                .last_upgrade_request_at_ms
+                .is_none_or(|last| now_ms.saturating_sub(last) >= UPGRADE_RETRY_MS)
+            {
+                run.nodes[index].status = UpgradeNodeStatus::Pending;
+                retry_pending = true;
+            }
+        }
+
+        for node_id in restored {
+            let state = self.registry.get_node_state(&node_id).await?;
+            if state.unschedulable && state.reason.as_deref() == Some("upgrade") {
+                self.registry
+                    .set_node_state(token, &node_id, NodeState::default())
+                    .await?;
+            }
+        }
+        if all_satisfied {
+            return self.finish_success(token, run).await;
+        }
+        if retry_pending {
+            transition(
+                &mut run,
+                UpgradePhase::UpgradeRequested,
+                now_ms,
+                None,
+                "retrying incomplete nodes in the active all-node upgrade batch".to_string(),
+            );
+        } else {
+            run.updated_at_ms = now_ms;
+        }
+        self.persist(token, &run, false).await
+    }
+
+    async fn observe_all_node_batch_progress(
+        &self,
+        run_id: &str,
+        target_version: &str,
+        step: &mut UpgradeNodeStep,
+        now_ms: i64,
+    ) -> Result<UpgradeProgressObservation> {
+        if step
+            .upgrade_started_at_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= UPGRADE_TIMEOUT_MS)
+        {
+            return Ok(UpgradeProgressObservation::Failed(format!(
+                "node `{}` did not complete its upgrade within six hours",
+                step.node_id
+            )));
+        }
+        let Some(progress) = self
+            .store
+            .read_system_upgrade_progress(Some(&step.node_id))
+            .await?
+        else {
+            return Ok(UpgradeProgressObservation::Missing);
+        };
+        if progress.run_id.as_deref() != Some(run_id)
+            || progress.target_version != target_version
+            || (progress.attempt_id.is_some()
+                && progress.attempt_id != upgrade_attempt_id(run_id, step))
+            || step
+                .last_upgrade_request_at_ms
+                .is_some_and(|requested_at| progress.updated_at_ms < requested_at)
+        {
+            return Ok(UpgradeProgressObservation::Missing);
+        }
+        if progress.stage.is_failed() {
+            return Ok(UpgradeProgressObservation::Failed(
+                progress.error.unwrap_or_else(|| {
+                    format!("node `{}` reported an upgrade failure", step.node_id)
+                }),
+            ));
+        }
+        if progress.stage.is_restarting()
+            && now_ms.saturating_sub(progress.updated_at_ms) >= RESTART_VERIFY_TIMEOUT_MS
+        {
+            return Ok(UpgradeProgressObservation::Missing);
+        }
+        step.upgrade_stage = Some(progress.stage);
+        if progress.stage.is_restarting() {
+            step.restart_started_at_ms.get_or_insert(now_ms);
+            step.status = UpgradeNodeStatus::Verifying;
+        } else {
+            step.status = UpgradeNodeStatus::Upgrading;
+        }
+        Ok(UpgradeProgressObservation::Active)
     }
 
     async fn drain(&self, token: &LeadershipToken, mut run: UpgradeRun) -> Result<()> {
@@ -1245,6 +1590,30 @@ fn upgrade_step(node: &NodeInfo) -> UpgradeNodeStep {
     }
 }
 
+fn mark_all_node_batch_requests(
+    run: &mut UpgradeRun,
+    live: &[NodeInfo],
+    now_ms: i64,
+) -> Vec<NodeInfo> {
+    let mut requested = Vec::new();
+    for step in &mut run.nodes {
+        if step.status != UpgradeNodeStatus::Pending {
+            continue;
+        }
+        let Some(node) = live.iter().find(|node| node.node_id == step.node_id) else {
+            continue;
+        };
+        step.status = UpgradeNodeStatus::Upgrading;
+        step.started_at_ms.get_or_insert(now_ms);
+        step.upgrade_started_at_ms = Some(now_ms);
+        step.last_upgrade_request_at_ms = Some(now_ms);
+        step.upgrade_stage = None;
+        step.error = None;
+        requested.push(node.clone());
+    }
+    requested
+}
+
 fn reset_upgrade_step_for_retry(step: &mut UpgradeNodeStep, node: &NodeInfo, now_ms: i64) {
     step.hostname.clone_from(&node.hostname);
     step.role = node.role;
@@ -1327,8 +1696,12 @@ fn should_start_restart_deadline_for_offline(
 
 fn current_upgrade_attempt_id(run: &UpgradeRun) -> Option<String> {
     let node = run.current_node()?;
+    upgrade_attempt_id(&run.run_id, node)
+}
+
+fn upgrade_attempt_id(run_id: &str, node: &UpgradeNodeStep) -> Option<String> {
     let started_at_ms = node.upgrade_started_at_ms?;
-    Some(format!("{}:{}:{started_at_ms}", run.run_id, node.node_id))
+    Some(format!("{run_id}:{}:{started_at_ms}", node.node_id))
 }
 
 fn apply_reported_upgrade_progress(
@@ -1512,6 +1885,26 @@ mod tests {
     }
 
     #[test]
+    fn legacy_upgrade_runs_default_to_rolling_batches() {
+        let run: UpgradeRun = serde_json::from_value(serde_json::json!({
+            "runId": "legacy-run",
+            "targetVersion": "2.0.0",
+            "requestedAtMs": 0,
+            "updatedAtMs": 0,
+            "requestedByNodeId": "leader",
+            "phase": "succeeded",
+            "phaseStartedAtMs": 0,
+            "currentNodeIndex": 0,
+            "nodes": [],
+            "history": [],
+            "failure": null
+        }))
+        .expect("decode legacy upgrade run");
+
+        assert_eq!(run.batch, UpgradeBatch::Rolling);
+    }
+
+    #[test]
     fn only_nodes_below_the_requested_minimum_require_upgrade() {
         let minimum = semver::Version::new(2, 0, 0);
         let mut current = node("worker", NodeRole::Worker);
@@ -1523,6 +1916,60 @@ mod tests {
         assert!(!node_requires_upgrade(&current, &minimum).unwrap());
         current.version = "invalid".to_string();
         assert!(node_requires_upgrade(&current, &minimum).is_err());
+    }
+
+    #[test]
+    fn all_node_batch_marks_every_pending_live_node_with_a_fresh_attempt() {
+        let nodes = [
+            node("worker-a", NodeRole::Worker),
+            node("worker-b", NodeRole::Worker),
+            node("offline", NodeRole::Worker),
+        ];
+        let mut run = UpgradeRun {
+            run_id: "batch-run".to_string(),
+            kind: ClusterMaintenanceKind::Upgrade,
+            batch: UpgradeBatch::All,
+            target_version: "2.0.0".to_string(),
+            requested_at_ms: 0,
+            updated_at_ms: 0,
+            requested_by_node_id: "worker-b".to_string(),
+            phase: UpgradePhase::UpgradeRequested,
+            phase_started_at_ms: 0,
+            current_node_index: 3,
+            nodes: nodes.iter().map(upgrade_step).collect(),
+            history: Vec::new(),
+            failure: None,
+        };
+
+        let requested = mark_all_node_batch_requests(&mut run, &nodes[..2], 1_000);
+        assert_eq!(
+            requested
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<Vec<_>>(),
+            ["worker-a", "worker-b"]
+        );
+        assert!(run.nodes[..2].iter().all(|step| {
+            step.status == UpgradeNodeStatus::Upgrading
+                && step.upgrade_started_at_ms == Some(1_000)
+                && step.last_upgrade_request_at_ms == Some(1_000)
+        }));
+        assert_eq!(run.nodes[2].status, UpgradeNodeStatus::Pending);
+        let first_attempt = upgrade_attempt_id(&run.run_id, &run.nodes[0]);
+
+        run.nodes[0].status = UpgradeNodeStatus::Pending;
+        let requested = mark_all_node_batch_requests(&mut run, &nodes[..2], 2_000);
+        assert_eq!(
+            requested
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<Vec<_>>(),
+            ["worker-a"]
+        );
+        assert_ne!(
+            upgrade_attempt_id(&run.run_id, &run.nodes[0]),
+            first_attempt
+        );
     }
 
     #[tokio::test]
@@ -1576,6 +2023,7 @@ mod tests {
         let run = UpgradeRun {
             run_id: "failed-run".to_string(),
             kind: ClusterMaintenanceKind::Upgrade,
+            batch: UpgradeBatch::Rolling,
             target_version: "2.0.0".to_string(),
             requested_at_ms: 0,
             updated_at_ms: 2,
@@ -1615,6 +2063,7 @@ mod tests {
         let mut run = UpgradeRun {
             run_id: "run-1".to_string(),
             kind: ClusterMaintenanceKind::Upgrade,
+            batch: UpgradeBatch::Rolling,
             target_version: "2.0.0".to_string(),
             requested_at_ms: 0,
             updated_at_ms: 0,
@@ -1789,6 +2238,7 @@ mod tests {
         let mut run = UpgradeRun {
             run_id: "run-1".to_string(),
             kind: ClusterMaintenanceKind::Upgrade,
+            batch: UpgradeBatch::Rolling,
             target_version: "2.0.0".to_string(),
             requested_at_ms: 0,
             updated_at_ms: 0,
@@ -1853,6 +2303,7 @@ mod tests {
         let run = UpgradeRun {
             run_id: "upgrade-1".to_string(),
             kind: ClusterMaintenanceKind::Upgrade,
+            batch: UpgradeBatch::Rolling,
             target_version: "2.0.0".to_string(),
             requested_at_ms: 0,
             updated_at_ms: 0,
@@ -1896,6 +2347,7 @@ mod tests {
         let run = UpgradeRun {
             run_id: "restart-1".to_string(),
             kind: ClusterMaintenanceKind::Restart,
+            batch: UpgradeBatch::Rolling,
             target_version: String::new(),
             requested_at_ms: 0,
             updated_at_ms: 0,

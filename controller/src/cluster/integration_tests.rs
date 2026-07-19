@@ -2712,7 +2712,7 @@ async fn multinode_rolling_upgrade_retries_and_restores_nodes_serially() -> Resu
         http,
     );
     let created = leader_orchestrator
-        .create_run(&initial_token, "2.0.0")
+        .create_run_with_batch(&initial_token, "2.0.0", super::UpgradeBatch::Rolling)
         .await?;
     assert_eq!(created.kind, super::ClusterMaintenanceKind::Upgrade);
     assert_eq!(

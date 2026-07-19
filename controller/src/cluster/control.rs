@@ -47,6 +47,8 @@ pub enum ControlCommand {
     },
     StartUpgrade {
         target_version: String,
+        #[serde(default)]
+        batch: crate::cluster::UpgradeBatch,
     },
     StartRestart {
         node_id: Option<String>,
@@ -350,12 +352,15 @@ impl ControlServer {
                 }
                 Some(serde_json::to_value(outcome)?)
             }
-            ControlCommand::StartUpgrade { target_version } => {
+            ControlCommand::StartUpgrade {
+                target_version,
+                batch,
+            } => {
                 let run = self
                     .upgrade
                     .as_ref()
                     .ok_or_else(|| anyhow!("cluster upgrade service is unavailable"))?
-                    .create_run(&token, &target_version)
+                    .create_run_with_batch(&token, &target_version, batch)
                     .await?;
                 Some(serde_json::to_value(run)?)
             }

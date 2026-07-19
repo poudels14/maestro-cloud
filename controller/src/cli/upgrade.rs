@@ -25,6 +25,7 @@ struct UpgradeSystemResponse {
 #[serde(rename_all = "camelCase")]
 struct ClusterUpgradeRequest<'a> {
     target_version: &'a str,
+    batch: crate::cluster::UpgradeBatch,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,43 +54,68 @@ struct UpgradeClusterConfig {
     nodes: Vec<serde_json::Value>,
 }
 
-pub async fn run_upgrade(host: &str, yes: bool) -> Result<()> {
+pub async fn run_upgrade(host: &str, batch: crate::cluster::UpgradeBatch, yes: bool) -> Result<()> {
     let base = normalize_base_url(host)?;
     let client = contexts::build_http_client()?;
     match detect_upgrade_mode(&client, &base).await? {
         UpgradeMode::SingleNode => run_upgrade_system(host, yes).await,
-        UpgradeMode::Coordinated => run_coordinated_upgrade(host, yes).await,
+        UpgradeMode::Coordinated => run_coordinated_upgrade(host, batch, yes).await,
     }
 }
 
-async fn run_coordinated_upgrade(host: &str, yes: bool) -> Result<()> {
-    let confirmed = crate::cli::confirm::confirm_action(
-        host,
-        &format!("About to roll every cluster node to Maestro {CLIENT_VERSION} or newer"),
-        &[
-            "Deploys will be frozen for the duration of the run".to_string(),
-            "Nodes will drain and restart serially".to_string(),
-        ],
-        yes,
-    )
-    .await?;
+async fn run_coordinated_upgrade(
+    host: &str,
+    batch: crate::cluster::UpgradeBatch,
+    yes: bool,
+) -> Result<()> {
+    let (action, warnings) = match batch {
+        crate::cluster::UpgradeBatch::Rolling => (
+            format!("About to roll every cluster node to Maestro {CLIENT_VERSION} or newer"),
+            vec![
+                "Deploys will be frozen for the duration of the run".to_string(),
+                "Nodes will drain and restart serially".to_string(),
+            ],
+        ),
+        crate::cluster::UpgradeBatch::All => (
+            format!(
+                "About to upgrade every cluster node to Maestro {CLIENT_VERSION} or newer in one batch"
+            ),
+            vec![
+                "Deploys will be frozen for the duration of the run".to_string(),
+                "All nodes will restart together; services and the control plane will be unavailable"
+                    .to_string(),
+            ],
+        ),
+    };
+    let confirmed = crate::cli::confirm::confirm_action(host, &action, &warnings, yes).await?;
     if !confirmed {
         println!("[maestro]: aborted");
         return Ok(());
     }
     let base = normalize_base_url(host)?;
-    let response = crate::cli::idempotent(
-        contexts::build_http_client()?.post(format!("{base}/api/cluster/upgrade")),
-    )
-    .json(&ClusterUpgradeRequest {
-        target_version: CLIENT_VERSION,
-    })
-    .send()
-    .await
-    .map_err(|error| Error::external(format!("failed to start cluster upgrade: {error}")))?;
+    let path = match batch {
+        crate::cluster::UpgradeBatch::Rolling => "/api/cluster/upgrade",
+        crate::cluster::UpgradeBatch::All => "/api/cluster/upgrade/batch",
+    };
+    let response =
+        crate::cli::idempotent(contexts::build_http_client()?.post(format!("{base}{path}")))
+            .json(&ClusterUpgradeRequest {
+                target_version: CLIENT_VERSION,
+                batch,
+            })
+            .send()
+            .await
+            .map_err(|error| {
+                Error::external(format!("failed to start cluster upgrade: {error}"))
+            })?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if batch == crate::cluster::UpgradeBatch::All && status == reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::external(
+                "the current cluster coordinator does not support `--batch=all`; upgrade the coordinator before using this strategy",
+            ));
+        }
         return Err(Error::external(format!(
             "cluster upgrade was rejected ({status}): {body}"
         )));
@@ -98,6 +124,11 @@ async fn run_coordinated_upgrade(host: &str, yes: bool) -> Result<()> {
         .json()
         .await
         .map_err(|error| Error::external(format!("invalid cluster upgrade response: {error}")))?;
+    if run.batch != batch {
+        return Err(Error::external(
+            "cluster upgrade coordinator did not preserve the requested batch strategy",
+        ));
+    }
     println!("[maestro]: cluster upgrade `{}` started", run.run_id);
     stream_cluster_maintenance(&base, run).await
 }
@@ -348,9 +379,11 @@ mod tests {
     fn cluster_upgrade_request_uses_camel_case_target() {
         let payload = serde_json::to_value(ClusterUpgradeRequest {
             target_version: "1.2.3",
+            batch: crate::cluster::UpgradeBatch::All,
         })
         .expect("serialize cluster upgrade request");
         assert_eq!(payload["targetVersion"], "1.2.3");
+        assert_eq!(payload["batch"], "all");
     }
 
     async fn detect_mode(

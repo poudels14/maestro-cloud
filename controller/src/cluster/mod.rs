@@ -27,5 +27,5 @@ pub use types::{
     Assignment, AssignmentManifest, ClusterMaintenanceKind, ClusterMeta, ClusterNodeEndpoint,
     ClusterRuntime, LeaderInfo, NodeAffinity, NodeDiskInfo, NodeGatewayEndpoint, NodeInfo,
     NodeRecord, NodeRole, NodeState, PlacementHistory, ReplicaEndpoint, SystemUpgradeStage,
-    TrafficGeneration, UnschedulableReplica, UpgradeEvent, UpgradePhase, UpgradeRun,
+    TrafficGeneration, UnschedulableReplica, UpgradeBatch, UpgradeEvent, UpgradePhase, UpgradeRun,
 };

@@ -300,6 +300,10 @@ impl Server {
                 get(Self::get_cluster_upgrade).post(Self::start_cluster_upgrade),
             )
             .route(
+                "/api/cluster/upgrade/batch",
+                post(Self::start_cluster_upgrade),
+            )
+            .route(
                 "/api/cluster/restart",
                 get(Self::get_cluster_upgrade).post(Self::start_cluster_restart),
             )
@@ -817,6 +821,7 @@ impl Server {
             token,
             crate::cluster::control::ControlCommand::StartUpgrade {
                 target_version: request.target_version,
+                batch: request.batch,
             },
         )
         .await

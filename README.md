@@ -680,6 +680,13 @@ BuildKit cache instead of compiling the probe while the cluster is unavailable.
 Maestro-owned images use exact release tags such as `maestro-probe:<version>`; upgrade
 prebuilds use the version read from the updated source and never overwrite `:latest`.
 
+Use `maestro cluster upgrade --batch=all` to make every node unschedulable and send
+all node-local upgrade requests as one batch. The coordinator persists all request
+watermarks before dispatch and sends its own request last, so the run resumes after
+the cluster returns. This mode intentionally takes down services and the control
+plane while the nodes restart; use the default rolling strategy when availability
+must be preserved.
+
 For coordinated upgrades, the elected leader owns the run in shared cluster state;
 the CLI only streams that state and can disconnect without canceling the upgrade.
 Each node reports its source update, validation, system rebuild, image pre-build,

@@ -190,6 +190,8 @@ pub(crate) struct UpgradeSystemRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClusterUpgradeRequest {
     pub(crate) target_version: String,
+    #[serde(default)]
+    pub(crate) batch: crate::cluster::UpgradeBatch,
 }
 
 #[derive(Debug, serde::Deserialize)]

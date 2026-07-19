@@ -270,6 +270,14 @@ pub enum ClusterMaintenanceKind {
     Restart,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpgradeBatch {
+    #[default]
+    Rolling,
+    All,
+}
+
 impl std::fmt::Display for ClusterMaintenanceKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -384,6 +392,8 @@ pub struct UpgradeRun {
     pub run_id: String,
     #[serde(default)]
     pub kind: ClusterMaintenanceKind,
+    #[serde(default)]
+    pub batch: UpgradeBatch,
     pub target_version: String,
     pub requested_at_ms: i64,
     pub updated_at_ms: i64,
