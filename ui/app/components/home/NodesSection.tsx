@@ -94,7 +94,11 @@ function NodesSection() {
                   <div class="mt-1 truncate font-mono text-[10px] text-gray-400">{node.nodeId}</div>
                   <Show when={node.state.reason || node.dataPlaneError}>
                     <div class="mt-1 truncate text-[10px] text-amber-600">
-                      {node.state.reason || node.dataPlaneError}
+                      {node.state.reason
+                        ? node.state.reason === "upgrade" || node.state.reason === "restart"
+                          ? `Drained for ${node.state.reason}`
+                          : `Placement disabled: ${node.state.reason}`
+                        : node.dataPlaneError}
                     </div>
                   </Show>
                 </div>

@@ -344,6 +344,7 @@ impl ClusterUpgradeOrchestrator {
             return Ok(());
         };
         if run.phase.is_terminal() {
+            self.restore_maintenance_nodes(token, &run).await?;
             return Ok(());
         }
         if run.current_node().is_none() {
@@ -909,7 +910,25 @@ impl ClusterUpgradeOrchestrator {
             current_node_id,
             format!("{message}; remaining {operation} nodes skipped and cluster unfrozen"),
         );
-        self.persist(token, &run, true).await
+        self.persist(token, &run, true).await?;
+        self.restore_maintenance_nodes(token, &run).await
+    }
+
+    async fn restore_maintenance_nodes(
+        &self,
+        token: &LeadershipToken,
+        run: &UpgradeRun,
+    ) -> Result<()> {
+        for node_id in restore_maintenance_node_states(self.registry.as_ref(), token, run).await? {
+            self.logger.emit(
+                "info",
+                &format!(
+                    "node `{node_id}` restored to placement eligibility after cluster {}",
+                    run.operation_name()
+                ),
+            );
+        }
+        Ok(())
     }
 
     async fn persist(
@@ -975,6 +994,25 @@ impl ClusterUpgradeOrchestrator {
             self.node_api_scheme, node.cluster_host_ip, node.cluster_api_port
         )
     }
+}
+
+async fn restore_maintenance_node_states(
+    registry: &dyn NodeRegistry,
+    token: &LeadershipToken,
+    run: &UpgradeRun,
+) -> Result<Vec<String>> {
+    let reason = run.operation_name();
+    let mut restored = Vec::new();
+    for node in &run.nodes {
+        let state = registry.get_node_state(&node.node_id).await?;
+        if state.unschedulable && state.reason.as_deref() == Some(reason) {
+            registry
+                .set_node_state(token, &node.node_id, NodeState::default())
+                .await?;
+            restored.push(node.node_id.clone());
+        }
+    }
+    Ok(restored)
 }
 
 fn single_voter_maintenance_preserves_quorum(live_voter_count: usize) -> bool {
@@ -1204,6 +1242,90 @@ mod tests {
         assert!(!UpgradePhase::Verifying.is_terminal());
         assert!(UpgradePhase::Succeeded.is_terminal());
         assert!(UpgradePhase::Failed.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn terminal_maintenance_restores_only_its_own_node_drains() {
+        let registry = crate::cluster::registry::InMemoryNodeRegistry::new("leader".to_string());
+        let token = LeadershipToken {
+            info: crate::cluster::types::LeaderInfo {
+                node_id: "leader".to_string(),
+            },
+            election_key: b"leader".to_vec(),
+            create_revision: 1,
+            lease_id: 1,
+        };
+        registry
+            .set_node_state(
+                &token,
+                &"upgrade-node".to_string(),
+                NodeState {
+                    unschedulable: true,
+                    drained_at_ms: Some(10),
+                    reason: Some("upgrade".to_string()),
+                },
+            )
+            .await
+            .unwrap();
+        let operator_state = NodeState {
+            unschedulable: true,
+            drained_at_ms: Some(20),
+            reason: Some("drain".to_string()),
+        };
+        registry
+            .set_node_state(&token, &"operator-node".to_string(), operator_state.clone())
+            .await
+            .unwrap();
+        let step = |node_id: &str| UpgradeNodeStep {
+            node_id: node_id.to_string(),
+            hostname: node_id.to_string(),
+            role: NodeRole::Worker,
+            from_version: "1.0.0".to_string(),
+            from_instance_id: Some(format!("instance-{node_id}")),
+            status: UpgradeNodeStatus::Failed,
+            started_at_ms: Some(1),
+            completed_at_ms: Some(2),
+            upgrade_started_at_ms: None,
+            last_upgrade_request_at_ms: None,
+            upgrade_stage: None,
+            restart_started_at_ms: None,
+            error: Some("failed".to_string()),
+        };
+        let run = UpgradeRun {
+            run_id: "failed-run".to_string(),
+            kind: ClusterMaintenanceKind::Upgrade,
+            target_version: "2.0.0".to_string(),
+            requested_at_ms: 0,
+            updated_at_ms: 2,
+            requested_by_node_id: "leader".to_string(),
+            phase: UpgradePhase::Failed,
+            phase_started_at_ms: 2,
+            current_node_index: 0,
+            nodes: vec![step("upgrade-node"), step("operator-node")],
+            history: Vec::new(),
+            failure: Some("failed".to_string()),
+        };
+
+        assert_eq!(
+            restore_maintenance_node_states(&registry, &token, &run)
+                .await
+                .unwrap(),
+            ["upgrade-node"]
+        );
+        assert_eq!(
+            registry
+                .get_node_state(&"upgrade-node".to_string())
+                .await
+                .unwrap(),
+            NodeState::default()
+        );
+        assert_eq!(
+            registry
+                .get_node_state(&"operator-node".to_string())
+                .await
+                .unwrap(),
+            operator_state
+        );
     }
 
     #[test]
