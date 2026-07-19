@@ -6,6 +6,7 @@ import type { Deployment } from "../../lib/types";
 import { DeploymentMenu, STATUS_COLORS, StatusBadge, StatusDot } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
 import { nodeAdminUrl } from "../../lib/nodeAdmin";
+import { replicaHostname } from "../../lib/deploymentEndpoints";
 
 type Props = {
   deployment: Deployment;
@@ -111,6 +112,7 @@ function DeploymentRow(props: Props) {
                 replicaIndex={replica.replicaIndex}
                 replicaStatus={replica.status}
                 nodeId={replica.nodeId}
+                containerHostname={replica.endpoint?.containerHostname}
                 clusterInfo={props.clusterInfo}
               />
             )}
@@ -126,13 +128,11 @@ function ReplicaRow(props: {
   replicaIndex: number;
   replicaStatus: string;
   nodeId?: string | null;
+  containerHostname?: string | null;
   clusterInfo: ClusterInfo | null;
 }) {
-  const shortDepId = () => props.deployment.id.slice(0, 6);
   const hostname = () =>
-    props.replicaIndex === 0
-      ? `${props.deployment.config.id}-${shortDepId()}`
-      : `${props.deployment.config.id}-${shortDepId()}-${props.replicaIndex}`;
+    replicaHostname(props.deployment, props.replicaIndex, props.containerHostname);
   const fqdn = () =>
     props.clusterInfo ? `${hostname()}.${props.clusterInfo.canonicalDomain}` : null;
   const href = () => {

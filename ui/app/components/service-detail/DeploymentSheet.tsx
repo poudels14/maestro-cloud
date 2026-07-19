@@ -8,6 +8,7 @@ import { StatusBadge, timeAgo } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
 import { ReplicaRow } from "./DeploymentRow";
+import { replicaHostname } from "../../lib/deploymentEndpoints";
 
 type SheetTabId = "logs" | "build" | "details";
 
@@ -161,8 +162,12 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
   const deploymentDomain = () => {
     const info = props.clusterInfo;
     if (!info) return null;
-    const idPrefix = d.id.slice(0, 6);
-    const host = `${d.config.id}-${idPrefix}.${info.canonicalDomain}`;
+    const replica = d.replicas?.find((candidate) => candidate.replicaIndex === 0);
+    const host = `${replicaHostname(
+      d,
+      0,
+      replica?.endpoint?.containerHostname
+    )}.${info.canonicalDomain}`;
     const port = d.config.ingress?.port ?? null;
     return port ? `${host}:${port}` : host;
   };
@@ -227,6 +232,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
                     replicaIndex={replica.replicaIndex}
                     replicaStatus={replica.status}
                     nodeId={replica.nodeId}
+                    containerHostname={replica.endpoint?.containerHostname}
                     clusterInfo={props.clusterInfo}
                   />
                   <Show when={replica.error}>

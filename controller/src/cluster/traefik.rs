@@ -28,7 +28,10 @@ const TRAFFIC_PREFIX: &str = "/maetro/cluster/traffic/";
 const DNS_PREFIX: &str = "/maetro/cluster/dns/";
 const SERVICE_MAP_PREFIX: &str = "/maetro/cluster/traefik-service-map/";
 const GATEWAY_PREFIX: &str = "maestro-gateway/";
-const GATEWAY_TRANSPORT: &str = "cluster-gateway@file";
+const GATEWAY_SERVERS_TRANSPORT: &str = "cluster-gateway@file";
+// Gateway clients connect by node IP while preserving the public service Host. Both must resolve
+// to the same TLS option or Traefik rejects the request as domain fronting with a 421 response.
+pub const GATEWAY_TLS_OPTIONS: &str = "default";
 pub const GATEWAY_HEALTH_PATH: &str = "/_maestro/gateway-ready";
 const AFFINITY_TOKEN_DOMAIN: &[u8] = b"maestro-node-affinity-v1\0";
 const MAX_ATOMIC_CUTOVER_OPS: usize = 100;
@@ -282,7 +285,7 @@ impl EtcdTrafficManager {
                     (format!("{gateway_router}/tls"), b"true".to_vec()),
                     (
                         format!("{gateway_router}/tls/options"),
-                        GATEWAY_TRANSPORT.as_bytes().to_vec(),
+                        GATEWAY_TLS_OPTIONS.as_bytes().to_vec(),
                     ),
                     (format!("{gateway_router}/priority"), b"10".to_vec()),
                     (
@@ -677,7 +680,7 @@ fn stage_generation(
         (format!("{prefix}/sticky/cookie/httpOnly"), b"true".to_vec()),
         (
             format!("{prefix}/serversTransport"),
-            GATEWAY_TRANSPORT.as_bytes().to_vec(),
+            GATEWAY_SERVERS_TRANSPORT.as_bytes().to_vec(),
         ),
         (
             format!("{prefix}/healthCheck/path"),
@@ -731,7 +734,7 @@ fn stage_generation(
         let affinity_prefix = format!("traefik/http/services/{label}-aff-{node_id}/loadBalancer");
         for (key, value) in [
             ("servers/0/url", gateway_url(gateway)),
-            ("serversTransport", GATEWAY_TRANSPORT.to_string()),
+            ("serversTransport", GATEWAY_SERVERS_TRANSPORT.to_string()),
             ("healthCheck/path", GATEWAY_HEALTH_PATH.to_string()),
             ("healthCheck/interval", "5s".to_string()),
             ("healthCheck/timeout", "2s".to_string()),

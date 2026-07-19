@@ -903,7 +903,10 @@ async fn init_ingress(
             "--entrypoints.internal.address=:80".into(),
             "--entrypoints.gateway.address=:8443".into(),
             "--entrypoints.gateway.http.tls=true".into(),
-            "--entrypoints.gateway.http.tls.options=cluster-gateway@file".into(),
+            format!(
+                "--entrypoints.gateway.http.tls.options={}",
+                crate::cluster::traefik::GATEWAY_TLS_OPTIONS
+            ),
             "--ping=true".into(),
             "--ping.manualrouting=true".into(),
         ]);
@@ -987,17 +990,19 @@ fn write_gateway_dynamic_config(
 }
 
 fn gateway_dynamic_config() -> String {
+    let health_path = crate::cluster::traefik::GATEWAY_HEALTH_PATH;
+    let tls_options = crate::cluster::traefik::GATEWAY_TLS_OPTIONS;
     format!(
         r#"http:
   routers:
     maestro-gateway-health:
       entryPoints:
         - gateway
-      rule: Path(`{}`)
+      rule: Path(`{health_path}`)
       service: ping@internal
       priority: 10000
       tls:
-        options: cluster-gateway
+        options: {tls_options}
   serversTransports:
     cluster-gateway:
       rootCAs:
@@ -1014,14 +1019,13 @@ tls:
         certFile: /certs/api.pem
         keyFile: /certs/api-key.pem
   options:
-    cluster-gateway:
+    {tls_options}:
       minVersion: VersionTLS13
       clientAuth:
         caFiles:
           - /certs/ca.pem
         clientAuthType: RequireAndVerifyClientCert
-"#,
-        crate::cluster::traefik::GATEWAY_HEALTH_PATH
+"#
     )
 }
 
@@ -1077,7 +1081,10 @@ async fn init_gateway(
         "--providers.file.filename=/gateway/dynamic.yml".into(),
         "--entrypoints.gateway.address=:8443".into(),
         "--entrypoints.gateway.http.tls=true".into(),
-        "--entrypoints.gateway.http.tls.options=cluster-gateway@file".into(),
+        format!(
+            "--entrypoints.gateway.http.tls.options={}",
+            crate::cluster::traefik::GATEWAY_TLS_OPTIONS
+        ),
         "--ping=true".into(),
         "--ping.manualrouting=true".into(),
     ];
@@ -2134,11 +2141,14 @@ mod tests {
     }
 
     #[test]
-    fn gateway_tls_version_is_configured_only_on_tls_options() {
+    fn gateway_default_tls_options_enforce_mtls_for_ip_sni_forwarding() {
         let config = gateway_dynamic_config();
 
         assert_eq!(config.matches("minVersion: VersionTLS13").count(), 1);
-        assert!(config.contains("options:\n    cluster-gateway:\n      minVersion: VersionTLS13"));
+        assert!(config.contains("options:\n    default:\n      minVersion: VersionTLS13"));
+        assert!(config.contains("options: default"));
+        assert!(config.contains("clientAuthType: RequireAndVerifyClientCert"));
+        assert!(config.contains("serversTransports:\n    cluster-gateway:"));
         let server_transport = config
             .split_once("serversTransports:")
             .unwrap()
