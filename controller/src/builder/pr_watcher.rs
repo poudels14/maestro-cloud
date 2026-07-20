@@ -1008,18 +1008,19 @@ mod tests {
             .unwrap()
             .dockerfile = "Dockerfile.preview".to_string();
         watcher.poll(1_750).await.unwrap();
-        let state = store.state.lock().unwrap();
-        assert_eq!(state.deployments["app-pr-7"].len(), 3);
-        assert_eq!(
-            state.infos["app-pr-7"]
-                .config
-                .build
-                .as_ref()
-                .unwrap()
-                .dockerfile,
-            "Dockerfile.preview"
-        );
-        drop(state);
+        {
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.deployments["app-pr-7"].len(), 3);
+            assert_eq!(
+                state.infos["app-pr-7"]
+                    .config
+                    .build
+                    .as_ref()
+                    .unwrap()
+                    .dockerfile,
+                "Dockerfile.preview"
+            );
+        }
 
         api.pull_requests.lock().unwrap().clear();
         watcher.poll(2_000).await.unwrap();
