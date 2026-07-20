@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package maestro.node.v1;
+
+// Returns the downward-API identity bound to the authenticated workload socket.
+service Identity {
+  // Returns claims for the authenticated workload; request metadata carries its token.
+  rpc GetIdentity(GetIdentityRequest) returns (WorkloadIdentity);
+}
+
+// Relays privileged, deduplicated resource mutations from authorized system workloads.
+service Control {
+  // Submits one typed resource mutation to the node agent.
+  rpc Mutate(ResourceMutation) returns (MutationResult);
+}
+
+// Empty request whose authorization metadata selects the workload identity.
+message GetIdentityRequest {}
+
+// Typed downward-API identity returned to one authenticated workload.
+message WorkloadIdentity {
+  // Runtime workload identity.
+  string workload_id = 1;
+  // Assignment that created the workload.
+  string assignment_id = 2;
+  // Node hosting the workload.
+  string node_id = 3;
+  // Service owning the workload.
+  string service_id = 4;
+  // Immutable deployment owning the workload.
+  string deployment_id = 5;
+  // Resource labels exposed to the workload.
+  map<string, string> labels = 6;
+}
+
+// Operation applied to the resource named by a mutation.
+enum MutationOperation {
+  // Unspecified operations are rejected.
+  MUTATION_OPERATION_UNSPECIFIED = 0;
+  // Create or replace a typed resource using optimistic concurrency.
+  MUTATION_OPERATION_APPLY = 1;
+  // Request deletion of a typed resource through finalizers.
+  MUTATION_OPERATION_DELETE = 2;
+}
+
+// Generic envelope that stays open to future resource kinds.
+message ResourceMutation {
+  // Stable idempotency identity claimed by the controller kernel.
+  string request_id = 1;
+  // Open resource kind resolved through the kernel API registry.
+  string kind = 2;
+  // Resource identity interpreted by the selected kind.
+  string resource_id = 3;
+  // Requested mutation operation.
+  MutationOperation operation = 4;
+  // Canonical JSON resource body for apply; empty for delete.
+  bytes resource_json = 5;
+}
+
+// Deduplication outcome of one privileged mutation.
+message MutationResult {
+  // Whether this request committed a new mutation.
+  MutationDisposition disposition = 1;
+  // Store revision observed after the mutation or duplicate claim.
+  uint64 revision = 2;
+}
+
+// Whether a mutation was newly committed or replayed from a request claim.
+enum MutationDisposition {
+  // Unspecified dispositions are never emitted.
+  MUTATION_DISPOSITION_UNSPECIFIED = 0;
+  // This request committed the mutation.
+  MUTATION_DISPOSITION_COMMITTED = 1;
+  // A prior request with the same identity already committed.
+  MUTATION_DISPOSITION_DUPLICATE = 2;
+}
