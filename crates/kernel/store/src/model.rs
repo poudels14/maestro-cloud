@@ -67,7 +67,7 @@ pub struct DeleteRequest {
     /// Exact key to remove.
     pub key: StoreKey,
     /// Required current key version.
-    pub expected: ExpectedVersion,
+    pub expected: Version,
 }
 
 /// Applied value or observed conflict from a CAS operation.
@@ -130,6 +130,11 @@ pub enum MutationResult {
         key: StoreKey,
         /// Version removed by the transaction.
         previous_version: Version,
+    },
+    /// A requested delete found no key and made no change.
+    DeleteMissing {
+        /// Exact key that was already absent.
+        key: StoreKey,
     },
 }
 

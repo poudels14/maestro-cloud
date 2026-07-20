@@ -4,13 +4,17 @@
 //! may depend on `kernel-api`, but must not depend on controllers, nodes,
 //! operators, runtimes, observability, cluster provisioning, or applications.
 
+mod clock;
 mod error;
 mod key;
+mod memory;
 mod model;
 mod store;
 
+pub use clock::{Clock, MonotonicTime};
 pub use error::StoreError;
 pub use key::{Keyspace, StoreKey, StorePrefix};
+pub use memory::InMemoryStore;
 pub use model::{
     CasOutcome, Compare, DeleteRequest, ExpectedVersion, ListResult, Mutation, MutationResult,
     PutRequest, SessionBinding, SessionId, StoredValue, Transaction, TransactionOutcome, Version,

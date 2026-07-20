@@ -8,6 +8,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 kernel-api = { version = "0.1.0", path = "../api" }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
 
 [lints]
 workspace = true
