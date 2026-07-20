@@ -1,6 +1,20 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod capabilities;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_config;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_event;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_exec_io;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_fixture;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_image;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_settings;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_support;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_config;
 #[cfg(all(feature = "docker", target_os = "linux"))]

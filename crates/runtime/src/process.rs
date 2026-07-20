@@ -9,12 +9,13 @@ use supervisor::{
     ProcessExit, ProcessHandle, ProcessSignal, ProcessStatus, ProcessSupervisor, SupervisorError,
 };
 
+use crate::file_log::FileLogStream;
 use crate::process_manifest::{
     ManifestState, ProcessManifest, commit_process_start, load_manifests, load_optional_manifest,
     remove_manifest, write_manifest,
 };
 use crate::process_settings::ProcessRuntimeSettings;
-use crate::process_stream::{ProcessEventJournal, ProcessLogStream};
+use crate::process_stream::ProcessEventJournal;
 use crate::process_support::{
     blocking, build_supervised_spec, process_handle, process_paths, read_cgroup_path,
     runtime_supervisor_error, spec_fingerprint, validate_process_handle,
@@ -455,7 +456,7 @@ impl WorkloadRuntime for ProcessRuntime {
     ) -> Result<Box<dyn LogStream>, RuntimeError> {
         validate_process_handle(handle)?;
         let manifest = self.load(handle.workload_id().clone()).await?;
-        ProcessLogStream::open(
+        FileLogStream::open(
             manifest.stdout_path,
             manifest.stderr_path,
             request.after.as_ref(),

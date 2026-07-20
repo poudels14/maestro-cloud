@@ -9,6 +9,26 @@ mod capabilities;
 #[cfg(target_os = "linux")]
 mod cgroup;
 mod clock;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_config;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_event;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_exec;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_exec_io;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_image;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_io;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_settings;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_support;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_task;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker;
 #[cfg(all(feature = "docker", target_os = "linux"))]
@@ -29,6 +49,8 @@ mod fake;
 mod fake_state;
 #[cfg(any(test, feature = "test-util"))]
 mod fake_stream;
+#[cfg(target_os = "linux")]
+mod file_log;
 mod network;
 #[cfg(target_os = "linux")]
 mod process;
@@ -48,6 +70,10 @@ pub use artifact::{
 };
 pub use capabilities::{Capabilities, RuntimeCapability};
 pub use clock::{MonotonicTime, RuntimeClock, TokioRuntimeClock};
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+pub use containerd::ContainerdRuntime;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+pub use containerd_settings::ContainerdRuntimeSettings;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 pub use docker::DockerRuntime;
 pub use error::{CgroupPathError, RuntimeError};
