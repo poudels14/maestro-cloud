@@ -8,6 +8,7 @@
 mod linux_mesh;
 mod mesh;
 mod mesh_identity;
+mod mesh_resource;
 
 #[cfg(target_os = "linux")]
 pub use linux_mesh::LinuxMeshBackend;
@@ -17,6 +18,7 @@ pub use mesh::{
     MeshError, MeshInterface, MeshPeer, MeshPlanner, MeshReconciler, MeshRoute, MeshSubnet,
 };
 pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
+pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
 
 #[cfg(test)]
 mod tests;

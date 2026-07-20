@@ -168,6 +168,11 @@ impl MeshPlanner {
         })
     }
 
+    /// Returns the stable node identity bound to this planner.
+    pub fn local_node_id(&self) -> &NodeId {
+        &self.local_node_id
+    }
+
     /// Builds the local `NodeNetwork` publication from validated topology.
     pub fn publication(
         &self,

@@ -3,3 +3,4 @@ mod fake_mesh;
 mod linux_mesh;
 mod mesh;
 mod mesh_identity;
+mod mesh_resource;
