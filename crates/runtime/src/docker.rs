@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -13,6 +14,7 @@ use kernel_api::{ClusterId, NodeId};
 
 use crate::cgroup;
 use crate::docker_config::{CLUSTER_LABEL, MANAGED_LABEL, NODE_LABEL, container_config};
+use crate::docker_network_ipam::DockerNetworkState;
 use crate::docker_stream::{DockerEventStream, DockerExecSession, DockerLogStream, log_since};
 use crate::docker_support::{
     container_id, docker_handle, is_conflict, is_not_found, is_not_modified, observed_workload,
@@ -27,7 +29,8 @@ use crate::{
 /// Docker Engine workload backend using Bollard's native daemon API.
 #[derive(Clone)]
 pub struct DockerRuntime {
-    client: Docker,
+    pub(crate) client: Docker,
+    pub(crate) network_state: Arc<tokio::sync::Mutex<DockerNetworkState>>,
 }
 
 impl DockerRuntime {
@@ -37,15 +40,18 @@ impl DockerRuntime {
             Docker::connect_with_defaults().map_err(|error| RuntimeError::Unavailable {
                 message: format!("failed to connect to the docker API: {error}"),
             })?;
-        Ok(Self { client })
+        Ok(Self::new(client))
     }
 
     /// Wraps an existing Bollard client while preserving its connection configuration.
     pub fn new(client: Docker) -> Self {
-        Self { client }
+        Self {
+            client,
+            network_state: Arc::new(tokio::sync::Mutex::new(DockerNetworkState::default())),
+        }
     }
 
-    async fn inspect(
+    pub(crate) async fn inspect_container(
         &self,
         handle: &WorkloadHandle,
     ) -> Result<docker::models::ContainerInspectResponse, RuntimeError> {
@@ -60,7 +66,11 @@ impl DockerRuntime {
 #[async_trait]
 impl WorkloadRuntime for DockerRuntime {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::new([RuntimeCapability::Exec, RuntimeCapability::InteractiveExec])
+        Capabilities::new([
+            RuntimeCapability::Exec,
+            RuntimeCapability::InteractiveExec,
+            RuntimeCapability::DynamicNetwork,
+        ])
     }
 
     async fn create(&self, spec: &WorkloadSpec) -> Result<WorkloadHandle, RuntimeError> {
@@ -165,7 +175,7 @@ impl WorkloadRuntime for DockerRuntime {
     }
 
     async fn status(&self, handle: &WorkloadHandle) -> Result<WorkloadStatus, RuntimeError> {
-        Ok(workload_status(&self.inspect(handle).await?))
+        Ok(workload_status(&self.inspect_container(handle).await?))
     }
 
     async fn list(
@@ -304,7 +314,7 @@ impl WorkloadRuntime for DockerRuntime {
     }
 
     async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError> {
-        let inspect = self.inspect(handle).await?;
+        let inspect = self.inspect_container(handle).await?;
         let process_id = process_id(&inspect, handle.workload_id())?;
         let path = tokio::task::spawn_blocking(move || cgroup::read_cgroup_path(process_id))
             .await

@@ -14,6 +14,10 @@ mod docker;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_config;
 #[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_network;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_network_ipam;
+#[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_stream;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_support;
