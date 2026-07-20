@@ -12,3 +12,6 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+insta = { version = "=1.48.0", features = ["json"] }

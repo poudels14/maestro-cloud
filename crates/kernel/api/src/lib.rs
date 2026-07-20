@@ -3,22 +3,56 @@
 //! This crate contains types and schemas only. It must not depend on stores,
 //! controller runtimes, node implementations, operators, or applications.
 
+mod automation;
 mod condition;
 mod identity;
 mod metadata;
+mod network;
+mod node;
 mod resource;
+mod schema;
+mod secret;
+mod workload;
 
+pub use automation::{
+    NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, UpgradeMode,
+    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookEvent, WebhookSpec,
+    WebhookStatus,
+};
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{
-    AssignmentId, BuildId, DeploymentId, DnsRecordId, FirewallPolicyId, IngressRouteId,
-    InvalidIdentifier, NodeId, NodeNetworkId, PreviewId, ReplicaStateId, ResourceId, ServiceId,
-    TrafficGenerationId, UpgradeRunId, WebhookId, WorkloadId,
+    ArtifactArchiveId, AssignmentId, BuildId, DeploymentId, DnsRecordId, FirewallPolicyId,
+    IngressRouteId, InvalidIdentifier, NodeId, NodeInstanceId, NodeNetworkId, PreviewId,
+    ReplicaStateId, ResourceId, ResourceKind, ResourceName, ServiceId, TrafficGenerationId,
+    UpgradeRunId, WebhookId, WorkloadId,
 };
 pub use metadata::{
     AnnotationKey, FinalizerName, Generation, LabelKey, ObjectMeta, OwnerReference, Ownership,
     ResourceRevision, Timestamp,
 };
+pub use network::{
+    DnsRecord, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, FirewallDirection, FirewallPolicy,
+    FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject, FirewallVerdict,
+    IngressRoute, IngressRouteSpec, IngressRouteStatus, NetworkAddress, PortRange, SessionAffinity,
+    TrafficGeneration, TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus,
+    TrafficTarget, TransportProtocol,
+};
+pub use node::{
+    Node, NodeNetwork, NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
+};
 pub use resource::Object;
+pub use schema::{
+    BuiltinKind, BuiltinResource, DecodeResourceError, UnknownBuiltinKind, decode_builtin,
+    openapi_document,
+};
+pub use secret::{MaskedSecret, SecretValue};
+pub use workload::{
+    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, Build,
+    BuildPhase, BuildSource, BuildSpec, BuildStatus, BuildTemplate, CommandSpec, Deployment,
+    DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe,
+    PlacementConstraint, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState, Service,
+    ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource,
+};
 
 #[cfg(test)]
 mod tests;

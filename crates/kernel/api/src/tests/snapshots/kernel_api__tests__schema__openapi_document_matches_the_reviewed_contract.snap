@@ -1,0 +1,4284 @@
+---
+source: crates/kernel/api/src/tests/schema.rs
+expression: openapi_document()
+---
+{
+  "components": {
+    "schemas": {
+      "ArtifactArchiveId": {
+        "description": "Stable identity of one uploaded artifact source archive.",
+        "type": "string"
+      },
+      "ArtifactTemplate": {
+        "description": "Runtime artifact selected for a service deployment.",
+        "oneOf": [
+          {
+            "description": "Pull an existing immutable or tag-addressed image.",
+            "properties": {
+              "reference": {
+                "description": "Registry image reference.",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "image"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "reference"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildTemplate"
+              }
+            ],
+            "description": "Build an image from a source repository or uploaded archive.",
+            "properties": {
+              "source": {
+                "enum": [
+                  "build"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Assignment": {
+        "$ref": "#/components/schemas/Object5"
+      },
+      "AssignmentId": {
+        "description": "Stable identity of a scheduled workload assignment.",
+        "type": "string"
+      },
+      "AssignmentPhase": {
+        "description": "Runtime lifecycle of an assignment.",
+        "oneOf": [
+          {
+            "description": "Waiting for the node agent to create a workload.",
+            "enum": [
+              "pending"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The assigned workload is running.",
+            "enum": [
+              "running"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The workload is stopping without accepting new traffic.",
+            "enum": [
+              "draining"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The workload stopped and no longer owns runtime state.",
+            "enum": [
+              "stopped"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The node agent could not converge the assignment.",
+            "enum": [
+              "failed"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "AssignmentSpec": {
+        "description": "Desired placement of one deployment replica on one node.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Immutable deployment being placed."
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node selected by the scheduler."
+          },
+          "placementEpoch": {
+            "description": "Monotonic epoch incremented when a slot moves to another node.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replacesAssignmentId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Assignment superseded by this placement, when one is draining."
+          },
+          "replicaIndex": {
+            "description": "Zero-based replica slot within the deployment.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service being placed."
+          },
+          "workloadAddress": {
+            "description": "Cluster-routable address reserved before the workload starts.",
+            "format": "ip",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "replicaIndex",
+          "nodeId",
+          "placementEpoch",
+          "workloadAddress"
+        ],
+        "type": "object"
+      },
+      "AssignmentStatus": {
+        "description": "Observed workload identity and lifecycle for an assignment.",
+        "properties": {
+          "conditions": {
+            "description": "Generic runtime and drain evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentPhase"
+              }
+            ],
+            "description": "Current runtime phase."
+          },
+          "workloadId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Runtime workload identity created for this assignment."
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "Build": {
+        "$ref": "#/components/schemas/Object11"
+      },
+      "BuildId": {
+        "description": "Stable identity of an artifact build.",
+        "type": "string"
+      },
+      "BuildPhase": {
+        "description": "Persisted phase of an artifact build.",
+        "oneOf": [
+          {
+            "description": "Waiting for a build worker.",
+            "enum": [
+              "queued"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Fetching and preparing source material.",
+            "enum": [
+              "preparing"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Running the configured build backend.",
+            "enum": [
+              "building"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The immutable artifact is available.",
+            "enum": [
+              "succeeded"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The build ended with a terminal error.",
+            "enum": [
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The build was canceled before completion.",
+            "enum": [
+              "canceled"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "BuildSource": {
+        "description": "Material used as the input to an artifact build.",
+        "oneOf": [
+          {
+            "description": "A source-control repository pinned to a revision.",
+            "properties": {
+              "repository": {
+                "description": "Repository URL.",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Branch, tag, or commit selected for the build.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "git"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "repository",
+              "revision"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A previously uploaded source archive.",
+            "properties": {
+              "archive_id": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ArtifactArchiveId"
+                  }
+                ],
+                "description": "Stable archive handle assigned by the upload API."
+              },
+              "type": {
+                "enum": [
+                  "tarball"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "archive_id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "BuildSpec": {
+        "description": "Desired build source and service association.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Deployment that will consume the build."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service requesting the build."
+          },
+          "template": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildTemplate"
+              }
+            ],
+            "description": "Immutable build template copied from the service."
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "template"
+        ],
+        "type": "object"
+      },
+      "BuildStatus": {
+        "description": "Observed build phase and immutable artifact identity.",
+        "properties": {
+          "conditions": {
+            "description": "Generic progress and failure evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "imageDigest": {
+            "description": "Immutable image digest produced by a successful build.",
+            "nullable": true,
+            "type": "string"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildPhase"
+              }
+            ],
+            "description": "Current build phase."
+          },
+          "sourceRevision": {
+            "description": "Source revision resolved by the build backend.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "BuildTemplate": {
+        "description": "Source and build environment applied to each generated build resource.",
+        "properties": {
+          "dockerfile": {
+            "description": "Path to the container build definition within the source.",
+            "type": "string"
+          },
+          "environment": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-secret build variables.",
+            "type": "object"
+          },
+          "secrets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SecretValue"
+            },
+            "description": "Secret build variables that are redacted from debug output.",
+            "type": "object"
+          },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildSource"
+              }
+            ],
+            "description": "Source material to build."
+          }
+        },
+        "required": [
+          "source",
+          "dockerfile"
+        ],
+        "type": "object"
+      },
+      "CommandSpec": {
+        "description": "Executable and argument vector passed without shell reinterpretation.",
+        "properties": {
+          "arguments": {
+            "description": "Argument vector passed verbatim to the executable.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "executable": {
+            "description": "Executable or container entrypoint.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "executable"
+        ],
+        "type": "object"
+      },
+      "Condition": {
+        "description": "Generic status evidence rendered consistently by APIs and the panel.",
+        "properties": {
+          "lastTransitionTime": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time the state last changed; message-only updates do not change it."
+          },
+          "message": {
+            "description": "Human-readable context that must not be used for machine decisions.",
+            "type": "string"
+          },
+          "observedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation evaluated to produce this condition."
+          },
+          "reason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConditionReason"
+              }
+            ],
+            "description": "Stable reason for the most recent transition."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConditionState"
+              }
+            ],
+            "description": "Current three-valued state."
+          },
+          "type": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConditionType"
+              }
+            ],
+            "description": "Stable condition name."
+          }
+        },
+        "required": [
+          "type",
+          "status",
+          "reason",
+          "message",
+          "observedGeneration",
+          "lastTransitionTime"
+        ],
+        "type": "object"
+      },
+      "ConditionReason": {
+        "description": "Stable machine-readable reason for a condition transition.",
+        "type": "string"
+      },
+      "ConditionState": {
+        "description": "Three-valued state of a status condition.",
+        "oneOf": [
+          {
+            "description": "The condition currently holds.",
+            "enum": [
+              "true"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The condition currently does not hold.",
+            "enum": [
+              "false"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The controller cannot currently determine the condition.",
+            "enum": [
+              "unknown"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "ConditionType": {
+        "description": "Stable machine-readable name of a status condition.",
+        "type": "string"
+      },
+      "Deployment": {
+        "$ref": "#/components/schemas/Object4"
+      },
+      "DeploymentId": {
+        "description": "Stable identity of one immutable service deployment.",
+        "type": "string"
+      },
+      "DeploymentPhase": {
+        "description": "Persisted phase of an immutable deployment.",
+        "oneOf": [
+          {
+            "description": "Waiting for the deployment operator.",
+            "enum": [
+              "QUEUED"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Preparing or resolving the deployment artifact.",
+            "enum": [
+              "BUILDING"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Workloads started but have not passed readiness checks.",
+            "enum": [
+              "PENDING_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Workloads are healthy and may receive traffic.",
+            "enum": [
+              "READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The deployment exhausted a terminal failure path.",
+            "enum": [
+              "CRASHED"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Runtime workloads have stopped.",
+            "enum": [
+              "TERMINATED"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Persistent deployment state is eligible for deletion.",
+            "enum": [
+              "REMOVED"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Traffic is leaving the deployment while requests drain.",
+            "enum": [
+              "DRAINING"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The queued or building deployment was canceled.",
+            "enum": [
+              "CANCELED"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "DeploymentSpec": {
+        "description": "Immutable service snapshot and artifact selected for one deployment.",
+        "properties": {
+          "buildId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Build generated for this deployment, when the artifact needs building."
+          },
+          "service": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Immutable service configuration used for every replica."
+          },
+          "serviceGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Service generation captured when the deployment was queued."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service that owns this deployment."
+          }
+        },
+        "required": [
+          "serviceId",
+          "serviceGeneration",
+          "service"
+        ],
+        "type": "object"
+      },
+      "DeploymentStatus": {
+        "description": "Observed lifecycle, artifact, and timing of one deployment.",
+        "properties": {
+          "conditions": {
+            "description": "Generic lifecycle and availability evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time the deployment was created."
+          },
+          "drainingAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time draining began."
+          },
+          "imageDigest": {
+            "description": "Immutable image digest selected or produced for workloads.",
+            "nullable": true,
+            "type": "string"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentPhase"
+              }
+            ],
+            "description": "Current lifecycle phase."
+          },
+          "readyAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time the deployment first became ready."
+          }
+        },
+        "required": [
+          "phase",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "DnsRecord": {
+        "$ref": "#/components/schemas/Object10"
+      },
+      "DnsRecordId": {
+        "description": "Stable identity of a cluster DNS record.",
+        "type": "string"
+      },
+      "DnsRecordSpec": {
+        "description": "Desired authoritative DNS record set.",
+        "properties": {
+          "name": {
+            "description": "Fully qualified record name.",
+            "type": "string"
+          },
+          "ttlSecs": {
+            "description": "DNS cache lifetime.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values": {
+            "description": "Homogeneous values published for the name.",
+            "items": {
+              "$ref": "#/components/schemas/DnsRecordValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "values",
+          "ttlSecs"
+        ],
+        "type": "object"
+      },
+      "DnsRecordStatus": {
+        "description": "Observed publication state of a DNS record set.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently loaded by node resolvers."
+          },
+          "conditions": {
+            "description": "Generic validation and publication evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "publishedNodes": {
+            "description": "Nodes that acknowledged this record generation.",
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "DnsRecordValue": {
+        "description": "A typed value stored in one authoritative DNS record set.",
+        "oneOf": [
+          {
+            "description": "IPv4 address record.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "a"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "format": "ipv4",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "IPv6 address record.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "aaaa"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "format": "ipv6",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Canonical-name target.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "cname"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Arbitrary text record.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "txt"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Service location record.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "srv"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "properties": {
+                  "port": {
+                    "description": "Target service port.",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "priority": {
+                    "description": "Target selection priority.",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target": {
+                    "description": "Canonical target hostname.",
+                    "type": "string"
+                  },
+                  "weight": {
+                    "description": "Relative target weight within one priority.",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "priority",
+                  "weight",
+                  "port",
+                  "target"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ExecPolicy": {
+        "description": "Whether API-initiated interactive execution is available to a workload.",
+        "oneOf": [
+          {
+            "description": "Authenticated exec sessions are allowed.",
+            "enum": [
+              "allowed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Exec sessions are rejected.",
+            "enum": [
+              "denied"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "FinalizerName": {
+        "description": "A finalizer registered by a controller before deletion can complete.",
+        "type": "string"
+      },
+      "FirewallDirection": {
+        "description": "Network direction governed by a firewall policy.",
+        "oneOf": [
+          {
+            "description": "Traffic initiated by workloads.",
+            "enum": [
+              "egress"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Traffic entering a node's protected host plane.",
+            "enum": [
+              "hostInput"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "FirewallPolicy": {
+        "$ref": "#/components/schemas/Object9"
+      },
+      "FirewallPolicyId": {
+        "description": "Stable identity of an effective firewall policy.",
+        "type": "string"
+      },
+      "FirewallPolicySpec": {
+        "description": "Desired ordered firewall policy.",
+        "properties": {
+          "defaultVerdict": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallVerdict"
+              }
+            ],
+            "description": "Verdict when no rule matches."
+          },
+          "direction": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallDirection"
+              }
+            ],
+            "description": "Network direction governed by the policy."
+          },
+          "rules": {
+            "description": "Ordered rules evaluated before the default verdict.",
+            "items": {
+              "$ref": "#/components/schemas/FirewallRule"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallSubject"
+              }
+            ],
+            "description": "Resource scope governed by the policy."
+          }
+        },
+        "required": [
+          "direction",
+          "subject",
+          "defaultVerdict"
+        ],
+        "type": "object"
+      },
+      "FirewallPolicyStatus": {
+        "description": "Observed atomic application state of a firewall policy.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently applied to the backend."
+          },
+          "conditions": {
+            "description": "Generic validation and application evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "rulesetDigest": {
+            "description": "Hash of the exact ruleset handed to the firewall backend.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "FirewallRule": {
+        "description": "One ordered firewall match and action.",
+        "properties": {
+          "cidr": {
+            "description": "Canonical destination or source CIDR, depending on policy direction.",
+            "type": "string"
+          },
+          "ports": {
+            "description": "Port ranges to match, or every port when empty.",
+            "items": {
+              "$ref": "#/components/schemas/PortRange"
+            },
+            "type": "array"
+          },
+          "protocol": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransportProtocol"
+              }
+            ],
+            "description": "Transport protocol to match."
+          },
+          "verdict": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallVerdict"
+              }
+            ],
+            "description": "Action applied to matching traffic."
+          }
+        },
+        "required": [
+          "cidr",
+          "protocol",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "FirewallSubject": {
+        "description": "Resource scope that a firewall policy governs.",
+        "oneOf": [
+          {
+            "description": "Every workload or node, depending on direction.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Workloads belonging to one service.",
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/ServiceId"
+              },
+              "type": {
+                "enum": [
+                  "service"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Host-input traffic for one node.",
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              "type": {
+                "enum": [
+                  "node"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FirewallVerdict": {
+        "description": "Action applied when a firewall rule matches.",
+        "oneOf": [
+          {
+            "description": "Permit matching traffic.",
+            "enum": [
+              "allow"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Reject matching traffic.",
+            "enum": [
+              "deny"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "Generation": {
+        "description": "Monotonic desired-state generation assigned when a resource specification changes.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "HealthCheckSpec": {
+        "description": "Timing and failure policy for a workload health probe.",
+        "properties": {
+          "intervalSecs": {
+            "description": "Interval between scheduled probes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "probe": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HealthProbe"
+              }
+            ],
+            "description": "Probe to perform."
+          },
+          "unhealthyThreshold": {
+            "description": "Consecutive failures required before a replica is unhealthy.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "probe",
+          "intervalSecs",
+          "unhealthyThreshold"
+        ],
+        "type": "object"
+      },
+      "HealthProbe": {
+        "description": "Health probe performed against a running workload address.",
+        "oneOf": [
+          {
+            "description": "HTTP GET probe requiring a successful response.",
+            "properties": {
+              "path": {
+                "description": "Absolute request path.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Workload port to probe.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "protocol": {
+                "enum": [
+                  "http"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "protocol",
+              "port",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "TCP connection probe.",
+            "properties": {
+              "port": {
+                "description": "Workload port to probe.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "protocol": {
+                "enum": [
+                  "tcp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "protocol",
+              "port"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "IngressRoute": {
+        "$ref": "#/components/schemas/Object7"
+      },
+      "IngressRouteId": {
+        "description": "Stable identity of an ingress route.",
+        "type": "string"
+      },
+      "IngressRouteSpec": {
+        "description": "Desired host routing for one service endpoint.",
+        "properties": {
+          "hosts": {
+            "description": "Canonical hostnames accepted by the route.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pathPrefix": {
+            "description": "Optional path prefix required after the host matches.",
+            "nullable": true,
+            "type": "string"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service receiving matching requests."
+          },
+          "sessionAffinity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionAffinity"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional opaque header affinity policy."
+          },
+          "targetPort": {
+            "description": "Workload port receiving requests.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "serviceId",
+          "hosts",
+          "targetPort"
+        ],
+        "type": "object"
+      },
+      "IngressRouteStatus": {
+        "description": "Observed route publication state.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Route generation most recently published by ingress."
+          },
+          "conditions": {
+            "description": "Generic publication and validation evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "Node": {
+        "$ref": "#/components/schemas/Object"
+      },
+      "NodeId": {
+        "description": "Stable identity of a cluster node.",
+        "type": "string"
+      },
+      "NodeInstanceId": {
+        "description": "Identity of one running daemon instance on a cluster node.",
+        "type": "string"
+      },
+      "NodeNetwork": {
+        "$ref": "#/components/schemas/Object2"
+      },
+      "NodeNetworkId": {
+        "description": "Stable identity of a node's published network configuration.",
+        "type": "string"
+      },
+      "NodeNetworkSpec": {
+        "description": "Desired WireGuard publication and workload subnet for one node.",
+        "properties": {
+          "endpoint": {
+            "description": "Directly reachable WireGuard UDP endpoint.",
+            "type": "string"
+          },
+          "mtuBytes": {
+            "description": "Mesh interface MTU applied to both WireGuard and workload networking.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node that owns the private key corresponding to this publication."
+          },
+          "publicKey": {
+            "description": "WireGuard public key; the private key is never stored in a resource.",
+            "type": "string"
+          },
+          "workloadSubnet": {
+            "description": "Canonical CIDR reserved for workloads on the node.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "publicKey",
+          "endpoint",
+          "workloadSubnet",
+          "mtuBytes"
+        ],
+        "type": "object"
+      },
+      "NodeNetworkStatus": {
+        "description": "Observed mesh programming state for one node network.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently applied by the node agent."
+          },
+          "conditions": {
+            "description": "Generic readiness and configuration evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "NodeRole": {
+        "description": "Scheduling and control-plane capability assigned to a node.",
+        "oneOf": [
+          {
+            "description": "Initial control-plane node that can bootstrap a cluster and run workloads.",
+            "enum": [
+              "master"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Control-plane node that also runs workloads.",
+            "enum": [
+              "hybrid"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Control-plane node that does not run user workloads.",
+            "enum": [
+              "controlPlane"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Workload node without control-plane responsibility.",
+            "enum": [
+              "worker"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "NodeSpec": {
+        "description": "Desired identity and connectivity of a cluster node.",
+        "properties": {
+          "hostAddress": {
+            "description": "Stable host address used for control-plane traffic.",
+            "format": "ip",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "Operator-facing hostname.",
+            "type": "string"
+          },
+          "role": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeRole"
+              }
+            ],
+            "description": "Scheduling and control-plane capability."
+          },
+          "schedulingLabels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Arbitrary scheduling labels advertised by the node.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "hostname",
+          "hostAddress",
+          "role"
+        ],
+        "type": "object"
+      },
+      "NodeStatus": {
+        "description": "Current reachability and lifecycle of a cluster node.",
+        "properties": {
+          "conditions": {
+            "description": "Generic readiness, availability, drain, and maintenance evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "instanceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeInstanceId"
+              }
+            ],
+            "description": "Identity of the currently running daemon instance."
+          },
+          "lastSeen": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Last time the node renewed its liveness session."
+          }
+        },
+        "required": [
+          "instanceId",
+          "lastSeen"
+        ],
+        "type": "object"
+      },
+      "NodeUpgradeStatus": {
+        "description": "Per-node progress retained across leader changes and daemon restarts.",
+        "properties": {
+          "attempts": {
+            "description": "Attempts consumed by retryable upgrade failures.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node being upgraded."
+          },
+          "observedVersion": {
+            "description": "Version last reported by the node.",
+            "nullable": true,
+            "type": "string"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradePhase"
+              }
+            ],
+            "description": "Current phase for this node."
+          },
+          "previousInstanceId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeInstanceId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Process identity observed before restart."
+          }
+        },
+        "required": [
+          "nodeId",
+          "phase",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "Object": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object10": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta10"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DnsRecordSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DnsRecordStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object11": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta11"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object12": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta12"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PreviewSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PreviewStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object13": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta13"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeRunSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeRunStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object14": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta14"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object2": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta2"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeNetworkSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeNetworkStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object3": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta3"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object4": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta4"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object5": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta5"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object6": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta6"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReplicaStateSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReplicaStateStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object7": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta7"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object8": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta8"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object9": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta9"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicySpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicyStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta10": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DnsRecordId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta11": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BuildId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta12": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PreviewId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta13": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeRunId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta14": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta2": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeNetworkId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta3": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta4": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta5": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta6": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReplicaStateId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta7": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta8": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta9": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicyId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "OwnerReference": {
+        "description": "A typed reference to a resource that created or manages another resource.",
+        "properties": {
+          "ownership": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ownership"
+              }
+            ],
+            "description": "Whether the owner controls cascading deletion."
+          },
+          "resource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceId"
+              }
+            ],
+            "description": "Identity and kind of the owner."
+          }
+        },
+        "required": [
+          "resource",
+          "ownership"
+        ],
+        "type": "object"
+      },
+      "Ownership": {
+        "description": "Whether an owner reference controls cascading deletion.",
+        "oneOf": [
+          {
+            "description": "The referenced resource controls this resource's lifecycle.",
+            "enum": [
+              "controller"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The reference records provenance without controlling deletion.",
+            "enum": [
+              "informational"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "PlacementConstraint": {
+        "description": "Hard node identity and label constraints used by the scheduler.",
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels every eligible node must match.",
+            "type": "object"
+          },
+          "nodeId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Required node identity, when placement is pinned."
+          }
+        },
+        "type": "object"
+      },
+      "PortRange": {
+        "description": "Inclusive transport port range.",
+        "properties": {
+          "end": {
+            "description": "Last port included by the range.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "description": "First port included by the range.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "Preview": {
+        "$ref": "#/components/schemas/Object12"
+      },
+      "PreviewId": {
+        "description": "Stable identity of a pull-request preview.",
+        "type": "string"
+      },
+      "PreviewPhase": {
+        "description": "Persisted lifecycle of a pull-request preview.",
+        "oneOf": [
+          {
+            "description": "Waiting for source inspection or derived resource creation.",
+            "enum": [
+              "pending"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Derived resources exist and the preview can receive traffic.",
+            "enum": [
+              "active"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Pull request closed and the grace-period finalizer is waiting.",
+            "enum": [
+              "closing"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Derived resources were deleted after close or expiry.",
+            "enum": [
+              "expired"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Preview reconciliation ended with a terminal configuration error.",
+            "enum": [
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Preview creation was canceled before becoming active.",
+            "enum": [
+              "canceled"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "PreviewSpec": {
+        "description": "Desired pull-request preview derivation and teardown policy.",
+        "properties": {
+          "baseServiceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Base service copied into the isolated preview service."
+          },
+          "closeGracePeriodSecs": {
+            "description": "Grace period between pull-request close and teardown.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expiresAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Absolute preview expiry time."
+          },
+          "headRevision": {
+            "description": "Current pull-request head revision.",
+            "type": "string"
+          },
+          "pullRequestNumber": {
+            "description": "Pull-request number within the repository.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repository": {
+            "description": "Source repository in `owner/name` form.",
+            "type": "string"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Derived service identity owned by this preview."
+          }
+        },
+        "required": [
+          "baseServiceId",
+          "repository",
+          "pullRequestNumber",
+          "headRevision",
+          "serviceId",
+          "closeGracePeriodSecs",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "PreviewStatus": {
+        "description": "Observed derived resource and teardown state of a preview.",
+        "properties": {
+          "conditions": {
+            "description": "Generic source, quota, rollout, and teardown evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PreviewPhase"
+              }
+            ],
+            "description": "Current preview phase."
+          },
+          "teardownAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time teardown may proceed after a close event."
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "ReplicaState": {
+        "$ref": "#/components/schemas/Object6"
+      },
+      "ReplicaStateId": {
+        "description": "Stable identity of a deployment replica's observed state.",
+        "type": "string"
+      },
+      "ReplicaStateSpec": {
+        "description": "Desired identity of one observable deployment replica slot.",
+        "properties": {
+          "assignmentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentId"
+              }
+            ],
+            "description": "Current assignment for the slot."
+          },
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Deployment owning the slot."
+          },
+          "replicaIndex": {
+            "description": "Zero-based replica slot within the deployment.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service owning the slot."
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "assignmentId",
+          "replicaIndex"
+        ],
+        "type": "object"
+      },
+      "ReplicaStateStatus": {
+        "description": "Health and restart evidence observed for one replica slot.",
+        "properties": {
+          "conditions": {
+            "description": "Generic health and exhaustion evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "healthcheckFailures": {
+            "description": "Consecutive failed health probes.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodeId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current node when assigned."
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentPhase"
+              }
+            ],
+            "description": "Deployment lifecycle phase observed for the replica."
+          },
+          "restartAttempts": {
+            "description": "Restart attempts consumed by this assignment.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workloadId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current runtime workload identity."
+          }
+        },
+        "required": [
+          "phase",
+          "healthcheckFailures",
+          "restartAttempts"
+        ],
+        "type": "object"
+      },
+      "ResourceId": {
+        "description": "An open reference to a built-in or future custom resource.",
+        "properties": {
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceName"
+              }
+            ],
+            "description": "Identity interpreted by the selected kind."
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceKind"
+              }
+            ],
+            "description": "Open kind name resolved through the API type registry."
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ResourceKind": {
+        "description": "Open resource kind name used by generic registries and owner references.",
+        "type": "string"
+      },
+      "ResourceName": {
+        "description": "Open resource identity used together with a resource kind.",
+        "type": "string"
+      },
+      "ResourceRevision": {
+        "description": "Monotonic store revision observed for a resource.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "RolloutState": {
+        "description": "Whether new service deployments may begin.",
+        "oneOf": [
+          {
+            "description": "New deployments may proceed.",
+            "enum": [
+              "active"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "New deployments remain queued until explicitly unfrozen.",
+            "enum": [
+              "frozen"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "SecretValue": {
+        "description": "A secret-bearing wire value whose debug representation is always redacted.",
+        "type": "string"
+      },
+      "Service": {
+        "$ref": "#/components/schemas/Object3"
+      },
+      "ServiceId": {
+        "description": "Stable identity of a deployable service.",
+        "type": "string"
+      },
+      "ServiceSpec": {
+        "description": "Desired service configuration used to create immutable deployments.",
+        "properties": {
+          "artifact": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactTemplate"
+              }
+            ],
+            "description": "Artifact selection or build template."
+          },
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommandSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional command override."
+          },
+          "environment": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-secret runtime environment.",
+            "type": "object"
+          },
+          "exec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExecPolicy"
+              }
+            ],
+            "description": "Interactive exec policy."
+          },
+          "exposedPorts": {
+            "description": "Runtime ports exposed to other cluster workloads.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "healthCheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HealthCheckSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional workload health policy."
+          },
+          "maxRestarts": {
+            "description": "Maximum restarts per assignment, or unlimited when absent.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Operator-facing service name.",
+            "type": "string"
+          },
+          "placement": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlacementConstraint"
+              }
+            ],
+            "default": {},
+            "description": "Hard scheduling constraints."
+          },
+          "replicas": {
+            "description": "Configured replica floor before a temporary override.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secrets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SecretValue"
+            },
+            "description": "Secret runtime environment, always redacted from debug output.",
+            "type": "object"
+          },
+          "version": {
+            "description": "Operator-supplied version used in rollout history.",
+            "type": "string"
+          },
+          "volumes": {
+            "description": "Filesystem mounts.",
+            "items": {
+              "$ref": "#/components/schemas/VolumeMountSpec"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "artifact",
+          "replicas",
+          "exec"
+        ],
+        "type": "object"
+      },
+      "ServiceStatus": {
+        "description": "Observed rollout state and active deployment of a service.",
+        "properties": {
+          "activeDeploymentId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Deployment currently receiving service traffic."
+          },
+          "conditions": {
+            "description": "Generic readiness and rollout evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "replicaOverride": {
+            "description": "Temporary replica count override, or the configured floor when absent.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "rollout": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RolloutState"
+              }
+            ],
+            "description": "Whether new rollouts may begin."
+          }
+        },
+        "required": [
+          "rollout"
+        ],
+        "type": "object"
+      },
+      "SessionAffinity": {
+        "description": "Optional header-based affinity applied by ingress.",
+        "properties": {
+          "header": {
+            "description": "HTTP header carrying the opaque affinity token.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "header"
+        ],
+        "type": "object"
+      },
+      "Timestamp": {
+        "description": "A UTC Unix timestamp represented in milliseconds.",
+        "format": "int64",
+        "type": "integer"
+      },
+      "TrafficGeneration": {
+        "$ref": "#/components/schemas/Object8"
+      },
+      "TrafficGenerationId": {
+        "description": "Stable identity of an ingress traffic generation.",
+        "type": "string"
+      },
+      "TrafficGenerationPhase": {
+        "description": "Persisted cutover lifecycle of a traffic generation.",
+        "oneOf": [
+          {
+            "description": "Configuration is prepared but does not yet receive traffic.",
+            "enum": [
+              "staged"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Configuration is published and receives traffic.",
+            "enum": [
+              "active"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Configuration is no longer referenced and may be collected.",
+            "enum": [
+              "retired"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "TrafficGenerationSpec": {
+        "description": "Desired immutable target set staged for an ingress cutover.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Deployment receiving traffic in this generation."
+          },
+          "routeIds": {
+            "description": "Routes published with the target set.",
+            "items": {
+              "$ref": "#/components/schemas/IngressRouteId"
+            },
+            "type": "array"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service whose traffic is changing."
+          },
+          "targets": {
+            "description": "Ready workload targets included in the generation.",
+            "items": {
+              "$ref": "#/components/schemas/TrafficTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "routeIds",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "TrafficGenerationStatus": {
+        "description": "Observed publication and garbage-collection state for one generation.",
+        "properties": {
+          "conditions": {
+            "description": "Generic readiness and collection evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationPhase"
+              }
+            ],
+            "description": "Current cutover phase."
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "TrafficTarget": {
+        "description": "One cluster-routable workload selected for ingress traffic.",
+        "properties": {
+          "assignmentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentId"
+              }
+            ],
+            "description": "Assignment owning this target."
+          },
+          "endpoint": {
+            "description": "Workload address and ingress port dialed directly over the mesh.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "endpoint"
+        ],
+        "type": "object"
+      },
+      "TransportProtocol": {
+        "description": "Transport protocol selected by a firewall rule.",
+        "oneOf": [
+          {
+            "description": "Transmission Control Protocol.",
+            "enum": [
+              "tcp"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "User Datagram Protocol.",
+            "enum": [
+              "udp"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Any transport protocol.",
+            "enum": [
+              "any"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpgradeMode": {
+        "description": "Node batching strategy for one cluster upgrade run.",
+        "oneOf": [
+          {
+            "description": "Upgrade one node at a time while preserving workload and store availability.",
+            "enum": [
+              "rolling"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Drain all nodes, then apply one coordinated batch.",
+            "enum": [
+              "allNodes"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpgradePhase": {
+        "description": "Persisted lifecycle shared by rolling and all-node upgrade modes.",
+        "oneOf": [
+          {
+            "description": "Waiting for the upgrade operator.",
+            "enum": [
+              "pending"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Selected nodes are becoming unschedulable and draining workloads.",
+            "enum": [
+              "draining"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The upgrade source is being staged or applied.",
+            "enum": [
+              "applying"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A node restart was requested and has not yet been observed.",
+            "enum": [
+              "restarting"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Running version and node health are being verified.",
+            "enum": [
+              "verifying"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Every selected node reached the target version and was restored.",
+            "enum": [
+              "completed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A terminal or retry-exhausted failure occurred.",
+            "enum": [
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The run was canceled and owned drains were restored.",
+            "enum": [
+              "canceled"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpgradeRun": {
+        "$ref": "#/components/schemas/Object13"
+      },
+      "UpgradeRunId": {
+        "description": "Stable identity of a persisted cluster upgrade run.",
+        "type": "string"
+      },
+      "UpgradeRunSpec": {
+        "description": "Desired target and batching for one cluster upgrade.",
+        "properties": {
+          "mode": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeMode"
+              }
+            ],
+            "description": "Node batching strategy."
+          },
+          "nodeIds": {
+            "description": "Explicit node selection, or every eligible node when empty.",
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "type": "array"
+          },
+          "targetVersion": {
+            "description": "Minimum semantic version every selected node must reach.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "targetVersion",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "UpgradeRunStatus": {
+        "description": "Observed aggregate and per-node progress of an upgrade run.",
+        "properties": {
+          "conditions": {
+            "description": "Generic leadership, retry, and restoration evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "description": "Per-node progress in deterministic maintenance order.",
+            "items": {
+              "$ref": "#/components/schemas/NodeUpgradeStatus"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradePhase"
+              }
+            ],
+            "description": "Aggregate run phase."
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "VolumeAccess": {
+        "description": "Read/write policy for a mounted volume.",
+        "oneOf": [
+          {
+            "description": "The workload can read and write the mount.",
+            "enum": [
+              "readWrite"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The workload can only read the mount.",
+            "enum": [
+              "readOnly"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "VolumeMountSpec": {
+        "description": "One filesystem mount in a service workload.",
+        "properties": {
+          "access": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VolumeAccess"
+              }
+            ],
+            "description": "Workload access mode."
+          },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VolumeSource"
+              }
+            ],
+            "description": "Storage source."
+          },
+          "target": {
+            "description": "Absolute path visible inside the workload.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target",
+          "access"
+        ],
+        "type": "object"
+      },
+      "VolumeSource": {
+        "description": "Storage source mounted into a workload.",
+        "oneOf": [
+          {
+            "description": "A path on one specific node, which pins scheduling to that node.",
+            "properties": {
+              "node_id": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/NodeId"
+                  }
+                ],
+                "description": "Node that owns the path."
+              },
+              "path": {
+                "description": "Absolute path on the node.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "hostPath"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "path",
+              "node_id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A runtime-managed named volume.",
+            "properties": {
+              "name": {
+                "description": "Stable runtime volume name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "managed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Webhook": {
+        "$ref": "#/components/schemas/Object14"
+      },
+      "WebhookEvent": {
+        "description": "Built-in event that may be delivered to an outbound webhook.",
+        "oneOf": [
+          {
+            "description": "A deployment changed lifecycle phase.",
+            "enum": [
+              "deploymentTransition"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A node became unavailable or recovered.",
+            "enum": [
+              "nodeAvailability"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A preview changed lifecycle phase.",
+            "enum": [
+              "previewTransition"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "An upgrade run changed lifecycle phase.",
+            "enum": [
+              "upgradeTransition"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "WebhookId": {
+        "description": "Stable identity of a webhook configuration.",
+        "type": "string"
+      },
+      "WebhookSpec": {
+        "description": "Desired endpoint, event selection, and signing material for a webhook.",
+        "properties": {
+          "endpoint": {
+            "description": "HTTPS endpoint receiving event deliveries.",
+            "type": "string"
+          },
+          "events": {
+            "description": "Event classes delivered to the endpoint.",
+            "items": {
+              "$ref": "#/components/schemas/WebhookEvent"
+            },
+            "type": "array"
+          },
+          "signingSecret": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              }
+            ],
+            "description": "Secret used to sign delivery payloads."
+          }
+        },
+        "required": [
+          "endpoint",
+          "events",
+          "signingSecret"
+        ],
+        "type": "object"
+      },
+      "WebhookStatus": {
+        "description": "Observed delivery health of a webhook.",
+        "properties": {
+          "conditions": {
+            "description": "Generic validation and delivery evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "consecutiveFailures": {
+            "description": "Consecutive delivery failures since the last success.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastSuccessAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time of the most recent successful delivery."
+          }
+        },
+        "required": [
+          "consecutiveFailures"
+        ],
+        "type": "object"
+      },
+      "WorkloadId": {
+        "description": "Stable identity of one runtime-managed workload instance.",
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "title": "Maestro Cloud API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.0.4",
+  "paths": {}
+}

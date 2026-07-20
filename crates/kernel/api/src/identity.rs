@@ -84,6 +84,10 @@ macro_rules! identifier {
 
 identifier!(NodeId, "Stable identity of a cluster node.");
 identifier!(
+    NodeInstanceId,
+    "Identity of one running daemon instance on a cluster node."
+);
+identifier!(
     NodeNetworkId,
     "Stable identity of a node's published network configuration."
 );
@@ -99,6 +103,10 @@ identifier!(
 identifier!(
     WorkloadId,
     "Stable identity of one runtime-managed workload instance."
+);
+identifier!(
+    ArtifactArchiveId,
+    "Stable identity of one uploaded artifact source archive."
 );
 identifier!(
     ReplicaStateId,
@@ -121,42 +129,62 @@ identifier!(
     "Stable identity of a persisted cluster upgrade run."
 );
 identifier!(WebhookId, "Stable identity of a webhook configuration.");
+identifier!(
+    ResourceKind,
+    "Open resource kind name used by generic registries and owner references."
+);
+identifier!(
+    ResourceName,
+    "Open resource identity used together with a resource kind."
+);
 
-/// A type-safe reference to the identity of any built-in resource.
+/// An open reference to a built-in or future custom resource.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
-#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
-pub enum ResourceId {
-    /// A cluster node.
-    Node(NodeId),
-    /// A node network publication.
-    NodeNetwork(NodeNetworkId),
-    /// A deployable service.
-    Service(ServiceId),
-    /// An immutable deployment.
-    Deployment(DeploymentId),
-    /// A scheduled assignment.
-    Assignment(AssignmentId),
-    /// An observed replica state.
-    ReplicaState(ReplicaStateId),
-    /// An ingress route.
-    IngressRoute(IngressRouteId),
-    /// A traffic generation.
-    TrafficGeneration(TrafficGenerationId),
-    /// A firewall policy.
-    FirewallPolicy(FirewallPolicyId),
-    /// A DNS record.
-    DnsRecord(DnsRecordId),
-    /// An artifact build.
-    Build(BuildId),
-    /// A pull-request preview.
-    Preview(PreviewId),
-    /// A cluster upgrade run.
-    UpgradeRun(UpgradeRunId),
-    /// A webhook configuration.
-    Webhook(WebhookId),
+#[serde(rename_all = "camelCase")]
+pub struct ResourceId {
+    /// Open kind name resolved through the API type registry.
+    pub kind: ResourceKind,
+    /// Identity interpreted by the selected kind.
+    pub id: ResourceName,
 }
+
+impl ResourceId {
+    /// Constructs a generic resource reference from validated components.
+    pub fn new(kind: ResourceKind, id: ResourceName) -> Self {
+        Self { kind, id }
+    }
+}
+
+macro_rules! resource_name_from {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            impl From<$name> for ResourceName {
+                fn from(value: $name) -> Self {
+                    Self(value.0)
+                }
+            }
+        )+
+    };
+}
+
+resource_name_from!(
+    NodeId,
+    NodeNetworkId,
+    ServiceId,
+    DeploymentId,
+    AssignmentId,
+    ReplicaStateId,
+    IngressRouteId,
+    TrafficGenerationId,
+    FirewallPolicyId,
+    DnsRecordId,
+    BuildId,
+    PreviewId,
+    UpgradeRunId,
+    WebhookId,
+);
 
 fn validate(value: &str) -> Result<(), InvalidIdentifier> {
     const MAXIMUM_LENGTH: usize = 253;

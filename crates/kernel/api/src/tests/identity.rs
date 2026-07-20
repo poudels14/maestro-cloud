@@ -24,7 +24,7 @@ fn identifiers_reject_invalid_boundaries_and_characters() {
 
 #[test]
 fn deserialization_validates_identifiers() {
-    let error = serde_json::from_str::<ResourceId>(r#"{"kind":"service","id":"bad/id"}"#)
+    let error = serde_json::from_str::<ResourceId>(r#"{"kind":"Service","id":"bad/id"}"#)
         .expect_err("invalid resource identity should fail");
 
     assert!(error.to_string().contains("unsupported character"));
