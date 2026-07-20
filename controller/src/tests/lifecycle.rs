@@ -14,8 +14,9 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use clustertest::{
-    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
-    FaultInjectableCluster, FixtureName, IngressFixture, LifecycleFaultCluster, ReplicaCount,
+    AcceptanceCluster, ArtifactBehavior, ArtifactObservation, ArtifactStageState, ClusterSnapshot,
+    DeploymentPhase, DeploymentSnapshot, FaultInjectableCluster, FixtureName, HealthObservation,
+    IngressFixture, LifecycleControlCluster, LifecycleFaultCluster, ReplicaCount, ReplicaHealth,
     ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
     RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
 };
@@ -2443,6 +2444,7 @@ impl OldSystemAcceptanceCluster {
                                     index: replica.replica_index,
                                     phase: acceptance_phase(&replica.status),
                                     restart_attempts: replica.restart_attempts,
+                                    healthcheck_failures: replica.healthcheck_failures,
                                     workload: if self
                                         .harness
                                         .supervisor
@@ -2462,6 +2464,9 @@ impl OldSystemAcceptanceCluster {
                                 deployment.config.version.clone(),
                             ),
                             phase: acceptance_phase(&deployment.status),
+                            artifact: deployment.build.as_ref().map(|build| {
+                                clustertest::FixtureArtifact::new(build.docker_image_id.clone())
+                            }),
                             replicas,
                         }
                     })
@@ -2759,6 +2764,160 @@ impl LifecycleFaultCluster for OldSystemAcceptanceCluster {
     }
 }
 
+#[async_trait]
+impl LifecycleControlCluster for OldSystemAcceptanceCluster {
+    async fn freeze_service(&mut self, service: &FixtureName) -> Result<()> {
+        self.harness.store.freeze(service.as_str());
+        Ok(())
+    }
+
+    async fn configure_artifact(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        behavior: ArtifactBehavior,
+    ) -> Result<()> {
+        match behavior {
+            ArtifactBehavior::CompleteWith(artifact) => self
+                .harness
+                .provider
+                .set_build_ok(deployment_id, artifact.as_str()),
+            ArtifactBehavior::NeverCompletes => {
+                self.harness.provider.set_build_hanging(deployment_id);
+            }
+        }
+        Ok(())
+    }
+
+    async fn artifact_observation(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+    ) -> Result<ArtifactObservation> {
+        let service_id = self.deployment_service(deployment_id)?;
+        let persisted_artifact = {
+            let state = self.harness.store.state.lock().expect("state lock");
+            state
+                .history
+                .get(&service_id)
+                .and_then(|deployments| {
+                    deployments
+                        .iter()
+                        .find(|deployment| deployment.id == *deployment_id)
+                })
+                .and_then(|deployment| deployment.build.as_ref())
+                .map(|build| clustertest::FixtureArtifact::new(build.docker_image_id.clone()))
+        };
+        Ok(ArtifactObservation {
+            preparation: if self.harness.provider.prepared_ids().contains(deployment_id) {
+                ArtifactStageState::Complete
+            } else {
+                ArtifactStageState::Pending
+            },
+            build: if self
+                .harness
+                .provider
+                .built_image_tag(deployment_id)
+                .is_some()
+            {
+                ArtifactStageState::Complete
+            } else {
+                ArtifactStageState::Pending
+            },
+            persisted_artifact,
+        })
+    }
+
+    fn health_failure_threshold(&self) -> u32 {
+        DEFAULT_MAX_HEALTHCHECK_FAILURES
+    }
+
+    async fn seed_replica_health(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+        phase: DeploymentPhase,
+        failures: u32,
+    ) -> Result<()> {
+        let service_id = self.deployment_service(deployment_id)?;
+        let mut state = self
+            .harness
+            .store
+            .replicas_for(&service_id, deployment_id)
+            .into_iter()
+            .find(|state| state.replica_index == replica_index.get())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "deployment `{deployment_id}` has no replica {}",
+                    replica_index.get()
+                )
+            })?;
+        state.status = acceptance_status(phase);
+        state.healthcheck_failures = failures;
+        self.harness
+            .store
+            .set_replica_state(&service_id, deployment_id, state);
+        Ok(())
+    }
+
+    async fn health_observation(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+    ) -> Result<HealthObservation> {
+        let snapshot = self.snapshot();
+        let replica = snapshot
+            .services
+            .iter()
+            .flat_map(|service| &service.deployments)
+            .find(|deployment| deployment.id == *deployment_id)
+            .and_then(|deployment| {
+                deployment
+                    .replicas
+                    .iter()
+                    .find(|replica| replica.index == replica_index.get())
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "deployment `{deployment_id}` has no replica {}",
+                    replica_index.get()
+                )
+            })?;
+        Ok(HealthObservation {
+            phase: replica.phase,
+            failures: replica.healthcheck_failures,
+            workload: replica.workload,
+            store_writes: u64::try_from(self.harness.store.upsert_replica_state_calls())
+                .map_err(|_| anyhow::anyhow!("health write count exceeds u64"))?,
+        })
+    }
+
+    async fn report_health(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+        health: ReplicaHealth,
+    ) -> Result<HealthObservation> {
+        let service_id = self.deployment_service(deployment_id)?;
+        match health {
+            ReplicaHealth::Healthy => {
+                self.harness
+                    .report_replica_healthy(&service_id, deployment_id, replica_index.get())
+                    .await;
+            }
+            ReplicaHealth::Unhealthy => {
+                self.harness
+                    .report_replica_unhealthy(
+                        &service_id,
+                        deployment_id,
+                        replica_index.get(),
+                        "acceptance health failure",
+                    )
+                    .await;
+            }
+        }
+        self.health_observation(deployment_id, replica_index).await
+    }
+}
+
 #[tokio::test]
 async fn acceptance_rollout_reaches_ready_on_old_system() {
     let mut cluster = OldSystemAcceptanceCluster::new();
@@ -2885,6 +3044,105 @@ async fn acceptance_old_workload_crash_does_not_break_redeployment_on_old_system
         .expect("rollover workload crash acceptance scenario");
 }
 
+#[tokio::test]
+async fn acceptance_queued_rollout_ignores_later_freeze_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::queued_rollout_ignores_later_freeze(&mut cluster)
+        .await
+        .expect("queued rollout freeze acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_artifact_preparation_precedes_build_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::artifact_preparation_precedes_build(&mut cluster)
+        .await
+        .expect("artifact ordering acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_built_artifact_is_persisted_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::built_artifact_is_persisted(&mut cluster)
+        .await
+        .expect("artifact persistence acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_unhealthy_threshold_restarts_replica_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::unhealthy_threshold_restarts_replica(&mut cluster)
+        .await
+        .expect("unhealthy threshold acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_repeated_healthy_reports_are_write_free_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::repeated_healthy_reports_are_write_free(&mut cluster)
+        .await
+        .expect("healthy no-op acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_healthy_report_updates_pending_replica_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::healthy_report_updates_pending_replica(&mut cluster)
+        .await
+        .expect("pending healthy acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_unhealthy_report_increments_and_persists_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::unhealthy_report_increments_and_persists(&mut cluster)
+        .await
+        .expect("unhealthy write acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_healthy_report_resets_failure_count_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::healthy_report_resets_failure_count(&mut cluster)
+        .await
+        .expect("health recovery acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_health_monitor_readies_deployment_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::health_monitor_readies_deployment(&mut cluster)
+        .await
+        .expect("health monitor rollout acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_in_progress_build_can_be_canceled_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::in_progress_build_can_be_canceled(&mut cluster)
+        .await
+        .expect("in-progress build cancellation acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_hanging_build_crashes_after_timeout_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::hanging_build_crashes_after_timeout(&mut cluster)
+        .await
+        .expect("hanging build timeout acceptance scenario");
+}
+
 fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {
     match status {
         DeploymentStatus::Queued => DeploymentPhase::Queued,
@@ -2896,5 +3154,19 @@ fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {
         DeploymentStatus::Removed => DeploymentPhase::Removed,
         DeploymentStatus::Draining => DeploymentPhase::Draining,
         DeploymentStatus::Canceled => DeploymentPhase::Canceled,
+    }
+}
+
+fn acceptance_status(phase: DeploymentPhase) -> DeploymentStatus {
+    match phase {
+        DeploymentPhase::Queued => DeploymentStatus::Queued,
+        DeploymentPhase::Building => DeploymentStatus::Building,
+        DeploymentPhase::PendingReady => DeploymentStatus::PendingReady,
+        DeploymentPhase::Ready => DeploymentStatus::Ready,
+        DeploymentPhase::Crashed => DeploymentStatus::Crashed,
+        DeploymentPhase::Terminated => DeploymentStatus::Terminated,
+        DeploymentPhase::Removed => DeploymentStatus::Removed,
+        DeploymentPhase::Draining => DeploymentStatus::Draining,
+        DeploymentPhase::Canceled => DeploymentStatus::Canceled,
     }
 }

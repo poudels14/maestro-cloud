@@ -9,6 +9,7 @@ mod cluster;
 mod election;
 mod error;
 mod formation;
+mod lifecycle;
 mod model;
 mod quorum;
 mod restart;
@@ -26,6 +27,10 @@ pub use formation::{
     BootstrapDecision, FormationCluster, FormationMemberRole, FormationSnapshot, JoinObservation,
     LeadershipAgreement, MembershipAgreement, NodePorts, RegistrationCleanup,
     RegistrationObservation, ReservationState,
+};
+pub use lifecycle::{
+    ArtifactBehavior, ArtifactObservation, ArtifactStageState, FixtureArtifact, HealthObservation,
+    LifecycleControlCluster, ReplicaHealth,
 };
 pub use model::{
     AffinityCookieSet, AffinityObservation, AffinitySession, AssignmentManifestSnapshot,

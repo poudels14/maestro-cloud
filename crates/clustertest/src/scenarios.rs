@@ -4,6 +4,7 @@ mod affinity;
 mod election;
 mod formation;
 mod lifecycle;
+mod lifecycle_control;
 mod lifecycle_faults;
 mod quorum;
 mod restart;
@@ -20,6 +21,14 @@ pub use lifecycle::{
     drained_deployment_finalizes, prepare_failure_marks_deployment_crashed,
     queued_deployment_can_be_canceled, redeploy_drains_previous, replica_override_round_trips,
     rollout_reaches_ready,
+};
+pub use lifecycle_control::{
+    artifact_preparation_precedes_build, built_artifact_is_persisted,
+    hanging_build_crashes_after_timeout, health_monitor_readies_deployment,
+    healthy_report_resets_failure_count, healthy_report_updates_pending_replica,
+    in_progress_build_can_be_canceled, queued_rollout_ignores_later_freeze,
+    repeated_healthy_reports_are_write_free, unhealthy_report_increments_and_persists,
+    unhealthy_threshold_restarts_replica,
 };
 pub use lifecycle_faults::{
     all_exhausted_replicas_crash_deployment, exhausted_replica_stays_down_while_peers_run,

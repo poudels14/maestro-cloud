@@ -4,9 +4,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::{
-    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
-    FaultInjectableCluster, FixtureName, LifecycleFaultCluster, ReplicaCount, ReplicaIndex,
-    ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
+    AcceptanceCluster, ArtifactBehavior, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
+    FaultInjectableCluster, FixtureArtifact, FixtureName, LifecycleFaultCluster, ReplicaCount,
+    ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
     RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
 };
 
@@ -16,18 +16,22 @@ struct WorldService {
     deployments: Vec<DeploymentSnapshot<u64>>,
 }
 
-struct LifecycleWorld {
+pub(super) struct LifecycleWorld {
     next_deployment: u64,
     services: BTreeMap<FixtureName, WorldService>,
     deployment_services: BTreeMap<u64, FixtureName>,
     failures: BTreeMap<u64, RolloutFailure>,
     exhausted: BTreeSet<(u64, u32)>,
     missing_records: BTreeSet<u64>,
+    pub(super) artifact_behaviors: BTreeMap<u64, ArtifactBehavior>,
+    pub(super) prepared: BTreeSet<u64>,
+    pub(super) built: BTreeSet<u64>,
+    pub(super) health_writes: u64,
     drain_grace_elapsed: bool,
 }
 
 impl LifecycleWorld {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             next_deployment: 1,
             services: BTreeMap::new(),
@@ -35,6 +39,10 @@ impl LifecycleWorld {
             failures: BTreeMap::new(),
             exhausted: BTreeSet::new(),
             missing_records: BTreeSet::new(),
+            artifact_behaviors: BTreeMap::new(),
+            prepared: BTreeSet::new(),
+            built: BTreeSet::new(),
+            health_writes: 0,
             drain_grace_elapsed: false,
         }
     }
@@ -64,7 +72,7 @@ impl LifecycleWorld {
             .ok_or(LifecycleWorldError("unknown service"))
     }
 
-    fn deployment_mut(
+    pub(super) fn deployment_mut(
         &mut self,
         deployment: u64,
     ) -> Result<&mut DeploymentSnapshot<u64>, LifecycleWorldError> {
@@ -79,14 +87,40 @@ impl LifecycleWorld {
         let failures = &self.failures;
         let exhausted = &self.exhausted;
         let missing_records = &self.missing_records;
+        let artifact_behaviors = &self.artifact_behaviors;
+        let prepared = &mut self.prepared;
+        let built = &mut self.built;
         for service in self.services.values_mut() {
             for deployment in &mut service.deployments {
+                if deployment.phase == DeploymentPhase::Canceled {
+                    continue;
+                }
+                prepared.insert(deployment.id);
                 if failures.contains_key(&deployment.id) {
                     deployment.phase = DeploymentPhase::Crashed;
                     deployment.replicas.clear();
                 } else if missing_records.contains(&deployment.id) {
                     deployment.phase = DeploymentPhase::Terminated;
                     deployment.replicas.clear();
+                } else {
+                    match artifact_behaviors.get(&deployment.id) {
+                        Some(ArtifactBehavior::NeverCompletes) => {
+                            deployment.phase = if self.drain_grace_elapsed {
+                                DeploymentPhase::Crashed
+                            } else {
+                                DeploymentPhase::Building
+                            };
+                        }
+                        Some(ArtifactBehavior::CompleteWith(artifact)) => {
+                            built.insert(deployment.id);
+                            deployment.artifact = Some(artifact.clone());
+                        }
+                        None => {
+                            built.insert(deployment.id);
+                            deployment.artifact =
+                                Some(FixtureArtifact::new(format!("artifact-{}", deployment.id)));
+                        }
+                    }
                 }
             }
             let Some(active_index) = service.deployments.iter().rposition(|deployment| {
@@ -96,6 +130,9 @@ impl LifecycleWorld {
                         | DeploymentPhase::Crashed
                         | DeploymentPhase::Terminated
                         | DeploymentPhase::Removed
+                ) && !matches!(
+                    artifact_behaviors.get(&deployment.id),
+                    Some(ArtifactBehavior::NeverCompletes)
                 )
             }) else {
                 continue;
@@ -114,6 +151,7 @@ impl LifecycleWorld {
                         index,
                         phase: DeploymentPhase::PendingReady,
                         restart_attempts: 0,
+                        healthcheck_failures: 0,
                         workload: ResourceAvailability::Available,
                     });
                 }
@@ -121,7 +159,13 @@ impl LifecycleWorld {
             active.replicas.sort_by_key(|replica| replica.index);
             let settled_phase = match readiness {
                 WorldReadiness::Automatic => DeploymentPhase::Ready,
-                WorldReadiness::External if active.phase == DeploymentPhase::Ready => {
+                WorldReadiness::External
+                    if active.phase == DeploymentPhase::Ready
+                        || active
+                            .replicas
+                            .iter()
+                            .all(|replica| replica.phase == DeploymentPhase::Ready) =>
+                {
                     DeploymentPhase::Ready
                 }
                 WorldReadiness::External => DeploymentPhase::PendingReady,
@@ -182,7 +226,7 @@ enum WorldReadiness {
 
 #[derive(Debug, thiserror::Error)]
 #[error("lifecycle world failed: {0}")]
-struct LifecycleWorldError(&'static str);
+pub(super) struct LifecycleWorldError(pub(super) &'static str);
 
 #[async_trait]
 impl AcceptanceCluster for LifecycleWorld {
@@ -210,6 +254,7 @@ impl AcceptanceCluster for LifecycleWorld {
             id: deployment,
             version: service.version,
             phase: DeploymentPhase::Queued,
+            artifact: None,
             replicas: Vec::new(),
         });
         Ok(deployment)

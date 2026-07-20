@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::lifecycle::FixtureArtifact;
+
 /// A stable scenario-local service name, mapped to a real `ServiceId` by a driver.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FixtureName(String);
@@ -372,6 +374,8 @@ pub struct ReplicaSnapshot {
     pub phase: DeploymentPhase,
     /// The restart attempts recorded for this replica.
     pub restart_attempts: u32,
+    /// Consecutive healthcheck failures recorded for this replica.
+    pub healthcheck_failures: u32,
     /// Whether the runtime workload currently exists.
     pub workload: ResourceAvailability,
 }
@@ -385,6 +389,8 @@ pub struct DeploymentSnapshot<DeploymentId> {
     pub version: FixtureVersion,
     /// The deployment's observed lifecycle phase.
     pub phase: DeploymentPhase,
+    /// Artifact identity persisted after a successful build.
+    pub artifact: Option<FixtureArtifact>,
     /// The deployment's observed replicas, ordered by index.
     pub replicas: Vec<ReplicaSnapshot>,
 }
