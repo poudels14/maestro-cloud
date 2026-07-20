@@ -1,4 +1,24 @@
-use crate::{BuildPhase, DeploymentPhase};
+use crate::{ArtifactArchiveId, BuildPhase, BuildSource, DeploymentPhase, NodeId, VolumeSource};
+
+#[test]
+fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
+    let build_source = BuildSource::Tarball {
+        archive_id: ArtifactArchiveId::new("archive-1").expect("archive id"),
+    };
+    let volume_source = VolumeSource::HostPath {
+        path: "/srv/data".to_string(),
+        node_id: NodeId::new("node-1").expect("node id"),
+    };
+
+    assert_eq!(
+        serde_json::to_value(build_source).expect("serialize build source"),
+        serde_json::json!({"type": "tarball", "archiveId": "archive-1"})
+    );
+    assert_eq!(
+        serde_json::to_value(volume_source).expect("serialize volume source"),
+        serde_json::json!({"type": "hostPath", "path": "/srv/data", "nodeId": "node-1"})
+    );
+}
 
 #[test]
 fn deployment_transition_matrix_matches_the_harvested_lifecycle() {

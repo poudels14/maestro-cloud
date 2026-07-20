@@ -40,7 +40,11 @@ pub struct BuildTemplate {
 
 /// Material used as the input to an artifact build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum BuildSource {
     /// A source-control repository pinned to a revision.
     Git {
@@ -119,7 +123,11 @@ pub enum VolumeAccess {
 
 /// Storage source mounted into a workload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum VolumeSource {
     /// A path on one specific node, which pins scheduling to that node.
     HostPath {

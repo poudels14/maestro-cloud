@@ -1,2 +1,4 @@
 packages:
   - ui
+  - ui/apps/*
+  - ui/packages/*

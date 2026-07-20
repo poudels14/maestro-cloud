@@ -1,7 +1,3 @@
----
-source: crates/kernel/api/src/tests/schema.rs
-expression: openapi_document()
----
 {
   "components": {
     "schemas": {
