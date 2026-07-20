@@ -476,6 +476,11 @@ curl http://my-app-abc123.my-cluster.maestro.internal/
 curl http://web.other-cluster.maestro.internal:8888/
 ```
 
+Deployment links use the human-readable `<cluster>.maestro.internal` alias. The
+suffix-bearing canonical domain remains available for diagnostics. If peer
+discovery finds another tailnet cluster claiming the same alias, Maestro reports
+the conflict in the UI but continues to show the configured alias.
+
 ### Multi-cluster setup
 
 Each cluster needs a unique `cluster.name` and `subnet` to avoid routing conflicts.

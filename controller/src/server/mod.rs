@@ -71,6 +71,7 @@ const LOG_CURSOR_HEADER: &str = "x-maestro-log-cursor";
 const EXEC_FORWARD_HEADER: &str = "x-maestro-telemetry-forwarded";
 const EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_EXEC_SESSIONS: usize = 8;
+const DNS_CLUSTERS_PATH: &str = "/api/clusters";
 
 #[derive(Debug)]
 enum UpgradeVersionError {
@@ -162,6 +163,19 @@ struct ClusterNodeView {
     lost_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsClusterSnapshot {
+    clusters: Vec<DnsClusterStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsClusterStatus {
+    alias_status: String,
+    is_local: bool,
+}
+
 #[derive(Clone)]
 struct OperatorIdentity(String);
 
@@ -176,6 +190,8 @@ struct AppState {
     system_type: Option<String>,
     cluster_name: String,
     cluster_alias: String,
+    dns_status_url: Option<String>,
+    dns_status_http: Option<reqwest::Client>,
     masked_config: Option<Arc<crate::config::MaskedConfig>>,
     slack: crate::slack::SlackNotifier,
     allow_cli_deployment: bool,
@@ -200,6 +216,7 @@ pub(crate) struct ServerConfig {
     pub system_type: Option<String>,
     pub cluster_name: String,
     pub cluster_alias: String,
+    pub dns_ip: Option<String>,
     pub masked_config: Option<Arc<crate::config::MaskedConfig>>,
     pub slack: crate::slack::SlackNotifier,
     pub allow_cli_deployment: bool,
@@ -223,6 +240,7 @@ impl Server {
             system_type,
             cluster_name,
             cluster_alias,
+            dns_ip,
             masked_config,
             slack,
             allow_cli_deployment,
@@ -231,6 +249,15 @@ impl Server {
             backup_stats,
             local_node_id,
         } = config;
+        let dns_status_url = dns_ip.map(|ip| format!("http://{ip}{DNS_CLUSTERS_PATH}"));
+        let dns_status_http = dns_status_url.as_ref().and_then(|_| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .connect_timeout(Duration::from_millis(250))
+                .timeout(Duration::from_millis(750))
+                .build()
+                .ok()
+        });
         cleanup_stale_cluster_request_spools(&upload_dir);
         Self {
             state: AppState {
@@ -243,6 +270,8 @@ impl Server {
                 system_type,
                 cluster_name,
                 cluster_alias,
+                dns_status_url,
+                dns_status_http,
                 masked_config,
                 slack,
                 allow_cli_deployment,
@@ -575,6 +604,7 @@ impl Server {
     ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
         let canonical_domain = format!("{}.maestro.internal", state.cluster_name);
         let alias_domain = format!("{}.maestro.internal", state.cluster_alias);
+        let alias_status = cluster_alias_status(&state).await;
         let upgrade_run = state.store.read_cluster_upgrade().await.ok().flatten();
         let coordinated_upgrade = upgrade_run.as_ref().is_some_and(|run| {
             !run.phase.is_terminal() && run.kind == crate::cluster::ClusterMaintenanceKind::Upgrade
@@ -641,6 +671,7 @@ impl Server {
             "clusterAlias": state.cluster_alias,
             "canonicalDomain": canonical_domain,
             "aliasDomain": alias_domain,
+            "aliasStatus": alias_status,
             "version": MAESTRO_VERSION,
             "upgrading": upgrading,
             "restarting": restarting,
@@ -5222,6 +5253,35 @@ async fn proxy_node_selected_read(
         axum::http::HeaderValue::from_str(&selected_node).expect("node id is a valid header value"),
     );
     Ok(output)
+}
+
+async fn cluster_alias_status(state: &AppState) -> &'static str {
+    let (Some(url), Some(client)) = (&state.dns_status_url, &state.dns_status_http) else {
+        return "inactive";
+    };
+    let Ok(response) = client.get(url).send().await else {
+        return "unknown";
+    };
+    let Ok(response) = response.error_for_status() else {
+        return "unknown";
+    };
+    let Ok(snapshot) = response.json::<DnsClusterSnapshot>().await else {
+        return "unknown";
+    };
+    alias_status_from_snapshot(&snapshot)
+}
+
+fn alias_status_from_snapshot(snapshot: &DnsClusterSnapshot) -> &'static str {
+    match snapshot
+        .clusters
+        .iter()
+        .find(|cluster| cluster.is_local)
+        .map(|cluster| cluster.alias_status.as_str())
+    {
+        Some("active") => "active",
+        Some("conflicted") => "conflicted",
+        _ => "unknown",
+    }
 }
 
 fn is_cluster_write(method: &axum::http::Method, path: &str) -> bool {

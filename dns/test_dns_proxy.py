@@ -52,6 +52,23 @@ class FakeUdpServer:
 
 
 class DnsProxyTests(unittest.TestCase):
+    def test_alias_derivation_supports_standalone_and_multinode_suffixes(self):
+        derive_alias = PROXY["derive_alias"]
+
+        self.assertEqual(derive_alias("sandbox-ab12"), "sandbox")
+        self.assertEqual(derive_alias("sandbox-5e02de75"), "sandbox")
+        self.assertEqual(derive_alias("sandbox"), "sandbox")
+        self.assertEqual(derive_alias("sandbox-not-an-id"), "sandbox-not-an-id")
+
+    def test_duplicate_alias_claims_are_reported_as_conflicted(self):
+        owners = PROXY["compute_alias_owners"](
+            "sandbox-5e02de75",
+            "sandbox",
+            {"sandbox-a12bc345": "100.64.0.10"},
+        )
+
+        self.assertNotIn("sandbox", owners)
+
     def test_peer_query_uses_tailscale_socks5_proxy(self):
         sock = FakeSocket(b"peer-response")
         with patch.object(PROXY["socket"], "create_connection", return_value=sock) as connect:

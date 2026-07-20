@@ -232,7 +232,7 @@ def derive_alias(cluster_name):
     if "-" not in cluster_name:
         return cluster_name
     base, suffix = cluster_name.rsplit("-", 1)
-    if base and len(suffix) == 4 and suffix.isalnum():
+    if base and len(suffix) in (4, 8) and suffix.isalnum():
         return base
     return cluster_name
 

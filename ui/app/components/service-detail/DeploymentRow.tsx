@@ -133,8 +133,7 @@ function ReplicaRow(props: {
 }) {
   const hostname = () =>
     replicaHostname(props.deployment, props.replicaIndex, props.containerHostname);
-  const fqdn = () =>
-    props.clusterInfo ? `${hostname()}.${props.clusterInfo.canonicalDomain}` : null;
+  const fqdn = () => (props.clusterInfo ? `${hostname()}.${props.clusterInfo.aliasDomain}` : null);
   const href = () => {
     const host = fqdn();
     if (!host) return null;

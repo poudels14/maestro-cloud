@@ -167,7 +167,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
       d,
       0,
       replica?.endpoint?.containerHostname
-    )}.${info.canonicalDomain}`;
+    )}.${info.aliasDomain}`;
     const port = d.config.ingress?.port ?? null;
     return port ? `${host}:${port}` : host;
   };

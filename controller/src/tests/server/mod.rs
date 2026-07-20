@@ -7,6 +7,31 @@ use crate::deployment::types::{
 use crate::utils::crypto::SecretString;
 use crate::validation::validate_service_id;
 
+#[test]
+fn local_dns_alias_conflicts_are_exposed() {
+    let snapshot: DnsClusterSnapshot = serde_json::from_value(serde_json::json!({
+        "clusters": [
+            {
+                "clusterName": "peer-a12bc345",
+                "clusterAlias": "peer",
+                "aliasStatus": "active",
+                "adminUrl": "http://admin.peer-a12bc345.maestro.internal/",
+                "isLocal": false
+            },
+            {
+                "clusterName": "sandbox-5e02de75",
+                "clusterAlias": "sandbox",
+                "aliasStatus": "conflicted",
+                "adminUrl": "http://admin.sandbox-5e02de75.maestro.internal/",
+                "isLocal": true
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert_eq!(alias_status_from_snapshot(&snapshot), "conflicted");
+}
+
 #[tokio::test]
 async fn service_mutation_errors_return_structured_json() {
     let response = ApiError::from((

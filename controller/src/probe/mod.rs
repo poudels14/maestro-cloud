@@ -160,6 +160,9 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
         read_secret_env_or_file("MAESTRO_INGESTION_TOKEN", "MAESTRO_INGESTION_TOKEN_FILE");
     let system_type = std::env::var("MAESTRO_SYSTEM_TYPE").ok();
     let cluster_alias = std::env::var("MAESTRO_CLUSTER_ALIAS").unwrap_or_default();
+    let dns_ip = std::env::var("MAESTRO_DNS_IP")
+        .ok()
+        .filter(|value| !value.is_empty());
     let slack_webhook_url = std::env::var("MAESTRO_SLACK_WEBHOOK_URL")
         .ok()
         .filter(|value| !value.is_empty())
@@ -188,6 +191,7 @@ pub async fn run(etcd_endpoint: &str, port: u16) -> Result<()> {
             system_type,
             cluster_name,
             cluster_alias,
+            dns_ip,
             masked_config,
             slack: slack_notifier,
             allow_cli_deployment,

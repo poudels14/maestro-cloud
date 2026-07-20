@@ -26,6 +26,7 @@ export interface ClusterInfo {
   clusterAlias: string;
   canonicalDomain: string;
   aliasDomain: string;
+  aliasStatus?: "active" | "conflicted" | "unknown" | "inactive";
   version?: string;
   upgrading?: boolean;
   restarting?: boolean;

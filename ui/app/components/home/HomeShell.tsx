@@ -2,7 +2,7 @@ import { createSignal, Match, Show, Switch } from "solid-js";
 import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
-import { Menu } from "lucide-solid";
+import { AlertTriangle, Menu } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { clusterInfoQuery, servicesQuery } from "../../lib/queries";
 import { ServiceSidebar } from "../service-detail/Sidebar";
@@ -162,6 +162,15 @@ function ClusterHero() {
             >
               {info().aliasDomain}
             </a>
+            <Show when={info().aliasStatus === "conflicted"}>
+              <span
+                class="inline-flex items-center gap-1 text-amber-600"
+                title="Another tailnet cluster claims this DNS alias"
+              >
+                <AlertTriangle class="size-3.5" />
+                alias conflict
+              </span>
+            </Show>
           </div>
         </div>
       )}

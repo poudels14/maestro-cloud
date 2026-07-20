@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import { Rocket } from "lucide-solid";
+import { AlertTriangle, Rocket } from "lucide-solid";
 import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
 import { clusterInfoQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "../../lib/ui";
@@ -109,6 +109,13 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
           <span class="text-xs text-amber-700 font-medium">
             Deploy is frozen — auto-deploys from git watch are paused
           </span>
+        </div>
+      </Show>
+      <Show when={clusterInfo.data?.aliasStatus === "conflicted"}>
+        <div class="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-700">
+          <AlertTriangle class="size-3.5 shrink-0" />
+          Another tailnet cluster also claims {clusterInfo.data?.aliasDomain}; deployment links may
+          resolve ambiguously.
         </div>
       </Show>
 

@@ -592,6 +592,11 @@ pub async fn start_system_jobs(
     init_probe(
         &probe_container,
         &dns_domain,
+        config
+            .tailscale_authkey
+            .as_ref()
+            .and(system_ips.as_ref())
+            .map(|ips| ips.dns.as_str()),
         &dns_flag,
         system_ips
             .as_ref()
@@ -1254,6 +1259,7 @@ async fn init_admin(
 async fn init_probe(
     container_name: &str,
     dns_domain: &str,
+    dns_ip: Option<&str>,
     dns_flag: &[String],
     ip_flags: Vec<String>,
     etcd_certs: Option<&EtcdCerts>,
@@ -1373,6 +1379,9 @@ async fn init_probe(
                 "-e".into(),
                 "MAESTRO_CONTROL_TOKEN_FILE=/run/maestro-control/control-token".into(),
             ];
+            if let Some(ip) = dns_ip {
+                probe_flags.extend(["-e".into(), format!("MAESTRO_DNS_IP={ip}")]);
+            }
             if config.cluster.is_none() {
                 probe_flags.extend([
                     "-v".into(),
