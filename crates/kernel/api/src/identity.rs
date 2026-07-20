@@ -83,6 +83,7 @@ macro_rules! identifier {
 }
 
 identifier!(NodeId, "Stable identity of a cluster node.");
+identifier!(ClusterId, "Stable identity of a Maestro cluster.");
 identifier!(
     NodeInstanceId,
     "Identity of one running daemon instance on a cluster node."
@@ -129,6 +130,10 @@ identifier!(
     "Stable identity of a persisted cluster upgrade run."
 );
 identifier!(WebhookId, "Stable identity of a webhook configuration.");
+identifier!(
+    RequestId,
+    "Stable identity of one deduplicated write request."
+);
 identifier!(
     ResourceKind,
     "Open resource kind name used by generic registries and owner references."

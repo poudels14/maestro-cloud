@@ -1,0 +1,13 @@
+[package]
+name = "kernel-store"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+kernel-api = { version = "0.1.0", path = "../api" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

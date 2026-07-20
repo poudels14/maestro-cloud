@@ -21,10 +21,10 @@ pub use automation::{
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{
-    ArtifactArchiveId, AssignmentId, BuildId, DeploymentId, DnsRecordId, FirewallPolicyId,
-    IngressRouteId, InvalidIdentifier, NodeId, NodeInstanceId, NodeNetworkId, PreviewId,
-    ReplicaStateId, ResourceId, ResourceKind, ResourceName, ServiceId, TrafficGenerationId,
-    UpgradeRunId, WebhookId, WorkloadId,
+    ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,
+    FirewallPolicyId, IngressRouteId, InvalidIdentifier, NodeId, NodeInstanceId, NodeNetworkId,
+    PreviewId, ReplicaStateId, RequestId, ResourceId, ResourceKind, ResourceName, ServiceId,
+    TrafficGenerationId, UpgradeRunId, WebhookId, WorkloadId,
 };
 pub use metadata::{
     AnnotationKey, FinalizerName, Generation, LabelKey, ObjectMeta, OwnerReference, Ownership,

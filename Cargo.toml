@@ -1,5 +1,5 @@
 [workspace]
-members = ["controller", "crates/clustertest", "crates/kernel/api"]
+members = ["controller", "crates/clustertest", "crates/kernel/api", "crates/kernel/store"]
 resolver = "3"
 
 [workspace.package]

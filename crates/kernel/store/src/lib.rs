@@ -1,0 +1,22 @@
+//! Backend-neutral persistence contracts for Maestro cluster state.
+//!
+//! This crate owns all `/maestro/` key construction and storage semantics. It
+//! may depend on `kernel-api`, but must not depend on controllers, nodes,
+//! operators, runtimes, observability, cluster provisioning, or applications.
+
+mod error;
+mod key;
+mod model;
+mod store;
+
+pub use error::StoreError;
+pub use key::{Keyspace, StoreKey, StorePrefix};
+pub use model::{
+    CasOutcome, Compare, DeleteRequest, ExpectedVersion, ListResult, Mutation, MutationResult,
+    PutRequest, SessionBinding, SessionId, StoredValue, Transaction, TransactionOutcome, Version,
+    WatchCursor, WatchEvent, WatchEventKind, WatchStart,
+};
+pub use store::{Session, Store, StoreWatch};
+
+#[cfg(test)]
+mod tests;
