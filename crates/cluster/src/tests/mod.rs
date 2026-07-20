@@ -2,6 +2,7 @@
 
 mod admission;
 mod certificates;
+mod embedded_etcd;
 mod fixtures;
 mod join;
 mod join_crypto;

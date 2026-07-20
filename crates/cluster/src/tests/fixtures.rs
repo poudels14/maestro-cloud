@@ -6,7 +6,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::{
     CertificateValidity, ClusterConfig, ClusterPorts, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint,
+    NodeDefinition, NodeEndpoint, StoreMember, StoreProviderConfig,
 };
 
 pub(crate) fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
@@ -61,6 +61,48 @@ pub(crate) fn validity() -> Result<CertificateValidity, Box<dyn std::error::Erro
     let start = OffsetDateTime::UNIX_EPOCH + Duration::days(20_000);
     Ok(CertificateValidity::new(
         start,
-        start + Duration::days(365),
+        start + Duration::days(3_650),
+    )?)
+}
+
+pub(crate) fn provider_config(
+    data_directory: std::path::PathBuf,
+    local_id: &str,
+) -> Result<StoreProviderConfig, Box<dyn std::error::Error>> {
+    let config = valid_config()?;
+    let local_id = NodeId::new(local_id)?;
+    let known_members = config
+        .nodes
+        .iter()
+        .map(|(node_id, node)| {
+            (
+                node_id.clone(),
+                StoreMember {
+                    node_id: node_id.clone(),
+                    host_address: node.endpoint.host_address,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let local_member = known_members
+        .get(&local_id)
+        .ok_or("missing fixture node")?
+        .clone();
+    let authority = crate::ClusterCertificateAuthority::generate(&config.name, validity()?)?;
+    let local_node = config.nodes.get(&local_id).ok_or("missing fixture node")?;
+    let security = authority.issue_node_certificate(
+        &local_id,
+        &local_node.hostname,
+        local_node.endpoint.host_address,
+        local_node.role,
+        validity()?,
+    )?;
+    Ok(StoreProviderConfig::new(
+        config.cluster_id,
+        local_member,
+        known_members,
+        config.ports,
+        data_directory,
+        security,
     )?)
 }

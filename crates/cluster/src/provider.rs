@@ -373,5 +373,13 @@ pub enum StoreProviderError {
 }
 
 fn valid_host_address(address: Ipv4Addr) -> bool {
-    address.is_private() && !address.is_loopback() && !address.is_unspecified()
+    let production_address = address.is_private() && !address.is_loopback();
+    #[cfg(test)]
+    {
+        production_address || address.is_loopback()
+    }
+    #[cfg(not(test))]
+    {
+        production_address
+    }
 }

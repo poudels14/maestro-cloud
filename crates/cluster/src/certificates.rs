@@ -149,11 +149,57 @@ impl ClusterCertificateAuthority {
         role: NodeRole,
         validity: CertificateValidity,
     ) -> Result<NodeCertificateBundle, CertificateError> {
+        self.issue_node_certificate_with_ip_sans(
+            node_id,
+            hostname,
+            host_address,
+            &[],
+            role,
+            validity,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn issue_node_certificate_with_additional_ip_sans(
+        &self,
+        node_id: &NodeId,
+        hostname: &str,
+        host_address: Ipv4Addr,
+        additional_host_addresses: &[Ipv4Addr],
+        role: NodeRole,
+        validity: CertificateValidity,
+    ) -> Result<NodeCertificateBundle, CertificateError> {
+        self.issue_node_certificate_with_ip_sans(
+            node_id,
+            hostname,
+            host_address,
+            additional_host_addresses,
+            role,
+            validity,
+        )
+    }
+
+    fn issue_node_certificate_with_ip_sans(
+        &self,
+        node_id: &NodeId,
+        hostname: &str,
+        host_address: Ipv4Addr,
+        additional_host_addresses: &[Ipv4Addr],
+        role: NodeRole,
+        validity: CertificateValidity,
+    ) -> Result<NodeCertificateBundle, CertificateError> {
         validate_ca_material(&self.certificate_pem, self.private_key_pem.expose())?;
         let issuer_key = KeyPair::from_pem(self.private_key_pem.expose())?;
         let issuer = Issuer::from_ca_cert_pem(&self.certificate_pem, &issuer_key)?;
         let node_key = KeyPair::generate()?;
-        let params = node_params(node_id, hostname, host_address, role, validity)?;
+        let params = node_params(
+            node_id,
+            hostname,
+            host_address,
+            additional_host_addresses,
+            role,
+            validity,
+        )?;
         let certificate = params.signed_by(&node_key, &issuer)?;
 
         Ok(NodeCertificateBundle {
@@ -241,6 +287,7 @@ fn node_params(
     node_id: &NodeId,
     hostname: &str,
     host_address: Ipv4Addr,
+    additional_host_addresses: &[Ipv4Addr],
     role: NodeRole,
     validity: CertificateValidity,
 ) -> Result<CertificateParams, CertificateError> {
@@ -267,6 +314,13 @@ fn node_params(
         SanType::DnsName(dns_name),
         SanType::IpAddress(host_address.into()),
     ];
+    params.subject_alt_names.extend(
+        additional_host_addresses
+            .iter()
+            .copied()
+            .filter(|address| *address != host_address)
+            .map(|address| SanType::IpAddress(address.into())),
+    );
     params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,7 +12,7 @@ use crate::{
     StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 
-use super::fixtures::{valid_config, validity};
+use super::fixtures::{provider_config, valid_config};
 
 struct FakeProvider {
     config: StoreProviderConfig,
@@ -101,7 +101,7 @@ impl StoreProvider for FakeProvider {
 #[tokio::test]
 async fn provider_contract_owns_lifecycle_and_membership() -> Result<(), Box<dyn std::error::Error>>
 {
-    let config = provider_config()?;
+    let config = provider_config(std::path::PathBuf::from("/var/lib/maestro/store"), "node-1")?;
     let running = Arc::new(AtomicBool::new(false));
     let provider = FakeProvider {
         config,
@@ -136,43 +136,4 @@ fn recovery_permit_requires_a_retained_multi_member_identity()
     let singleton = BTreeSet::from([retained.clone()]);
     assert!(StoreRecoveryPermit::new(config.cluster_id, retained, singleton, 1_000).is_err());
     Ok(())
-}
-
-fn provider_config() -> Result<StoreProviderConfig, Box<dyn std::error::Error>> {
-    let config = valid_config()?;
-    let local_id = NodeId::new("node-1")?;
-    let known_members = config
-        .nodes
-        .iter()
-        .map(|(node_id, node)| {
-            (
-                node_id.clone(),
-                StoreMember {
-                    node_id: node_id.clone(),
-                    host_address: node.endpoint.host_address,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let local_member = known_members
-        .get(&local_id)
-        .ok_or("missing fixture node")?
-        .clone();
-    let authority = crate::ClusterCertificateAuthority::generate(&config.name, validity()?)?;
-    let local_node = config.nodes.get(&local_id).ok_or("missing fixture node")?;
-    let security = authority.issue_node_certificate(
-        &local_id,
-        &local_node.hostname,
-        local_node.endpoint.host_address,
-        local_node.role,
-        validity()?,
-    )?;
-    Ok(StoreProviderConfig::new(
-        config.cluster_id,
-        local_member,
-        known_members,
-        config.ports,
-        std::path::PathBuf::from("/var/lib/maestro/store"),
-        security,
-    )?)
 }
