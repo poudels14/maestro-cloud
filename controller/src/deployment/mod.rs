@@ -577,9 +577,6 @@ pub async fn start_system_jobs(
                 .as_ref()
                 .map(|ips| ip_flag(&ips.gateway))
                 .unwrap_or_default(),
-            etcd_certs
-                .as_ref()
-                .expect("cluster gateway requires node certificates"),
             logger,
             config,
             runtime,
@@ -860,9 +857,8 @@ async fn init_ingress(
         extra_flags.extend(["-v".into(), format!("{}:/certs:ro", certs_abs.display())]);
     }
     if config.cluster.is_some() {
-        let gateway_config =
-            write_gateway_dynamic_config(config, etcd_certs.expect("cluster certs"))
-                .expect("failed to write cluster gateway TLS configuration");
+        let gateway_config = write_gateway_dynamic_config(config)
+            .expect("failed to write cluster gateway TLS configuration");
         let gateway_dir = gateway_config
             .parent()
             .expect("gateway config parent directory");
@@ -975,20 +971,9 @@ async fn init_ingress(
     }
 }
 
-fn write_gateway_dynamic_config(
-    config: &ControllerConfig,
-    certs: &EtcdCerts,
-) -> std::io::Result<std::path::PathBuf> {
+fn write_gateway_dynamic_config(config: &ControllerConfig) -> std::io::Result<std::path::PathBuf> {
     let directory = config.data_dir.join("system/gateway");
     std::fs::create_dir_all(&directory)?;
-    let identity_path = directory.join("traefik-client-identity.pem");
-    write_private_file(
-        &identity_path,
-        &format!(
-            "{}\n{}",
-            certs.traefik_client_cert_pem, certs.traefik_client_key_pem
-        ),
-    )?;
     let dynamic_path = directory.join("dynamic.yml");
     write_private_file(&dynamic_path, &gateway_dynamic_config())?;
     Ok(dynamic_path)
@@ -1013,7 +998,8 @@ fn gateway_dynamic_config() -> String {
       rootCAs:
         - /certs/ca.pem
       certificates:
-        - /gateway/traefik-client-identity.pem
+        - certFile: /certs/traefik-client.pem
+          keyFile: /certs/traefik-client-key.pem
 tls:
   certificates:
     - certFile: /certs/api.pem
@@ -1039,7 +1025,6 @@ async fn init_gateway(
     dns_domain: &str,
     dns_flag: &[String],
     ip_flags: Vec<String>,
-    etcd_certs: &EtcdCerts,
     logger: &Logger,
     config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
@@ -1048,7 +1033,7 @@ async fn init_gateway(
 ) {
     let static_ip = static_ip_from_flags(&ip_flags);
     let cluster = config.cluster.as_ref().expect("cluster gateway runtime");
-    let config_path = write_gateway_dynamic_config(config, etcd_certs)
+    let config_path = write_gateway_dynamic_config(config)
         .expect("failed to write cluster gateway TLS configuration");
     let gateway_dir = config_path.parent().expect("gateway config directory");
     let certs_abs =
@@ -2158,6 +2143,10 @@ mod tests {
         assert!(config.contains("options: default"));
         assert!(config.contains("clientAuthType: RequireAndVerifyClientCert"));
         assert!(config.contains("serversTransports:\n    cluster-gateway:"));
+        assert!(config.contains(
+            "certificates:\n        - certFile: /certs/traefik-client.pem\n          keyFile: /certs/traefik-client-key.pem"
+        ));
+        assert!(!config.contains("/gateway/traefik-client-identity.pem"));
         let server_transport = config
             .split_once("serversTransports:")
             .unwrap()
