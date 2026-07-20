@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail};
 use tokio::sync::{Mutex, broadcast};
@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, broadcast};
 use crate::{
     cluster::{
         Assignment, AssignmentManifest,
-        assignment_store::AssignmentStore,
+        assignment_store::{AssignmentStore, AssignmentWatcher},
         executor::{EngineReplicaExecutor, RunningReplica},
     },
     logs::Logger,
@@ -75,16 +75,8 @@ impl AssignmentReconciler {
     }
 
     pub async fn run(self, mut shutdown: broadcast::Receiver<ShutdownEvent>) {
-        let mut watcher = match self.store.watch_node(&self.node_id).await {
-            Ok(watcher) => watcher,
-            Err(error) => {
-                self.logger.emit(
-                    "error",
-                    &format!("failed to start assignment watcher: {error}"),
-                );
-                return;
-            }
-        };
+        let mut watcher = None;
+        let mut watcher_unavailable = false;
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut discovered = false;
@@ -92,13 +84,33 @@ impl AssignmentReconciler {
         loop {
             tokio::select! {
                 _ = shutdown.recv() => break,
-                changed = watcher.changed() => {
-                    if changed.is_err() {
-                        // Polling remains the level-triggered safety net.
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                watch_open = assignment_watch_changed(&mut watcher) => {
+                    if !watch_open {
+                        watcher = None;
                     }
                 }
                 _ = interval.tick() => {}
+            }
+            match attach_assignment_watcher(&mut watcher, self.store.watch_node(&self.node_id))
+                .await
+            {
+                Ok(attached) => {
+                    if attached && watcher_unavailable {
+                        self.logger.emit("info", "assignment watcher recovered");
+                    }
+                    watcher_unavailable = false;
+                }
+                Err(error) => {
+                    if !watcher_unavailable {
+                        self.logger.emit(
+                            "warn",
+                            &format!(
+                                "assignment watcher unavailable; polling until it recovers: {error}"
+                            ),
+                        );
+                    }
+                    watcher_unavailable = true;
+                }
             }
             let manifest = match self.store.get_for_node(&self.node_id).await {
                 Ok(Some(manifest)) => manifest,
@@ -178,6 +190,27 @@ impl AssignmentReconciler {
     }
 }
 
+async fn assignment_watch_changed(watcher: &mut Option<AssignmentWatcher>) -> bool {
+    let Some(watcher) = watcher.as_mut() else {
+        return std::future::pending().await;
+    };
+    watcher.changed().await.is_ok()
+}
+
+async fn attach_assignment_watcher<F>(
+    watcher: &mut Option<AssignmentWatcher>,
+    create: F,
+) -> Result<bool>
+where
+    F: Future<Output = Result<AssignmentWatcher>>,
+{
+    if watcher.is_some() {
+        return Ok(false);
+    }
+    *watcher = Some(create.await?);
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +279,25 @@ mod tests {
             images: Vec::new(),
         };
         assert!(diff_assignments(&actual, &desired).is_err());
+    }
+
+    #[tokio::test]
+    async fn watcher_can_attach_after_transient_initial_failure() {
+        let mut watcher = None;
+        let failed = attach_assignment_watcher(
+            &mut watcher,
+            std::future::ready(Err(anyhow::anyhow!("etcd unavailable"))),
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(watcher.is_none());
+
+        let (_sender, receiver) = tokio::sync::watch::channel(None);
+        assert!(
+            attach_assignment_watcher(&mut watcher, std::future::ready(Ok(receiver)))
+                .await
+                .unwrap()
+        );
+        assert!(watcher.is_some());
     }
 }
