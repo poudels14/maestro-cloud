@@ -13,6 +13,7 @@ use crate::{
         assignment_store::{AssignmentStore, ReplaceOutcome},
         elector::{EtcdLeaderElector, LeaderElector},
         registry::{NodeAvailabilityEvent, NodeRegistry},
+        retain_peer_image,
         scheduler::{self, ScheduleInput},
         traefik::{EtcdTrafficManager, RoutingTarget},
         types::{
@@ -1280,20 +1281,6 @@ impl LeaderLoop {
 fn image_node_order(image: &str, node_id: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("{image}\0{node_id}").as_bytes()).into()
-}
-
-fn retain_peer_image(
-    status: &DeploymentStatus,
-    deployment_id: &str,
-    latest_deployment_id: Option<&str>,
-) -> bool {
-    matches!(
-        status,
-        DeploymentStatus::Building
-            | DeploymentStatus::PendingReady
-            | DeploymentStatus::Ready
-            | DeploymentStatus::Draining
-    ) || latest_deployment_id == Some(deployment_id)
 }
 
 fn select_image_nodes(

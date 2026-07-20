@@ -10,6 +10,7 @@ use crate::{
     cluster::{
         Assignment, AssignmentManifest, ImageAssignment, NodeGatewayEndpoint, PlacementHistory,
         ReplicaEndpoint, assignment_store::AssignmentStore, registry::NodeRegistry,
+        retain_peer_image,
     },
     deployment::{
         provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity, replica_container_name},
@@ -25,6 +26,7 @@ use crate::{
 const RESTART_DELAY_MS: u64 = 5_000;
 const SHUTDOWN_GRACE_MS: u64 = 60_000;
 const MAX_RESTARTS: Option<u32> = Some(10);
+const IMAGE_PRUNE_DELAY_MS: i64 = 60 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
 pub struct RunningReplica {
@@ -53,6 +55,7 @@ pub struct EngineReplicaExecutor {
     log_sender: Option<flume::Sender<LogEntry>>,
     egress_firewall: Option<crate::firewall::FirewallManager>,
     running: BTreeMap<String, RunningReplica>,
+    image_prune_candidates: BTreeMap<String, i64>,
 }
 
 impl EngineReplicaExecutor {
@@ -121,6 +124,7 @@ impl EngineReplicaExecutor {
             log_sender,
             egress_firewall: None,
             running: BTreeMap::new(),
+            image_prune_candidates: BTreeMap::new(),
         })
     }
 
@@ -145,24 +149,57 @@ impl EngineReplicaExecutor {
         Ok(())
     }
 
-    pub async fn prune_images(&self, desired: &AssignmentManifest) -> Result<()> {
-        let desired = desired
+    pub async fn prune_images(&mut self, desired: &AssignmentManifest) -> Result<()> {
+        let mut retained = desired
             .images
             .iter()
-            .map(|image| image.image.as_str())
+            .map(|image| image.image.clone())
             .collect::<BTreeSet<_>>();
-        for holder in self.registry.list_local_image_holders().await? {
-            if desired.contains(holder.image.as_str()) {
+        let holders = self.registry.list_local_image_holders().await?;
+        if holders.is_empty() {
+            self.image_prune_candidates.clear();
+            return Ok(());
+        }
+        retained.extend(self.retained_source_images().await?);
+        let now_ms = i64::try_from(crate::utils::time::current_time_millis()?).unwrap_or(i64::MAX);
+        let local_images = holders
+            .iter()
+            .map(|holder| holder.image.clone())
+            .collect::<BTreeSet<_>>();
+        self.image_prune_candidates
+            .retain(|image, _| local_images.contains(image) && !retained.contains(image));
+        for holder in holders {
+            if retained.contains(&holder.image) {
+                continue;
+            }
+            let unassigned_at_ms = *self
+                .image_prune_candidates
+                .entry(holder.image.clone())
+                .or_insert(now_ms);
+            if !peer_image_is_prunable(unassigned_at_ms, now_ms) {
                 continue;
             }
             self.registry.remove_image_holder(&holder.image).await?;
             self.runtime.remove_image(&holder.image).await?;
+            self.image_prune_candidates.remove(&holder.image);
             self.logger.emit(
                 "info",
                 &format!("removed unassigned peer image `{}`", holder.image),
             );
         }
         Ok(())
+    }
+
+    async fn retained_source_images(&self) -> Result<BTreeSet<String>> {
+        let mut retained = BTreeSet::new();
+        for service in self.store.list_service_infos().await? {
+            let deployments = self
+                .store
+                .list_service_deployments(&service.config.id)
+                .await?;
+            retained.extend(retained_source_images_for_node(&deployments, &self.node_id));
+        }
+        Ok(retained)
     }
 
     async fn ensure_peer_image(&self, desired: &ImageAssignment) -> Result<()> {
@@ -669,6 +706,43 @@ impl EngineReplicaExecutor {
     }
 }
 
+fn peer_image_is_prunable(unassigned_at_ms: i64, now_ms: i64) -> bool {
+    now_ms.saturating_sub(unassigned_at_ms) >= IMAGE_PRUNE_DELAY_MS
+}
+
+fn retained_source_images_for_node(
+    deployments: &[ServiceDeployment],
+    node_id: &str,
+) -> BTreeSet<String> {
+    let latest_peer_image_deployment = deployments
+        .iter()
+        .filter(|deployment| {
+            deployment.build.is_some()
+                && deployment
+                    .config
+                    .build
+                    .as_ref()
+                    .is_some_and(|build| build.registry.is_none())
+        })
+        .max_by_key(|deployment| deployment.created_at)
+        .map(|deployment| deployment.id.as_str());
+    deployments
+        .iter()
+        .filter_map(|deployment| {
+            let build_config = deployment.config.build.as_ref()?;
+            let build = deployment.build.as_ref()?;
+            (build_config.registry.is_none()
+                && build.source_node_id.as_deref() == Some(node_id)
+                && retain_peer_image(
+                    &deployment.status,
+                    &deployment.id,
+                    latest_peer_image_deployment,
+                ))
+            .then(|| build.docker_image_id.clone())
+        })
+        .collect()
+}
+
 fn image_peer_token(secret: &str) -> Result<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -851,5 +925,68 @@ mod tests {
         ];
 
         assert_eq!(next_start_failure_attempt(&states, &assignment), 3);
+    }
+
+    #[test]
+    fn pruning_waits_from_when_the_image_becomes_unassigned() {
+        let now_ms = 100_000;
+
+        assert!(!peer_image_is_prunable(now_ms, now_ms));
+        assert!(!peer_image_is_prunable(
+            now_ms - IMAGE_PRUNE_DELAY_MS + 1,
+            now_ms
+        ));
+        assert!(peer_image_is_prunable(
+            now_ms - IMAGE_PRUNE_DELAY_MS,
+            now_ms
+        ));
+    }
+
+    #[test]
+    fn source_keeps_active_and_latest_registry_free_images() {
+        fn deployment(
+            id: &str,
+            created_at: u64,
+            status: &str,
+            image: &str,
+            source_node_id: &str,
+        ) -> ServiceDeployment {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "createdAt": created_at,
+                "status": status,
+                "config": {
+                    "id": "web",
+                    "name": "Web",
+                    "version": id,
+                    "build": { "dockerfile": "Dockerfile" },
+                    "deploy": { "command": null }
+                },
+                "gitCommit": null,
+                "build": {
+                    "dockerImageId": image,
+                    "sourceNodeId": source_node_id
+                }
+            }))
+            .unwrap()
+        }
+
+        let retained = retained_source_images_for_node(
+            &[
+                deployment("active", 1, "READY", "web:active", "node-a"),
+                deployment("old", 2, "CRASHED", "web:old", "node-a"),
+                deployment("latest", 3, "CRASHED", "web:latest", "node-a"),
+                deployment("remote", 0, "READY", "web:remote", "node-b"),
+            ],
+            "node-a",
+        );
+
+        assert_eq!(
+            retained,
+            ["web:active", "web:latest"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
     }
 }

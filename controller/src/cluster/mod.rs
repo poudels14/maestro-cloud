@@ -29,3 +29,19 @@ pub use types::{
     SystemUpgradeStage, TrafficGeneration, UnschedulableReplica, UpgradeBatch, UpgradeEvent,
     UpgradePhase, UpgradeRun,
 };
+
+pub(crate) fn retain_peer_image(
+    status: &crate::deployment::types::DeploymentStatus,
+    deployment_id: &str,
+    latest_deployment_id: Option<&str>,
+) -> bool {
+    use crate::deployment::types::DeploymentStatus;
+
+    matches!(
+        status,
+        DeploymentStatus::Building
+            | DeploymentStatus::PendingReady
+            | DeploymentStatus::Ready
+            | DeploymentStatus::Draining
+    ) || latest_deployment_id == Some(deployment_id)
+}
