@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 /// A stable scenario-local service name, mapped to a real `ServiceId` by a driver.
@@ -17,7 +19,7 @@ impl FixtureName {
 }
 
 /// A stable scenario-local service version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FixtureVersion(String);
 
 impl FixtureVersion {
@@ -119,6 +121,39 @@ pub enum AffinityCookieSet {
     Complete,
     /// One or both affinity cookies are missing.
     Incomplete,
+}
+
+/// The readiness shape applied when starting a candidate deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CandidateReadiness {
+    /// Every candidate replica starts ready.
+    AllReady,
+    /// Exactly one candidate replica remains unready until explicitly released.
+    OneDelayed,
+}
+
+/// Whether the old workload respected an in-flight request during drain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrainBehavior {
+    /// Shutdown remained pending until the in-flight response completed.
+    WaitedForInflight,
+    /// Shutdown completed before the in-flight response completed.
+    ExitedEarly,
+}
+
+/// The externally observed result of an ingress cutover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CutoverObservation {
+    /// Deployment versions served while continuous traffic crossed the cutover.
+    pub traffic_versions: BTreeSet<FixtureVersion>,
+    /// Public requests that failed during cutover.
+    pub public_failures: usize,
+    /// Version that completed an in-flight request after cutover began.
+    pub in_flight_version: FixtureVersion,
+    /// Whether workload shutdown honored the in-flight request.
+    pub drain_behavior: DrainBehavior,
+    /// Deployment versions routed after cutover and old-generation cleanup.
+    pub final_routes: BTreeSet<FixtureVersion>,
 }
 
 /// The affinity result observed from one public request.

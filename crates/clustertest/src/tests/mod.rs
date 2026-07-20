@@ -4,5 +4,6 @@ mod affinity;
 mod election;
 mod quorum;
 mod restart;
+mod rollout;
 mod routing;
 mod scheduling;

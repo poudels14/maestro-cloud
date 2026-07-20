@@ -9,12 +9,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
     AffinityCluster, AffinityCookieSet, AffinityObservation, AffinitySession,
-    AssignmentManifestSnapshot, AssignmentWriteOutcome, ControlPlaneReadiness, ElectionCluster,
-    FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureMarker,
-    FixtureMutationName, FixtureNodeName, FixtureVersion, LeadershipSnapshot,
-    QuorumRecoveryCluster, ReadinessProbe, ReplicaCount, ReplicaIndex, ResourceAvailability,
-    RestartCluster, RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot,
-    scenarios,
+    AssignmentManifestSnapshot, AssignmentWriteOutcome, CandidateReadiness, ControlPlaneReadiness,
+    CutoverCluster, CutoverObservation, DrainBehavior, ElectionCluster, FencedWriteOutcome,
+    FixtureAffinityToken, FixtureControllerName, FixtureMarker, FixtureMutationName,
+    FixtureNodeName, FixtureVersion, LeadershipSnapshot, QuorumRecoveryCluster, ReadinessProbe,
+    ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster,
+    ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -1806,6 +1806,246 @@ impl AffinityCluster for OldSystemAffinityCluster {
     }
 }
 
+struct OldSystemCutoverCluster {
+    cluster: SingleHostHttpCluster,
+    client: reqwest::Client,
+    routed_version: Option<FixtureVersion>,
+    delayed_candidate: Option<(FixtureVersion, usize)>,
+}
+
+impl OldSystemCutoverCluster {
+    fn start() -> Result<Self> {
+        Ok(Self {
+            cluster: SingleHostHttpCluster::start()?,
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()?,
+            routed_version: None,
+            delayed_candidate: None,
+        })
+    }
+
+    fn version_bodies(&self, version: &FixtureVersion) -> BTreeSet<String> {
+        (1..=self.cluster.nodes.len())
+            .map(|node_number| format!("{}-node-{node_number}", version.as_str()))
+            .collect()
+    }
+
+    fn observed_version(body: &str) -> Result<FixtureVersion> {
+        body.split_once("-node-")
+            .map(|(version, _)| FixtureVersion::new(version.to_string()))
+            .ok_or_else(|| anyhow!("unexpected rollout response `{body}`"))
+    }
+}
+
+#[async_trait]
+impl CutoverCluster for OldSystemCutoverCluster {
+    type Error = anyhow::Error;
+
+    async fn deploy_initial(&mut self, version: FixtureVersion) -> Result<()> {
+        ensure_image(&self.cluster.runtime_cli, ROLLOUT_TEST_IMAGE)?;
+        self.cluster.remove_initial_backends()?;
+        for node_index in 0..self.cluster.nodes.len() {
+            self.cluster
+                .start_rollout_backend(node_index, version.as_str(), true)?;
+        }
+        self.cluster
+            .write_rollout_gateway_configs(version.as_str())?;
+        self.routed_version = Some(version);
+        Ok(())
+    }
+
+    async fn deploy_candidate(
+        &mut self,
+        version: FixtureVersion,
+        readiness: CandidateReadiness,
+    ) -> Result<()> {
+        let delayed_index = self.cluster.nodes.len().checked_sub(1);
+        for node_index in 0..self.cluster.nodes.len() {
+            let starts_ready = match readiness {
+                CandidateReadiness::AllReady => true,
+                CandidateReadiness::OneDelayed => Some(node_index) != delayed_index,
+            };
+            self.cluster
+                .start_rollout_backend(node_index, version.as_str(), starts_ready)?;
+            let expected_status = if starts_ready {
+                reqwest::StatusCode::OK.as_u16()
+            } else {
+                reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16()
+            };
+            wait_for_rollout_status(
+                &self.cluster,
+                node_index,
+                version.as_str(),
+                expected_status,
+                Duration::from_secs(20),
+            )
+            .await?;
+        }
+        self.delayed_candidate = match readiness {
+            CandidateReadiness::AllReady => None,
+            CandidateReadiness::OneDelayed => delayed_index.map(|index| (version, index)),
+        };
+        Ok(())
+    }
+
+    async fn await_routed_versions(&mut self) -> Result<BTreeSet<FixtureVersion>> {
+        let version = self
+            .routed_version
+            .as_ref()
+            .ok_or_else(|| anyhow!("rollout fixture has no routed version"))?;
+        let expected = self.version_bodies(version);
+        wait_for_routing_set(
+            &self.client,
+            &self.cluster.public_url(),
+            &expected,
+            &expected,
+            Duration::from_secs(30),
+        )
+        .await?;
+        Ok([version.clone()].into_iter().collect())
+    }
+
+    async fn make_candidate_ready(&mut self, version: &FixtureVersion) -> Result<()> {
+        if let Some((delayed_version, node_index)) = &self.delayed_candidate {
+            if delayed_version != version {
+                bail!(
+                    "delayed candidate is {:?}, not {:?}",
+                    delayed_version,
+                    version
+                );
+            }
+            self.cluster
+                .mark_rollout_backend_ready(*node_index, version.as_str())?;
+            wait_for_rollout_status(
+                &self.cluster,
+                *node_index,
+                version.as_str(),
+                reqwest::StatusCode::OK.as_u16(),
+                Duration::from_secs(10),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn cutover_with_inflight_request(
+        &mut self,
+        previous: &FixtureVersion,
+        candidate: &FixtureVersion,
+    ) -> Result<CutoverObservation> {
+        let previous_bodies = self.version_bodies(previous);
+        let candidate_bodies = self.version_bodies(candidate);
+        let allowed_during_cutover = previous_bodies
+            .union(&candidate_bodies)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let traffic_client = self.client.clone();
+        let public_url = self.cluster.public_url();
+        let (traffic_started, traffic_is_running) = tokio::sync::oneshot::channel();
+        let traffic = tokio::spawn(async move {
+            let mut observed = BTreeSet::new();
+            let mut traffic_started = Some(traffic_started);
+            for _ in 0..160 {
+                let response = traffic_client.get(&public_url).send().await?;
+                if !response.status().is_success() {
+                    bail!(
+                        "public request failed during rollout with {}",
+                        response.status()
+                    );
+                }
+                let body = response.text().await?.trim().to_string();
+                if !allowed_during_cutover.contains(&body) {
+                    bail!("public request reached unexpected rollout backend `{body}`");
+                }
+                observed.insert(body);
+                if let Some(started) = traffic_started.take() {
+                    let _ = started.send(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Result::<BTreeSet<String>>::Ok(observed)
+        });
+        traffic_is_running
+            .await
+            .map_err(|_| anyhow!("continuous rollout traffic stopped before cutover"))?;
+
+        let slow_client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        let slow_url = format!("{}/slow", self.cluster.gateway_url(0));
+        let slow_request = tokio::spawn(async move {
+            let response = slow_client.get(slow_url).send().await?;
+            if !response.status().is_success() {
+                bail!("in-flight request returned {}", response.status());
+            }
+            Result::<String>::Ok(response.text().await?.trim().to_string())
+        });
+        wait_for_rollout_marker(
+            &self.cluster,
+            0,
+            previous.as_str(),
+            "/tmp/slow-started",
+            Duration::from_secs(10),
+        )
+        .await?;
+
+        self.cluster
+            .write_rollout_gateway_configs(candidate.as_str())?;
+        self.routed_version = Some(candidate.clone());
+        let runtime_cli = self.cluster.runtime_cli.clone();
+        let old_backend = self.cluster.rollout_backend_name(0, previous.as_str());
+        let old_stop = tokio::task::spawn_blocking(move || {
+            command_output(&runtime_cli, &["stop", "--time", "10", &old_backend])?;
+            Result::<()>::Ok(())
+        });
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let drain_behavior = if old_stop.is_finished() {
+            DrainBehavior::ExitedEarly
+        } else {
+            DrainBehavior::WaitedForInflight
+        };
+
+        let final_expected = self.version_bodies(candidate);
+        wait_for_routing_set(
+            &self.client,
+            &self.cluster.public_url(),
+            &final_expected,
+            &final_expected,
+            Duration::from_secs(30),
+        )
+        .await?;
+        let in_flight_body = slow_request.await??;
+        old_stop.await??;
+        for node_index in 1..self.cluster.nodes.len() {
+            self.cluster
+                .stop_rollout_backend(node_index, previous.as_str())?;
+        }
+        let traffic_versions = traffic
+            .await??
+            .into_iter()
+            .map(|body| Self::observed_version(&body))
+            .collect::<Result<BTreeSet<_>>>()?;
+        wait_for_routing_set(
+            &self.client,
+            &self.cluster.public_url(),
+            &final_expected,
+            &final_expected,
+            Duration::from_secs(20),
+        )
+        .await?;
+        Ok(CutoverObservation {
+            traffic_versions,
+            public_failures: 0,
+            in_flight_version: Self::observed_version(&in_flight_body)?,
+            drain_behavior,
+            final_routes: [candidate.clone()].into_iter().collect(),
+        })
+    }
+}
+
 struct OldSystemQuorumRecoveryCluster {
     cluster: ContainerEtcdCluster,
 }
@@ -2683,163 +2923,10 @@ async fn scheduler_scales_live_replicas_across_logical_nodes() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn readiness_gated_rollout_preserves_in_flight_requests() -> Result<()> {
-    let mut cluster = SingleHostHttpCluster::start()?;
-    ensure_image(&cluster.runtime_cli, ROLLOUT_TEST_IMAGE)?;
-    cluster.remove_initial_backends()?;
-    for index in 0..cluster.nodes.len() {
-        cluster.start_rollout_backend(index, "v1", true)?;
-    }
-    cluster.write_rollout_gateway_configs("v1")?;
+    let mut cluster = OldSystemCutoverCluster::start()?;
 
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    let v1 = (1..=cluster.nodes.len())
-        .map(|index| format!("v1-node-{index}"))
-        .collect::<BTreeSet<_>>();
-    let v2 = (1..=cluster.nodes.len())
-        .map(|index| format!("v2-node-{index}"))
-        .collect::<BTreeSet<_>>();
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &v1,
-        &v1,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    for index in 0..cluster.nodes.len() {
-        cluster.start_rollout_backend(index, "v2", index + 1 < cluster.nodes.len())?;
-    }
-    for index in 0..cluster.nodes.len() - 1 {
-        wait_for_rollout_status(
-            &cluster,
-            index,
-            "v2",
-            reqwest::StatusCode::OK.as_u16(),
-            Duration::from_secs(20),
-        )
+    scenarios::readiness_gated_cutover_preserves_traffic_and_inflight_requests(&mut cluster)
         .await?;
-    }
-    let delayed_index = cluster.nodes.len() - 1;
-    wait_for_rollout_status(
-        &cluster,
-        delayed_index,
-        "v2",
-        reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-        Duration::from_secs(20),
-    )
-    .await?;
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &v1,
-        &v1,
-        Duration::from_secs(10),
-    )
-    .await?;
-
-    cluster.mark_rollout_backend_ready(delayed_index, "v2")?;
-    wait_for_rollout_status(
-        &cluster,
-        delayed_index,
-        "v2",
-        reqwest::StatusCode::OK.as_u16(),
-        Duration::from_secs(10),
-    )
-    .await?;
-
-    let traffic_client = client.clone();
-    let public_url = cluster.public_url();
-    let allowed_during_cutover = v1.union(&v2).cloned().collect::<BTreeSet<_>>();
-    let (traffic_started, traffic_is_running) = tokio::sync::oneshot::channel();
-    let traffic = tokio::spawn(async move {
-        let mut observed = BTreeSet::new();
-        let mut traffic_started = Some(traffic_started);
-        for _ in 0..160 {
-            let response = traffic_client.get(&public_url).send().await?;
-            if !response.status().is_success() {
-                bail!(
-                    "public request failed during rollout with {}",
-                    response.status()
-                );
-            }
-            let body = response.text().await?.trim().to_string();
-            if !allowed_during_cutover.contains(&body) {
-                bail!("public request reached unexpected rollout backend `{body}`");
-            }
-            observed.insert(body);
-            if let Some(started) = traffic_started.take() {
-                let _ = started.send(());
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        Result::<BTreeSet<String>>::Ok(observed)
-    });
-    traffic_is_running
-        .await
-        .map_err(|_| anyhow!("continuous rollout traffic stopped before cutover"))?;
-
-    let slow_client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(10))
-        .build()?;
-    let slow_url = format!("{}/slow", cluster.gateway_url(0));
-    let slow_request = tokio::spawn(async move {
-        let response = slow_client.get(slow_url).send().await?;
-        if !response.status().is_success() {
-            bail!("in-flight request returned {}", response.status());
-        }
-        Result::<String>::Ok(response.text().await?.trim().to_string())
-    });
-    wait_for_rollout_marker(
-        &cluster,
-        0,
-        "v1",
-        "/tmp/slow-started",
-        Duration::from_secs(10),
-    )
-    .await?;
-
-    cluster.write_rollout_gateway_configs("v2")?;
-    let runtime_cli = cluster.runtime_cli.clone();
-    let old_backend = cluster.rollout_backend_name(0, "v1");
-    let old_stop = tokio::task::spawn_blocking(move || {
-        command_output(&runtime_cli, &["stop", "--time", "10", &old_backend])?;
-        Result::<()>::Ok(())
-    });
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    assert!(
-        !old_stop.is_finished(),
-        "the old replica exited before its in-flight request completed"
-    );
-
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &v2,
-        &v2,
-        Duration::from_secs(30),
-    )
-    .await?;
-    assert_eq!(slow_request.await??, "v1-node-1");
-    old_stop.await??;
-    for index in 1..cluster.nodes.len() {
-        cluster.stop_rollout_backend(index, "v1")?;
-    }
-    let observed = traffic.await??;
-    assert!(observed.iter().any(|body| v1.contains(body)));
-    assert!(observed.iter().any(|body| v2.contains(body)));
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &v2,
-        &v2,
-        Duration::from_secs(20),
-    )
-    .await?;
     Ok(())
 }
 

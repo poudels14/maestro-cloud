@@ -11,6 +11,7 @@ mod error;
 mod model;
 mod quorum;
 mod restart;
+mod rollout;
 mod routing;
 pub mod scenarios;
 mod scheduling;
@@ -21,15 +22,16 @@ pub use election::ElectionCluster;
 pub use error::ScenarioError;
 pub use model::{
     AffinityCookieSet, AffinityObservation, AffinitySession, AssignmentManifestSnapshot,
-    AssignmentWriteOutcome, ClusterSnapshot, ControlPlaneReadiness, DeploymentPhase,
-    DeploymentSnapshot, FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName,
-    FixtureMarker, FixtureMutationName, FixtureName, FixtureNodeName, FixtureVersion,
-    IngressFixture, LeadershipSnapshot, ReadinessProbe, ReplicaCount, ReplicaIndex,
-    ReplicaOverride, ReplicaSnapshot, ResourceAvailability, RolloutFailure, ScheduledAssignment,
-    SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
+    AssignmentWriteOutcome, CandidateReadiness, ClusterSnapshot, ControlPlaneReadiness,
+    CutoverObservation, DeploymentPhase, DeploymentSnapshot, DrainBehavior, FencedWriteOutcome,
+    FixtureAffinityToken, FixtureControllerName, FixtureMarker, FixtureMutationName, FixtureName,
+    FixtureNodeName, FixtureVersion, IngressFixture, LeadershipSnapshot, ReadinessProbe,
+    ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot, ResourceAvailability,
+    RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
 };
 pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;
+pub use rollout::CutoverCluster;
 pub use routing::RoutingCluster;
 pub use scheduling::SchedulingCluster;
 
