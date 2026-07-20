@@ -13,6 +13,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use clustertest::{
+    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName,
+    IngressFixture, ReplicaOverride, ReplicaSnapshot, ServiceFixture, ServiceSnapshot, scenarios,
+};
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
@@ -2392,5 +2396,246 @@ proptest::proptest! {
             .build()
             .unwrap();
         rt.block_on(run_property_sequence(ops));
+    }
+}
+
+struct OldSystemAcceptanceCluster {
+    harness: Harness,
+}
+
+impl OldSystemAcceptanceCluster {
+    fn new() -> Self {
+        Self {
+            harness: Harness::new(),
+        }
+    }
+
+    fn snapshot(&self) -> ClusterSnapshot<String> {
+        let state = self.harness.store.state.lock().expect("state lock");
+        let mut services = state
+            .configs
+            .iter()
+            .map(|(service_id, config)| {
+                let deployments = state
+                    .history
+                    .get(service_id)
+                    .into_iter()
+                    .flatten()
+                    .map(|deployment| {
+                        let replica_key = format!("{service_id}/{}", deployment.id);
+                        let mut replicas = state
+                            .replicas
+                            .get(&replica_key)
+                            .into_iter()
+                            .flatten()
+                            .map(|replica| ReplicaSnapshot {
+                                index: replica.replica_index,
+                                phase: acceptance_phase(&replica.status),
+                            })
+                            .collect::<Vec<_>>();
+                        replicas.sort_by_key(|replica| replica.index);
+                        DeploymentSnapshot {
+                            id: deployment.id.clone(),
+                            version: clustertest::FixtureVersion::new(
+                                deployment.config.version.clone(),
+                            ),
+                            phase: acceptance_phase(&deployment.status),
+                            replicas,
+                        }
+                    })
+                    .collect();
+                ServiceSnapshot {
+                    name: FixtureName::new(service_id.clone()),
+                    configured_replicas: clustertest::ReplicaCount::new(config.deploy.replicas),
+                    replica_override: state
+                        .replicas_override
+                        .get(service_id)
+                        .copied()
+                        .flatten()
+                        .map(clustertest::ReplicaCount::new),
+                    deployments,
+                }
+            })
+            .collect::<Vec<_>>();
+        services.sort_by(|left, right| left.name.cmp(&right.name));
+        ClusterSnapshot { services }
+    }
+
+    fn ready_built_deployments(&self) {
+        let deployment_ids = {
+            let state = self.harness.store.state.lock().expect("state lock");
+            state
+                .history
+                .values()
+                .flatten()
+                .filter(|deployment| {
+                    matches!(
+                        deployment.status,
+                        DeploymentStatus::Building | DeploymentStatus::PendingReady
+                    ) && self
+                        .harness
+                        .provider
+                        .built_image_tag(&deployment.id)
+                        .is_some()
+                })
+                .map(|deployment| deployment.id.clone())
+                .collect::<Vec<_>>()
+        };
+        for deployment_id in deployment_ids {
+            self.harness.mark_all_replicas_ready(&deployment_id);
+        }
+    }
+}
+
+#[async_trait]
+impl AcceptanceCluster for OldSystemAcceptanceCluster {
+    type DeploymentId = String;
+    type Error = anyhow::Error;
+
+    async fn rollout(&mut self, service: ServiceFixture) -> Result<Self::DeploymentId> {
+        let mut config = docker_service(service.name.as_str(), service.replicas.get());
+        config.version = service.version.as_str().to_string();
+        if let IngressFixture::Host(host) = service.ingress {
+            config.ingress = Some(IngressConfig {
+                host: Some(host),
+                hosts: Vec::new(),
+                port: Some(80),
+                session_affinity: None,
+            });
+        }
+        Ok(self.harness.store.queue_new_deployment(config).id)
+    }
+
+    async fn cancel(&mut self, deployment_id: &Self::DeploymentId) -> Result<()> {
+        let service_id = {
+            let state = self.harness.store.state.lock().expect("state lock");
+            state
+                .history
+                .iter()
+                .find(|(_, deployments)| {
+                    deployments
+                        .iter()
+                        .any(|deployment| deployment.id == *deployment_id)
+                })
+                .map(|(service_id, _)| service_id.clone())
+        }
+        .ok_or_else(|| anyhow::anyhow!("deployment `{deployment_id}` does not exist"))?;
+        self.harness
+            .store
+            .cancel_service_deployment(&Deployment {
+                service_id,
+                id: deployment_id.clone(),
+                replica_index: 0,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn set_replicas(
+        &mut self,
+        service: &FixtureName,
+        replica_override: ReplicaOverride,
+    ) -> Result<()> {
+        let override_value = match replica_override {
+            ReplicaOverride::Set(replicas) => Some(replicas.get()),
+            ReplicaOverride::Clear => None,
+        };
+        self.harness
+            .store
+            .set_replicas_override(service.as_str(), override_value);
+        Ok(())
+    }
+
+    async fn advance(&mut self, duration: Duration) -> Result<()> {
+        let millis = u64::try_from(duration.as_millis())
+            .map_err(|_| anyhow::anyhow!("logical duration is too large"))?;
+        self.harness.clock.advance(millis);
+        Ok(())
+    }
+
+    async fn await_converged(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>> {
+        const MINIMUM_TICKS: usize = 32;
+        const REQUIRED_QUIET_TICKS: usize = 8;
+        const MAXIMUM_TICKS: usize = 10_000;
+
+        let mut previous = None;
+        let mut quiet_ticks = 0;
+        for tick_index in 0..MAXIMUM_TICKS {
+            self.ready_built_deployments();
+            self.harness.tick().await;
+            tokio::task::yield_now().await;
+            let snapshot = self.snapshot();
+            if tick_index >= MINIMUM_TICKS && previous.as_ref() == Some(&snapshot) {
+                quiet_ticks += 1;
+            } else {
+                quiet_ticks = 0;
+            }
+            if quiet_ticks >= REQUIRED_QUIET_TICKS {
+                return Ok(snapshot);
+            }
+            previous = Some(snapshot);
+        }
+        Err(anyhow::anyhow!(
+            "old system did not converge after {MAXIMUM_TICKS} reconcile ticks"
+        ))
+    }
+}
+
+#[tokio::test]
+async fn acceptance_rollout_reaches_ready_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::rollout_reaches_ready(&mut cluster)
+        .await
+        .expect("rollout acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_redeploy_drains_previous_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::redeploy_drains_previous(&mut cluster)
+        .await
+        .expect("redeploy acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_queued_deployment_can_be_canceled_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::queued_deployment_can_be_canceled(&mut cluster)
+        .await
+        .expect("cancel acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_replica_override_round_trips_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::replica_override_round_trips(&mut cluster)
+        .await
+        .expect("replica override acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_drained_deployment_finalizes_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::drained_deployment_finalizes(&mut cluster)
+        .await
+        .expect("drain finalization acceptance scenario");
+}
+
+fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {
+    match status {
+        DeploymentStatus::Queued => DeploymentPhase::Queued,
+        DeploymentStatus::Building => DeploymentPhase::Building,
+        DeploymentStatus::PendingReady => DeploymentPhase::PendingReady,
+        DeploymentStatus::Ready => DeploymentPhase::Ready,
+        DeploymentStatus::Crashed => DeploymentPhase::Crashed,
+        DeploymentStatus::Terminated => DeploymentPhase::Terminated,
+        DeploymentStatus::Removed => DeploymentPhase::Removed,
+        DeploymentStatus::Draining => DeploymentPhase::Draining,
+        DeploymentStatus::Canceled => DeploymentPhase::Canceled,
     }
 }
