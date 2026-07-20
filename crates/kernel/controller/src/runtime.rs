@@ -348,6 +348,7 @@ where
                     next_attempt: 0,
                 }
             }
+            Err(ReconcileError::Infrastructure(error)) => return Err(error),
         };
         #[cfg(feature = "test-util")]
         if let Some(action) = outcome.action {

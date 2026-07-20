@@ -22,6 +22,9 @@ pub enum Action {
 /// Matchable operator failure classified for retry and status reporting.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReconcileError {
+    /// Controller-kernel failure that must escape the work queue immediately.
+    #[error(transparent)]
+    Infrastructure(#[from] crate::ControllerError),
     /// Transient failure retried with controller backoff.
     #[error("retryable reconciliation failure: {message}")]
     Retryable {
