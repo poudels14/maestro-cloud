@@ -1,11 +1,13 @@
 use std::fmt;
 use std::io::IsTerminal;
+use std::os::unix::fs::OpenOptionsExt;
 
 use clap::Args;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
 use inquire::Select;
 use serde::Deserialize;
+use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
@@ -355,7 +357,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let (mut websocket_writer, mut websocket_reader) = websocket.split();
-    let mut stdin = tokio::io::stdin();
+    let mut stdin = CancellableStdin::open()?;
     let mut stdout = tokio::io::stdout();
     let mut input_buffer = vec![0_u8; 16 * 1024];
     let mut stdin_closed = false;
@@ -445,6 +447,56 @@ where
     }
 }
 
+enum CancellableStdin {
+    Ready(AsyncFd<std::fs::File>),
+    Regular(tokio::fs::File),
+}
+
+impl CancellableStdin {
+    fn open() -> Result<Self> {
+        let file = open_stdin(true)?;
+        match AsyncFd::new(file) {
+            Ok(file) => Ok(Self::Ready(file)),
+            Err(error) if error.raw_os_error() == Some(libc::EPERM) => {
+                Ok(Self::Regular(tokio::fs::File::from_std(open_stdin(false)?)))
+            }
+            Err(error) => Err(Error::internal(format!(
+                "failed to register terminal input: {error}"
+            ))),
+        }
+    }
+
+    async fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Ready(file) => loop {
+                let mut ready = file.readable().await?;
+                match ready.try_io(|file| {
+                    let mut file = file.get_ref();
+                    std::io::Read::read(&mut file, buffer)
+                }) {
+                    Ok(result) => return result,
+                    Err(_) => continue,
+                }
+            },
+            Self::Regular(file) => file.read(buffer).await,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_file(file: std::fs::File) -> std::io::Result<Self> {
+        AsyncFd::new(file).map(Self::Ready)
+    }
+}
+
+fn open_stdin(nonblocking: bool) -> Result<std::fs::File> {
+    let flags = libc::O_CLOEXEC | if nonblocking { libc::O_NONBLOCK } else { 0 };
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open("/dev/stdin")
+        .map_err(|error| Error::internal(format!("failed to open terminal input: {error}")))
+}
+
 fn terminal_size(tty: bool) -> Result<Option<crate::exec::TerminalSize>> {
     if tty {
         let (cols, rows) = crossterm::terminal::size()
@@ -530,8 +582,29 @@ impl EscapeState {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::{FromRawFd, IntoRawFd};
+    use std::time::Duration;
+
     use super::*;
     use clap::Parser;
+
+    #[tokio::test]
+    async fn terminal_input_read_is_cancellable() {
+        let (reader, mut writer) = tokio::net::UnixStream::pair().unwrap();
+        let reader =
+            unsafe { std::fs::File::from_raw_fd(reader.into_std().unwrap().into_raw_fd()) };
+        let mut input = CancellableStdin::from_file(reader).unwrap();
+        let mut buffer = [0_u8; 1];
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), input.read(&mut buffer))
+                .await
+                .is_err()
+        );
+        writer.write_all(b"x").await.unwrap();
+        assert_eq!(input.read(&mut buffer).await.unwrap(), 1);
+        assert_eq!(buffer, *b"x");
+    }
 
     #[test]
     fn exec_command_parses_replica_and_remote_argv() {
