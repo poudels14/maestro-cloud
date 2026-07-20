@@ -27,6 +27,15 @@ fn initializes_and_reloads_one_cluster_authority() -> Result<(), Box<dyn std::er
     );
     assert_eq!(first, second);
     assert!(!format!("{first:?}").contains("PRIVATE KEY"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(directory.path().join("cluster-ca/ca-key.pem"))?
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     Ok(())
 }
 

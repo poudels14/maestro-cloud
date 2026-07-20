@@ -130,6 +130,7 @@ impl ClusterCertificateAuthority {
     pub fn load(directory: &Path) -> Result<Self, CertificateError> {
         let certificate_path = directory.join("ca.pem");
         let private_key_path = directory.join("ca-key.pem");
+        validate_private_permissions(&private_key_path)?;
         let certificate_pem = read_text(&certificate_path)?;
         let private_key_pem = read_text(&private_key_path)?;
         validate_ca_material(&certificate_pem, &private_key_pem)?;
@@ -196,6 +197,9 @@ pub enum CertificateError {
     /// Only one of the two persisted CA files was present.
     #[error("cluster certificate authority is incomplete in `{}`", directory.display())]
     IncompleteAuthority { directory: PathBuf },
+    /// A persisted signing key was readable by users other than its owner.
+    #[error("private key `{}` has insecure permissions {mode:#o}", path.display())]
+    InsecurePermissions { path: PathBuf, mode: u32 },
     /// A DNS subject alternative name was not syntactically valid.
     #[error("invalid certificate hostname `{hostname}`")]
     InvalidHostname { hostname: String },
@@ -383,4 +387,28 @@ fn sync_directory(directory: &Path) -> Result<(), CertificateError> {
         path: directory.to_path_buf(),
         source,
     })
+}
+
+fn validate_private_permissions(path: &Path) -> Result<(), CertificateError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(path)
+            .map_err(|source| CertificateError::Io {
+                action: "inspect permissions of",
+                path: path.to_path_buf(),
+                source,
+            })?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(CertificateError::InsecurePermissions {
+                path: path.to_path_buf(),
+                mode,
+            });
+        }
+    }
+    Ok(())
 }

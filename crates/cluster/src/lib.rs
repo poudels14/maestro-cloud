@@ -1,17 +1,33 @@
 //! Cluster formation, membership, and private network contracts.
 //!
 //! This crate owns the boundary between operator-facing cluster topology and
-//! the internal store and mesh providers that realize it.
+//! the internal store and mesh providers that realize it. It may depend on
+//! kernel contracts, but never on node agents, runtimes, operators, or apps.
 
+mod admission;
 mod certificates;
+mod join;
+mod join_crypto;
+mod join_key;
 mod network;
 mod ports;
 mod topology;
 
+pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
 pub use certificates::{
     CertificateError, CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority,
     NodeCertificateBundle, certificate_fingerprint,
 };
+pub use join::{
+    CaDiscoveryRequest, CaDiscoveryResponse, JoinPrivateKey, JoinProtocolError, JoinRequest,
+    RequestSignature, create_ca_discovery_response, public_key_fingerprint, sign_join_request,
+    verify_ca_discovery_response, verify_join_request_signature,
+};
+pub use join_crypto::{
+    EncryptedJoinResponse, JoinPayload, JoinResponseStatus, decrypt_join_response,
+    encrypt_join_response,
+};
+pub use join_key::{JoinKeyError, load_or_create_join_key};
 pub use network::{CidrError, Ipv4Cidr};
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
 pub use topology::{
