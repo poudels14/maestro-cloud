@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use kernel_api::WorkloadId;
 
@@ -50,6 +51,16 @@ pub enum RuntimeError {
     Stream {
         /// Backend detail safe to log.
         message: String,
+    },
+    /// A bounded lifecycle operation did not converge before its configured deadline.
+    #[error("runtime {operation} for workload `{workload_id}` exceeded {timeout:?}")]
+    Timeout {
+        /// Lifecycle operation that timed out.
+        operation: &'static str,
+        /// Workload whose state did not converge.
+        workload_id: WorkloadId,
+        /// Configured deadline duration.
+        timeout: Duration,
     },
 }
 

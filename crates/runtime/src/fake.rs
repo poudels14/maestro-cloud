@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::future::pending;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, WorkloadId};
+use test_util::{Mutex, MutexGuard};
 
 use crate::{
     Capabilities, CgroupPath, EventCursor, EventRequest, ExecOutput, ExecRequest, ExecSession,
@@ -170,9 +171,7 @@ impl FakeRuntime {
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, FakeState>, RuntimeError> {
-        self.state.lock().map_err(|_| RuntimeError::Unavailable {
-            message: "fake runtime state lock was poisoned".to_owned(),
-        })
+        Ok(self.state.lock())
     }
 
     fn emit(
@@ -220,7 +219,7 @@ impl WorkloadRuntime for FakeRuntime {
                 capability: RuntimeCapability::VirtualMachine,
             });
         }
-        let fingerprint = test_util::to_vec(spec).map_err(|error| RuntimeError::InvalidSpec {
+        let fingerprint = serde_json::to_vec(spec).map_err(|error| RuntimeError::InvalidSpec {
             message: format!("failed to fingerprint fake workload spec: {error}"),
         })?;
         let mut state = self.lock()?;

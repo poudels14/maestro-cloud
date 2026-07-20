@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::{
     EnvironmentInheritance, ProcessCommand, ProcessEnvironment, ProcessHandle, ProcessLogFiles,
@@ -101,6 +102,38 @@ async fn persisted_handle_rejects_pid_reuse_before_signaling() {
         .await
         .unwrap();
     assert_eq!(supervisor.wait(handle).await.unwrap().signal, Some(9));
+}
+
+#[tokio::test]
+async fn failed_identity_commit_kills_and_reaps_the_new_process() {
+    let root = tempfile::tempdir().unwrap();
+    let supervisor = ProcessSupervisor::new();
+    let observed = Arc::new(Mutex::new(None));
+    let observed_for_commit = observed.clone();
+    let result = supervisor
+        .spawn_committed(
+            ProcessSpec {
+                command: ProcessCommand {
+                    executable: "/bin/sleep".into(),
+                    arguments: vec!["30".to_owned()],
+                },
+                ..base_spec(root.path())
+            },
+            move |handle| {
+                *observed_for_commit.lock().unwrap() = Some(handle);
+                Err(SupervisorError::InvalidSpec {
+                    message: "injected commit failure".to_owned(),
+                })
+            },
+        )
+        .await;
+
+    assert!(matches!(result, Err(SupervisorError::InvalidSpec { .. })));
+    let handle = observed.lock().unwrap().unwrap();
+    assert_eq!(
+        ProcessSupervisor::new().status(handle).await.unwrap(),
+        ProcessStatus::Gone
+    );
 }
 
 fn shell_spec(root: &Path, script: &str) -> ProcessSpec {

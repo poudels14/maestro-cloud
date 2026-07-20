@@ -33,8 +33,8 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
     });
 
     assert_eq!(spec.configuration().metadata.workload_id, workload_id);
-    let wire = test_util::to_value(&spec).unwrap();
-    assert_eq!(wire.get("type"), Some(&test_util::json!("process")));
+    let wire = serde_json::to_value(&spec).unwrap();
+    assert_eq!(wire.get("type"), Some(&serde_json::json!("process")));
 }
 
 #[test]

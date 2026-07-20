@@ -25,10 +25,31 @@ impl ProcessSupervisor {
 
     /// Spawns a new process group on Tokio's blocking pool and retains its child handle for reaping.
     pub async fn spawn(&self, spec: ProcessSpec) -> Result<ProcessHandle, SupervisorError> {
+        self.spawn_committed(spec, |_| Ok(())).await
+    }
+
+    /// Spawns a process and invokes a durable identity commit on the same blocking operation.
+    ///
+    /// Once spawning begins, canceling the async caller does not cancel the blocking operation:
+    /// the commit still runs. If the commit fails, the new process group is killed and reaped before
+    /// the error is returned. This lets higher layers make spawn-plus-manifest cancellation-safe.
+    pub async fn spawn_committed<Commit>(
+        &self,
+        spec: ProcessSpec,
+        commit: Commit,
+    ) -> Result<ProcessHandle, SupervisorError>
+    where
+        Commit: FnOnce(ProcessHandle) -> Result<(), SupervisorError> + Send + 'static,
+    {
         spec.validate()?;
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || {
-            let (handle, child) = spawn_process(&spec)?;
+            let (handle, mut child) = spawn_process(&spec)?;
+            if let Err(error) = commit(handle) {
+                let _ = signal_process(handle, ProcessSignal::Kill);
+                let _ = child.wait();
+                return Err(error);
+            }
             lock(&state)?.insert(
                 handle,
                 ManagedProcess {
