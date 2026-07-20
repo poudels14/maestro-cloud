@@ -1,0 +1,368 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use kernel_api::{
+    ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
+    ClusterId, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus,
+    ExecPolicy, Generation, NodeId, ObjectMeta, PlacementConstraint, ResourceKind, ResourceName,
+    ResourceRevision, ServiceId, ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec,
+    VolumeSource,
+};
+use kernel_store::{
+    Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
+    Store,
+};
+use runtime::{
+    FakeRuntime, FakeRuntimeOperation, NetworkCidr, NetworkProvider, RuntimeError, WorkloadRuntime,
+};
+
+use crate::{AssignmentAgent, AssignmentAgentSettings, StatusClock};
+
+use super::fake_network::FakeNetworkProvider;
+
+#[tokio::test]
+async fn assignment_reconcile_runs_and_re_adopts_one_exactly_addressed_workload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+
+    let first = world.agent().reconcile_once().await?;
+    assert_eq!(first.desired, 1);
+    assert_eq!(first.running, 1);
+    assert_eq!(world.network.lease_count(), 1);
+    assert_running(&world).await?;
+
+    let restarted = world.agent().reconcile_once().await?;
+    assert_eq!(restarted.running, 1);
+    assert_eq!(restarted.garbage_collected, 0);
+    assert_eq!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_status()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.runtime.fail_next(
+        FakeRuntimeOperation::Start,
+        RuntimeError::Unavailable {
+            message: "injected outage".to_owned(),
+        },
+    )?;
+
+    let first = world.agent().reconcile_once().await?;
+    assert_eq!(first.unresolved, 1);
+    let pending = world.load_assignment().await?;
+    assert_eq!(pending.status.phase, AssignmentPhase::Pending);
+    assert_eq!(
+        pending
+            .status
+            .conditions
+            .first()
+            .map(|condition| condition.reason.0.as_str()),
+        Some("RuntimeRetry")
+    );
+
+    let second = world.agent().reconcile_once().await?;
+    assert_eq!(second.running, 1);
+    assert_running(&world).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    let key = world.assignment_key();
+    let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
+    world
+        .store
+        .delete_cas(DeleteRequest {
+            key,
+            expected: stored.version,
+        })
+        .await?;
+
+    let report = world.agent().reconcile_once().await?;
+    assert_eq!(report.garbage_collected, 1);
+    assert!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .is_empty()
+    );
+    assert_eq!(world.network.lease_count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_reconcile_skips_gc_when_assignment_ownership_is_malformed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    let key = world.assignment_key();
+    let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
+    world
+        .store
+        .delete_cas(DeleteRequest {
+            key,
+            expected: stored.version,
+        })
+        .await?;
+    let malformed_key = Keyspace::new(&cluster_id()).resource(
+        &ResourceKind::new("Assignment")?,
+        &ResourceName::new("malformed-assignment")?,
+    );
+    put_resource(world.store.as_ref(), malformed_key, b"not-json".to_vec()).await?;
+
+    let report = world.agent().reconcile_once().await?;
+    assert_eq!(report.malformed_resources, 1);
+    assert_eq!(report.garbage_collected, 0);
+    assert_eq!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+pub(crate) fn cluster_id() -> ClusterId {
+    ClusterId::new("cluster-1").unwrap()
+}
+
+pub(crate) fn node_id(value: &str) -> NodeId {
+    NodeId::new(value).unwrap()
+}
+
+pub(crate) fn assignment() -> Assignment {
+    Assignment {
+        meta: ObjectMeta {
+            id: AssignmentId::new("assignment-1").unwrap(),
+            labels: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            revision: ResourceRevision::default(),
+            generation: Generation(1),
+            owner_refs: Vec::new(),
+            finalizers: BTreeSet::new(),
+            deletion_timestamp: None,
+        },
+        spec: AssignmentSpec {
+            service_id: ServiceId::new("api").unwrap(),
+            deployment_id: DeploymentId::new("deployment-1").unwrap(),
+            replica_index: 0,
+            node_id: node_id("node-1"),
+            placement_epoch: 1,
+            workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 8)),
+            replaces_assignment_id: None,
+        },
+        status: AssignmentStatus {
+            phase: AssignmentPhase::Pending,
+            workload_id: None,
+            conditions: Vec::new(),
+        },
+    }
+}
+
+pub(crate) fn deployment() -> Deployment {
+    Deployment {
+        meta: ObjectMeta {
+            id: DeploymentId::new("deployment-1").unwrap(),
+            labels: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            revision: ResourceRevision::default(),
+            generation: Generation(1),
+            owner_refs: Vec::new(),
+            finalizers: BTreeSet::new(),
+            deletion_timestamp: None,
+        },
+        spec: DeploymentSpec {
+            service_id: ServiceId::new("api").unwrap(),
+            service_generation: Generation(1),
+            service: ServiceSpec {
+                name: "API".to_owned(),
+                version: "1.0.0".to_owned(),
+                artifact: ArtifactTemplate::Image {
+                    reference: "registry.test/api:latest".to_owned(),
+                },
+                command: None,
+                replicas: 1,
+                exposed_ports: vec![8080],
+                health_check: None,
+                max_restarts: Some(3),
+                environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
+                secrets: BTreeMap::new(),
+                volumes: vec![VolumeMountSpec {
+                    source: VolumeSource::HostPath {
+                        path: "/srv/api".to_owned(),
+                        node_id: node_id("node-1"),
+                    },
+                    target: "/data".to_owned(),
+                    access: VolumeAccess::ReadOnly,
+                }],
+                placement: PlacementConstraint::default(),
+                exec: ExecPolicy::Allowed,
+            },
+            build_id: None,
+        },
+        status: DeploymentStatus {
+            phase: DeploymentPhase::PendingReady,
+            created_at: Timestamp(1_750_000_000_000),
+            ready_at: None,
+            draining_at: None,
+            image_digest: Some("registry.test/api@sha256:abc".to_owned()),
+            conditions: Vec::new(),
+        },
+    }
+}
+
+async fn assert_running(world: &World) -> Result<(), Box<dyn std::error::Error>> {
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Running);
+    assert_eq!(
+        assignment.status.workload_id.as_ref().map(|id| id.as_str()),
+        Some("assignment-1")
+    );
+    assert_eq!(
+        assignment
+            .status
+            .conditions
+            .first()
+            .map(|condition| condition.reason.0.as_str()),
+        Some("WorkloadRunning")
+    );
+    Ok(())
+}
+
+struct World {
+    store: Arc<InMemoryStore>,
+    runtime: Arc<FakeRuntime>,
+    network: Arc<FakeNetworkProvider>,
+}
+
+impl World {
+    fn new() -> Self {
+        Self {
+            store: Arc::new(InMemoryStore::new(Arc::new(TestMonotonicClock))),
+            runtime: Arc::new(FakeRuntime::new()),
+            network: Arc::new(FakeNetworkProvider::default()),
+        }
+    }
+
+    fn agent(&self) -> AssignmentAgent {
+        let runtime: Arc<dyn WorkloadRuntime> = self.runtime.clone();
+        let network: Arc<dyn NetworkProvider> = self.network.clone();
+        AssignmentAgent::new(
+            self.store.clone(),
+            runtime,
+            network,
+            AssignmentAgentSettings {
+                cluster_id: cluster_id(),
+                node_id: node_id("node-1"),
+                network: runtime::NetworkSpec {
+                    name: "maestro-node-1".to_owned(),
+                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
+                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                },
+                stop_timeout: Duration::from_secs(5),
+                resync_interval: Duration::from_secs(30),
+            },
+            Arc::new(TestMonotonicClock),
+            Arc::new(FixedStatusClock),
+        )
+        .unwrap()
+    }
+
+    async fn seed(
+        &self,
+        deployment: &Deployment,
+        assignment: &Assignment,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let keyspace = Keyspace::new(&cluster_id());
+        put_resource(
+            self.store.as_ref(),
+            keyspace.resource(
+                &ResourceKind::new("Deployment")?,
+                &ResourceName::new(deployment.meta.id.as_str())?,
+            ),
+            serde_json::to_vec(deployment)?,
+        )
+        .await?;
+        put_resource(
+            self.store.as_ref(),
+            self.assignment_key(),
+            serde_json::to_vec(assignment)?,
+        )
+        .await
+    }
+
+    async fn load_assignment(&self) -> Result<Assignment, Box<dyn std::error::Error>> {
+        let stored = self
+            .store
+            .get(&self.assignment_key())
+            .await?
+            .ok_or("assignment missing")?;
+        Ok(serde_json::from_slice(&stored.value)?)
+    }
+
+    fn assignment_key(&self) -> kernel_store::StoreKey {
+        Keyspace::new(&cluster_id()).resource(
+            &ResourceKind::new("Assignment").unwrap(),
+            &ResourceName::new("assignment-1").unwrap(),
+        )
+    }
+}
+
+async fn put_resource(
+    store: &dyn Store,
+    key: kernel_store::StoreKey,
+    value: Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    store
+        .put_cas(PutRequest {
+            key,
+            value,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    Ok(())
+}
+
+struct TestMonotonicClock;
+
+#[async_trait]
+impl Clock for TestMonotonicClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::ZERO)
+    }
+
+    async fn sleep_until(&self, _deadline: MonotonicTime) {
+        std::future::pending::<()>().await;
+    }
+}
+
+struct FixedStatusClock;
+
+impl StatusClock for FixedStatusClock {
+    fn now(&self) -> Timestamp {
+        Timestamp(1_750_000_000_000)
+    }
+}

@@ -1,4 +1,9 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+mod assignment;
+mod assignment_plan;
 mod fake_mesh;
+mod fake_network;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
 mod mesh;
