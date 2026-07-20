@@ -29,6 +29,8 @@ use crate::{
     slack::SlackNotifier,
 };
 
+const CLUSTER_DRAIN_GRACE_MS: i64 = 30_000;
+
 pub struct LeaderLoop {
     cluster_id: String,
     cluster_name: String,
@@ -124,6 +126,8 @@ impl LeaderLoop {
             .flat_map(|manifest| manifest.assignments.iter().cloned())
             .collect::<Vec<_>>();
         let replica_states = self.assignments.list_replica_states().await?;
+        self.finalize_drained_deployments(token, &current, &replica_states, now_ms)
+            .await?;
         self.fail_exhausted_deployments(token, &current, &replica_states)
             .await?;
         let (services, mut validation_errors) = self
@@ -294,6 +298,47 @@ impl LeaderLoop {
             now_ms,
         )
         .await?;
+        Ok(())
+    }
+
+    async fn finalize_drained_deployments(
+        &self,
+        token: &crate::cluster::types::LeadershipToken,
+        assignments: &[Assignment],
+        replica_states: &[ReplicaState],
+        now_ms: i64,
+    ) -> Result<()> {
+        for service in self.store.list_service_infos().await? {
+            for deployment in self
+                .store
+                .list_service_deployments(&service.config.id)
+                .await?
+            {
+                if !drained_deployment_has_settled(&deployment, assignments, replica_states, now_ms)
+                {
+                    continue;
+                }
+                let deployment_ref = Deployment {
+                    service_id: service.config.id.clone(),
+                    id: deployment.id.clone(),
+                    replica_index: 0,
+                };
+                self.store
+                    .update_deployment_status_fenced(
+                        token,
+                        &deployment_ref,
+                        DeploymentStatus::Removed,
+                    )
+                    .await?;
+                self.logger.emit(
+                    "info",
+                    &format!(
+                        "drained deployment `{}` for service `{}` was removed",
+                        deployment.id, service.config.id
+                    ),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -488,7 +533,7 @@ impl LeaderLoop {
                     && (deployment.status != DeploymentStatus::Draining
                         || deployment.drained_at.is_none_or(|drained_at| {
                             i64::try_from(drained_at).ok().is_some_and(|drained_at| {
-                                now_ms < drained_at.saturating_add(30_000)
+                                now_ms < drained_at.saturating_add(CLUSTER_DRAIN_GRACE_MS)
                             })
                         }))
             });
@@ -1325,6 +1370,34 @@ fn current_replica_exhausted(
     })
 }
 
+fn drained_deployment_has_settled(
+    deployment: &crate::deployment::types::ServiceDeployment,
+    assignments: &[Assignment],
+    replica_states: &[ReplicaState],
+    now_ms: i64,
+) -> bool {
+    if deployment.status != DeploymentStatus::Draining
+        || !deployment
+            .drained_at
+            .and_then(|value| i64::try_from(value).ok())
+            .is_some_and(|value| now_ms >= value.saturating_add(CLUSTER_DRAIN_GRACE_MS))
+    {
+        return false;
+    }
+    let assigned = assignments.iter().any(|assignment| {
+        assignment.service_id == deployment.config.id && assignment.deployment_id == deployment.id
+    });
+    let replica_active = replica_states.iter().any(|state| {
+        state.service_id.as_deref() == Some(deployment.config.id.as_str())
+            && state.deployment_id.as_deref() == Some(deployment.id.as_str())
+            && !matches!(
+                state.status,
+                DeploymentStatus::Terminated | DeploymentStatus::Removed
+            )
+    });
+    !assigned && !replica_active
+}
+
 fn all_current_replicas_exhausted(
     assignments: &[Assignment],
     states: &[ReplicaState],
@@ -1576,6 +1649,54 @@ mod tests {
                 drain_old_after_ms,
             },
         )])
+    }
+
+    fn draining_deployment(drained_at: u64) -> crate::deployment::types::ServiceDeployment {
+        serde_json::from_value(serde_json::json!({
+            "id": "dep1",
+            "drainedAt": drained_at,
+            "status": "DRAINING",
+            "config": {
+                "id": "web",
+                "name": "Web",
+                "version": "1",
+                "image": "busybox:1.37",
+                "deploy": { "command": null }
+            },
+            "gitCommit": null,
+            "build": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn drained_deployment_settles_after_runtime_state_is_gone() {
+        let deployment = draining_deployment(1_000);
+
+        assert!(!drained_deployment_has_settled(
+            &deployment,
+            &[],
+            &[],
+            30_999
+        ));
+        assert!(!drained_deployment_has_settled(
+            &deployment,
+            &[assignment(0)],
+            &[],
+            31_000
+        ));
+        assert!(!drained_deployment_has_settled(
+            &deployment,
+            &[],
+            &[state(0, DeploymentStatus::Ready)],
+            31_000
+        ));
+        assert!(drained_deployment_has_settled(
+            &deployment,
+            &[],
+            &[],
+            31_000
+        ));
     }
 
     #[test]
