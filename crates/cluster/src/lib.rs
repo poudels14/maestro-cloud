@@ -11,6 +11,7 @@ mod join_crypto;
 mod join_key;
 mod network;
 mod ports;
+mod provider;
 mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
@@ -30,6 +31,11 @@ pub use join_crypto::{
 pub use join_key::{JoinKeyError, load_or_create_join_key};
 pub use network::{CidrError, Ipv4Cidr};
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
+pub use provider::{
+    MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,
+    StoreProviderConfig, StoreProviderError, StoreRecovery, StoreRecoveryPermit,
+    StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
+};
 pub use topology::{
     ClusterConfig, ClusterPreflightError, NodeDefinition, NodeEndpoint, ValidatedTopology,
     WIREGUARD_MTU_BYTES,

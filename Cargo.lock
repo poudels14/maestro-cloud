@@ -1346,12 +1346,14 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "cluster"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "chacha20poly1305",
  "hex",
  "hkdf",
  "hmac 0.12.1",
  "kernel-api",
+ "kernel-store",
  "proptest",
  "rcgen",
  "serde",
@@ -1361,6 +1363,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "tokio",
  "x25519-dalek",
  "x509-parser",
  "zeroize",

@@ -1,6 +1,6 @@
 use crate::{
     ClusterCertificateAuthority, JoinPayload, JoinPrivateKey, JoinProtocolError, JoinRequest,
-    JoinResponseStatus, decrypt_join_response, encrypt_join_response,
+    JoinResponseStatus, StoreJoinTicket, decrypt_join_response, encrypt_join_response,
 };
 
 use super::fixtures::{valid_config, validity};
@@ -26,6 +26,10 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         nodes: config.nodes.clone(),
         ports: config.ports,
         certificates,
+        store_join_ticket: Some(StoreJoinTicket::from_provider_data(
+            node_id.clone(),
+            b"test-ticket",
+        )),
         certificate_issuer: Some(authority),
     };
     let envelope = encrypt_join_response(

@@ -37,6 +37,9 @@ pub struct JoinPayload {
     pub ports: ClusterPorts,
     /// Node-specific mutual-authentication identity.
     pub certificates: NodeCertificateBundle,
+    /// Opaque store membership data granted to control-plane joiners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_join_ticket: Option<crate::StoreJoinTicket>,
     /// Trust-root signing material granted only to control-plane nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub certificate_issuer: Option<ClusterCertificateAuthority>,
@@ -206,7 +209,9 @@ fn validate_payload_binding(
     if payload.nodes.get(&request.node_id) != Some(&requested_node) {
         return Err(JoinProtocolError::ResponseConfigurationMismatch);
     }
-    if request.role.is_control_plane() != payload.certificate_issuer.is_some() {
+    if request.role.is_control_plane() != payload.certificate_issuer.is_some()
+        || request.role.is_control_plane() != payload.store_join_ticket.is_some()
+    {
         return Err(JoinProtocolError::ResponseIssuerGrantMismatch);
     }
     Ok(())

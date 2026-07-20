@@ -8,4 +8,5 @@ mod join_crypto;
 mod join_key;
 mod network;
 mod ports;
+mod provider;
 mod topology;
