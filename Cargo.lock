@@ -3183,6 +3183,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "node-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "kernel-api",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "node-fabric"
 version = "0.1.0"
 dependencies = [

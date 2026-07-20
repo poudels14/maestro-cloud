@@ -1,0 +1,19 @@
+[package]
+name = "node-agent"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "=0.1.89"
+base64 = "=0.22.1"
+kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+thiserror = "=2.0.18"
+x25519-dalek = { version = "=3.0.0", features = ["getrandom", "static_secrets"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+tokio = { version = "=1.52.3", features = ["macros", "rt"] }
