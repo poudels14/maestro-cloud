@@ -16,6 +16,7 @@ mod rollout;
 mod routing;
 pub mod scenarios;
 mod scheduling;
+mod upgrade;
 
 pub use affinity::AffinityCluster;
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
@@ -40,6 +41,12 @@ pub use restart::RestartCluster;
 pub use rollout::CutoverCluster;
 pub use routing::RoutingCluster;
 pub use scheduling::SchedulingCluster;
+pub use upgrade::{
+    FixtureInstanceId, MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze,
+    MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, RollingUpgradeObservation,
+    SchedulingEligibility, SelectedRestartObservation, TargetRetention, UpgradeCluster,
+    UpgradeFault,
+};
 
 #[cfg(test)]
 mod tests;

@@ -11,13 +11,16 @@ use clustertest::{
     AffinityCluster, AffinityCookieSet, AffinityObservation, AffinitySession,
     AssignmentManifestSnapshot, AssignmentWriteOutcome, BootstrapDecision, CandidateReadiness,
     ControlPlaneReadiness, CutoverCluster, CutoverObservation, DrainBehavior, ElectionCluster,
-    FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureMarker,
-    FixtureMutationName, FixtureNodeName, FixtureVersion, FormationCluster, FormationMemberRole,
-    FormationSnapshot, JoinObservation, LeadershipAgreement, LeadershipSnapshot,
-    MembershipAgreement, NodePorts, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup,
-    RegistrationObservation, ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability,
-    RestartCluster, RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot,
-    scenarios,
+    FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureInstanceId,
+    FixtureMarker, FixtureMutationName, FixtureNodeName, FixtureVersion, FormationCluster,
+    FormationMemberRole, FormationSnapshot, JoinObservation, LeadershipAgreement,
+    LeadershipSnapshot, MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze,
+    MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, MembershipAgreement,
+    NodePorts, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup, RegistrationObservation,
+    ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability, RestartCluster,
+    RollingUpgradeObservation, RoutingCluster, ScheduledAssignment, SchedulingCluster,
+    SchedulingEligibility, SchedulingSnapshot, SelectedRestartObservation, TargetRetention,
+    UpgradeCluster, UpgradeFault, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -3217,6 +3220,370 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     Ok(())
 }
 
+struct OldSystemUpgradeCluster {
+    _etcd: ContainerEtcdCluster,
+    registry: Arc<InMemoryNodeRegistry>,
+    restart_requests: Arc<std::sync::Mutex<Vec<String>>>,
+    upgrade_observations: Arc<std::sync::Mutex<Vec<UpgradeObservation>>>,
+    initial_nodes: Vec<NodeInfo>,
+    leader: Arc<EtcdLeaderElector>,
+    follower: Arc<EtcdLeaderElector>,
+    initial_token: LeadershipToken,
+    shutdown_leader: broadcast::Sender<ShutdownEvent>,
+    shutdown_follower: broadcast::Sender<ShutdownEvent>,
+    election_handles: Vec<tokio::task::JoinHandle<()>>,
+    api_handles: Vec<tokio::task::JoinHandle<()>>,
+    store: Arc<EtcdStateStore>,
+    leader_orchestrator: super::upgrade::ClusterUpgradeOrchestrator,
+    follower_orchestrator: super::upgrade::ClusterUpgradeOrchestrator,
+}
+
+impl OldSystemUpgradeCluster {
+    async fn start() -> Result<Self> {
+        let etcd = ContainerEtcdCluster::start()?;
+        etcd.wait_until_ready().await?;
+        let endpoints = reserve_node_endpoints(4, Ipv4Addr::LOCALHOST)?;
+        let registry = Arc::new(InMemoryNodeRegistry::new("test-orchestrator".to_string()));
+        let restart_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let upgrade_observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let upgrade_attempts = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        let roles = [
+            NodeRole::Worker,
+            NodeRole::Voter,
+            NodeRole::Voter,
+            NodeRole::Voter,
+        ];
+        let node_ids = ["node-a", "node-b", "node-c", "node-d"];
+        let mut initial_nodes = Vec::new();
+        let mut api_handles = Vec::new();
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            let node = NodeInfo {
+                node_id: node_ids[index].to_string(),
+                instance_id: format!("instance-{}", node_ids[index]),
+                hostname: node_ids[index].to_string(),
+                role: roles[index],
+                cluster_host_ip: Ipv4Addr::LOCALHOST,
+                cluster_api_port: endpoint.api_port,
+                cluster_gateway_port: endpoint.gateway_port,
+                subnet: format!("172.31.{}.0/24", index + 1),
+                tailscale_ip: None,
+                data_plane_ready: true,
+                data_plane_checked_at_ms: 1,
+                data_plane_error: None,
+                version: "1.0.0".to_string(),
+                started_at_ms: 1,
+                labels: BTreeMap::new(),
+            };
+            registry.insert_for_test(node.clone());
+            initial_nodes.push(node.clone());
+            let listener =
+                tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, endpoint.api_port)).await?;
+            let app = axum::Router::new()
+                .route(
+                    "/api/system/upgrade",
+                    axum::routing::post(upgrade_test_node),
+                )
+                .route(
+                    "/api/system/restart",
+                    axum::routing::post(restart_test_node),
+                )
+                .route("/_healthy", axum::routing::get(restart_test_healthy))
+                .with_state(MaintenanceNodeApiState {
+                    node,
+                    registry: registry.clone(),
+                    restart_requests: restart_requests.clone(),
+                    upgrade_observations: upgrade_observations.clone(),
+                    upgrade_attempts: upgrade_attempts.clone(),
+                    fail_first_upgrade: index == 0,
+                });
+            api_handles.push(tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            }));
+        }
+
+        let leader = Arc::new(
+            EtcdLeaderElector::connect(&etcd.endpoints, None, "node-c".to_string(), true).await?,
+        );
+        let follower = Arc::new(
+            EtcdLeaderElector::connect(&etcd.endpoints, None, "node-b".to_string(), true).await?,
+        );
+        let (shutdown_leader, _) = broadcast::channel(2);
+        let (shutdown_follower, _) = broadcast::channel(2);
+        let mut election_handles = leader
+            .clone()
+            .spawn(shutdown_leader.subscribe(), Logger::noop());
+        let initial_token = leader.wait_until_leading(Duration::from_secs(20)).await?;
+        election_handles.extend(
+            follower
+                .clone()
+                .spawn(shutdown_follower.subscribe(), Logger::noop()),
+        );
+
+        let store = Arc::new(
+            EtcdStateStore::new_with_endpoints(
+                &etcd.endpoints,
+                crate::utils::crypto::derive_key("coordinated-restart-integration"),
+                None,
+            )
+            .await?,
+        );
+        let assignments = Arc::new(InMemoryAssignmentStore::default());
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()?;
+        let leader_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
+            "node-c".to_string(),
+            leader.clone(),
+            registry.clone(),
+            assignments.clone(),
+            store.clone(),
+            http.clone(),
+        );
+        let follower_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
+            "node-b".to_string(),
+            follower.clone(),
+            registry.clone(),
+            assignments,
+            store.clone(),
+            http,
+        );
+        Ok(Self {
+            _etcd: etcd,
+            registry,
+            restart_requests,
+            upgrade_observations,
+            initial_nodes,
+            leader,
+            follower,
+            initial_token,
+            shutdown_leader,
+            shutdown_follower,
+            election_handles,
+            api_handles,
+            store,
+            leader_orchestrator,
+            follower_orchestrator,
+        })
+    }
+
+    fn active_orchestrator(
+        &self,
+    ) -> Result<(&super::upgrade::ClusterUpgradeOrchestrator, LeadershipToken)> {
+        match (self.leader.state(), self.follower.state()) {
+            (LeadershipState::Leading(token), _) => Ok((&self.leader_orchestrator, token)),
+            (_, LeadershipState::Leading(token)) => Ok((&self.follower_orchestrator, token)),
+            _ => bail!("cluster has no maintenance leader"),
+        }
+    }
+
+    async fn node_snapshots(&self) -> Result<BTreeMap<FixtureNodeName, MaintenanceNodeSnapshot>> {
+        let mut snapshots = BTreeMap::new();
+        for node in self.registry.list_nodes().await? {
+            let role = if node.role == NodeRole::Worker {
+                MaintenanceNodeRole::Worker
+            } else if node.role.is_voter() {
+                MaintenanceNodeRole::Voter
+            } else {
+                bail!("maintenance fixture has unsupported role {:?}", node.role);
+            };
+            let state = self.registry.get_node_state(&node.node_id).await?;
+            snapshots.insert(
+                FixtureNodeName::new(node.node_id),
+                MaintenanceNodeSnapshot {
+                    role,
+                    version: FixtureVersion::new(node.version),
+                    instance_id: FixtureInstanceId::new(node.instance_id),
+                    scheduling: if state.unschedulable {
+                        SchedulingEligibility::Ineligible
+                    } else {
+                        SchedulingEligibility::Eligible
+                    },
+                },
+            );
+        }
+        Ok(snapshots)
+    }
+
+    fn completion(phase: super::UpgradePhase) -> MaintenanceCompletion {
+        if phase == super::UpgradePhase::Succeeded {
+            MaintenanceCompletion::Succeeded
+        } else {
+            MaintenanceCompletion::Failed
+        }
+    }
+
+    async fn final_freeze(&self) -> Result<MaintenanceFreeze> {
+        if self.store.read_cluster_freeze().await?.is_none() {
+            Ok(MaintenanceFreeze::Cleared)
+        } else {
+            Ok(MaintenanceFreeze::Present)
+        }
+    }
+}
+
+#[async_trait]
+impl UpgradeCluster for OldSystemUpgradeCluster {
+    type Error = anyhow::Error;
+
+    async fn topology(&mut self) -> Result<MaintenanceTopology> {
+        let leader = match (self.leader.state(), self.follower.state()) {
+            (LeadershipState::Leading(token), _) => token.info.node_id,
+            (_, LeadershipState::Leading(token)) => token.info.node_id,
+            _ => bail!("cluster has no leader before maintenance"),
+        };
+        Ok(MaintenanceTopology {
+            nodes: self.node_snapshots().await?,
+            leader: FixtureNodeName::new(leader),
+        })
+    }
+
+    async fn rolling_upgrade(
+        &mut self,
+        target: FixtureVersion,
+        fault: UpgradeFault,
+    ) -> Result<RollingUpgradeObservation> {
+        let UpgradeFault::FailFirstAttempt { node: failed_node } = fault;
+        let configured_failure = self
+            .initial_nodes
+            .first()
+            .ok_or_else(|| anyhow!("maintenance fixture has no worker"))?;
+        if configured_failure.node_id != failed_node.as_str() {
+            bail!(
+                "legacy fixture injects the first failure on `{}`, not `{}`",
+                configured_failure.node_id,
+                failed_node.as_str()
+            );
+        }
+        let created = self
+            .leader_orchestrator
+            .create_run_with_batch(
+                &self.initial_token,
+                target.as_str(),
+                super::UpgradeBatch::Rolling,
+            )
+            .await?;
+        let planned_nodes = created
+            .nodes
+            .iter()
+            .map(|node| FixtureNodeName::new(node.node_id.clone()))
+            .collect();
+        let mut target_retention = TargetRetention::RetainedUntilCompletion;
+        let completed = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let run = self
+                    .store
+                    .read_cluster_upgrade()
+                    .await?
+                    .ok_or_else(|| anyhow!("coordinated upgrade run disappeared"))?;
+                if run.phase.is_terminal() {
+                    return Result::<super::UpgradeRun>::Ok(run);
+                }
+                if self.store.read_cluster_freeze().await?.is_none() {
+                    target_retention = TargetRetention::ClearedEarly;
+                }
+                match (self.leader.state(), self.follower.state()) {
+                    (LeadershipState::Leading(token), _) => {
+                        self.leader_orchestrator.tick(&token).await?;
+                    }
+                    (_, LeadershipState::Leading(token)) => {
+                        self.follower_orchestrator.tick(&token).await?;
+                    }
+                    _ => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("coordinated upgrade did not finish"))??;
+        let attempts = self
+            .upgrade_observations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .map(|observation| MaintenanceAttempt {
+                node: FixtureNodeName::new(observation.node_id.clone()),
+                drained_nodes: observation
+                    .drained_nodes
+                    .iter()
+                    .cloned()
+                    .map(FixtureNodeName::new)
+                    .collect(),
+            })
+            .collect();
+        Ok(RollingUpgradeObservation {
+            planned_nodes,
+            attempts,
+            completion: Self::completion(completed.phase),
+            target_retention,
+            final_freeze: self.final_freeze().await?,
+            final_nodes: self.node_snapshots().await?,
+        })
+    }
+
+    async fn restart_node(&mut self, node: &FixtureNodeName) -> Result<SelectedRestartObservation> {
+        let (orchestrator, token) = self.active_orchestrator()?;
+        let selected = orchestrator
+            .create_restart_run(&token, Some(node.as_str()))
+            .await?;
+        let planned_nodes = selected
+            .nodes
+            .iter()
+            .map(|node| FixtureNodeName::new(node.node_id.clone()))
+            .collect();
+        let completed = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let run = self
+                    .store
+                    .read_cluster_upgrade()
+                    .await?
+                    .ok_or_else(|| anyhow!("selected-node restart run disappeared"))?;
+                if run.phase.is_terminal() {
+                    return Result::<super::UpgradeRun>::Ok(run);
+                }
+                match (self.leader.state(), self.follower.state()) {
+                    (LeadershipState::Leading(token), _) => {
+                        self.leader_orchestrator.tick(&token).await?;
+                    }
+                    (_, LeadershipState::Leading(token)) => {
+                        self.follower_orchestrator.tick(&token).await?;
+                    }
+                    _ => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("selected-node restart did not finish"))??;
+        let requested_nodes = self
+            .restart_requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .cloned()
+            .map(FixtureNodeName::new)
+            .collect();
+        Ok(SelectedRestartObservation {
+            planned_nodes,
+            requested_nodes,
+            completion: Self::completion(completed.phase),
+            final_freeze: self.final_freeze().await?,
+        })
+    }
+}
+
+impl Drop for OldSystemUpgradeCluster {
+    fn drop(&mut self) {
+        let _ = self.shutdown_leader.send(ShutdownEvent::Force);
+        let _ = self.shutdown_follower.send(ShutdownEvent::Force);
+        for handle in &self.election_handles {
+            handle.abort();
+        }
+        for handle in &self.api_handles {
+            handle.abort();
+        }
+    }
+}
+
 /// Drives the production rolling-upgrade state machine against real etcd fencing and two real
 /// electors. Simulated node APIs restart their controller at the requested version instead of
 /// mutating the host NixOS system. The first worker attempt fails so the test also proves that the
@@ -3224,244 +3591,9 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn multinode_rolling_upgrade_retries_and_restores_nodes_serially() -> Result<()> {
-    let etcd = ContainerEtcdCluster::start()?;
-    etcd.wait_until_ready().await?;
-    let endpoints = reserve_node_endpoints(4, Ipv4Addr::LOCALHOST)?;
-    let registry = Arc::new(InMemoryNodeRegistry::new("test-orchestrator".to_string()));
-    let restart_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let upgrade_observations = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let upgrade_attempts = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
-    let roles = [
-        NodeRole::Worker,
-        NodeRole::Voter,
-        NodeRole::Voter,
-        NodeRole::Voter,
-    ];
-    let node_ids = ["node-a", "node-b", "node-c", "node-d"];
-    let mut nodes = Vec::new();
-    let mut api_handles = Vec::new();
-    for (index, endpoint) in endpoints.iter().enumerate() {
-        let node = NodeInfo {
-            node_id: node_ids[index].to_string(),
-            instance_id: format!("instance-{}", node_ids[index]),
-            hostname: node_ids[index].to_string(),
-            role: roles[index],
-            cluster_host_ip: Ipv4Addr::LOCALHOST,
-            cluster_api_port: endpoint.api_port,
-            cluster_gateway_port: endpoint.gateway_port,
-            subnet: format!("172.31.{}.0/24", index + 1),
-            tailscale_ip: None,
-            data_plane_ready: true,
-            data_plane_checked_at_ms: 1,
-            data_plane_error: None,
-            version: "1.0.0".to_string(),
-            started_at_ms: 1,
-            labels: BTreeMap::new(),
-        };
-        registry.insert_for_test(node.clone());
-        nodes.push(node.clone());
-        let listener =
-            tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, endpoint.api_port)).await?;
-        let app = axum::Router::new()
-            .route(
-                "/api/system/upgrade",
-                axum::routing::post(upgrade_test_node),
-            )
-            .route(
-                "/api/system/restart",
-                axum::routing::post(restart_test_node),
-            )
-            .route("/_healthy", axum::routing::get(restart_test_healthy))
-            .with_state(MaintenanceNodeApiState {
-                node,
-                registry: registry.clone(),
-                restart_requests: restart_requests.clone(),
-                upgrade_observations: upgrade_observations.clone(),
-                upgrade_attempts: upgrade_attempts.clone(),
-                fail_first_upgrade: index == 0,
-            });
-        api_handles.push(tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        }));
-    }
+    let mut cluster = OldSystemUpgradeCluster::start().await?;
 
-    let leader = Arc::new(
-        EtcdLeaderElector::connect(&etcd.endpoints, None, "node-c".to_string(), true).await?,
-    );
-    let follower = Arc::new(
-        EtcdLeaderElector::connect(&etcd.endpoints, None, "node-b".to_string(), true).await?,
-    );
-    let (shutdown_leader, _) = broadcast::channel(2);
-    let (shutdown_follower, _) = broadcast::channel(2);
-    let mut election_handles = leader
-        .clone()
-        .spawn(shutdown_leader.subscribe(), Logger::noop());
-    let initial_token = leader.wait_until_leading(Duration::from_secs(20)).await?;
-    election_handles.extend(
-        follower
-            .clone()
-            .spawn(shutdown_follower.subscribe(), Logger::noop()),
-    );
-
-    let store = Arc::new(
-        EtcdStateStore::new_with_endpoints(
-            &etcd.endpoints,
-            crate::utils::crypto::derive_key("coordinated-restart-integration"),
-            None,
-        )
-        .await?,
-    );
-    let assignments = Arc::new(InMemoryAssignmentStore::default());
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    let leader_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
-        "node-c".to_string(),
-        leader.clone(),
-        registry.clone(),
-        assignments.clone(),
-        store.clone(),
-        http.clone(),
-    );
-    let follower_orchestrator = super::upgrade::ClusterUpgradeOrchestrator::new_for_test(
-        "node-b".to_string(),
-        follower.clone(),
-        registry.clone(),
-        assignments,
-        store.clone(),
-        http,
-    );
-    let created = leader_orchestrator
-        .create_run_with_batch(&initial_token, "2.0.0", super::UpgradeBatch::Rolling)
-        .await?;
-    assert_eq!(created.kind, super::ClusterMaintenanceKind::Upgrade);
-    assert_eq!(
-        created
-            .nodes
-            .iter()
-            .map(|node| node.node_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["node-a", "node-b", "node-d", "node-c"]
-    );
-
-    let completed = tokio::time::timeout(Duration::from_secs(60), async {
-        loop {
-            let run = store
-                .read_cluster_upgrade()
-                .await?
-                .ok_or_else(|| anyhow!("coordinated upgrade run disappeared"))?;
-            if run.phase.is_terminal() {
-                return Result::<super::UpgradeRun>::Ok(run);
-            }
-            if store.read_cluster_freeze().await?.is_none() {
-                bail!("cluster upgrade target was cleared before every node was upgraded");
-            }
-            match (leader.state(), follower.state()) {
-                (LeadershipState::Leading(token), _) => {
-                    leader_orchestrator.tick(&token).await?;
-                }
-                (_, LeadershipState::Leading(token)) => {
-                    follower_orchestrator.tick(&token).await?;
-                }
-                _ => tokio::time::sleep(Duration::from_millis(100)).await,
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("coordinated upgrade did not finish"))??;
-    assert_eq!(completed.phase, super::UpgradePhase::Succeeded);
-    let observations = upgrade_observations
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone();
-    assert_eq!(
-        observations
-            .iter()
-            .map(|observation| observation.node_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["node-a", "node-b", "node-d", "node-c", "node-a"]
-    );
-    for observation in observations {
-        assert_eq!(observation.drained_nodes, vec![observation.node_id]);
-    }
-    assert_eq!(
-        *upgrade_attempts
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()),
-        BTreeMap::from([
-            ("node-a".to_string(), 2),
-            ("node-b".to_string(), 1),
-            ("node-c".to_string(), 1),
-            ("node-d".to_string(), 1),
-        ])
-    );
-    for node in nodes {
-        let upgraded = registry
-            .list_nodes()
-            .await?
-            .into_iter()
-            .find(|candidate| candidate.node_id == node.node_id)
-            .ok_or_else(|| anyhow!("upgraded node `{}` disappeared", node.node_id))?;
-        assert_ne!(upgraded.instance_id, node.instance_id);
-        assert_eq!(upgraded.version, "2.0.0");
-        assert_eq!(
-            registry.get_node_state(&node.node_id).await?,
-            NodeState::default()
-        );
-    }
-    assert!(store.read_cluster_freeze().await?.is_none());
-
-    let (active_orchestrator, active_token) = match (leader.state(), follower.state()) {
-        (LeadershipState::Leading(token), _) => (&leader_orchestrator, token),
-        (_, LeadershipState::Leading(token)) => (&follower_orchestrator, token),
-        _ => bail!("cluster had no leader after the all-node restart"),
-    };
-    let selected = active_orchestrator
-        .create_restart_run(&active_token, Some("node-a"))
-        .await?;
-    assert_eq!(selected.nodes.len(), 1);
-    assert_eq!(selected.nodes[0].node_id, "node-a");
-    let selected_completed = tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            let run = store
-                .read_cluster_upgrade()
-                .await?
-                .ok_or_else(|| anyhow!("selected-node restart run disappeared"))?;
-            if run.phase.is_terminal() {
-                return Result::<super::UpgradeRun>::Ok(run);
-            }
-            match (leader.state(), follower.state()) {
-                (LeadershipState::Leading(token), _) => {
-                    leader_orchestrator.tick(&token).await?;
-                }
-                (_, LeadershipState::Leading(token)) => {
-                    follower_orchestrator.tick(&token).await?;
-                }
-                _ => tokio::time::sleep(Duration::from_millis(100)).await,
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("selected-node restart did not finish"))??;
-    assert_eq!(selected_completed.phase, super::UpgradePhase::Succeeded);
-    assert_eq!(
-        *restart_requests
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()),
-        vec!["node-a".to_string()]
-    );
-    assert!(store.read_cluster_freeze().await?.is_none());
-
-    let _ = shutdown_leader.send(ShutdownEvent::Force);
-    let _ = shutdown_follower.send(ShutdownEvent::Force);
-    for handle in election_handles {
-        handle.abort();
-    }
-    for handle in api_handles {
-        handle.abort();
-    }
+    scenarios::rolling_upgrade_retries_and_restores_nodes_serially(&mut cluster).await?;
     Ok(())
 }
 

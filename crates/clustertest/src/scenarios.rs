@@ -9,6 +9,7 @@ mod restart;
 mod rollout;
 mod routing;
 mod scheduling;
+mod upgrade;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
 pub use election::leader_failover_fences_stale_writes;
@@ -24,3 +25,4 @@ pub use restart::serial_node_restarts_preserve_quorum_and_routing;
 pub use rollout::readiness_gated_cutover_preserves_traffic_and_inflight_requests;
 pub use routing::routing_survives_workload_and_gateway_failures;
 pub use scheduling::scheduler_scales_replicas_across_nodes;
+pub use upgrade::rolling_upgrade_retries_and_restores_nodes_serially;

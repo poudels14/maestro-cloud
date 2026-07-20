@@ -8,3 +8,4 @@ mod restart;
 mod rollout;
 mod routing;
 mod scheduling;
+mod upgrade;
