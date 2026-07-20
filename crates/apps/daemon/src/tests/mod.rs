@@ -1,4 +1,5 @@
 mod control_plane;
+mod launch;
 mod plan;
 mod runtime;
 
