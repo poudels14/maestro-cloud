@@ -17,3 +17,10 @@ workspace = true
 [dev-dependencies]
 tempfile = "=3.27.0"
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-util = "=0.3.33"
+netlink-packet-route = "=0.30.0"
+rtnetlink = "=0.21.0"
+tokio = { version = "=1.52.3", features = ["rt"] }
+wireguard-control = "=2.0.0"

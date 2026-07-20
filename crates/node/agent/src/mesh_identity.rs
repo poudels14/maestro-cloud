@@ -54,7 +54,15 @@ pub struct WireGuardPrivateKey(StaticSecret);
 impl WireGuardPrivateKey {
     /// Generates a new key from operating-system cryptographic randomness.
     pub fn generate() -> Self {
-        Self(StaticSecret::random())
+        let mut bytes = StaticSecret::random().to_bytes();
+        if let Some(first) = bytes.first_mut() {
+            *first &= 248;
+        }
+        if let Some(last) = bytes.last_mut() {
+            *last &= 127;
+            *last |= 64;
+        }
+        Self(StaticSecret::from(bytes))
     }
 
     /// Returns the public half safe to publish in a `NodeNetwork` resource.

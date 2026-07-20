@@ -1,4 +1,4 @@
-use crate::{MeshIdentity, WireGuardPublicKey};
+use crate::{MeshIdentity, WireGuardPrivateKey, WireGuardPublicKey};
 
 #[test]
 fn identity_persists_with_owner_only_permissions() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,4 +52,13 @@ fn public_key_parser_rejects_the_all_zero_point() {
             .parse::<WireGuardPublicKey>()
             .is_err()
     );
+}
+
+#[test]
+fn generated_private_keys_use_wireguard_clamping() {
+    let private_key = WireGuardPrivateKey::generate();
+    let bytes = private_key.expose_bytes();
+    assert_eq!(bytes.first().copied().unwrap_or_default() & 7, 0);
+    assert_eq!(bytes.last().copied().unwrap_or_default() & 128, 0);
+    assert_eq!(bytes.last().copied().unwrap_or_default() & 64, 64);
 }

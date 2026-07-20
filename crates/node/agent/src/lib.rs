@@ -4,8 +4,13 @@
 //! not depend on cluster provisioning, operators, observability pipelines, or
 //! application composition roots.
 
+#[cfg(target_os = "linux")]
+mod linux_mesh;
 mod mesh;
 mod mesh_identity;
+
+#[cfg(target_os = "linux")]
+pub use linux_mesh::LinuxMeshBackend;
 
 pub use mesh::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
