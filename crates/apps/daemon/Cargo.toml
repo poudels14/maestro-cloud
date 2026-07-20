@@ -20,4 +20,7 @@ tokio = { version = "=1.52.3", features = ["macros", "rt", "signal", "sync"] }
 workspace = true
 
 [dev-dependencies]
+clustertest = { path = "../../clustertest" }
 tempfile = "=3.27.0"
+time = "=0.3.53"
+tokio = { version = "=1.52.3", features = ["macros", "rt", "time"] }
