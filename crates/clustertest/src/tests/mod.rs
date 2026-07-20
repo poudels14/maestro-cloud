@@ -5,6 +5,7 @@ mod election;
 mod formation;
 mod lifecycle;
 mod lifecycle_control;
+mod lifecycle_stress;
 mod quorum;
 mod restart;
 mod rollout;

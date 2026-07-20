@@ -6,6 +6,7 @@ mod formation;
 mod lifecycle;
 mod lifecycle_control;
 mod lifecycle_faults;
+mod lifecycle_stress;
 mod quorum;
 mod restart;
 mod rollout;
@@ -34,6 +35,12 @@ pub use lifecycle_faults::{
     all_exhausted_replicas_crash_deployment, exhausted_replica_stays_down_while_peers_run,
     initial_replica_crash_preserves_pending_peers, missing_workload_record_is_recovered,
     old_workload_crash_does_not_break_redeployment, rollout_failure_is_isolated_between_services,
+};
+pub use lifecycle_stress::{
+    back_to_back_redeploys_keep_only_latest_ready, many_rapid_redeploys_settle_to_one_ready,
+    many_services_roll_out_independently, multi_replica_rollout_starts_all_replicas,
+    replica_override_respects_configured_floor, replica_override_scales_up,
+    sequential_redeploys_supersede_history,
 };
 pub use quorum::all_voter_restart_waits_for_quorum_and_preserves_state;
 pub use restart::serial_node_restarts_preserve_quorum_and_routing;

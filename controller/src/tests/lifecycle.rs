@@ -3143,6 +3143,69 @@ async fn acceptance_hanging_build_crashes_after_timeout_on_old_system() {
         .expect("hanging build timeout acceptance scenario");
 }
 
+#[tokio::test]
+async fn acceptance_multi_replica_rollout_starts_all_replicas_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::multi_replica_rollout_starts_all_replicas(&mut cluster)
+        .await
+        .expect("multi-replica acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_sequential_redeploys_supersede_history_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::sequential_redeploys_supersede_history(&mut cluster)
+        .await
+        .expect("sequential redeploy acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_many_services_roll_out_independently_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::many_services_roll_out_independently(&mut cluster)
+        .await
+        .expect("many services acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_back_to_back_redeploys_keep_only_latest_ready_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::back_to_back_redeploys_keep_only_latest_ready(&mut cluster)
+        .await
+        .expect("back-to-back redeploy acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_replica_override_scales_up_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::replica_override_scales_up(&mut cluster)
+        .await
+        .expect("scale-up acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_replica_override_respects_configured_floor_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::replica_override_respects_configured_floor(&mut cluster)
+        .await
+        .expect("replica floor acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_many_rapid_redeploys_settle_to_one_ready_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::many_rapid_redeploys_settle_to_one_ready(&mut cluster)
+        .await
+        .expect("rapid redeploy acceptance scenario");
+}
+
 fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {
     match status {
         DeploymentStatus::Queued => DeploymentPhase::Queued,

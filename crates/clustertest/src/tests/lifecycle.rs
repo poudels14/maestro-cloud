@@ -139,6 +139,9 @@ impl LifecycleWorld {
             };
             let desired = service
                 .replica_override
+                .map(|replicas| {
+                    ReplicaCount::new(replicas.get().max(service.fixture.replicas.get()))
+                })
                 .unwrap_or(service.fixture.replicas)
                 .get();
             let Some(active) = service.deployments.get_mut(active_index) else {
