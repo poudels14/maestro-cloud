@@ -1,5 +1,6 @@
 //! Shared acceptance scenarios that every Maestro implementation must pass.
 
+mod affinity;
 mod election;
 mod lifecycle;
 mod quorum;
@@ -7,6 +8,7 @@ mod restart;
 mod routing;
 mod scheduling;
 
+pub use affinity::affinity_is_opaque_sticky_and_overridable;
 pub use election::leader_failover_fences_stale_writes;
 pub use lifecycle::{
     build_failure_marks_deployment_crashed, crashed_replica_restarts_in_place,

@@ -8,11 +8,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
+    AffinityCluster, AffinityCookieSet, AffinityObservation, AffinitySession,
     AssignmentManifestSnapshot, AssignmentWriteOutcome, ControlPlaneReadiness, ElectionCluster,
-    FencedWriteOutcome, FixtureControllerName, FixtureMarker, FixtureMutationName, FixtureNodeName,
-    FixtureVersion, LeadershipSnapshot, QuorumRecoveryCluster, ReadinessProbe, ReplicaCount,
-    ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster, ScheduledAssignment,
-    SchedulingCluster, SchedulingSnapshot, scenarios,
+    FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureMarker,
+    FixtureMutationName, FixtureNodeName, FixtureVersion, LeadershipSnapshot,
+    QuorumRecoveryCluster, ReadinessProbe, ReplicaCount, ReplicaIndex, ResourceAvailability,
+    RestartCluster, RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot,
+    scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -1664,6 +1666,146 @@ impl SchedulingCluster for OldSystemSchedulingCluster {
     }
 }
 
+struct OldSystemAffinityCluster {
+    cluster: SingleHostHttpCluster,
+    client: reqwest::Client,
+}
+
+impl OldSystemAffinityCluster {
+    fn start() -> Result<Self> {
+        Ok(Self {
+            cluster: SingleHostHttpCluster::start()?,
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()?,
+        })
+    }
+
+    async fn parse_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<(AffinityObservation, Vec<String>)> {
+        let token = response
+            .headers()
+            .get(TEST_AFFINITY_HEADER)
+            .ok_or_else(|| anyhow!("gateway did not return `{TEST_AFFINITY_HEADER}`"))?
+            .to_str()?
+            .to_string();
+        let cookies = response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok()?.split(';').next())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let node = FixtureNodeName::new(response.text().await?.trim().to_string());
+        let expected = super::traefik::affinity_token(TEST_CLUSTER_NAME, node.as_str());
+        if token != expected {
+            bail!(
+                "gateway returned affinity token `{token}` for `{}`, expected `{expected}`",
+                node.as_str()
+            );
+        }
+        let has_node_cookie = cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("maestro-node-affinity="));
+        let has_workload_cookie = cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("maestro-affinity="));
+        let cookie_set = if has_node_cookie && has_workload_cookie {
+            AffinityCookieSet::Complete
+        } else {
+            AffinityCookieSet::Incomplete
+        };
+        Ok((
+            AffinityObservation {
+                node,
+                token: FixtureAffinityToken::new(token),
+                cookies: cookie_set,
+            },
+            cookies,
+        ))
+    }
+}
+
+#[async_trait]
+impl AffinityCluster for OldSystemAffinityCluster {
+    type Session = String;
+    type Error = anyhow::Error;
+
+    fn nodes(&self) -> Vec<FixtureNodeName> {
+        (1..=self.cluster.nodes.len())
+            .map(|node_number| FixtureNodeName::new(format!("node-{node_number}")))
+            .collect()
+    }
+
+    async fn establish_affinity(&mut self) -> Result<AffinitySession<Self::Session>> {
+        for (node_index, node) in self.nodes().iter().enumerate() {
+            wait_for_body(
+                &self.client,
+                &self.cluster.gateway_url(node_index),
+                node.as_str(),
+                Duration::from_secs(20),
+            )
+            .await?;
+        }
+        let response = wait_for_affinity_response(
+            &self.client,
+            &self.cluster.public_url(),
+            Duration::from_secs(20),
+        )
+        .await?;
+        let (initial, cookies) = self.parse_response(response).await?;
+        Ok(AffinitySession {
+            session: cookies.join("; "),
+            initial,
+        })
+    }
+
+    async fn replay_affinity(&mut self, session: &Self::Session) -> Result<AffinityObservation> {
+        let response = self
+            .client
+            .get(self.cluster.public_url())
+            .header(reqwest::header::COOKIE, session)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!(
+                "sticky-cookie replay returned {status} with body {body:?}; public={}",
+                self.cluster
+                    .container_diagnostics(&self.cluster.public_name())
+            );
+        }
+        self.parse_response(response)
+            .await
+            .map(|(observation, _)| observation)
+    }
+
+    async fn override_affinity(
+        &mut self,
+        session: &Self::Session,
+        node: &FixtureNodeName,
+    ) -> Result<AffinityObservation> {
+        let target_token = super::traefik::affinity_token(TEST_CLUSTER_NAME, node.as_str());
+        let response = self
+            .client
+            .get(self.cluster.public_url())
+            .header(reqwest::header::COOKIE, session)
+            .header(TEST_AFFINITY_HEADER, target_token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            bail!("affinity override returned {}", response.status());
+        }
+        self.parse_response(response)
+            .await
+            .map(|(observation, _)| observation)
+    }
+}
+
 struct OldSystemQuorumRecoveryCluster {
     cluster: ContainerEtcdCluster,
 }
@@ -2707,105 +2849,9 @@ async fn readiness_gated_rollout_preserves_in_flight_requests() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn node_affinity_is_automatic_opaque_and_replayable() -> Result<()> {
-    let cluster = SingleHostHttpCluster::start()?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    for index in 0..cluster.nodes.len() {
-        wait_for_body(
-            &client,
-            &cluster.gateway_url(index),
-            &format!("node-{}", index + 1),
-            Duration::from_secs(20),
-        )
-        .await?;
-    }
+    let mut cluster = OldSystemAffinityCluster::start()?;
 
-    let first =
-        wait_for_affinity_response(&client, &cluster.public_url(), Duration::from_secs(20)).await?;
-    let response_token = first
-        .headers()
-        .get(TEST_AFFINITY_HEADER)
-        .ok_or_else(|| anyhow!("gateway did not return `{TEST_AFFINITY_HEADER}`"))?
-        .to_str()?
-        .to_string();
-    let cookies = first
-        .headers()
-        .get_all(reqwest::header::SET_COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok()?.split(';').next())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    let selected_body = first.text().await?.trim().to_string();
-    let selected_index = selected_body
-        .strip_prefix("node-")
-        .and_then(|value| value.parse::<usize>().ok())
-        .and_then(|value| value.checked_sub(1))
-        .ok_or_else(|| anyhow!("unexpected affinity response body `{selected_body}`"))?;
-    let selected_node_id = format!("node-{}", selected_index + 1);
-    assert_eq!(
-        response_token,
-        super::traefik::affinity_token(TEST_CLUSTER_NAME, &selected_node_id)
-    );
-    assert!(!response_token.contains(&selected_node_id));
-    assert!(
-        cookies
-            .iter()
-            .any(|cookie| cookie.starts_with("maestro-node-affinity="))
-    );
-    assert!(
-        cookies
-            .iter()
-            .any(|cookie| cookie.starts_with("maestro-affinity="))
-    );
-
-    let cookie_header = cookies.join("; ");
-    for _ in 0..8 {
-        let response = client
-            .get(cluster.public_url())
-            .header(reqwest::header::COOKIE, &cookie_header)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!(
-                "sticky-cookie replay returned {status} with body {body:?}; cookies={cookies:?}; public={}; gateway={}",
-                cluster.container_diagnostics(&cluster.public_name()),
-                cluster.container_diagnostics(&cluster.gateway_name(selected_index))
-            );
-        }
-        assert_eq!(
-            response
-                .headers()
-                .get(TEST_AFFINITY_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some(response_token.as_str())
-        );
-        assert_eq!(response.text().await?.trim(), selected_body);
-    }
-
-    let target_index = (selected_index + 1) % cluster.nodes.len();
-    let target_node_id = format!("node-{}", target_index + 1);
-    let target_token = super::traefik::affinity_token(TEST_CLUSTER_NAME, &target_node_id);
-    for _ in 0..4 {
-        let response = client
-            .get(cluster.public_url())
-            .header(reqwest::header::COOKIE, &cookie_header)
-            .header(TEST_AFFINITY_HEADER, &target_token)
-            .send()
-            .await?;
-        assert!(response.status().is_success());
-        assert_eq!(
-            response
-                .headers()
-                .get(TEST_AFFINITY_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some(target_token.as_str())
-        );
-        assert_eq!(response.text().await?.trim(), target_node_id);
-    }
+    scenarios::affinity_is_opaque_sticky_and_overridable(&mut cluster).await?;
     Ok(())
 }
 

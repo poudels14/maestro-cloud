@@ -96,6 +96,51 @@ impl FixtureMutationName {
     }
 }
 
+/// An opaque affinity token returned by public ingress.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixtureAffinityToken(String);
+
+impl FixtureAffinityToken {
+    /// Creates an observed affinity token.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the token text for opacity assertions and driver translation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether both required affinity cookies were returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AffinityCookieSet {
+    /// Both node-level and workload-level affinity cookies are present.
+    Complete,
+    /// One or both affinity cookies are missing.
+    Incomplete,
+}
+
+/// The affinity result observed from one public request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AffinityObservation {
+    /// The logical node that served the response.
+    pub node: FixtureNodeName,
+    /// The opaque affinity token returned by ingress.
+    pub token: FixtureAffinityToken,
+    /// The required cookie set returned with the response.
+    pub cookies: AffinityCookieSet,
+}
+
+/// An established client session and its first affinity observation.
+#[derive(Debug)]
+pub struct AffinitySession<Session> {
+    /// The implementation-specific replay handle.
+    pub session: Session,
+    /// The response that established the session.
+    pub initial: AffinityObservation,
+}
+
 /// The current leader and its opaque fencing token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeadershipSnapshot<LeadershipToken> {

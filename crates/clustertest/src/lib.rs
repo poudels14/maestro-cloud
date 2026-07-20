@@ -4,6 +4,7 @@
 //! the old control plane and the rewrite. It must not depend on any Maestro
 //! production crate so each implementation is tested through the same seam.
 
+mod affinity;
 mod cluster;
 mod election;
 mod error;
@@ -14,16 +15,18 @@ mod routing;
 pub mod scenarios;
 mod scheduling;
 
+pub use affinity::AffinityCluster;
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use election::ElectionCluster;
 pub use error::ScenarioError;
 pub use model::{
-    AssignmentManifestSnapshot, AssignmentWriteOutcome, ClusterSnapshot, ControlPlaneReadiness,
-    DeploymentPhase, DeploymentSnapshot, FencedWriteOutcome, FixtureControllerName, FixtureMarker,
-    FixtureMutationName, FixtureName, FixtureNodeName, FixtureVersion, IngressFixture,
-    LeadershipSnapshot, ReadinessProbe, ReplicaCount, ReplicaIndex, ReplicaOverride,
-    ReplicaSnapshot, ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot,
-    ServiceFixture, ServiceSnapshot,
+    AffinityCookieSet, AffinityObservation, AffinitySession, AssignmentManifestSnapshot,
+    AssignmentWriteOutcome, ClusterSnapshot, ControlPlaneReadiness, DeploymentPhase,
+    DeploymentSnapshot, FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName,
+    FixtureMarker, FixtureMutationName, FixtureName, FixtureNodeName, FixtureVersion,
+    IngressFixture, LeadershipSnapshot, ReadinessProbe, ReplicaCount, ReplicaIndex,
+    ReplicaOverride, ReplicaSnapshot, ResourceAvailability, RolloutFailure, ScheduledAssignment,
+    SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
 };
 pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;
