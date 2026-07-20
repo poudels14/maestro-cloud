@@ -26,5 +26,8 @@ pub use model::{
 };
 pub use store::{Session, Store, StoreWatch};
 
+#[cfg(feature = "test-util")]
+pub mod conformance;
+
 #[cfg(test)]
 mod tests;

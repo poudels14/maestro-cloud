@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+#[cfg(feature = "test-util")]
+use std::sync::Arc;
+
 use kernel_api::{ClusterId, ResourceKind, ResourceName};
 
 use crate::{
@@ -98,6 +101,17 @@ async fn etcd_backend_preserves_cas_watch_transaction_and_session_contracts()
 
     delete_if_present(&store, &first_key).await?;
     delete_if_present(&store, &second_key).await?;
+    #[cfg(feature = "test-util")]
+    {
+        let report = crate::conformance::run(
+            Arc::new(store.clone()),
+            ClusterId::new("etcd-shared-conformance")?,
+        )
+        .await?;
+        assert_eq!(report.watch_events, 2);
+        assert_eq!(report.conflicts, 1);
+        assert_eq!(report.expired_session_keys, 1);
+    }
     Ok(())
 }
 

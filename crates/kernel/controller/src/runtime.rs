@@ -16,6 +16,8 @@ use tracing::Instrument;
 use crate::{
     Action, Backoff, ControllerError, FencedStore, ReconcileContext, ReconcileError, Reconciler,
 };
+#[cfg(feature = "test-util")]
+use crate::{JournalEntry, ReconcileJournal};
 
 /// Validated scheduling policy for one controller runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +58,8 @@ pub struct ControllerRuntime<R> {
     fenced_store: Arc<FencedStore>,
     clock: Arc<dyn Clock>,
     config: RuntimeConfig,
+    #[cfg(feature = "test-util")]
+    journal: ReconcileJournal,
 }
 
 impl<R> ControllerRuntime<R>
@@ -79,7 +83,15 @@ where
             fenced_store,
             clock,
             config,
+            #[cfg(feature = "test-util")]
+            journal: ReconcileJournal::default(),
         }
+    }
+
+    /// Returns the invocation journal owned by this runtime.
+    #[cfg(feature = "test-util")]
+    pub fn journal(&self) -> ReconcileJournal {
+        self.journal.clone()
     }
 
     /// Reconciles one linearizable prefix snapshot in lexicographic key order.
@@ -275,6 +287,12 @@ where
         attempt: u32,
         deleting: bool,
     ) -> Result<ProcessResult, ControllerError> {
+        #[cfg(feature = "test-util")]
+        let started_at = self.clock.now();
+        #[cfg(feature = "test-util")]
+        let resource_id = resource.meta.id.to_string();
+        #[cfg(feature = "test-util")]
+        let observed_revision = version.resource_revision();
         let span = tracing::info_span!(
             "reconcile",
             kind = R::KIND,
@@ -299,21 +317,21 @@ where
                 .instrument(span.clone())
                 .await
         };
-        match result {
-            Ok(action) => Ok(ProcessResult {
+        let outcome = match result {
+            Ok(action) => ProcessResult {
                 action: Some(action),
                 invoked: true,
                 next_attempt: 0,
-            }),
+            },
             Err(ReconcileError::Retryable { message }) => {
                 span.in_scope(|| {
                     tracing::warn!(kind = R::KIND, %message, "reconcile will be retried");
                 });
-                Ok(ProcessResult {
+                ProcessResult {
                     action: Some(Action::Requeue(self.config.retry_backoff.delay(attempt))),
                     invoked: true,
                     next_attempt: attempt.saturating_add(1),
-                })
+                }
             }
             Err(ReconcileError::Terminal { reason, message }) => {
                 span.in_scope(|| {
@@ -324,13 +342,30 @@ where
                         "reconcile requires an external change"
                     );
                 });
-                Ok(ProcessResult {
+                ProcessResult {
                     action: Some(Action::Done),
                     invoked: true,
                     next_attempt: 0,
-                })
+                }
             }
+        };
+        #[cfg(feature = "test-util")]
+        if let Some(action) = outcome.action {
+            self.journal.record(JournalEntry {
+                sequence: 0,
+                kind: R::KIND,
+                resource_id,
+                observed_revision,
+                action: action.into(),
+                duration: self
+                    .clock
+                    .now()
+                    .as_duration()
+                    .saturating_sub(started_at.as_duration()),
+                deleting,
+            });
         }
+        Ok(outcome)
     }
 
     async fn persist_resource(

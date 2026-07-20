@@ -197,6 +197,10 @@ async fn session_expiry_deletes_bound_keys_and_wakes_watchers() {
 }
 
 fn a_store() -> (InMemoryStore, ManualClock) {
+    test_store()
+}
+
+pub(super) fn test_store() -> (InMemoryStore, ManualClock) {
     let clock = ManualClock::new();
     (InMemoryStore::new(Arc::new(clock.clone())), clock)
 }
@@ -214,7 +218,7 @@ fn a_key(keys: &Keyspace, id: &str) -> crate::StoreKey {
 }
 
 #[derive(Clone)]
-struct ManualClock {
+pub(super) struct ManualClock {
     now_millis: Arc<AtomicU64>,
     changes: watch::Sender<u64>,
 }

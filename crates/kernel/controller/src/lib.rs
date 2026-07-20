@@ -9,6 +9,8 @@ mod dedup;
 mod elector;
 mod error;
 mod fencing;
+#[cfg(feature = "test-util")]
+mod journal;
 mod leadership;
 mod reconciler;
 mod runtime;
@@ -18,6 +20,8 @@ pub use dedup::{DedupOutcome, RequestFingerprint};
 pub use elector::StoreLeaderElector;
 pub use error::ControllerError;
 pub use fencing::FencedStore;
+#[cfg(feature = "test-util")]
+pub use journal::{JournalAction, JournalEntry, ReconcileJournal};
 pub use leadership::{
     LeaderElector, LeaderIdentity, LeadershipLease, LeadershipObservation, LeadershipToken,
 };

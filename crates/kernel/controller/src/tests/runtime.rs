@@ -140,6 +140,18 @@ async fn runtime_installs_and_executes_finalizers_before_physical_deletion()
     assert_eq!(runtime.reconcile_snapshot().await?, 1);
     assert_eq!(reconciler.finalizes.load(Ordering::SeqCst), 1);
     assert!(store.get(&key).await?.is_none());
+    #[cfg(feature = "test-util")]
+    {
+        let entries = runtime.journal().entries();
+        assert_eq!(entries.len(), 2);
+        let first = entries.first().ok_or("first journal entry should exist")?;
+        let second = entries.get(1).ok_or("second journal entry should exist")?;
+        assert_eq!(first.sequence, 1);
+        assert!(!first.deleting);
+        assert_eq!(second.sequence, 2);
+        assert!(second.deleting);
+        assert!(entries.iter().all(|entry| entry.observed_revision.0 > 0));
+    }
     Ok(())
 }
 

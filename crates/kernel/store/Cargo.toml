@@ -11,9 +11,13 @@ async-trait.workspace = true
 etcd-client = { version = "=0.19.0", features = ["tls"] }
 kernel-api = { version = "0.1.0", path = "../api" }
 sha2 = "=0.10.9"
+test-util = { version = "=0.4.5", package = "tokio-test", optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
 zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [lints]
 workspace = true
+
+[features]
+test-util = ["dep:test-util"]
