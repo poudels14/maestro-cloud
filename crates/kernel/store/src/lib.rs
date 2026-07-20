@@ -5,6 +5,7 @@
 //! operators, runtimes, observability, cluster provisioning, or applications.
 
 mod clock;
+mod encryption;
 mod error;
 mod key;
 mod memory;
@@ -12,6 +13,7 @@ mod model;
 mod store;
 
 pub use clock::{Clock, MonotonicTime};
+pub use encryption::{EncryptedValue, EncryptionError, EncryptionKey, derive_key, open, seal};
 pub use error::StoreError;
 pub use key::{Keyspace, StoreKey, StorePrefix};
 pub use memory::InMemoryStore;

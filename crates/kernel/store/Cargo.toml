@@ -5,10 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aes-gcm = "=0.10.3"
+argon2 = "=0.5.3"
 async-trait.workspace = true
 kernel-api = { version = "0.1.0", path = "../api" }
+sha2 = "=0.10.9"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [lints]
 workspace = true

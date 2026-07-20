@@ -2841,10 +2841,14 @@ dependencies = [
 name = "kernel-store"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "argon2",
  "async-trait",
  "kernel-api",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
