@@ -7,6 +7,7 @@
 mod cluster;
 mod error;
 mod model;
+mod restart;
 mod routing;
 pub mod scenarios;
 
@@ -17,6 +18,7 @@ pub use model::{
     FixtureVersion, IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot,
     ResourceAvailability, RolloutFailure, ServiceFixture, ServiceSnapshot,
 };
+pub use restart::RestartCluster;
 pub use routing::RoutingCluster;
 
 #[cfg(test)]

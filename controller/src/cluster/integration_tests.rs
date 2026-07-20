@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
-use clustertest::{FixtureNodeName, ResourceAvailability, RoutingCluster, scenarios};
+use clustertest::{
+    FixtureNodeName, ResourceAvailability, RestartCluster, RoutingCluster, scenarios,
+};
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
 
@@ -1472,6 +1474,114 @@ impl RoutingCluster for OldSystemRoutingCluster {
     }
 }
 
+struct OldSystemRestartCluster {
+    etcd: ContainerEtcdCluster,
+    routing: OldSystemRoutingCluster,
+    quorum_sequence: usize,
+}
+
+impl OldSystemRestartCluster {
+    async fn start() -> Result<Self> {
+        let etcd = ContainerEtcdCluster::start()?;
+        etcd.wait_until_ready().await?;
+        Ok(Self {
+            etcd,
+            routing: OldSystemRoutingCluster::start()?,
+            quorum_sequence: 0,
+        })
+    }
+}
+
+#[async_trait]
+impl RoutingCluster for OldSystemRestartCluster {
+    type Error = anyhow::Error;
+
+    fn nodes(&self) -> Vec<FixtureNodeName> {
+        self.routing.nodes()
+    }
+
+    async fn set_workload_availability(
+        &mut self,
+        node: &FixtureNodeName,
+        availability: ResourceAvailability,
+    ) -> Result<()> {
+        self.routing
+            .set_workload_availability(node, availability)
+            .await
+    }
+
+    async fn set_gateway_availability(
+        &mut self,
+        node: &FixtureNodeName,
+        availability: ResourceAvailability,
+    ) -> Result<()> {
+        self.routing
+            .set_gateway_availability(node, availability)
+            .await
+    }
+
+    async fn await_public_routes(
+        &mut self,
+        expected: &BTreeSet<FixtureNodeName>,
+    ) -> Result<BTreeSet<FixtureNodeName>> {
+        self.routing.await_public_routes(expected).await
+    }
+
+    async fn await_public_unavailable(&mut self) -> Result<()> {
+        self.routing.await_public_unavailable().await
+    }
+}
+
+#[async_trait]
+impl RestartCluster for OldSystemRestartCluster {
+    async fn set_node_availability(
+        &mut self,
+        node: &FixtureNodeName,
+        availability: ResourceAvailability,
+    ) -> Result<()> {
+        let node_index = self.routing.node_index(node)?;
+        match availability {
+            ResourceAvailability::Available => {
+                self.etcd.restart_member(node_index)?;
+                self.routing.cluster.restart_backend(node_index)?;
+                self.routing.cluster.restart_gateway(node_index)?;
+                wait_for_body(
+                    &self.routing.client,
+                    &self.routing.cluster.gateway_url(node_index),
+                    node.as_str(),
+                    Duration::from_secs(20),
+                )
+                .await?;
+            }
+            ResourceAvailability::Unavailable => {
+                self.etcd.stop_member(node_index)?;
+                self.routing.cluster.stop_gateway(node_index)?;
+                self.routing.cluster.stop_backend(node_index)?;
+                wait_until_unavailable(
+                    &self.routing.client,
+                    &self.routing.cluster.gateway_url(node_index),
+                    Duration::from_secs(10),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn verify_quorum_write(&mut self, unavailable_node: &FixtureNodeName) -> Result<()> {
+        let node_index = self.routing.node_index(unavailable_node)?;
+        self.etcd
+            .wait_for_quorum_write(node_index, self.quorum_sequence)
+            .await?;
+        self.quorum_sequence = self.quorum_sequence.saturating_add(1);
+        Ok(())
+    }
+
+    async fn await_control_plane_ready(&mut self) -> Result<()> {
+        self.etcd.wait_until_ready().await
+    }
+}
+
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
         if !self.container_names.is_empty() {
@@ -2031,70 +2141,9 @@ async fn single_host_gateways_route_and_recover_across_logical_nodes() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn serial_node_restarts_preserve_quorum_and_ingress() -> Result<()> {
-    let etcd = ContainerEtcdCluster::start()?;
-    etcd.wait_until_ready().await?;
-    let http = SingleHostHttpCluster::start()?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    let all = ["node-1", "node-2", "node-3"]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
+    let mut cluster = OldSystemRestartCluster::start().await?;
 
-    wait_for_routing_set(
-        &client,
-        &http.public_url(),
-        &all,
-        &all,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    for index in 0..http.nodes.len() {
-        let restarting = format!("node-{}", index + 1);
-        etcd.stop_member(index)?;
-        http.stop_gateway(index)?;
-        http.stop_backend(index)?;
-
-        etcd.wait_for_quorum_write(index, index).await?;
-        wait_until_unavailable(&client, &http.gateway_url(index), Duration::from_secs(10)).await?;
-        let remaining = all
-            .iter()
-            .filter(|node| *node != &restarting)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        wait_for_routing_set(
-            &client,
-            &http.public_url(),
-            &remaining,
-            &remaining,
-            Duration::from_secs(30),
-        )
-        .await?;
-
-        etcd.restart_member(index)?;
-        http.restart_backend(index)?;
-        http.restart_gateway(index)?;
-
-        etcd.wait_until_ready().await?;
-        wait_for_body(
-            &client,
-            &http.gateway_url(index),
-            &restarting,
-            Duration::from_secs(20),
-        )
-        .await?;
-        wait_for_routing_set(
-            &client,
-            &http.public_url(),
-            &all,
-            &all,
-            Duration::from_secs(30),
-        )
-        .await?;
-    }
+    scenarios::serial_node_restarts_preserve_quorum_and_routing(&mut cluster).await?;
     Ok(())
 }
 

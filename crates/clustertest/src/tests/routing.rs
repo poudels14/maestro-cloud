@@ -7,14 +7,14 @@ use crate::{
     scenarios::routing_survives_workload_and_gateway_failures,
 };
 
-struct RoutingWorld {
-    nodes: Vec<FixtureNodeName>,
-    workloads: BTreeMap<FixtureNodeName, ResourceAvailability>,
-    gateways: BTreeMap<FixtureNodeName, ResourceAvailability>,
+pub(super) struct RoutingWorld {
+    pub(super) nodes: Vec<FixtureNodeName>,
+    pub(super) workloads: BTreeMap<FixtureNodeName, ResourceAvailability>,
+    pub(super) gateways: BTreeMap<FixtureNodeName, ResourceAvailability>,
 }
 
 impl RoutingWorld {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let nodes = (1..=3)
             .map(|node_number| FixtureNodeName::new(format!("node-{node_number}")))
             .collect::<Vec<_>>();
@@ -33,7 +33,7 @@ impl RoutingWorld {
         }
     }
 
-    fn public_routes(&self) -> BTreeSet<FixtureNodeName> {
+    pub(super) fn public_routes(&self) -> BTreeSet<FixtureNodeName> {
         self.nodes
             .iter()
             .filter(|node| {
@@ -46,11 +46,15 @@ impl RoutingWorld {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum RoutingWorldError {
+pub(super) enum RoutingWorldError {
     #[error("node `{0}` does not exist")]
     MissingNode(String),
     #[error("public ingress is still available")]
     StillAvailable,
+    #[error("control plane cannot reach quorum")]
+    NoQuorum,
+    #[error("control plane is not fully ready")]
+    ControlPlaneNotReady,
 }
 
 #[async_trait]
