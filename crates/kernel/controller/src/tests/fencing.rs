@@ -1,14 +1,13 @@
-use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, NodeInstanceId, ResourceKind, ResourceName};
 use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, Mutation,
-    PutRequest, SessionBinding, Store, Transaction, TransactionOutcome,
+    CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, Mutation, PutRequest, SessionBinding,
+    Store, Transaction, TransactionOutcome,
 };
 
+use super::clock::NoopClock;
 use crate::{ControllerError, FencedStore, LeaderIdentity, LeadershipToken};
 
 #[tokio::test]
@@ -91,17 +90,4 @@ fn an_identity(instance_id: &str) -> Result<LeaderIdentity, kernel_api::InvalidI
         node_id: NodeId::new("node-1")?,
         instance_id: NodeInstanceId::new(instance_id)?,
     })
-}
-
-struct NoopClock;
-
-#[async_trait]
-impl Clock for NoopClock {
-    fn now(&self) -> MonotonicTime {
-        MonotonicTime::default()
-    }
-
-    async fn sleep_until(&self, _deadline: MonotonicTime) {
-        pending::<()>().await;
-    }
 }

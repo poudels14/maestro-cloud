@@ -13,4 +13,10 @@ pub enum ControllerError {
         /// Invariant violation detail.
         message: String,
     },
+    /// Persisted leader identity could not be decoded safely.
+    #[error("persisted leader identity is malformed: {message}")]
+    MalformedLeader {
+        /// Serde decoding detail.
+        message: String,
+    },
 }

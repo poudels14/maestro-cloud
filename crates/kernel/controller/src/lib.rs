@@ -5,12 +5,14 @@
 //! or applications.
 
 mod backoff;
+mod elector;
 mod error;
 mod fencing;
 mod leadership;
 mod reconciler;
 
 pub use backoff::{Backoff, BackoffError};
+pub use elector::StoreLeaderElector;
 pub use error::ControllerError;
 pub use fencing::FencedStore;
 pub use leadership::{

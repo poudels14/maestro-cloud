@@ -3,11 +3,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{NodeId, NodeInstanceId};
 use kernel_store::{SessionId, Version};
+use serde::{Deserialize, Serialize};
 
 use crate::ControllerError;
 
 /// Stable node and process identity participating in leader election.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderIdentity {
     /// Node running the controller candidate.
     pub node_id: NodeId,
@@ -55,10 +57,8 @@ impl LeadershipToken {
 /// Current result of observing one leader campaign key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeadershipObservation {
-    /// This candidate owns the current fencing token.
-    Leading(LeadershipToken),
-    /// Another candidate owns leadership.
-    Following(LeaderIdentity),
+    /// A live candidate owns leadership.
+    Leader(LeaderIdentity),
     /// No live candidate currently owns the leader key.
     Vacant,
 }
@@ -85,11 +85,13 @@ pub trait LeadershipLease: Send + Sync {
 #[async_trait]
 pub trait LeaderElector: Send + Sync {
     /// Attempts to own the leader key under a new TTL session.
+    ///
+    /// `None` means another live candidate already owns the key.
     async fn campaign(
         &self,
         identity: LeaderIdentity,
         ttl: Duration,
-    ) -> Result<Box<dyn LeadershipLease>, ControllerError>;
+    ) -> Result<Option<Box<dyn LeadershipLease>>, ControllerError>;
 
     /// Reads the current live leader without campaigning.
     async fn observe(&self) -> Result<LeadershipObservation, ControllerError>;

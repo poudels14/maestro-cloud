@@ -2844,6 +2844,8 @@ dependencies = [
  "async-trait",
  "kernel-api",
  "kernel-store",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
 ]
