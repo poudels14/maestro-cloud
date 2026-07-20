@@ -2838,6 +2838,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-controller"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kernel-api",
+ "kernel-store",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "kernel-store"
 version = "0.1.0"
 dependencies = [

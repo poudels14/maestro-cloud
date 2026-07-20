@@ -1,0 +1,16 @@
+/// Matchable failure from controller-kernel infrastructure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ControllerError {
+    /// The persistence backend could not complete an operation.
+    #[error(transparent)]
+    Store(#[from] kernel_store::StoreError),
+    /// A formerly valid leader attempted a mutation after losing its fence.
+    #[error("leadership fence no longer matches the active leader key")]
+    LeadershipLost,
+    /// A controller-kernel invariant was violated.
+    #[error("controller runtime violated its contract: {message}")]
+    Contract {
+        /// Invariant violation detail.
+        message: String,
+    },
+}
