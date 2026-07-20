@@ -6,6 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "=0.1.89"
+docker = { version = "=0.21.0", package = "bollard", optional = true }
+futures-util = "=0.3.33"
 hex = "=0.4.3"
 kernel-api = { version = "0.1.0", path = "../kernel/api" }
 serde = { version = "=1.0.228", features = ["derive"] }
@@ -14,13 +16,15 @@ sha2 = "=0.10.9"
 supervisor = { version = "0.1.0", path = "../kernel/supervisor" }
 test-util = { version = "=0.12.5", package = "parking_lot", optional = true }
 thiserror = "=2.0.18"
-tokio = { version = "=1.52.3", features = ["macros", "rt", "sync", "time"] }
+time = { version = "=0.3.53", features = ["parsing"] }
+tokio = { version = "=1.52.3", features = ["io-util", "macros", "rt", "sync", "time"] }
 
 [lints]
 workspace = true
 
 [features]
 test-util = ["dep:test-util"]
+docker = ["dep:docker"]
 
 [dev-dependencies]
 tempfile = "=3.27.0"

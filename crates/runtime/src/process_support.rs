@@ -7,6 +7,7 @@ use supervisor::{
     ProcessSpec as SupervisedProcessSpec, ProcessUser, SupervisorError,
 };
 
+use crate::cgroup;
 use crate::process_manifest::workload_directory;
 use crate::{ProcessWorkload, RuntimeError, WorkloadHandle, WorkloadSpec};
 
@@ -113,18 +114,7 @@ pub(crate) fn spec_fingerprint(spec: &WorkloadSpec) -> Result<String, RuntimeErr
 }
 
 pub(crate) fn read_cgroup_path(process: ProcessHandle) -> Result<PathBuf, RuntimeError> {
-    let proc_path = PathBuf::from(format!("/proc/{}/cgroup", process.pid()));
-    let contents =
-        std::fs::read_to_string(&proc_path).map_err(|error| RuntimeError::Unavailable {
-            message: format!("failed to read `{}`: {error}", proc_path.display()),
-        })?;
-    let relative = contents
-        .lines()
-        .find_map(|line| line.strip_prefix("0::"))
-        .ok_or_else(|| RuntimeError::Rejected {
-            message: format!("`{}` does not report a cgroup-v2 path", proc_path.display()),
-        })?;
-    Ok(Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/')))
+    cgroup::read_cgroup_path(process.pid())
 }
 
 pub(crate) fn runtime_supervisor_error(error: SupervisorError) -> RuntimeError {

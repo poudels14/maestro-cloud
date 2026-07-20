@@ -6,7 +6,17 @@
 
 mod artifact;
 mod capabilities;
+#[cfg(target_os = "linux")]
+mod cgroup;
 mod clock;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_config;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_stream;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_support;
 mod error;
 mod execution;
 #[cfg(any(test, feature = "test-util"))]
@@ -34,6 +44,8 @@ pub use artifact::{
 };
 pub use capabilities::{Capabilities, RuntimeCapability};
 pub use clock::{MonotonicTime, RuntimeClock, TokioRuntimeClock};
+#[cfg(all(feature = "docker", target_os = "linux"))]
+pub use docker::DockerRuntime;
 pub use error::{CgroupPathError, RuntimeError};
 pub use execution::{
     ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, LogCursor, LogFrame, LogMode,
