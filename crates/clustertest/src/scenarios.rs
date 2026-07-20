@@ -2,6 +2,7 @@
 
 mod affinity;
 mod election;
+mod formation;
 mod lifecycle;
 mod quorum;
 mod restart;
@@ -11,6 +12,7 @@ mod scheduling;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
 pub use election::leader_failover_fences_stale_writes;
+pub use formation::designated_seed_and_learners_form_registered_cluster;
 pub use lifecycle::{
     build_failure_marks_deployment_crashed, crashed_replica_restarts_in_place,
     drained_deployment_finalizes, prepare_failure_marks_deployment_crashed,

@@ -8,6 +8,7 @@ mod affinity;
 mod cluster;
 mod election;
 mod error;
+mod formation;
 mod model;
 mod quorum;
 mod restart;
@@ -20,6 +21,11 @@ pub use affinity::AffinityCluster;
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use election::ElectionCluster;
 pub use error::ScenarioError;
+pub use formation::{
+    BootstrapDecision, FormationCluster, FormationMemberRole, FormationSnapshot, JoinObservation,
+    LeadershipAgreement, MembershipAgreement, NodePorts, RegistrationCleanup,
+    RegistrationObservation, ReservationState,
+};
 pub use model::{
     AffinityCookieSet, AffinityObservation, AffinitySession, AssignmentManifestSnapshot,
     AssignmentWriteOutcome, CandidateReadiness, ClusterSnapshot, ControlPlaneReadiness,

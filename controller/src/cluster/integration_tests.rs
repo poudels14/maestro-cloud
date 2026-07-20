@@ -9,12 +9,15 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
     AffinityCluster, AffinityCookieSet, AffinityObservation, AffinitySession,
-    AssignmentManifestSnapshot, AssignmentWriteOutcome, CandidateReadiness, ControlPlaneReadiness,
-    CutoverCluster, CutoverObservation, DrainBehavior, ElectionCluster, FencedWriteOutcome,
-    FixtureAffinityToken, FixtureControllerName, FixtureMarker, FixtureMutationName,
-    FixtureNodeName, FixtureVersion, LeadershipSnapshot, QuorumRecoveryCluster, ReadinessProbe,
-    ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster,
-    ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
+    AssignmentManifestSnapshot, AssignmentWriteOutcome, BootstrapDecision, CandidateReadiness,
+    ControlPlaneReadiness, CutoverCluster, CutoverObservation, DrainBehavior, ElectionCluster,
+    FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureMarker,
+    FixtureMutationName, FixtureNodeName, FixtureVersion, FormationCluster, FormationMemberRole,
+    FormationSnapshot, JoinObservation, LeadershipAgreement, LeadershipSnapshot,
+    MembershipAgreement, NodePorts, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup,
+    RegistrationObservation, ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability,
+    RestartCluster, RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot,
+    scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -634,36 +637,6 @@ impl FormingEtcdCluster {
         .map_err(|_| anyhow!("etcd member at `{endpoint}` did not become ready"))
     }
 
-    async fn assert_formed(&self) -> Result<()> {
-        let expected_names = self
-            .nodes
-            .iter()
-            .map(|node| node.member_name())
-            .collect::<BTreeSet<_>>();
-        for endpoint in &self.endpoints {
-            let mut client = etcd_client::Client::connect(vec![endpoint.clone()], None).await?;
-            let status = client.status().await?;
-            if status.leader() == 0 || !status.errors().is_empty() {
-                bail!("formed member `{endpoint}` has no healthy leader");
-            }
-            let members = client.member_list().await?;
-            let names = members
-                .members()
-                .iter()
-                .map(|member| member.name().to_string())
-                .collect::<BTreeSet<_>>();
-            if names != expected_names || members.members().iter().any(|member| member.is_learner())
-            {
-                bail!("formed membership does not contain three promoted voters: {names:?}");
-            }
-        }
-        let mut client = etcd_client::Client::connect(self.endpoints.clone(), None).await?;
-        client
-            .put("/maestro/integration/formed", "three-voters", None)
-            .await?;
-        Ok(())
-    }
-
     fn runtime(&self, index: usize) -> super::ClusterRuntime {
         let node = self.nodes[index];
         super::ClusterRuntime {
@@ -698,6 +671,295 @@ impl FormingEtcdCluster {
 
     fn container_name(&self, index: usize) -> String {
         format!("maestro-forming-etcd-{}-{}", self.run_id, index + 1)
+    }
+}
+
+struct OldSystemFormationCluster {
+    cluster: FormingEtcdCluster,
+    registry: Option<EtcdNodeRegistry>,
+}
+
+impl OldSystemFormationCluster {
+    fn start() -> Result<Self> {
+        Ok(Self {
+            cluster: FormingEtcdCluster::start_seed()?,
+            registry: None,
+        })
+    }
+
+    fn fixture_node(&self, index: usize) -> FixtureNodeName {
+        FixtureNodeName::new(self.cluster.runtime(index).node_id)
+    }
+
+    fn node_index(&self, node: &FixtureNodeName) -> Result<usize> {
+        (0..self.cluster.nodes.len())
+            .find(|index| self.cluster.runtime(*index).node_id == node.as_str())
+            .ok_or_else(|| anyhow!("formation node `{}` does not exist", node.as_str()))
+    }
+
+    fn fixture_for_member(&self, member_name: &str) -> Result<FixtureNodeName> {
+        self.cluster
+            .nodes
+            .iter()
+            .position(|node| node.member_name() == member_name)
+            .map(|index| self.fixture_node(index))
+            .ok_or_else(|| anyhow!("formed etcd member `{member_name}` is not configured"))
+    }
+
+    fn bootstrap_decision(action: super::bootstrap::BootstrapAction) -> Result<BootstrapDecision> {
+        match action {
+            super::bootstrap::BootstrapAction::BootstrapSeed => {
+                Ok(BootstrapDecision::BootstrapSeed)
+            }
+            super::bootstrap::BootstrapAction::BootstrapSeedResume => {
+                Ok(BootstrapDecision::ResumeSeed)
+            }
+            super::bootstrap::BootstrapAction::Restart => Ok(BootstrapDecision::Restart),
+            super::bootstrap::BootstrapAction::JoinExisting(_) => {
+                Ok(BootstrapDecision::JoinExisting)
+            }
+            unexpected => bail!("unexpected formation bootstrap action {unexpected:?}"),
+        }
+    }
+
+    fn seed_data_dir(&self) -> PathBuf {
+        self.cluster.root.join("node-1")
+    }
+
+    fn advertised_ports(&self) -> NodePorts {
+        let runtime = self.cluster.runtime(0);
+        NodePorts {
+            api: runtime.api_port,
+            gateway: runtime.gateway_port,
+            consensus_client: runtime.etcd_client_port,
+            consensus_peer: runtime.etcd_peer_port,
+        }
+    }
+
+    fn reserved_port(reservation: &serde_json::Value, field: &'static str) -> Result<u16> {
+        let value = reservation[field]
+            .as_u64()
+            .ok_or_else(|| anyhow!("control reservation has no numeric `{field}`"))?;
+        u16::try_from(value).map_err(|_| anyhow!("control reservation `{field}` is out of range"))
+    }
+}
+
+#[async_trait]
+impl FormationCluster for OldSystemFormationCluster {
+    type Error = anyhow::Error;
+
+    fn nodes(&self) -> Vec<FixtureNodeName> {
+        (0..self.cluster.nodes.len())
+            .map(|index| self.fixture_node(index))
+            .collect()
+    }
+
+    async fn seed_decision(&mut self) -> Result<BootstrapDecision> {
+        let runtime = self.cluster.runtime(0);
+        Self::bootstrap_decision(super::bootstrap::decide(
+            Some(&runtime),
+            &self.seed_data_dir(),
+        )?)
+    }
+
+    async fn mark_seed_starting(&mut self) -> Result<()> {
+        super::bootstrap::mark_seed_starting(&self.seed_data_dir())
+    }
+
+    async fn mark_seed_joined(&mut self) -> Result<()> {
+        super::bootstrap::mark_seed_joined(&self.seed_data_dir())
+    }
+
+    async fn await_seed(&mut self) -> Result<()> {
+        self.cluster.wait_for_seed().await
+    }
+
+    async fn join_and_promote(&mut self, node: &FixtureNodeName) -> Result<JoinObservation> {
+        let index = self.node_index(node)?;
+        let runtime = self.cluster.runtime(index);
+        let data_dir = self.cluster.root.join(format!("node-{}", index + 1));
+        let decision_before_join =
+            Self::bootstrap_decision(super::bootstrap::decide(Some(&runtime), &data_dir)?)?;
+        let mut join_info = self.cluster.add_and_promote_learner(index).await?;
+        let initial_members = join_info
+            .initial_cluster
+            .split(',')
+            .map(|member| {
+                member
+                    .split_once('=')
+                    .map(|(name, _)| name)
+                    .ok_or_else(|| anyhow!("invalid initial cluster member `{member}`"))
+                    .and_then(|name| self.fixture_for_member(name))
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        // The lightweight fixture uses HTTP, while persisted production intent is bound to mTLS.
+        join_info.peer_url = runtime.peer_url();
+        super::bootstrap::persist_join_info(&data_dir, &join_info)?;
+        let decision_after_join =
+            Self::bootstrap_decision(super::bootstrap::decide(Some(&runtime), &data_dir)?)?;
+        Ok(JoinObservation {
+            node: node.clone(),
+            decision_before_join,
+            decision_after_join,
+            initial_members,
+            final_role: FormationMemberRole::Voter,
+        })
+    }
+
+    async fn formation_snapshot(&mut self) -> Result<FormationSnapshot> {
+        let mut observed_members = None;
+        let mut observed_leader = None;
+        let mut membership = MembershipAgreement::Consistent;
+        let mut leadership = LeadershipAgreement::Consistent;
+        for endpoint in &self.cluster.endpoints {
+            let mut client = etcd_client::Client::connect([endpoint.clone()], None).await?;
+            let status = client.status().await?;
+            if status.leader() == 0 || !status.errors().is_empty() {
+                leadership = LeadershipAgreement::Divergent;
+            }
+            if observed_leader
+                .replace(status.leader())
+                .is_some_and(|leader| leader != status.leader())
+            {
+                leadership = LeadershipAgreement::Divergent;
+            }
+            let members = client
+                .member_list()
+                .await?
+                .members()
+                .iter()
+                .map(|member| {
+                    let role = if member.is_learner() {
+                        FormationMemberRole::Learner
+                    } else {
+                        FormationMemberRole::Voter
+                    };
+                    self.fixture_for_member(member.name())
+                        .map(|node| (node, role))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            if observed_members
+                .as_ref()
+                .is_some_and(|observed| observed != &members)
+            {
+                membership = MembershipAgreement::Divergent;
+            }
+            observed_members = Some(members);
+        }
+        let mut client = etcd_client::Client::connect(self.cluster.endpoints.clone(), None).await?;
+        let writes = match client
+            .put("/maestro/integration/formed", "three-voters", None)
+            .await
+        {
+            Ok(_) => ResourceAvailability::Available,
+            Err(_) => ResourceAvailability::Unavailable,
+        };
+        Ok(FormationSnapshot {
+            members: observed_members.unwrap_or_default(),
+            membership,
+            leadership,
+            writes,
+        })
+    }
+
+    async fn register_seed(&mut self) -> Result<RegistrationObservation> {
+        let seed_runtime = self.cluster.runtime(0);
+        let endpoint = self.cluster.client_url(0);
+        let mut client = etcd_client::Client::connect([endpoint.clone()], None).await?;
+        super::bootstrap::seed_bootstrap_records(&mut client, &seed_runtime).await?;
+        let registry =
+            EtcdNodeRegistry::connect(&[endpoint], None, seed_runtime.node_id.clone()).await?;
+        let info = NodeInfo {
+            node_id: seed_runtime.node_id.clone(),
+            instance_id: seed_runtime.instance_id.clone(),
+            hostname: "seed-node".to_string(),
+            role: seed_runtime.role,
+            cluster_host_ip: seed_runtime.host_ip,
+            cluster_api_port: seed_runtime.api_port,
+            cluster_gateway_port: seed_runtime.gateway_port,
+            subnet: seed_runtime.subnet.clone(),
+            tailscale_ip: None,
+            data_plane_ready: false,
+            data_plane_checked_at_ms: 0,
+            data_plane_error: None,
+            version: "integration-test".to_string(),
+            started_at_ms: 1,
+            labels: BTreeMap::new(),
+        };
+        registry.register(info).await?;
+        registry.publish_image_holder("api:deployment").await?;
+        let registered_nodes = registry
+            .list_nodes()
+            .await?
+            .into_iter()
+            .map(|node| FixtureNodeName::new(node.node_id))
+            .collect();
+        let image_holders = registry
+            .list_image_holders("api:deployment")
+            .await?
+            .into_iter()
+            .map(|holder| FixtureNodeName::new(holder.node_id))
+            .collect();
+        let control_key =
+            super::identity::control_reservation_key(seed_runtime.host_ip, seed_runtime.api_port);
+        let reservation = client
+            .get(control_key, None)
+            .await?
+            .kvs()
+            .first()
+            .ok_or_else(|| anyhow!("registered control reservation disappeared"))?
+            .value()
+            .to_vec();
+        let reservation: serde_json::Value = serde_json::from_slice(&reservation)?;
+        let reservation_node = FixtureNodeName::new(
+            reservation["nodeId"]
+                .as_str()
+                .ok_or_else(|| anyhow!("control reservation has no node id"))?,
+        );
+        let reservation_state = if reservation["state"] == "active" {
+            ReservationState::Active
+        } else {
+            ReservationState::Inactive
+        };
+        let reserved_ports = NodePorts {
+            api: Self::reserved_port(&reservation, "apiPort")?,
+            gateway: Self::reserved_port(&reservation, "gatewayPort")?,
+            consensus_client: Self::reserved_port(&reservation, "etcdClientPort")?,
+            consensus_peer: Self::reserved_port(&reservation, "etcdPeerPort")?,
+        };
+        self.registry = Some(registry);
+        Ok(RegistrationObservation {
+            registered_nodes,
+            image_holders,
+            reservation_node,
+            reservation_state,
+            advertised_ports: self.advertised_ports(),
+            reserved_ports,
+        })
+    }
+
+    async fn deregister_seed(&mut self) -> Result<RegistrationCleanup> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or_else(|| anyhow!("formation seed is not registered"))?;
+        registry.deregister().await?;
+        let registered_nodes = registry
+            .list_nodes()
+            .await?
+            .into_iter()
+            .map(|node| FixtureNodeName::new(node.node_id))
+            .collect();
+        let image_holders = registry
+            .list_image_holders("api:deployment")
+            .await?
+            .into_iter()
+            .map(|holder| FixtureNodeName::new(holder.node_id))
+            .collect();
+        Ok(RegistrationCleanup {
+            registered_nodes,
+            image_holders,
+        })
     }
 }
 
@@ -2949,115 +3211,9 @@ async fn node_affinity_is_automatic_opaque_and_replayable() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
-    let mut cluster = FormingEtcdCluster::start_seed()?;
-    let seed_runtime = cluster.runtime(0);
-    let seed_data = cluster.root.join("node-1");
-    assert_eq!(
-        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
-        super::bootstrap::BootstrapAction::BootstrapSeed
-    );
-    super::bootstrap::mark_seed_starting(&seed_data)?;
-    assert_eq!(
-        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
-        super::bootstrap::BootstrapAction::BootstrapSeedResume,
-        "an interrupted seed start must replay its persisted bootstrap intent"
-    );
-    super::bootstrap::mark_seed_joined(&seed_data)?;
-    assert_eq!(
-        super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
-        super::bootstrap::BootstrapAction::Restart
-    );
-    cluster.wait_for_seed().await?;
+    let mut cluster = OldSystemFormationCluster::start()?;
 
-    for index in [2, 1] {
-        let runtime = cluster.runtime(index);
-        let data_dir = cluster.root.join(format!("node-{}", index + 1));
-        assert_eq!(
-            super::bootstrap::decide(Some(&runtime), &data_dir)?,
-            super::bootstrap::BootstrapAction::Restart
-        );
-        let mut join_info = cluster.add_and_promote_learner(index).await?;
-        // The lightweight formation fixture runs plain HTTP; persisted production join intent is
-        // bound to the configured mTLS peer URL.
-        join_info.peer_url = runtime.peer_url();
-        super::bootstrap::persist_join_info(&data_dir, &join_info)?;
-        assert_eq!(
-            super::bootstrap::decide(Some(&runtime), &data_dir)?,
-            super::bootstrap::BootstrapAction::JoinExisting(join_info)
-        );
-    }
-
-    cluster.assert_formed().await?;
-
-    let mut client = etcd_client::Client::connect([cluster.client_url(0)], None).await?;
-    super::bootstrap::seed_bootstrap_records(&mut client, &seed_runtime).await?;
-    let registry =
-        EtcdNodeRegistry::connect(&[cluster.client_url(0)], None, seed_runtime.node_id.clone())
-            .await?;
-    let info = NodeInfo {
-        node_id: seed_runtime.node_id.clone(),
-        instance_id: seed_runtime.instance_id.clone(),
-        hostname: "seed-node".to_string(),
-        role: seed_runtime.role,
-        cluster_host_ip: seed_runtime.host_ip,
-        cluster_api_port: seed_runtime.api_port,
-        cluster_gateway_port: seed_runtime.gateway_port,
-        subnet: seed_runtime.subnet.clone(),
-        tailscale_ip: None,
-        data_plane_ready: false,
-        data_plane_checked_at_ms: 0,
-        data_plane_error: None,
-        version: "integration-test".to_string(),
-        started_at_ms: 1,
-        labels: BTreeMap::new(),
-    };
-    registry.register(info.clone()).await?;
-    assert_eq!(registry.list_nodes().await?, vec![info]);
-    registry.publish_image_holder("api:deployment").await?;
-    assert_eq!(
-        registry
-            .list_image_holders("api:deployment")
-            .await?
-            .into_iter()
-            .map(|holder| holder.node_id)
-            .collect::<Vec<_>>(),
-        vec![seed_runtime.node_id.clone()]
-    );
-
-    let control_key =
-        super::identity::control_reservation_key(seed_runtime.host_ip, seed_runtime.api_port);
-    let reservation = client.get(control_key, None).await?;
-    let reservation = reservation
-        .kvs()
-        .first()
-        .ok_or_else(|| anyhow!("registered control reservation disappeared"))?;
-    let reservation: serde_json::Value = serde_json::from_slice(reservation.value())?;
-    assert_eq!(reservation["nodeId"], seed_runtime.node_id);
-    assert_eq!(reservation["state"], "active");
-    assert_eq!(
-        reservation["apiPort"].as_u64(),
-        Some(u64::from(seed_runtime.api_port))
-    );
-    assert_eq!(
-        reservation["gatewayPort"].as_u64(),
-        Some(u64::from(seed_runtime.gateway_port))
-    );
-    assert_eq!(
-        reservation["etcdClientPort"].as_u64(),
-        Some(u64::from(seed_runtime.etcd_client_port))
-    );
-    assert_eq!(
-        reservation["etcdPeerPort"].as_u64(),
-        Some(u64::from(seed_runtime.etcd_peer_port))
-    );
-    registry.deregister().await?;
-    assert!(
-        registry
-            .list_image_holders("api:deployment")
-            .await?
-            .is_empty(),
-        "revoking the node lease must remove its image availability"
-    );
+    scenarios::designated_seed_and_learners_form_registered_cluster(&mut cluster).await?;
     Ok(())
 }
 
