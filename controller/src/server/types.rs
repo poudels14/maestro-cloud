@@ -181,6 +181,8 @@ pub(crate) struct BlockedIpsResponse {
 pub(crate) struct UpgradeSystemRequest {
     pub(crate) version: String,
     #[serde(default)]
+    pub(crate) batch: crate::cluster::UpgradeBatch,
+    #[serde(default)]
     pub(crate) run_id: Option<String>,
     #[serde(default)]
     pub(crate) attempt_id: Option<String>,

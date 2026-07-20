@@ -965,6 +965,48 @@ impl DeploymentController {
         }
     }
 
+    fn arm_all_node_quorum_restart(
+        &self,
+        request: &SystemUpgradeRequest,
+        target_version: &str,
+    ) -> Result<bool> {
+        if request.batch != crate::cluster::UpgradeBatch::All {
+            return Ok(false);
+        }
+        let cluster = self
+            .config
+            .cluster
+            .as_ref()
+            .context("all-node upgrade request requires cluster runtime state")?;
+        if !cluster.role.is_voter() {
+            return Ok(false);
+        }
+        let run_id = request
+            .run_id
+            .as_deref()
+            .context("all-node upgrade request requires a run ID")?;
+        crate::cluster::recovery::arm_planned_quorum_restart(
+            &self.config.data_dir,
+            cluster,
+            run_id,
+            target_version,
+        )
+        .context("failed to persist all-node quorum restart authorization")?;
+        Ok(true)
+    }
+
+    fn disarm_all_node_quorum_restart(&self, armed: bool) {
+        if armed
+            && let Err(error) =
+                crate::cluster::recovery::disarm_planned_quorum_restart(&self.config.data_dir)
+        {
+            self.logger.emit(
+                "error",
+                &format!("failed to clear all-node quorum restart authorization: {error}"),
+            );
+        }
+    }
+
     async fn check_system_upgrade(&self) -> Option<ControllerExitReason> {
         let request_node_id = self
             .config
@@ -1199,6 +1241,21 @@ impl DeploymentController {
             self.mark_deployments_terminated().await;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+            let quorum_restart_armed =
+                match self.arm_all_node_quorum_restart(&request, &target_version_string) {
+                    Ok(armed) => armed,
+                    Err(err) => {
+                        self.fail_system_upgrade(
+                            request_node_id,
+                            &request,
+                            &target_version_string,
+                            format!("refusing to reboot after NixOS upgrade: {err}"),
+                        )
+                        .await;
+                        return None;
+                    }
+                };
+
             self.logger
                 .emit("info", "NixOS upgrade complete, rebooting");
             if let Err(err) = self
@@ -1206,6 +1263,7 @@ impl DeploymentController {
                 .delete_system_upgrade_request(request_node_id)
                 .await
             {
+                self.disarm_all_node_quorum_restart(quorum_restart_armed);
                 self.fail_system_upgrade(
                     request_node_id,
                     &request,
@@ -1218,6 +1276,7 @@ impl DeploymentController {
             match tokio::process::Command::new("reboot").output().await {
                 Ok(output) if output.status.success() => Some(ControllerExitReason::Restart),
                 Ok(output) => {
+                    self.disarm_all_node_quorum_restart(quorum_restart_armed);
                     self.fail_system_upgrade(
                         request_node_id,
                         &request,
@@ -1231,6 +1290,7 @@ impl DeploymentController {
                     None
                 }
                 Err(err) => {
+                    self.disarm_all_node_quorum_restart(quorum_restart_armed);
                     self.fail_system_upgrade(
                         request_node_id,
                         &request,
@@ -1293,11 +1353,26 @@ impl DeploymentController {
             .await;
             self.logger
                 .emit("info", "system images rebuilt, draining and restarting");
+            let quorum_restart_armed =
+                match self.arm_all_node_quorum_restart(&request, &target_version_string) {
+                    Ok(armed) => armed,
+                    Err(err) => {
+                        self.fail_system_upgrade(
+                            request_node_id,
+                            &request,
+                            &target_version_string,
+                            format!("refusing to restart after system upgrade: {err}"),
+                        )
+                        .await;
+                        return None;
+                    }
+                };
             if let Err(err) = self
                 .store
                 .delete_system_upgrade_request(request_node_id)
                 .await
             {
+                self.disarm_all_node_quorum_restart(quorum_restart_armed);
                 self.fail_system_upgrade(
                     request_node_id,
                     &request,
@@ -3362,6 +3437,7 @@ mod upgrade_source_tests {
     #[test]
     fn stored_upgrade_request_preserves_the_requested_minimum_version() {
         let request = SystemUpgradeRequest::new("nixos", "0.3.3")
+            .with_batch(crate::cluster::UpgradeBatch::All)
             .with_run_id(Some("upgrade-run-1".to_string()))
             .with_attempt_id(Some("attempt-1".to_string()));
         let encoded = request.to_storage().expect("encode request");
@@ -3380,6 +3456,7 @@ mod upgrade_source_tests {
 
         assert_eq!(request.system_type, "nixos");
         assert!(request.target_version.is_none());
+        assert_eq!(request.batch, crate::cluster::UpgradeBatch::Rolling);
         assert!(request.run_id.is_none());
         assert!(request.attempt_id.is_none());
         assert!(requested_upgrade_version(&request).is_err());

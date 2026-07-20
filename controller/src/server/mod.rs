@@ -2859,6 +2859,7 @@ impl Server {
         );
         let stored_request =
             StoredSystemUpgradeRequest::new(system_type, target_version.to_string())
+                .with_batch(request.batch)
                 .with_run_id(run_id.map(str::to_string))
                 .with_attempt_id(request.attempt_id);
         state

@@ -1,9 +1,10 @@
 use std::{
     collections::BTreeMap,
+    io::Write,
     net::{IpAddr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -24,6 +25,7 @@ type HmacSha256 = Hmac<Sha256>;
 const RECOVERY_CONTEXT: &[u8] = b"maestro-cluster-recovery-status-v1";
 const RECOVERY_REQUEST_CONTEXT: &[u8] = b"maestro-cluster-recovery-request-v1";
 const LOCAL_MEMBER_FAILURE_LIMIT: u8 = 6;
+const PLANNED_QUORUM_RESTART_MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryDecision {
@@ -47,6 +49,16 @@ pub(crate) struct RecoveryStatusRequest {
     pub(crate) cluster_id: String,
     pub(crate) nonce: String,
     proof: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannedQuorumRestart {
+    cluster_id: String,
+    node_id: String,
+    run_id: String,
+    target_version: String,
+    created_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +98,7 @@ pub async fn coordinate(
     }
 
     let local_state = inspect_local_member_state(data_dir, runtime_cli)?;
+    let planned_restart = consume_planned_quorum_restart(data_dir, runtime)?;
     let force_new_pending =
         crate::cluster::bootstrap::force_new_cluster_is_pending(data_dir, &runtime.cluster_id)?;
     if force_new_pending {
@@ -98,6 +111,12 @@ pub async fn coordinate(
         && runtime.is_seed()
         && crate::cluster::bootstrap::seed_is_armed(data_dir)?
     {
+        return Ok(RecoveryDecision::Normal);
+    }
+    if local_state == MemberDataState::Present && planned_restart.is_some() {
+        eprintln!(
+            "[maestro]: consuming planned all-node restart authorization; starting existing etcd membership"
+        );
         return Ok(RecoveryDecision::Normal);
     }
 
@@ -154,6 +173,119 @@ pub async fn coordinate(
     handle.graceful_shutdown(Some(Duration::from_secs(2)));
     let _ = server.await;
     result
+}
+
+pub(crate) fn arm_planned_quorum_restart(
+    data_dir: &Path,
+    runtime: &ClusterRuntime,
+    run_id: &str,
+    target_version: &str,
+) -> Result<()> {
+    let run_id = run_id.trim();
+    let target_version = target_version.trim();
+    if run_id.is_empty() {
+        bail!("all-node restart authorization requires an upgrade run ID");
+    }
+    if target_version.is_empty() {
+        bail!("all-node restart authorization requires a target version");
+    }
+    persist_planned_quorum_restart(
+        data_dir,
+        &PlannedQuorumRestart {
+            cluster_id: runtime.cluster_id.clone(),
+            node_id: runtime.node_id.clone(),
+            run_id: run_id.to_string(),
+            target_version: target_version.to_string(),
+            created_at_ms: unix_time_millis()?,
+        },
+    )
+}
+
+pub(crate) fn disarm_planned_quorum_restart(data_dir: &Path) -> Result<()> {
+    remove_planned_quorum_restart(&planned_quorum_restart_path(data_dir))
+}
+
+fn consume_planned_quorum_restart(
+    data_dir: &Path,
+    runtime: &ClusterRuntime,
+) -> Result<Option<PlannedQuorumRestart>> {
+    let path = planned_quorum_restart_path(data_dir);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    // Consume before etcd starts. If this daemon dies during startup, the next invocation must
+    // use authenticated recovery instead of replaying an authorization indefinitely.
+    remove_planned_quorum_restart(&path)?;
+    let marker: PlannedQuorumRestart = match serde_json::from_slice(&bytes) {
+        Ok(marker) => marker,
+        Err(error) => {
+            eprintln!(
+                "[maestro]: ignoring invalid planned all-node restart authorization: {error}"
+            );
+            return Ok(None);
+        }
+    };
+    let now_ms = unix_time_millis()?;
+    let maximum_age_ms =
+        u64::try_from(PLANNED_QUORUM_RESTART_MAX_AGE.as_millis()).expect("six hours fits in u64");
+    if marker.cluster_id != runtime.cluster_id
+        || marker.node_id != runtime.node_id
+        || marker.run_id.trim().is_empty()
+        || marker.target_version.trim().is_empty()
+        || marker.created_at_ms > now_ms
+        || now_ms - marker.created_at_ms > maximum_age_ms
+    {
+        eprintln!("[maestro]: ignoring stale or mismatched planned all-node restart authorization");
+        return Ok(None);
+    }
+    Ok(Some(marker))
+}
+
+fn planned_quorum_restart_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("system/etcd-planned-quorum-restart.json")
+}
+
+fn persist_planned_quorum_restart(data_dir: &Path, marker: &PlannedQuorumRestart) -> Result<()> {
+    let path = planned_quorum_restart_path(data_dir);
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow!("restart authorization path has no parent"))?;
+    std::fs::create_dir_all(directory)?;
+    let temporary = path.with_extension("tmp");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).truncate(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(marker)?)?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, &path)?;
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn remove_planned_quorum_restart(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            if let Some(directory) = path.parent() {
+                std::fs::File::open(directory)?.sync_all()?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn unix_time_millis() -> Result<u64> {
+    Ok(u64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+    )?)
 }
 
 pub fn spawn_local_member_monitor(
@@ -582,6 +714,15 @@ mod tests {
         endpoints
     }
 
+    fn recovery_test_root(label: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "maestro-recovery-{label}-{}",
+            crate::utils::nanoid::unique_id(10)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     async fn coordinate_test_cluster(
         present: &[usize],
     ) -> (Vec<RecoveryDecision>, Vec<std::path::PathBuf>) {
@@ -669,6 +810,97 @@ mod tests {
         tampered.cluster_available = true;
         assert!(verify_response("shared-secret", &request, &tampered).is_err());
         assert!(verify_response("wrong-secret", &request, &response).is_err());
+    }
+
+    #[test]
+    fn planned_quorum_restart_authorization_is_identity_bound_and_one_shot() {
+        let root = recovery_test_root("planned-restart");
+        let endpoints = reserve_endpoints();
+        let runtime = test_runtime(endpoints[0], &endpoints, 0);
+        arm_planned_quorum_restart(&root, &runtime, "upgrade-run", "1.2.3").unwrap();
+
+        assert!(
+            consume_planned_quorum_restart(&root, &runtime)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            consume_planned_quorum_restart(&root, &runtime)
+                .unwrap()
+                .is_none()
+        );
+
+        arm_planned_quorum_restart(&root, &runtime, "upgrade-run", "1.2.3").unwrap();
+        let mut other_node = runtime.clone();
+        other_node.node_id = "different-node".to_string();
+        assert!(
+            consume_planned_quorum_restart(&root, &other_node)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!planned_quorum_restart_path(&root).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_planned_quorum_restart_authorization_is_consumed_without_use() {
+        let root = recovery_test_root("stale-restart");
+        let endpoints = reserve_endpoints();
+        let runtime = test_runtime(endpoints[0], &endpoints, 0);
+        persist_planned_quorum_restart(
+            &root,
+            &PlannedQuorumRestart {
+                cluster_id: runtime.cluster_id.clone(),
+                node_id: runtime.node_id.clone(),
+                run_id: "old-upgrade".to_string(),
+                target_version: "1.2.3".to_string(),
+                created_at_ms: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            consume_planned_quorum_restart(&root, &runtime)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!planned_quorum_restart_path(&root).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn planned_restart_with_existing_member_skips_recovery_rendezvous() {
+        let root = recovery_test_root("planned-existing-member");
+        std::fs::create_dir_all(root.join("system/etcd/data/member")).unwrap();
+        let endpoints = reserve_endpoints();
+        let runtime = test_runtime(endpoints[0], &endpoints, 0);
+        arm_planned_quorum_restart(&root, &runtime, "upgrade-run", "1.2.3").unwrap();
+        let ca = crate::utils::certs::generate_cluster_ca().unwrap();
+        let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
+            &ca,
+            runtime.host_ip,
+            runtime.api_port,
+            runtime.role,
+        )
+        .unwrap();
+        let (_shutdown, receiver) = broadcast::channel(1);
+
+        assert_eq!(
+            coordinate(
+                &runtime,
+                "test",
+                &root,
+                "shared-recovery-secret",
+                &certs,
+                None,
+                receiver,
+            )
+            .await
+            .unwrap(),
+            RecoveryDecision::Normal
+        );
+        assert!(!planned_quorum_restart_path(&root).exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]

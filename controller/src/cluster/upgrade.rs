@@ -480,11 +480,7 @@ impl ClusterUpgradeOrchestrator {
                 "x-maestro-request-id",
                 format!("upgrade-{}-{}", run.run_id, node.node_id),
             )
-            .json(&serde_json::json!({
-                "version": run.target_version,
-                "runId": run.run_id,
-                "attemptId": attempt_id,
-            }));
+            .json(&all_node_upgrade_request_body(run, attempt_id.as_deref()));
         if let Some(token) = self.operator_token()? {
             request = request.bearer_auth(token);
         }
@@ -1542,6 +1538,15 @@ impl ClusterUpgradeOrchestrator {
     }
 }
 
+fn all_node_upgrade_request_body(run: &UpgradeRun, attempt_id: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "version": run.target_version,
+        "batch": run.batch,
+        "runId": run.run_id,
+        "attemptId": attempt_id,
+    })
+}
+
 async fn restore_maintenance_node_states(
     registry: &dyn NodeRegistry,
     token: &LeadershipToken,
@@ -1970,6 +1975,10 @@ mod tests {
             upgrade_attempt_id(&run.run_id, &run.nodes[0]),
             first_attempt
         );
+        let body = all_node_upgrade_request_body(&run, Some("attempt-2"));
+        assert_eq!(body["batch"], "all");
+        assert_eq!(body["runId"], "batch-run");
+        assert_eq!(body["attemptId"], "attempt-2");
     }
 
     #[tokio::test]

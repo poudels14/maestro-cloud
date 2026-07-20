@@ -13,6 +13,8 @@ pub struct SystemUpgradeRequest {
     pub system_type: String,
     #[serde(default)]
     pub target_version: Option<String>,
+    #[serde(default)]
+    pub batch: crate::cluster::UpgradeBatch,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,9 +26,15 @@ impl SystemUpgradeRequest {
         Self {
             system_type: system_type.into(),
             target_version: Some(target_version.into()),
+            batch: crate::cluster::UpgradeBatch::Rolling,
             run_id: None,
             attempt_id: None,
         }
+    }
+
+    pub fn with_batch(mut self, batch: crate::cluster::UpgradeBatch) -> Self {
+        self.batch = batch;
+        self
     }
 
     pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
@@ -50,6 +58,7 @@ impl SystemUpgradeRequest {
                 Ok(Self {
                     system_type: system_type.to_string(),
                     target_version: None,
+                    batch: crate::cluster::UpgradeBatch::Rolling,
                     run_id: None,
                     attempt_id: None,
                 })

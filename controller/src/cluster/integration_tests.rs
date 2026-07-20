@@ -247,7 +247,7 @@ impl ContainerEtcdCluster {
             let container = format!("maestro-etcd-test-{run_id}-{}", index + 1);
             let client_port = node.etcd_client_port;
             let peer_port = node.etcd_peer_port;
-            let data_dir = cluster.root.join(format!("member-{}", index + 1));
+            let data_dir = cluster.member_data_dir(index);
             std::fs::create_dir_all(&data_dir)?;
             let arguments = vec![
                 "run".to_string(),
@@ -298,12 +298,20 @@ impl ContainerEtcdCluster {
             .join(",")
     }
 
+    fn node_data_dir(&self, index: usize) -> PathBuf {
+        self.root.join(format!("node-{}", index + 1))
+    }
+
+    fn member_data_dir(&self, index: usize) -> PathBuf {
+        self.node_data_dir(index).join("system/etcd/data")
+    }
+
     fn wipe_member(&self, index: usize) -> Result<()> {
         command_output(
             &self.runtime_cli,
             &["rm", "--force", &self.container_names[index]],
         )?;
-        let data_dir = self.root.join(format!("member-{}", index + 1));
+        let data_dir = self.member_data_dir(index);
         std::fs::remove_dir_all(&data_dir)?;
         std::fs::create_dir_all(data_dir)?;
         Ok(())
@@ -324,7 +332,7 @@ impl ContainerEtcdCluster {
     fn run_member(&self, index: usize, initial_cluster: &str, force_new: bool) -> Result<()> {
         let node = self.nodes[index];
         let member = format!("member{}", index + 1);
-        let data_dir = self.root.join(format!("member-{}", index + 1));
+        let data_dir = self.member_data_dir(index);
         let mut arguments = vec![
             "run".to_string(),
             "--detach".to_string(),
@@ -374,6 +382,20 @@ impl ContainerEtcdCluster {
 
     fn restart_member(&self, index: usize) -> Result<()> {
         command_output(&self.runtime_cli, &["start", &self.container_names[index]])?;
+        Ok(())
+    }
+
+    fn stop_all_members(&self) -> Result<()> {
+        for index in 0..self.container_names.len() {
+            self.stop_member(index)?;
+        }
+        Ok(())
+    }
+
+    fn restart_all_members(&self) -> Result<()> {
+        for index in 0..self.container_names.len() {
+            self.restart_member(index)?;
+        }
         Ok(())
     }
 
@@ -3040,6 +3062,107 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
     for handle in handles[survivor].drain(..) {
         handle.abort();
     }
+    Ok(())
+}
+
+/// Stops every member of a real three-voter etcd cluster, passes each persisted member through
+/// the production planned-restart recovery gate, and starts all existing members again. This is
+/// the controller-restart equivalent of an all-node system upgrade without mutating the host OS.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn planned_all_voter_restart_restores_existing_etcd_quorum() -> Result<()> {
+    let cluster = ContainerEtcdCluster::start()?;
+    cluster.wait_until_ready().await?;
+    let cluster_id = format!(
+        "{:0<32}",
+        crate::utils::nanoid::unique_id(16).to_ascii_lowercase()
+    );
+    let runtimes = cluster
+        .nodes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, endpoint)| super::ClusterRuntime {
+            cluster_id: cluster_id.clone(),
+            node_id: format!("node-{index}"),
+            instance_id: format!("instance-{index}"),
+            host_ip: endpoint.host_ip,
+            role: if index == 0 {
+                NodeRole::Master
+            } else {
+                NodeRole::Voter
+            },
+            initial_voters: cluster.nodes.clone(),
+            voter_endpoints: cluster.nodes.clone(),
+            subnet: format!("172.29.{}.0/24", index + 1),
+            control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
+            api_port: endpoint.api_port,
+            gateway_port: endpoint.gateway_port,
+            etcd_client_port: endpoint.etcd_client_port,
+            etcd_peer_port: endpoint.etcd_peer_port,
+            labels: BTreeMap::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
+    client
+        .put(
+            "/maestro/integration/planned-restart-preserved",
+            "before-restart",
+            None,
+        )
+        .await?;
+    drop(client);
+
+    for (index, runtime) in runtimes.iter().enumerate() {
+        super::recovery::arm_planned_quorum_restart(
+            &cluster.node_data_dir(index),
+            runtime,
+            "all-node-integration-run",
+            env!("CARGO_PKG_VERSION"),
+        )?;
+    }
+    cluster.stop_all_members()?;
+
+    let ca = crate::utils::certs::generate_cluster_ca()?;
+    let (shutdown, _) = broadcast::channel(1);
+    for (index, runtime) in runtimes.iter().enumerate() {
+        let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
+            &ca,
+            runtime.host_ip,
+            runtime.api_port,
+            runtime.role,
+        )?;
+        let decision = super::recovery::coordinate(
+            runtime,
+            TEST_CLUSTER_NAME,
+            &cluster.node_data_dir(index),
+            "planned-restart-integration-secret",
+            &certs,
+            Some(&cluster.runtime_cli),
+            shutdown.subscribe(),
+        )
+        .await?;
+        assert_eq!(decision, super::recovery::RecoveryDecision::Normal);
+        assert!(
+            !cluster
+                .node_data_dir(index)
+                .join("system/etcd-planned-quorum-restart.json")
+                .exists(),
+            "node {} did not consume its restart authorization",
+            index + 1
+        );
+    }
+
+    cluster.restart_all_members()?;
+    cluster.wait_until_ready().await?;
+    let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
+    let preserved = client
+        .get("/maestro/integration/planned-restart-preserved", None)
+        .await?;
+    assert_eq!(
+        preserved.kvs().first().map(|entry| entry.value()),
+        Some(b"before-restart".as_slice())
+    );
     Ok(())
 }
 
