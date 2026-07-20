@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::Object;
-use kernel_store::{Clock, MonotonicTime};
+use kernel_store::{Clock, MonotonicTime, Version};
 
 use crate::FencedStore;
 
@@ -43,15 +43,22 @@ pub enum ReconcileError {
 pub struct ReconcileContext {
     fenced_store: Arc<FencedStore>,
     clock: Arc<dyn Clock>,
+    observed_version: Version,
     attempt: u32,
 }
 
 impl ReconcileContext {
     /// Creates context for one invocation; controller runtimes normally own this call.
-    pub fn new(fenced_store: Arc<FencedStore>, clock: Arc<dyn Clock>, attempt: u32) -> Self {
+    pub fn new(
+        fenced_store: Arc<FencedStore>,
+        clock: Arc<dyn Clock>,
+        observed_version: Version,
+        attempt: u32,
+    ) -> Self {
         Self {
             fenced_store,
             clock,
+            observed_version,
             attempt,
         }
     }
@@ -64,6 +71,11 @@ impl ReconcileContext {
     /// Returns the injected deterministic clock.
     pub fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
+    }
+
+    /// Returns the exact store version observed for optimistic mutations.
+    pub fn observed_version(&self) -> Version {
+        self.observed_version
     }
 
     /// Returns the zero-based retry attempt for this resource revision.
@@ -85,6 +97,9 @@ pub trait Reconciler: Send + Sync {
     /// Stable resource kind registered by this reconciler.
     const KIND: &'static str;
 
+    /// Optional cleanup barrier installed on active resources by the runtime.
+    const FINALIZER: Option<&'static str> = None;
+
     /// Converges one observed resource and returns its next scheduling action.
     ///
     /// Reconciliation is at-least-once. Canceling this future may leave any
@@ -95,4 +110,17 @@ pub trait Reconciler: Send + Sync {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError>;
+
+    /// Cleans external state after deletion is requested.
+    ///
+    /// The runtime removes this controller's finalizer only after this method
+    /// returns [`Action::Done`]. The default reuses level-triggered reconcile
+    /// logic for controllers whose cleanup is part of the same state machine.
+    async fn finalize(
+        &self,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
+        context: ReconcileContext,
+    ) -> Result<Action, ReconcileError> {
+        self.reconcile(resource, context).await
+    }
 }

@@ -25,6 +25,22 @@ pub enum ControllerError {
         /// Serde decoding detail.
         message: String,
     },
+    /// A stored typed resource could not be decoded safely.
+    #[error("persisted {kind} resource is malformed: {message}")]
+    MalformedResource {
+        /// Stable resource kind registered by the reconciler.
+        kind: &'static str,
+        /// Serde decoding detail.
+        message: String,
+    },
+    /// A typed resource could not be encoded for an atomic metadata update.
+    #[error("{kind} resource could not be serialized: {message}")]
+    SerializeResource {
+        /// Stable resource kind registered by the reconciler.
+        kind: &'static str,
+        /// Serde encoding detail.
+        message: String,
+    },
     /// One request identity was reused for different mutation content.
     #[error("request identity was already claimed with a different fingerprint")]
     RequestCollision,

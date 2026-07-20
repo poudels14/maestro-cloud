@@ -11,6 +11,7 @@ mod error;
 mod fencing;
 mod leadership;
 mod reconciler;
+mod runtime;
 
 pub use backoff::{Backoff, BackoffError};
 pub use dedup::{DedupOutcome, RequestFingerprint};
@@ -21,6 +22,7 @@ pub use leadership::{
     LeaderElector, LeaderIdentity, LeadershipLease, LeadershipObservation, LeadershipToken,
 };
 pub use reconciler::{Action, ReconcileContext, ReconcileError, Reconciler};
+pub use runtime::{ControllerRuntime, RuntimeConfig, RuntimeConfigError};
 
 #[cfg(test)]
 mod tests;

@@ -11,6 +11,8 @@ kernel-store = { version = "0.1.0", path = "../store" }
 serde.workspace = true
 serde_json = "=1.0.151"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing = "0.1.44"
 
 [lints]
 workspace = true

@@ -12,7 +12,7 @@ mod memory;
 mod model;
 mod store;
 
-pub use clock::{Clock, MonotonicTime};
+pub use clock::{Clock, MonotonicTime, TokioClock};
 pub use encryption::{EncryptedValue, EncryptionError, EncryptionKey, derive_key, open, seal};
 pub use error::StoreError;
 pub use key::{Keyspace, StoreKey, StorePrefix};

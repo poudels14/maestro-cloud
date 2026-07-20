@@ -1,8 +1,17 @@
+use kernel_api::ResourceRevision;
+
 use crate::{StoreKey, StorePrefix};
 
 /// Opaque version of one key used for compare-and-swap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version(pub(crate) u64);
+
+impl Version {
+    /// Projects this backend version into resource metadata exposed to reconcilers.
+    pub const fn resource_revision(self) -> ResourceRevision {
+        ResourceRevision(self.0)
+    }
+}
 
 /// Opaque ordered watch position used to resume an event stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

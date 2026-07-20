@@ -33,6 +33,20 @@ impl FencedStore {
         self.store.as_ref()
     }
 
+    /// Verifies that this facade still owns the active leader key.
+    pub async fn verify_leadership(&self) -> Result<(), ControllerError> {
+        let active_version = self
+            .store
+            .get(&self.leader_key)
+            .await?
+            .map(|leader| leader.version);
+        if active_version == Some(self.token.leader_version()) {
+            Ok(())
+        } else {
+            Err(ControllerError::LeadershipLost)
+        }
+    }
+
     /// Applies an atomic transaction only while this token still owns leadership.
     ///
     /// Cancellation may leave the full transaction committed, never partially
