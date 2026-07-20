@@ -7,6 +7,7 @@
 mod cluster;
 mod error;
 mod model;
+mod quorum;
 mod restart;
 mod routing;
 pub mod scenarios;
@@ -15,11 +16,12 @@ mod scheduling;
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use error::ScenarioError;
 pub use model::{
-    ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName, FixtureNodeName,
-    FixtureVersion, IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot,
-    ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture,
-    ServiceSnapshot,
+    ClusterSnapshot, ControlPlaneReadiness, DeploymentPhase, DeploymentSnapshot, FixtureMarker,
+    FixtureName, FixtureNodeName, FixtureVersion, IngressFixture, ReadinessProbe, ReplicaCount,
+    ReplicaIndex, ReplicaOverride, ReplicaSnapshot, ResourceAvailability, RolloutFailure,
+    ScheduledAssignment, SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
 };
+pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;
 pub use routing::RoutingCluster;
 pub use scheduling::SchedulingCluster;

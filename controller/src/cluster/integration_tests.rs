@@ -8,8 +8,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
-    FixtureNodeName, ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster,
-    RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
+    ControlPlaneReadiness, FixtureMarker, FixtureNodeName, QuorumRecoveryCluster, ReadinessProbe,
+    ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster,
+    ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -1661,6 +1662,98 @@ impl SchedulingCluster for OldSystemSchedulingCluster {
     }
 }
 
+struct OldSystemQuorumRecoveryCluster {
+    cluster: ContainerEtcdCluster,
+}
+
+impl OldSystemQuorumRecoveryCluster {
+    async fn start() -> Result<Self> {
+        let cluster = ContainerEtcdCluster::start()?;
+        cluster.wait_until_ready().await?;
+        Ok(Self { cluster })
+    }
+
+    fn node_index(&self, node: &FixtureNodeName) -> Result<usize> {
+        self.nodes()
+            .iter()
+            .position(|candidate| candidate == node)
+            .ok_or_else(|| anyhow!("persisted voter `{}` does not exist", node.as_str()))
+    }
+}
+
+#[async_trait]
+impl QuorumRecoveryCluster for OldSystemQuorumRecoveryCluster {
+    type Error = anyhow::Error;
+
+    fn nodes(&self) -> Vec<FixtureNodeName> {
+        (1..=self.cluster.container_names.len())
+            .map(|node_number| FixtureNodeName::new(format!("node-{node_number}")))
+            .collect()
+    }
+
+    async fn write_marker(&mut self, marker: FixtureMarker) -> Result<()> {
+        let mut client = etcd_client::Client::connect(self.cluster.endpoints.clone(), None).await?;
+        client
+            .put(
+                "/maestro/integration/etcd-first-restart-preserved",
+                marker.as_str(),
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn stop_all_nodes(&mut self) -> Result<()> {
+        self.cluster.stop_all_members()
+    }
+
+    async fn start_node(&mut self, node: &FixtureNodeName) -> Result<()> {
+        self.cluster.restart_member(self.node_index(node)?)
+    }
+
+    async fn probe_readiness(&mut self, probe: ReadinessProbe) -> Result<ControlPlaneReadiness> {
+        let endpoint = self
+            .cluster
+            .endpoints
+            .first()
+            .ok_or_else(|| anyhow!("quorum fixture has no client endpoint"))?;
+        let timeout = match probe {
+            ReadinessProbe::Brief => Duration::from_secs(2),
+            ReadinessProbe::UntilReady => Duration::from_secs(30),
+        };
+        let readiness = tokio::time::timeout(
+            timeout,
+            crate::deployment::await_etcd_quorum(
+                std::slice::from_ref(endpoint),
+                None,
+                &Logger::noop(),
+            ),
+        )
+        .await;
+        if readiness.is_ok() {
+            Ok(ControlPlaneReadiness::Ready)
+        } else {
+            Ok(ControlPlaneReadiness::Unavailable)
+        }
+    }
+
+    async fn read_marker(&mut self) -> Result<Option<FixtureMarker>> {
+        let mut client = etcd_client::Client::connect(self.cluster.endpoints.clone(), None).await?;
+        let response = client
+            .get("/maestro/integration/etcd-first-restart-preserved", None)
+            .await?;
+        response
+            .kvs()
+            .first()
+            .map(|entry| {
+                std::str::from_utf8(entry.value())
+                    .map(|value| FixtureMarker::new(value.to_string()))
+                    .map_err(anyhow::Error::from)
+            })
+            .transpose()
+    }
+}
+
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
         if !self.container_names.is_empty() {
@@ -3057,53 +3150,8 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn all_voter_restart_waits_for_etcd_quorum_and_preserves_data() -> Result<()> {
-    let cluster = ContainerEtcdCluster::start()?;
-    cluster.wait_until_ready().await?;
-    let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
-    client
-        .put(
-            "/maestro/integration/etcd-first-restart-preserved",
-            "before-restart",
-            None,
-        )
-        .await?;
-    drop(client);
+    let mut cluster = OldSystemQuorumRecoveryCluster::start().await?;
 
-    cluster.stop_all_members()?;
-    cluster.restart_member(0)?;
-    let early = tokio::time::timeout(
-        Duration::from_secs(2),
-        crate::deployment::await_etcd_quorum(
-            std::slice::from_ref(&cluster.endpoints[0]),
-            None,
-            &Logger::noop(),
-        ),
-    )
-    .await;
-    assert!(
-        early.is_err(),
-        "readiness passed with only one of three persisted voters running"
-    );
-
-    cluster.restart_member(1)?;
-    cluster.restart_member(2)?;
-    tokio::time::timeout(
-        Duration::from_secs(30),
-        crate::deployment::await_etcd_quorum(
-            std::slice::from_ref(&cluster.endpoints[0]),
-            None,
-            &Logger::noop(),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow!("etcd readiness did not observe the restored quorum"))?;
-    let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
-    let preserved = client
-        .get("/maestro/integration/etcd-first-restart-preserved", None)
-        .await?;
-    assert_eq!(
-        preserved.kvs().first().map(|entry| entry.value()),
-        Some(b"before-restart".as_slice())
-    );
+    scenarios::all_voter_restart_waits_for_quorum_and_preserves_state(&mut cluster).await?;
     Ok(())
 }

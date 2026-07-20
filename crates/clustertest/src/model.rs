@@ -48,6 +48,40 @@ impl FixtureNodeName {
     }
 }
 
+/// A persisted value used to prove state survives a full control-plane outage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixtureMarker(String);
+
+impl FixtureMarker {
+    /// Creates a persisted acceptance marker.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the marker as text for driver translation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The observation window used when probing control-plane readiness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReadinessProbe {
+    /// A short probe used to prove readiness remains blocked.
+    Brief,
+    /// A convergence probe used after enough voters have returned.
+    UntilReady,
+}
+
+/// The result of probing the control-plane readiness gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlPlaneReadiness {
+    /// Persisted quorum is available and accepts linearizable operations.
+    Ready,
+    /// Persisted quorum is unavailable within the requested probe window.
+    Unavailable,
+}
+
 /// A desired or observed number of replicas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplicaCount(u32);
