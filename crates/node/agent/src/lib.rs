@@ -5,7 +5,10 @@
 //! application composition roots.
 
 mod assignment;
+mod assignment_error;
 mod assignment_plan;
+mod assignment_resource;
+mod assignment_restart;
 mod assignment_status;
 mod health;
 mod health_probe;
@@ -19,9 +22,8 @@ mod mesh_resource;
 #[cfg(target_os = "linux")]
 pub use linux_mesh::LinuxMeshBackend;
 
-pub use assignment::{
-    AssignmentAgent, AssignmentAgentError, AssignmentAgentSettings, AssignmentReconcileReport,
-};
+pub use assignment::{AssignmentAgent, AssignmentAgentSettings, AssignmentReconcileReport};
+pub use assignment_error::AssignmentAgentError;
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
 pub use mesh::{

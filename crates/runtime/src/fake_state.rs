@@ -31,6 +31,7 @@ pub(crate) struct FakeWorkload {
     pub(crate) logs: Vec<LogFrame>,
 }
 
+#[derive(Clone)]
 pub(crate) struct FakeEventRecord {
     pub(crate) cluster_id: ClusterId,
     pub(crate) node_id: NodeId,

@@ -53,7 +53,11 @@ async fn fake_replays_events_logs_and_exec_without_hiding_event_gaps() {
         })
         .await
         .unwrap();
-    assert!(resumed.next().await.unwrap().is_none());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), resumed.next())
+            .await
+            .is_err()
+    );
 
     let mut logs = runtime
         .logs(

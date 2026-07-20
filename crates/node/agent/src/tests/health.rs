@@ -163,6 +163,7 @@ fn health_resources(threshold: u32) -> (Assignment, Deployment, ReplicaState) {
             workload_id: assignment.status.workload_id.clone(),
             healthcheck_failures: 0,
             restart_attempts: 0,
+            restart_pending_attempt: None,
             conditions: Vec::new(),
         },
     };

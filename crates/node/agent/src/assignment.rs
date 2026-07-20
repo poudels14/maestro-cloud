@@ -1,27 +1,38 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use kernel_api::{
-    Assignment, ClusterId, Deployment, DeploymentId, NodeId, ResourceKind, ResourceName,
+    Assignment, ClusterId, Deployment, NodeId, ReplicaState, ResourceKind, ResourceName,
 };
 use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, StoredValue,
-    WatchCursor, WatchStart,
+    CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, WatchCursor,
+    WatchStart,
 };
 use runtime::{
-    AddressLease, AddressRequest, NetworkHandle, NetworkProvider, NetworkProviderError,
+    AddressLease, AddressRequest, EventCursor, EventRequest, NetworkHandle, NetworkProvider,
     NetworkSpec, RuntimeError, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 use tokio::sync::watch;
 
 use crate::StatusClock;
+use crate::assignment_error::AssignmentAgentError;
 use crate::assignment_plan::workload_spec;
-use crate::assignment_status::{AssignmentOutcome, ConvergeFailure, desired_status};
+use crate::assignment_resource::{
+    decode_assignment, decode_assignments, decode_deployments, decode_replicas,
+};
+use crate::assignment_restart::{
+    RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
+};
+use crate::assignment_status::{
+    AssignmentOutcome, ConvergeFailure, desired_status, runtime_status_message,
+};
 
 const ASSIGNMENT_KIND: &str = "Assignment";
 const DEPLOYMENT_KIND: &str = "Deployment";
+const REPLICA_STATE_KIND: &str = "ReplicaState";
 const RUNTIME_RETRY_REASON: &str = "RuntimeRetry";
+const RUNTIME_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MAX_CAS_ATTEMPTS: usize = 16;
 
 /// Node-scoped assignment reconciliation settings.
@@ -46,6 +57,8 @@ pub struct AssignmentReconcileReport {
     pub desired: usize,
     /// Assignments confirmed running after reconciliation.
     pub running: usize,
+    /// Exited workloads restored using a durably accounted restart attempt.
+    pub restarted: usize,
     /// Assignments left pending or failed with a status condition.
     pub unresolved: usize,
     /// Runtime workloads removed because no active local assignment owned them.
@@ -63,6 +76,7 @@ pub struct AssignmentAgent {
     keyspace: Keyspace,
     assignment_kind: ResourceKind,
     deployment_kind: ResourceKind,
+    replica_kind: ResourceKind,
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
 }
@@ -84,6 +98,7 @@ impl AssignmentAgent {
             keyspace: Keyspace::new(&settings.cluster_id),
             assignment_kind: ResourceKind::new(ASSIGNMENT_KIND)?,
             deployment_kind: ResourceKind::new(DEPLOYMENT_KIND)?,
+            replica_kind: ResourceKind::new(REPLICA_STATE_KIND)?,
             store,
             runtime,
             network,
@@ -108,6 +123,7 @@ impl AssignmentAgent {
             .monotonic_clock
             .now()
             .saturating_add(self.settings.resync_interval);
+        let mut runtime_cursor: Option<EventCursor> = None;
         loop {
             if *shutdown.borrow() {
                 return Ok(());
@@ -116,6 +132,26 @@ impl AssignmentAgent {
             let mut events = self
                 .store
                 .watch(self.keyspace.resources(), WatchStart::After(cursor))?;
+            let mut runtime_stream_ended = false;
+            let mut runtime_reconnect_at = self
+                .monotonic_clock
+                .now()
+                .saturating_add(RUNTIME_STREAM_RECONNECT_DELAY);
+            let mut runtime_events = match self
+                .runtime
+                .events(EventRequest {
+                    cluster_id: self.settings.cluster_id.clone(),
+                    node_id: self.settings.node_id.clone(),
+                    after: runtime_cursor.clone(),
+                })
+                .await
+            {
+                Ok(events) => Some(events),
+                Err(_) => {
+                    runtime_stream_ended = true;
+                    None
+                }
+            };
             loop {
                 tokio::select! {
                     changed = shutdown.changed() => {
@@ -128,6 +164,30 @@ impl AssignmentAgent {
                             Ok(_) | Err(StoreError::CursorExpired { .. }) => break,
                             Err(error) => return Err(error.into()),
                         }
+                    }
+                    event = async {
+                        match runtime_events.as_mut() {
+                            Some(events) => events.next().await,
+                            None => std::future::pending().await,
+                        }
+                    }, if !runtime_stream_ended => {
+                        match event {
+                            Ok(Some(event)) => {
+                                runtime_cursor = Some(event.cursor);
+                                break;
+                            }
+                            Ok(None) | Err(_) => {
+                                runtime_events = None;
+                                runtime_stream_ended = true;
+                                runtime_reconnect_at = self
+                                    .monotonic_clock
+                                    .now()
+                                    .saturating_add(RUNTIME_STREAM_RECONNECT_DELAY);
+                            }
+                        }
+                    }
+                    () = self.monotonic_clock.sleep_until(runtime_reconnect_at), if runtime_stream_ended => {
+                        break;
                     }
                     () = self.monotonic_clock.sleep_until(resync_at) => {
                         resync_at = self
@@ -152,8 +212,13 @@ impl AssignmentAgent {
             .store
             .list(&self.keyspace.resource_kind(&self.deployment_kind))
             .await?;
+        let replica_snapshot = self
+            .store
+            .list(&self.keyspace.resource_kind(&self.replica_kind))
+            .await?;
         let (assignments, malformed_assignments) = decode_assignments(&assignment_snapshot.values);
         let (deployments, malformed_deployments) = decode_deployments(&deployment_snapshot.values);
+        let (replicas, malformed_replicas) = decode_replicas(&replica_snapshot.values);
         let local = assignments
             .into_iter()
             .filter(|assignment| assignment.spec.node_id == self.settings.node_id)
@@ -165,14 +230,21 @@ impl AssignmentAgent {
         let network = self.network.ensure_network(&self.settings.network).await?;
         let mut report = AssignmentReconcileReport {
             desired: active.len(),
-            malformed_resources: malformed_assignments.saturating_add(malformed_deployments),
+            malformed_resources: malformed_assignments
+                .saturating_add(malformed_deployments)
+                .saturating_add(malformed_replicas),
             ..Default::default()
         };
         for assignment in &active {
             let outcome = match deployments.get(&assignment.spec.deployment_id) {
                 Some(deployment) => {
-                    self.converge_assignment(assignment, deployment, &network)
-                        .await
+                    self.converge_assignment(
+                        assignment,
+                        deployment,
+                        replicas.get(&assignment.meta.id),
+                        &network,
+                    )
+                    .await
                 }
                 None => Err(ConvergeFailure::pending(
                     "DeploymentMissing",
@@ -183,10 +255,13 @@ impl AssignmentAgent {
                 )),
             };
             match outcome {
-                Ok(handle) => {
-                    self.update_status(assignment, AssignmentOutcome::Running(&handle))
+                Ok(converged) => {
+                    self.update_status(assignment, AssignmentOutcome::Running(&converged.handle))
                         .await?;
                     report.running = report.running.saturating_add(1);
+                    if converged.restarted {
+                        report.restarted = report.restarted.saturating_add(1);
+                    }
                 }
                 Err(failure) => {
                     self.update_status(assignment, AssignmentOutcome::Unresolved(&failure))
@@ -221,7 +296,10 @@ impl AssignmentAgent {
         }
         Ok((
             report,
-            std::cmp::min(assignment_snapshot.cursor, deployment_snapshot.cursor),
+            std::cmp::min(
+                std::cmp::min(assignment_snapshot.cursor, deployment_snapshot.cursor),
+                replica_snapshot.cursor,
+            ),
         ))
     }
 
@@ -229,8 +307,9 @@ impl AssignmentAgent {
         &self,
         assignment: &Assignment,
         deployment: &Deployment,
+        replica: Option<&ReplicaState>,
         network: &NetworkHandle,
-    ) -> Result<WorkloadHandle, ConvergeFailure> {
+    ) -> Result<ConvergedAssignment, ConvergeFailure> {
         let spec = workload_spec(&self.settings.cluster_id, assignment, deployment)?;
         let handle = self.runtime.create(&spec).await?;
         let lease = self
@@ -242,14 +321,75 @@ impl AssignmentAgent {
             )
             .await?;
         self.network.attach(&handle, network, &lease).await?;
-        self.runtime.start(&handle).await?;
+        let before = self.runtime.status(&handle).await?;
+        match before.state {
+            WorkloadState::Created => self.runtime.start(&handle).await?,
+            WorkloadState::Running => {}
+            WorkloadState::Stopped => {
+                let replica = replica.ok_or_else(|| {
+                    ConvergeFailure::pending(
+                        "ReplicaStateMissing",
+                        "an exited workload cannot restart until its ReplicaState is available"
+                            .to_owned(),
+                    )
+                })?;
+                match reserve_restart(
+                    self.store.as_ref(),
+                    &self.keyspace,
+                    &self.replica_kind,
+                    replica,
+                    &assignment.meta.id,
+                    deployment.spec.service.max_restarts,
+                    self.status_clock.now(),
+                )
+                .await
+                .map_err(restart_failure)?
+                {
+                    RestartReservation::Reserved => self.runtime.start(&handle).await?,
+                    RestartReservation::Exhausted => {
+                        return Err(ConvergeFailure::failed(
+                            "RestartLimitReached",
+                            format!(
+                                "workload exhausted its restart limit of {} attempts",
+                                deployment.spec.service.max_restarts.unwrap_or(u32::MAX)
+                            ),
+                        ));
+                    }
+                }
+            }
+            WorkloadState::Paused => {
+                return Err(ConvergeFailure::pending(
+                    RUNTIME_RETRY_REASON,
+                    "runtime workload is paused".to_owned(),
+                ));
+            }
+            WorkloadState::Failed => {
+                return Err(ConvergeFailure::failed(
+                    "RuntimeFailed",
+                    runtime_status_message(&before),
+                ));
+            }
+        }
         let status = self.runtime.status(&handle).await?;
         if status.state == WorkloadState::Running {
-            Ok(handle)
+            let restarted = match replica {
+                Some(replica) => finish_pending_restart(
+                    self.store.as_ref(),
+                    &self.keyspace,
+                    &self.replica_kind,
+                    replica,
+                    &assignment.meta.id,
+                    self.status_clock.now(),
+                )
+                .await
+                .map_err(restart_failure)?,
+                None => false,
+            };
+            Ok(ConvergedAssignment { handle, restarted })
         } else {
             Err(ConvergeFailure::pending(
                 RUNTIME_RETRY_REASON,
-                format!("runtime reported {:?} after start", status.state),
+                runtime_status_message(&status),
             ))
         }
     }
@@ -337,74 +477,7 @@ impl AssignmentAgent {
     }
 }
 
-fn decode_assignments(values: &[StoredValue]) -> (Vec<Assignment>, usize) {
-    let decoded = values
-        .iter()
-        .map(|stored| serde_json::from_slice(&stored.value))
-        .collect::<Vec<Result<Assignment, _>>>();
-    let malformed = decoded.iter().filter(|result| result.is_err()).count();
-    (
-        decoded.into_iter().filter_map(Result::ok).collect(),
-        malformed,
-    )
-}
-
-fn decode_deployments(values: &[StoredValue]) -> (BTreeMap<DeploymentId, Deployment>, usize) {
-    let decoded = values
-        .iter()
-        .map(|stored| serde_json::from_slice(&stored.value))
-        .collect::<Vec<Result<Deployment, _>>>();
-    let malformed = decoded.iter().filter(|result| result.is_err()).count();
-    (
-        decoded
-            .into_iter()
-            .filter_map(Result::ok)
-            .map(|deployment| (deployment.meta.id.clone(), deployment))
-            .collect(),
-        malformed,
-    )
-}
-
-fn decode_assignment(stored: &StoredValue) -> Result<Assignment, AssignmentAgentError> {
-    serde_json::from_slice(&stored.value).map_err(|error| {
-        AssignmentAgentError::MalformedAssignment {
-            key: stored.key.to_string(),
-            message: error.to_string(),
-        }
-    })
-}
-
-/// Why node-local assignment reconciliation could not complete its snapshot.
-#[derive(Debug, thiserror::Error)]
-pub enum AssignmentAgentError {
-    /// A configured resource kind or observed identity was invalid.
-    #[error(transparent)]
-    InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
-    /// A zero deadline would create an unbounded loop or immediate forced shutdown.
-    #[error("assignment stop and resync deadlines must be positive")]
-    ZeroDeadline,
-    /// Store access or watch setup failed.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// Runtime cleanup failed and will be retried by a later resync.
-    #[error(transparent)]
-    Runtime(#[from] RuntimeError),
-    /// Network cleanup failed and will be retried by a later resync.
-    #[error(transparent)]
-    Network(#[from] NetworkProviderError),
-    /// The assignment disappeared while its observed status was being committed.
-    #[error("assignment `{assignment_id}` disappeared before status update")]
-    AssignmentDisappeared { assignment_id: String },
-    /// A scheduler mutation moved an assignment away from this node during reconciliation.
-    #[error("assignment `{assignment_id}` moved to another node during status update")]
-    AssignmentMoved { assignment_id: String },
-    /// A stored assignment could not be decoded for its conditional status write.
-    #[error("malformed Assignment resource at `{key}`: {message}")]
-    MalformedAssignment { key: String, message: String },
-    /// A status-bearing assignment could not be encoded.
-    #[error("failed to serialize Assignment resource: {message}")]
-    SerializeResource { message: String },
-    /// Repeated concurrent status writes exhausted the bounded retry budget.
-    #[error("store contention prevented status update for assignment `{assignment_id}`")]
-    Contention { assignment_id: String },
+struct ConvergedAssignment {
+    handle: WorkloadHandle,
+    restarted: bool,
 }

@@ -399,6 +399,9 @@ pub struct ReplicaStateStatus {
     pub healthcheck_failures: u32,
     /// Restart attempts consumed by this assignment.
     pub restart_attempts: u32,
+    /// Attempt durably reserved before a runtime restart and cleared after it is observed running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_pending_attempt: Option<u32>,
     /// Generic health and exhaustion evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

@@ -63,19 +63,23 @@ pub(crate) fn desired_health_status(
     let last_transition_time = previous
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
+    let mut conditions = replica.status.conditions.clone();
+    conditions.retain(|condition| condition.condition_type.0 != HEALTH_READY_CONDITION);
+    conditions.push(Condition {
+        condition_type: ConditionType(HEALTH_READY_CONDITION.to_owned()),
+        state,
+        reason: ConditionReason(reason.to_owned()),
+        message,
+        observed_generation: replica.meta.generation,
+        last_transition_time,
+    });
     ReplicaStateStatus {
         phase,
         node_id: Some(assignment.spec.node_id.clone()),
         workload_id: assignment.status.workload_id.clone(),
         healthcheck_failures: failures,
         restart_attempts: replica.status.restart_attempts,
-        conditions: vec![Condition {
-            condition_type: ConditionType(HEALTH_READY_CONDITION.to_owned()),
-            state,
-            reason: ConditionReason(reason.to_owned()),
-            message,
-            observed_generation: replica.meta.generation,
-            last_transition_time,
-        }],
+        restart_pending_attempt: replica.status.restart_pending_attempt,
+        conditions,
     }
 }

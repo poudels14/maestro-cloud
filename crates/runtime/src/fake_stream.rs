@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
 
 use async_trait::async_trait;
+use kernel_api::{ClusterId, NodeId};
+use tokio::sync::broadcast;
 
+use crate::fake_state::FakeEventRecord;
 use crate::{
     ExecInput, ExecOutput, ExecSession, LogFrame, LogStream, RuntimeError, RuntimeEvent,
     RuntimeEventStream,
@@ -9,12 +12,41 @@ use crate::{
 
 pub(crate) struct FakeEventStream {
     pub(crate) events: VecDeque<RuntimeEvent>,
+    pub(crate) receiver: broadcast::Receiver<FakeEventRecord>,
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) node_id: NodeId,
+    pub(crate) after: u64,
 }
 
 #[async_trait]
 impl RuntimeEventStream for FakeEventStream {
     async fn next(&mut self) -> Result<Option<RuntimeEvent>, RuntimeError> {
-        Ok(self.events.pop_front())
+        if let Some(event) = self.events.pop_front() {
+            self.after = cursor_sequence(event.cursor.as_str())?;
+            return Ok(Some(event));
+        }
+        loop {
+            match self.receiver.recv().await {
+                Ok(record) => {
+                    let sequence = cursor_sequence(record.event.cursor.as_str())?;
+                    if record.cluster_id == self.cluster_id
+                        && record.node_id == self.node_id
+                        && sequence > self.after
+                    {
+                        self.after = sequence;
+                        return Ok(Some(record.event));
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    return Err(RuntimeError::Stream {
+                        message: format!(
+                            "fake lifecycle subscriber lagged by {skipped} events; re-list required"
+                        ),
+                    });
+                }
+                Err(broadcast::error::RecvError::Closed) => return Ok(None),
+            }
+        }
     }
 }
 

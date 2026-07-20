@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, WorkloadId};
 use test_util::{Mutex, MutexGuard};
+use tokio::sync::broadcast;
 
 use crate::{
     Capabilities, CgroupPath, EventCursor, EventRequest, ExecOutput, ExecRequest, ExecSession,
@@ -66,6 +67,7 @@ pub struct FakeRuntimeCall {
 pub struct FakeRuntime {
     capabilities: Capabilities,
     state: Arc<Mutex<FakeState>>,
+    event_tx: broadcast::Sender<FakeEventRecord>,
 }
 
 impl FakeRuntime {
@@ -79,9 +81,11 @@ impl FakeRuntime {
 
     /// Constructs a fake with an exact advertised capability set.
     pub fn with_capabilities(capabilities: Capabilities) -> Self {
+        let (event_tx, _receiver) = broadcast::channel(256);
         Self {
             capabilities,
             state: Arc::new(Mutex::new(FakeState::default())),
+            event_tx,
         }
     }
 
@@ -175,13 +179,14 @@ impl FakeRuntime {
     }
 
     fn emit(
+        &self,
         state: &mut FakeState,
         metadata: &WorkloadMetadata,
         kind: RuntimeEventKind,
         exit_code: Option<i32>,
     ) {
         let cursor = EventCursor::new(state.next_sequence().to_string());
-        state.events.push(FakeEventRecord {
+        let record = FakeEventRecord {
             cluster_id: metadata.cluster_id.clone(),
             node_id: metadata.node_id.clone(),
             event: RuntimeEvent {
@@ -190,7 +195,9 @@ impl FakeRuntime {
                 kind,
                 exit_code,
             },
-        });
+        };
+        state.events.push(record.clone());
+        let _receiver_count = self.event_tx.send(record);
     }
 }
 
@@ -249,7 +256,7 @@ impl WorkloadRuntime for FakeRuntime {
         };
         let metadata = record.metadata.clone();
         state.workloads.insert(workload_id, record);
-        Self::emit(&mut state, &metadata, RuntimeEventKind::Created, None);
+        self.emit(&mut state, &metadata, RuntimeEventKind::Created, None);
         Ok(handle)
     }
 
@@ -276,7 +283,7 @@ impl WorkloadRuntime for FakeRuntime {
             };
             record.metadata.clone()
         };
-        Self::emit(&mut state, &metadata, RuntimeEventKind::Started, None);
+        self.emit(&mut state, &metadata, RuntimeEventKind::Started, None);
         Ok(())
     }
 
@@ -289,7 +296,7 @@ impl WorkloadRuntime for FakeRuntime {
         self.begin(FakeRuntimeOperation::Stop, Some(workload_id.clone()))
             .await?;
         let mut state = self.lock()?;
-        stop_with_exit(&mut state, handle, 0)
+        stop_with_exit(self, &mut state, handle, 0)
     }
 
     async fn kill(&self, handle: &WorkloadHandle) -> Result<(), RuntimeError> {
@@ -297,7 +304,7 @@ impl WorkloadRuntime for FakeRuntime {
         self.begin(FakeRuntimeOperation::Kill, Some(workload_id))
             .await?;
         let mut state = self.lock()?;
-        stop_with_exit(&mut state, handle, 137)
+        stop_with_exit(self, &mut state, handle, 137)
     }
 
     async fn remove(&self, handle: &WorkloadHandle) -> Result<(), RuntimeError> {
@@ -319,7 +326,7 @@ impl WorkloadRuntime for FakeRuntime {
         }
         let metadata = record.metadata.clone();
         state.workloads.remove(handle.workload_id());
-        Self::emit(&mut state, &metadata, RuntimeEventKind::Removed, None);
+        self.emit(&mut state, &metadata, RuntimeEventKind::Removed, None);
         Ok(())
     }
 
@@ -359,6 +366,7 @@ impl WorkloadRuntime for FakeRuntime {
     ) -> Result<Box<dyn RuntimeEventStream>, RuntimeError> {
         self.begin(FakeRuntimeOperation::Events, None).await?;
         let after = parse_cursor(request.after.as_ref().map(EventCursor::as_str))?;
+        let receiver = self.event_tx.subscribe();
         let state = self.lock()?;
         let events = state
             .events
@@ -370,7 +378,13 @@ impl WorkloadRuntime for FakeRuntime {
             })
             .map(|record| record.event.clone())
             .collect();
-        Ok(Box::new(FakeEventStream { events }))
+        Ok(Box::new(FakeEventStream {
+            events,
+            receiver,
+            cluster_id: request.cluster_id,
+            node_id: request.node_id,
+            after,
+        }))
     }
 
     async fn logs(
@@ -437,6 +451,7 @@ impl WorkloadRuntime for FakeRuntime {
 }
 
 fn stop_with_exit(
+    runtime: &FakeRuntime,
     state: &mut FakeState,
     handle: &WorkloadHandle,
     exit_code: i32,
@@ -453,6 +468,6 @@ fn stop_with_exit(
         };
         record.metadata.clone()
     };
-    FakeRuntime::emit(state, &metadata, RuntimeEventKind::Exited, Some(exit_code));
+    runtime.emit(state, &metadata, RuntimeEventKind::Exited, Some(exit_code));
     Ok(())
 }

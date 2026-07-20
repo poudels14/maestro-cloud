@@ -2,7 +2,7 @@ use kernel_api::{
     Assignment, AssignmentPhase, AssignmentStatus, Condition, ConditionReason, ConditionState,
     ConditionType, Timestamp,
 };
-use runtime::{NetworkProviderError, RuntimeError, WorkloadHandle};
+use runtime::{NetworkProviderError, RuntimeError, WorkloadHandle, WorkloadStatus};
 
 use crate::assignment_plan::WorkloadPlanError;
 
@@ -33,7 +33,7 @@ impl ConvergeFailure {
         }
     }
 
-    fn failed(reason: &'static str, message: String) -> Self {
+    pub(crate) fn failed(reason: &'static str, message: String) -> Self {
         Self {
             phase: AssignmentPhase::Failed,
             reason,
@@ -136,4 +136,15 @@ pub(crate) fn desired_status(
             last_transition_time,
         }],
     }
+}
+
+pub(crate) fn runtime_status_message(status: &WorkloadStatus) -> String {
+    let detail = status
+        .detail
+        .as_deref()
+        .map_or(String::new(), |detail| format!(": {detail}"));
+    let exit = status
+        .exit_code
+        .map_or(String::new(), |code| format!(" (exit code {code})"));
+    format!("runtime reported {:?}{exit}{detail}", status.state)
 }

@@ -3492,6 +3492,13 @@ expression: openapi_document()
             "minimum": 0,
             "type": "integer"
           },
+          "restartPendingAttempt": {
+            "description": "Attempt durably reserved before a runtime restart and cleared after it is observed running.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "workloadId": {
             "anyOf": [
               {
