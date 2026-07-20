@@ -32,6 +32,22 @@ impl FixtureVersion {
     }
 }
 
+/// A stable scenario-local node name, mapped to a real `NodeId` by a driver.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FixtureNodeName(String);
+
+impl FixtureNodeName {
+    /// Creates a scenario-local node name.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the fixture node name as text for driver translation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A desired or observed number of replicas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplicaCount(u32);
@@ -71,6 +87,15 @@ pub enum IngressFixture {
     Disabled,
     /// The service has an ingress route at the given host.
     Host(String),
+}
+
+/// The desired availability of an injected test resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResourceAvailability {
+    /// The resource is running and should serve traffic.
+    Available,
+    /// The resource is stopped and must not receive traffic.
+    Unavailable,
 }
 
 /// A service definition applied by a shared acceptance scenario.

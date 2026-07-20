@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use async_trait::async_trait;
+use clustertest::{FixtureNodeName, ResourceAvailability, RoutingCluster, scenarios};
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
 
@@ -1321,6 +1323,155 @@ impl Drop for SingleHostHttpCluster {
     }
 }
 
+struct OldSystemRoutingCluster {
+    cluster: SingleHostHttpCluster,
+    client: reqwest::Client,
+}
+
+impl OldSystemRoutingCluster {
+    fn start() -> Result<Self> {
+        let cluster = SingleHostHttpCluster::start()?;
+        if !cluster
+            .nodes
+            .iter()
+            .all(|node| node.host_ip == cluster.host_ip)
+        {
+            bail!("logical nodes do not share the single-host test address");
+        }
+        if cluster
+            .nodes
+            .iter()
+            .map(|node| node.api_port)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != 3
+        {
+            bail!("logical nodes do not have three unique API ports");
+        }
+        for node in &cluster.nodes {
+            if node.gateway_port != node.api_port + 1
+                || node.etcd_client_port != node.api_port + 2
+                || node.etcd_peer_port != node.api_port + 3
+            {
+                bail!("logical node ports do not use the persisted offset layout");
+            }
+        }
+        Ok(Self {
+            cluster,
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()?,
+        })
+    }
+
+    fn node_index(&self, node: &FixtureNodeName) -> Result<usize> {
+        self.nodes()
+            .iter()
+            .position(|candidate| candidate == node)
+            .ok_or_else(|| anyhow!("logical node `{}` does not exist", node.as_str()))
+    }
+}
+
+#[async_trait]
+impl RoutingCluster for OldSystemRoutingCluster {
+    type Error = anyhow::Error;
+
+    fn nodes(&self) -> Vec<FixtureNodeName> {
+        (1..=self.cluster.nodes.len())
+            .map(|node_number| FixtureNodeName::new(format!("node-{node_number}")))
+            .collect()
+    }
+
+    async fn set_workload_availability(
+        &mut self,
+        node: &FixtureNodeName,
+        availability: ResourceAvailability,
+    ) -> Result<()> {
+        let node_index = self.node_index(node)?;
+        match availability {
+            ResourceAvailability::Available => {
+                self.cluster.restart_backend(node_index)?;
+                wait_for_body(
+                    &self.client,
+                    &self.cluster.gateway_url(node_index),
+                    node.as_str(),
+                    Duration::from_secs(20),
+                )
+                .await?;
+            }
+            ResourceAvailability::Unavailable => {
+                self.cluster.stop_backend(node_index)?;
+                wait_until_unavailable(
+                    &self.client,
+                    &self.cluster.gateway_url(node_index),
+                    Duration::from_secs(10),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_gateway_availability(
+        &mut self,
+        node: &FixtureNodeName,
+        availability: ResourceAvailability,
+    ) -> Result<()> {
+        let node_index = self.node_index(node)?;
+        match availability {
+            ResourceAvailability::Available => {
+                self.cluster.restart_gateway(node_index)?;
+                wait_for_body(
+                    &self.client,
+                    &self.cluster.gateway_url(node_index),
+                    node.as_str(),
+                    Duration::from_secs(20),
+                )
+                .await?;
+            }
+            ResourceAvailability::Unavailable => {
+                self.cluster.stop_gateway(node_index)?;
+                wait_until_unavailable(
+                    &self.client,
+                    &self.cluster.gateway_url(node_index),
+                    Duration::from_secs(10),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn await_public_routes(
+        &mut self,
+        expected: &BTreeSet<FixtureNodeName>,
+    ) -> Result<BTreeSet<FixtureNodeName>> {
+        let expected_bodies = expected
+            .iter()
+            .map(|node| node.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        wait_for_routing_set(
+            &self.client,
+            &self.cluster.public_url(),
+            &expected_bodies,
+            &expected_bodies,
+            Duration::from_secs(30),
+        )
+        .await?;
+        Ok(expected.clone())
+    }
+
+    async fn await_public_unavailable(&mut self) -> Result<()> {
+        wait_until_unavailable(
+            &self.client,
+            &self.cluster.public_url(),
+            Duration::from_secs(15),
+        )
+        .await
+    }
+}
+
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
         if !self.container_names.is_empty() {
@@ -1868,136 +2019,9 @@ async fn wait_for_assignment_routes(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn single_host_gateways_route_and_recover_across_logical_nodes() -> Result<()> {
-    let cluster = SingleHostHttpCluster::start()?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    let all = ["node-1", "node-2", "node-3"]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
+    let mut cluster = OldSystemRoutingCluster::start()?;
 
-    assert!(
-        cluster
-            .nodes
-            .iter()
-            .all(|node| node.host_ip == cluster.host_ip)
-    );
-    assert_eq!(
-        cluster
-            .nodes
-            .iter()
-            .map(|node| node.api_port)
-            .collect::<BTreeSet<_>>()
-            .len(),
-        3
-    );
-    for (index, node) in cluster.nodes.iter().enumerate() {
-        assert_eq!(node.gateway_port, node.api_port + 1);
-        assert_eq!(node.etcd_client_port, node.api_port + 2);
-        assert_eq!(node.etcd_peer_port, node.api_port + 3);
-        if let Err(error) = wait_for_body(
-            &client,
-            &cluster.gateway_url(index),
-            &format!("node-{}", index + 1),
-            Duration::from_secs(20),
-        )
-        .await
-        {
-            bail!(
-                "{error}; {}",
-                cluster.container_diagnostics(&cluster.gateway_name(index))
-            );
-        }
-    }
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &all,
-        &all,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    cluster.stop_backend(1)?;
-    wait_until_unavailable(&client, &cluster.gateway_url(1), Duration::from_secs(10)).await?;
-    let without_node_two = ["node-1", "node-3"]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &without_node_two,
-        &without_node_two,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    cluster.restart_backend(1)?;
-    wait_for_body(
-        &client,
-        &cluster.gateway_url(1),
-        "node-2",
-        Duration::from_secs(20),
-    )
-    .await?;
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &all,
-        &all,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    cluster.stop_gateway(0)?;
-    wait_until_unavailable(&client, &cluster.gateway_url(0), Duration::from_secs(10)).await?;
-    let without_node_one = ["node-2", "node-3"]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &without_node_one,
-        &without_node_one,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    cluster.stop_gateway(1)?;
-    cluster.stop_gateway(2)?;
-    wait_until_unavailable(&client, &cluster.public_url(), Duration::from_secs(15)).await?;
-
-    cluster.restart_gateway(1)?;
-    cluster.restart_gateway(2)?;
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &without_node_one,
-        &without_node_one,
-        Duration::from_secs(30),
-    )
-    .await?;
-
-    cluster.restart_gateway(0)?;
-    wait_for_body(
-        &client,
-        &cluster.gateway_url(0),
-        "node-1",
-        Duration::from_secs(20),
-    )
-    .await?;
-    wait_for_routing_set(
-        &client,
-        &cluster.public_url(),
-        &all,
-        &all,
-        Duration::from_secs(30),
-    )
-    .await?;
+    scenarios::routing_survives_workload_and_gateway_failures(&mut cluster).await?;
     Ok(())
 }
 

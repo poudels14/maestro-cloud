@@ -7,12 +7,17 @@
 mod cluster;
 mod error;
 mod model;
+mod routing;
 pub mod scenarios;
 
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use error::ScenarioError;
 pub use model::{
-    ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName, FixtureVersion,
-    IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot, RolloutFailure,
-    ServiceFixture, ServiceSnapshot,
+    ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName, FixtureNodeName,
+    FixtureVersion, IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot,
+    ResourceAvailability, RolloutFailure, ServiceFixture, ServiceSnapshot,
 };
+pub use routing::RoutingCluster;
+
+#[cfg(test)]
+mod tests;
