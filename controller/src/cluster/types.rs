@@ -455,6 +455,25 @@ pub struct AssignmentManifest {
     pub generation: u64,
     #[serde(default)]
     pub assignments: Vec<Assignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAssignment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAssignment {
+    pub service_id: String,
+    pub deployment_id: String,
+    pub image: String,
+    pub source_node_id: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageHolder {
+    pub image: String,
+    pub node_id: NodeId,
+    pub available_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

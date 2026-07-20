@@ -117,6 +117,22 @@ impl EtcdAssignmentStore {
                 bail!("assignment manifest contains duplicate container address `{address}`");
             }
         }
+        let mut images = std::collections::BTreeSet::new();
+        for image in &manifest.images {
+            if image.image.trim().is_empty()
+                || image.service_id.trim().is_empty()
+                || image.deployment_id.trim().is_empty()
+                || image.source_node_id.trim().is_empty()
+            {
+                bail!("assignment manifest contains an incomplete image assignment");
+            }
+            if !images.insert(image.image.as_str()) {
+                bail!(
+                    "assignment manifest contains duplicate image `{}`",
+                    image.image
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -581,6 +597,7 @@ mod tests {
             node_id: "worker-node1".to_string(),
             generation: 0,
             assignments: vec![assignment()],
+            images: Vec::new(),
         };
         assert_eq!(
             store.replace_for_node(&token(), 0, manifest).await.unwrap(),
@@ -597,6 +614,7 @@ mod tests {
                         node_id: "worker-node1".to_string(),
                         generation: 0,
                         assignments: Vec::new(),
+                        images: Vec::new(),
                     },
                 )
                 .await
@@ -616,6 +634,7 @@ mod tests {
                     node_id: "worker-node1".to_string(),
                     generation: 0,
                     assignments: vec![assignment()],
+                    images: Vec::new(),
                 },
             )
             .await
@@ -651,6 +670,7 @@ mod tests {
                     node_id: "worker-node1".to_string(),
                     generation: 1,
                     assignments: Vec::new(),
+                    images: Vec::new(),
                 },
             )
             .await
@@ -666,5 +686,35 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn legacy_manifests_default_to_no_peer_images() {
+        let manifest: AssignmentManifest = serde_json::from_value(serde_json::json!({
+            "nodeId": "worker-node1",
+            "generation": 1,
+            "assignments": []
+        }))
+        .unwrap();
+
+        assert!(manifest.images.is_empty());
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_peer_image_assignments() {
+        let image = crate::cluster::ImageAssignment {
+            service_id: "api".to_string(),
+            deployment_id: "deployment".to_string(),
+            image: "api:deployment".to_string(),
+            source_node_id: "worker-node1".to_string(),
+        };
+        let manifest = AssignmentManifest {
+            node_id: "worker-node1".to_string(),
+            generation: 1,
+            assignments: Vec::new(),
+            images: vec![image.clone(), image],
+        };
+
+        assert!(EtcdAssignmentStore::validate_manifest(&manifest).is_err());
     }
 }

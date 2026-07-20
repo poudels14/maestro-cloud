@@ -106,6 +106,7 @@ impl AssignmentReconciler {
                     node_id: self.node_id.clone(),
                     generation: last_generation,
                     assignments: Vec::new(),
+                    images: Vec::new(),
                 },
                 Err(error) => {
                     self.logger
@@ -123,6 +124,12 @@ impl AssignmentReconciler {
                     &format!("service egress firewall reconciliation failed: {error}"),
                 );
                 continue;
+            }
+            if let Err(error) = executor.reconcile_images(&manifest).await {
+                self.logger.emit(
+                    "warn",
+                    &format!("peer image reconciliation failed: {error}"),
+                );
             }
             if !discovered {
                 if let Err(error) = executor.discover(&manifest).await {
@@ -161,6 +168,10 @@ impl AssignmentReconciler {
                     self.logger
                         .emit("error", &format!("assignment action failed: {error}"));
                 }
+            }
+            if let Err(error) = executor.prune_images(&manifest).await {
+                self.logger
+                    .emit("warn", &format!("peer image pruning failed: {error}"));
             }
             last_generation = manifest.generation;
         }
@@ -203,6 +214,7 @@ mod tests {
             node_id: "node".to_string(),
             generation: 2,
             assignments: vec![new.clone()],
+            images: Vec::new(),
         };
         assert_eq!(
             diff_assignments(&actual, &desired).unwrap(),
@@ -231,6 +243,7 @@ mod tests {
             node_id: "node".to_string(),
             generation: 2,
             assignments: vec![changed],
+            images: Vec::new(),
         };
         assert!(diff_assignments(&actual, &desired).is_err());
     }

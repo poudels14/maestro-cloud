@@ -87,24 +87,13 @@ pub async fn publish_legacy_images(
     runtime: Arc<dyn crate::runtime::RuntimeProvider>,
     store: Arc<dyn crate::deployment::store::ClusterStore>,
     token: &crate::cluster::types::LeadershipToken,
+    source_node_id: &str,
 ) -> Result<()> {
     if !image_publication_required(data_dir) {
         return Ok(());
     }
 
     for service_id in store.list_service_ids().await? {
-        if let Some(info) = store.read_service_info(&service_id).await?
-            && let Some(build) = info.config.build.as_ref()
-            && build
-                .registry
-                .as_deref()
-                .is_none_or(|registry| registry.trim().is_empty())
-        {
-            bail!(
-                "migrated service `{service_id}` requires build.registry before it can run in multi-node mode"
-            );
-        }
-
         for mut deployment in store.list_service_deployments(&service_id).await? {
             let Some(build_info) = deployment.build.as_ref() else {
                 continue;
@@ -136,11 +125,27 @@ pub async fn publish_legacy_images(
                 .map(|registry| registry.trim_end_matches('/'))
                 .filter(|registry| !registry.is_empty())
             else {
-                if required {
-                    bail!(
-                        "runnable migrated service `{service_id}` requires build.registry before it can run in multi-node mode"
-                    );
+                if !runtime.image_exists(&source).await.unwrap_or(false) {
+                    if required {
+                        bail!(
+                            "runnable migrated service `{service_id}` is missing local build image `{source}`"
+                        );
+                    }
+                    continue;
                 }
+                deployment
+                    .build
+                    .as_mut()
+                    .expect("build checked above")
+                    .source_node_id = Some(source_node_id.to_string());
+                let reference = crate::deployment::types::Deployment {
+                    service_id: service_id.clone(),
+                    id: deployment.id.clone(),
+                    replica_index: 0,
+                };
+                store
+                    .update_deployment_build_info_fenced(token, &reference, &deployment)
+                    .await?;
                 continue;
             };
             let target = format!("{registry}/{service_id}:{}", deployment.id);

@@ -36,6 +36,7 @@ fn build_upload_payload_accepts_missing_repo() {
             .unwrap_or(false),
         "build.repo should remain unset for uploads",
     );
+    assert_eq!(payload.build.and_then(|build| build.registry), None);
 }
 
 #[test]
@@ -45,40 +46,4 @@ fn build_upload_payload_rejects_empty_id() {
     let err = build_upload_payload(manifest).expect_err("should reject empty id");
     let message = format!("{err}");
     assert!(message.contains("id"), "error mentions id: {message}");
-}
-
-#[tokio::test]
-async fn up_rejects_a_build_without_registry_for_a_multinode_target() {
-    let app = axum::Router::new().route(
-        "/api/config",
-        axum::routing::get(|| async {
-            axum::Json(serde_json::json!({
-                "cluster": { "nodes": { "node1": {}, "node2": {} } }
-            }))
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let root = std::env::temp_dir().join(format!(
-        "maestro-up-registry-test-{}",
-        crate::utils::nanoid::unique_id(8)
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let config = root.join("service.jsonc");
-    std::fs::write(&config, sample_manifest()).unwrap();
-
-    let error = run_up(&address.to_string(), &config, &root)
-        .await
-        .expect_err("multi-node upload should require build.registry");
-    assert!(
-        error
-            .to_string()
-            .contains("build.registry is required for services built in multi-node mode"),
-        "unexpected error: {error}"
-    );
-
-    server.abort();
-    let _ = std::fs::remove_dir_all(root);
 }

@@ -157,3 +157,53 @@ fn image_inspection_rejects_a_digest_for_a_different_repository() {
 
     assert!(error.contains("no matching immutable repository digest"));
 }
+
+#[tokio::test]
+async fn image_export_command_streams_stdout_without_buffering_an_archive() {
+    use tokio::io::AsyncReadExt;
+
+    let (writer, mut reader) = tokio::io::duplex(64);
+    let export = tokio::spawn(runtime::stream_command_output(
+        "sh",
+        &["-c", "printf image-archive"],
+        Box::pin(writer),
+    ));
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).await.unwrap();
+
+    export.await.unwrap().unwrap();
+    assert_eq!(bytes, b"image-archive");
+}
+
+#[tokio::test]
+async fn image_import_command_streams_the_archive_to_stdin() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut writer, reader) = tokio::io::duplex(64);
+    writer.write_all(b"image-archive").await.unwrap();
+    writer.shutdown().await.unwrap();
+    drop(writer);
+
+    runtime::stream_command_input(
+        "sh",
+        &["-c", "value=$(cat); test \"$value\" = image-archive"],
+        Box::pin(reader),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a running nerdctl/containerd runtime and the busybox:1.37 image"]
+async fn nerdctl_peer_image_archive_round_trips_through_a_bounded_stream() {
+    let provider = runtime::create_provider(RuntimeType::Nerdctl);
+    let (writer, reader) = tokio::io::duplex(256 * 1024);
+
+    let (export, import) = tokio::join!(
+        provider.export_image("busybox:1.37", Box::pin(writer)),
+        provider.import_image("busybox:1.37", Box::pin(reader)),
+    );
+
+    export.unwrap();
+    import.unwrap();
+}

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
 
@@ -359,6 +359,18 @@ impl RuntimeProvider for NerdctlRuntimeProvider {
             cmd::exec("nerdctl", &args).run().await?;
         }
         eprintln!("[maestro]: nerdctl image {image} pulled successfully");
+        Ok(())
+    }
+
+    async fn export_image(&self, image: &str, output: crate::runtime::ImageOutput) -> Result<()> {
+        crate::runtime::stream_command_output("nerdctl", &["save", image], output).await
+    }
+
+    async fn import_image(&self, image: &str, input: crate::runtime::ImageInput) -> Result<()> {
+        crate::runtime::stream_command_input("nerdctl", &["load"], input).await?;
+        if !self.image_exists(image).await? {
+            bail!("imported archive did not contain expected image `{image}`");
+        }
         Ok(())
     }
 

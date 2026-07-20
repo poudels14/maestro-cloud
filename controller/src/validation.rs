@@ -186,22 +186,6 @@ pub fn validate_build_config(
     }
 }
 
-pub fn validate_cluster_build_registry(
-    build: &Option<ServiceBuildConfig>,
-    cluster_mode: bool,
-) -> Result<(), String> {
-    if cluster_mode
-        && build.is_some()
-        && build
-            .as_ref()
-            .and_then(|build| build.registry.as_ref())
-            .is_none()
-    {
-        return Err("build.registry is required for services built in multi-node mode".to_string());
-    }
-    Ok(())
-}
-
 pub fn validate_service_provider_config(
     build: &Option<ServiceBuildConfig>,
     image: &Option<String>,
@@ -428,22 +412,8 @@ mod tests {
     }
 
     #[test]
-    fn multi_node_builds_require_a_service_registry() {
-        let build = build_with_registry(None);
-        assert!(validate_cluster_build_registry(&build, false).is_ok());
-        assert_eq!(
-            validate_cluster_build_registry(&build, true).unwrap_err(),
-            "build.registry is required for services built in multi-node mode"
-        );
-        assert!(validate_cluster_build_registry(&None, true).is_ok());
-        assert!(
-            validate_cluster_build_registry(&build_with_registry(Some("ghcr.io/acme")), true)
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn build_registry_is_nonempty_and_normalized() {
+        assert!(validate_build_config(&build_with_registry(None), &None).is_ok());
         assert!(
             validate_build_config(&build_with_registry(Some(" / ")), &None)
                 .unwrap_err()

@@ -68,6 +68,9 @@ pub enum ControlCommand {
         initial_size: Option<crate::exec::TerminalSize>,
         client: String,
     },
+    ExportImage {
+        image: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -217,6 +220,17 @@ impl ControlServer {
             }
             return Ok(());
         }
+        if let ControlCommand::ExportImage { image } = request.command {
+            let prepared = self.prepare_image_export(&image).await;
+            match prepared {
+                Ok(()) => {
+                    write_control_response(&mut stream, Ok(None)).await?;
+                    self.runtime.export_image(&image, Box::pin(stream)).await?;
+                }
+                Err(error) => write_control_response(&mut stream, Err(error)).await?,
+            }
+            return Ok(());
+        }
         let result = self.execute(request.command).await;
         write_control_response(&mut stream, result).await?;
         stream.shutdown().await?;
@@ -225,7 +239,9 @@ impl ControlServer {
 
     async fn execute(&self, command: ControlCommand) -> Result<Option<serde_json::Value>> {
         let command = match command {
-            ControlCommand::ExecSession { .. } => unreachable!("exec is handled before execute"),
+            ControlCommand::ExecSession { .. } | ControlCommand::ExportImage { .. } => {
+                unreachable!("streaming commands are handled before execute")
+            }
             ControlCommand::DiscoverClusterCa { request } => {
                 let response = self
                     .join
@@ -253,7 +269,9 @@ impl ControlServer {
             bail!("local daemon is not the cluster leader");
         };
         let output = match command {
-            ControlCommand::ExecSession { .. } => unreachable!("exec is handled before execute"),
+            ControlCommand::ExecSession { .. } | ControlCommand::ExportImage { .. } => {
+                unreachable!("streaming commands are handled before execute")
+            }
             ControlCommand::DiscoverClusterCa { .. } | ControlCommand::RecoveryStatus { .. } => {
                 unreachable!("handled without leadership")
             }
@@ -492,6 +510,73 @@ impl ControlServer {
         })
     }
 
+    async fn prepare_image_export(&self, image: &str) -> Result<()> {
+        if image.trim().is_empty() {
+            bail!("image reference cannot be empty");
+        }
+        let mut authorized = false;
+        for service in self.store.list_service_infos().await? {
+            let deployments = self
+                .store
+                .list_service_deployments(&service.config.id)
+                .await?;
+            let latest_peer_image = deployments
+                .iter()
+                .filter(|deployment| {
+                    deployment
+                        .config
+                        .build
+                        .as_ref()
+                        .is_some_and(|build| build.registry.is_none())
+                })
+                .filter_map(|deployment| {
+                    deployment
+                        .build
+                        .as_ref()
+                        .map(|build| (deployment.created_at, build.docker_image_id.clone()))
+                })
+                .max_by_key(|(created_at, _)| *created_at)
+                .map(|(_, image)| image);
+            for deployment in deployments {
+                if deployment
+                    .build
+                    .as_ref()
+                    .is_some_and(|build| build.docker_image_id == image)
+                    && deployment
+                        .config
+                        .build
+                        .as_ref()
+                        .is_some_and(|build| build.registry.is_none())
+                    && (matches!(
+                        deployment.status,
+                        crate::deployment::types::DeploymentStatus::Building
+                            | crate::deployment::types::DeploymentStatus::PendingReady
+                            | crate::deployment::types::DeploymentStatus::Ready
+                            | crate::deployment::types::DeploymentStatus::Draining
+                    ) || latest_peer_image.as_deref() == Some(image))
+                {
+                    authorized = true;
+                    break;
+                }
+            }
+            if authorized {
+                break;
+            }
+        }
+        if !authorized {
+            bail!("image is not an active registry-free Maestro build");
+        }
+        if !self.runtime.image_exists(image).await? {
+            bail!("image `{image}` is not available on this node");
+        }
+        self.registry
+            .as_ref()
+            .ok_or_else(|| anyhow!("cluster registry is unavailable"))?
+            .publish_image_holder(image)
+            .await?;
+        Ok(())
+    }
+
     async fn run_exec(&self, stream: UnixStream, prepared: PreparedExec) -> Result<()> {
         let PreparedExec {
             session,
@@ -706,6 +791,32 @@ pub async fn open_exec_stream(
     }
 }
 
+pub async fn open_image_export_stream(
+    socket_path: &str,
+    token: &str,
+    image: String,
+) -> Result<UnixStream> {
+    let mut stream = UnixStream::connect(socket_path).await?;
+    let request = ControlRequest {
+        token: token.to_string(),
+        command: ControlCommand::ExportImage { image },
+    };
+    stream.write_all(&serde_json::to_vec(&request)?).await?;
+    stream.write_all(b"\n").await?;
+    let line = read_control_line(&mut stream).await?;
+    let response: ControlResponse = serde_json::from_slice(&line)?;
+    if response.ok {
+        Ok(stream)
+    } else {
+        bail!(
+            "{}",
+            response
+                .error
+                .unwrap_or_else(|| "daemon rejected image export request".to_string())
+        )
+    }
+}
+
 fn constant_time_matches(expected: &str, presented: &str) -> bool {
     let expected = Sha256::digest(expected.as_bytes());
     let presented = Sha256::digest(presented.as_bytes());
@@ -743,5 +854,46 @@ mod tests {
     fn token_comparison_handles_equal_and_different_values() {
         assert!(constant_time_matches("secret", "secret"));
         assert!(!constant_time_matches("secret", "other"));
+    }
+
+    #[tokio::test]
+    async fn image_export_control_stream_preserves_archive_bytes() {
+        use tokio::io::AsyncReadExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "maestro-image-control-{}",
+            crate::utils::nanoid::unique_id(8)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket_path = directory.join("control.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let line = read_control_line(&mut stream).await.unwrap();
+            let request: ControlRequest = serde_json::from_slice(&line).unwrap();
+            assert_eq!(request.token, "secret");
+            assert!(matches!(
+                request.command,
+                ControlCommand::ExportImage { image } if image == "api:deployment"
+            ));
+            write_control_response(&mut stream, Ok(None)).await.unwrap();
+            stream.write_all(b"archive-bytes").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let mut stream = open_image_export_stream(
+            socket_path.to_str().unwrap(),
+            "secret",
+            "api:deployment".to_string(),
+        )
+        .await
+        .unwrap();
+        let mut archive = Vec::new();
+        stream.read_to_end(&mut archive).await.unwrap();
+
+        server.await.unwrap();
+        assert_eq!(archive, b"archive-bytes");
+        let _ = std::fs::remove_file(socket_path);
+        let _ = std::fs::remove_dir(directory);
     }
 }

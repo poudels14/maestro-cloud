@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     cluster::{
-        Assignment, AssignmentManifest,
+        Assignment, AssignmentManifest, ImageAssignment,
         assignment_store::{AssignmentStore, ReplaceOutcome},
         elector::{EtcdLeaderElector, LeaderElector},
         registry::{NodeAvailabilityEvent, NodeRegistry},
@@ -39,6 +39,7 @@ pub struct LeaderLoop {
     traffic: Arc<EtcdTrafficManager>,
     logger: Logger,
     slack: SlackNotifier,
+    warned_image_ha: std::sync::Mutex<HashSet<String>>,
 }
 
 impl LeaderLoop {
@@ -63,6 +64,7 @@ impl LeaderLoop {
             traffic,
             logger,
             slack,
+            warned_image_ha: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -211,6 +213,15 @@ impl LeaderLoop {
         ));
 
         let planned_assignments = planned.assignments;
+        let mut images_by_node = self
+            .plan_image_assignments(
+                &planned_assignments,
+                &nodes,
+                &drain_node_states,
+                now_ms,
+                &mut validation_errors,
+            )
+            .await?;
         let mut desired_by_node = BTreeMap::<String, Vec<Assignment>>::new();
         for assignment in &planned_assignments {
             desired_by_node
@@ -223,6 +234,7 @@ impl LeaderLoop {
             .map(|manifest| manifest.node_id.clone())
             .chain(nodes.iter().map(|node| node.node_id.clone()))
             .chain(desired_by_node.keys().cloned())
+            .chain(images_by_node.keys().cloned())
             .collect::<BTreeSet<_>>();
         let existing_by_node = manifests
             .into_iter()
@@ -237,7 +249,16 @@ impl LeaderLoop {
                     .then_with(|| left.replica_index.cmp(&right.replica_index))
             });
             let current = existing_by_node.get(&node_id);
-            if current.is_some_and(|manifest| manifest.assignments == desired) {
+            let mut images = images_by_node.remove(&node_id).unwrap_or_default();
+            images.sort_by(|left, right| {
+                left.service_id
+                    .cmp(&right.service_id)
+                    .then_with(|| left.deployment_id.cmp(&right.deployment_id))
+                    .then_with(|| left.image.cmp(&right.image))
+            });
+            if current.is_some_and(|manifest| {
+                manifest.assignments == desired && manifest.images == images
+            }) {
                 continue;
             }
             let expected_generation = current.map(|manifest| manifest.generation).unwrap_or(0);
@@ -250,6 +271,7 @@ impl LeaderLoop {
                         node_id: node_id.clone(),
                         generation: expected_generation,
                         assignments: desired,
+                        images,
                     },
                 )
                 .await?;
@@ -267,11 +289,126 @@ impl LeaderLoop {
             &planned_assignments,
             &replica_states,
             &nodes,
+            &drain_node_states,
             &traffic_exclusions,
             now_ms,
         )
         .await?;
         Ok(())
+    }
+
+    async fn plan_image_assignments(
+        &self,
+        assignments: &[Assignment],
+        nodes: &[crate::cluster::NodeInfo],
+        node_states: &BTreeMap<String, crate::cluster::NodeState>,
+        now_ms: i64,
+        validation_errors: &mut Vec<UnschedulableReplica>,
+    ) -> Result<BTreeMap<String, Vec<ImageAssignment>>> {
+        let eligible = nodes
+            .iter()
+            .filter(|node| {
+                node.role.runs_workloads()
+                    && node.data_plane_ready
+                    && now_ms.saturating_sub(node.data_plane_checked_at_ms) <= 15_000
+                    && !node_states
+                        .get(&node.node_id)
+                        .is_some_and(|state| state.unschedulable)
+            })
+            .map(|node| node.node_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut planned = BTreeMap::<String, Vec<ImageAssignment>>::new();
+        let mut retained_deployments = HashSet::new();
+        for service in self.store.list_service_infos().await? {
+            let deployments = self
+                .store
+                .list_service_deployments(&service.config.id)
+                .await?;
+            let latest_peer_image_deployment = deployments
+                .iter()
+                .filter(|deployment| {
+                    deployment.build.is_some()
+                        && deployment
+                            .config
+                            .build
+                            .as_ref()
+                            .is_some_and(|build| build.registry.is_none())
+                })
+                .max_by_key(|deployment| deployment.created_at)
+                .map(|deployment| deployment.id.clone());
+            for deployment in deployments {
+                if !retain_peer_image(
+                    &deployment.status,
+                    &deployment.id,
+                    latest_peer_image_deployment.as_deref(),
+                ) || !deployment
+                    .config
+                    .build
+                    .as_ref()
+                    .is_some_and(|build| build.registry.is_none())
+                {
+                    continue;
+                }
+                let Some(build) = deployment.build.as_ref() else {
+                    continue;
+                };
+                retained_deployments.insert(deployment.id.clone());
+                let Some(source_node_id) = build.source_node_id.as_ref() else {
+                    validation_errors.push(UnschedulableReplica {
+                        service_id: service.config.id.clone(),
+                        deployment_id: deployment.id.clone(),
+                        replica_index: 0,
+                        reason: "registry-free build has no source node metadata".to_string(),
+                    });
+                    continue;
+                };
+                let assigned = assignments
+                    .iter()
+                    .filter(|assignment| {
+                        assignment.service_id == service.config.id
+                            && assignment.deployment_id == deployment.id
+                    })
+                    .map(|assignment| assignment.node_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let selected =
+                    select_image_nodes(&build.docker_image_id, source_node_id, assigned, &eligible);
+                let desired_ha_copies = eligible.len().min(2);
+                if desired_ha_copies < 2
+                    && self
+                        .warned_image_ha
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .insert(deployment.id.clone())
+                {
+                    self.logger.emit(
+                        "warn",
+                        &format!(
+                            "registry-free image `{}` has {desired_ha_copies}/2 eligible HA holders",
+                            build.docker_image_id
+                        ),
+                    );
+                }
+                for node_id in selected {
+                    let images = planned.entry(node_id).or_default();
+                    if !images
+                        .iter()
+                        .any(|image| image.image == build.docker_image_id)
+                    {
+                        images.push(ImageAssignment {
+                            service_id: service.config.id.clone(),
+                            deployment_id: deployment.id.clone(),
+                            image: build.docker_image_id.clone(),
+                            source_node_id: source_node_id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        self.warned_image_ha
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|deployment_id| retained_deployments.contains(deployment_id));
+        Ok(planned)
     }
 
     fn notify_availability_events(&self, events: Vec<NodeAvailabilityEvent>, now_ms: i64) {
@@ -720,6 +857,7 @@ impl LeaderLoop {
         assignments: &[Assignment],
         states: &[ReplicaState],
         nodes: &[crate::cluster::NodeInfo],
+        node_states: &BTreeMap<String, crate::cluster::NodeState>,
         traffic_exclusions: &BTreeSet<String>,
         now_ms: i64,
     ) -> Result<()> {
@@ -823,7 +961,10 @@ impl LeaderLoop {
             }
             let all_ready = desired.len()
                 == usize::try_from(info.effective_replicas()).unwrap_or(usize::MAX)
-                && exact_ready.len() == desired.len();
+                && exact_ready.len() == desired.len()
+                && self
+                    .image_ha_ready(target_deployment, nodes, node_states, now_ms)
+                    .await?;
             if incoming.is_some_and(|incoming| incoming.id == target_deployment.id) && !all_ready {
                 if let Some(current) = &current_traffic
                     && let Some(active) = deployments
@@ -909,6 +1050,52 @@ impl LeaderLoop {
                 .await?;
         }
         Ok(())
+    }
+
+    async fn image_ha_ready(
+        &self,
+        deployment: &crate::deployment::types::ServiceDeployment,
+        nodes: &[crate::cluster::NodeInfo],
+        node_states: &BTreeMap<String, crate::cluster::NodeState>,
+        now_ms: i64,
+    ) -> Result<bool> {
+        if !deployment
+            .config
+            .build
+            .as_ref()
+            .is_some_and(|build| build.registry.is_none())
+        {
+            return Ok(true);
+        }
+        let Some(build) = deployment.build.as_ref() else {
+            return Ok(false);
+        };
+        let live_workload_nodes = nodes
+            .iter()
+            .filter(|node| {
+                node.role.runs_workloads()
+                    && node.data_plane_ready
+                    && now_ms.saturating_sub(node.data_plane_checked_at_ms) <= 15_000
+                    && !node_states
+                        .get(&node.node_id)
+                        .is_some_and(|state| state.unschedulable)
+            })
+            .map(|node| node.node_id.as_str())
+            .collect::<HashSet<_>>();
+        let required = live_workload_nodes.len().min(2);
+        if required == 0 {
+            return Ok(false);
+        }
+        let available = self
+            .registry
+            .list_image_holders(&build.docker_image_id)
+            .await?
+            .into_iter()
+            .filter(|holder| live_workload_nodes.contains(holder.node_id.as_str()))
+            .map(|holder| holder.node_id)
+            .collect::<HashSet<_>>()
+            .len();
+        Ok(available >= required)
     }
 
     async fn coordinate_drain_traffic(
@@ -1043,6 +1230,51 @@ impl LeaderLoop {
             .await?;
         Ok(())
     }
+}
+
+fn image_node_order(image: &str, node_id: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("{image}\0{node_id}").as_bytes()).into()
+}
+
+fn retain_peer_image(
+    status: &DeploymentStatus,
+    deployment_id: &str,
+    latest_deployment_id: Option<&str>,
+) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Building
+            | DeploymentStatus::PendingReady
+            | DeploymentStatus::Ready
+            | DeploymentStatus::Draining
+    ) || latest_deployment_id == Some(deployment_id)
+}
+
+fn select_image_nodes(
+    image: &str,
+    source_node_id: &str,
+    mut assigned: BTreeSet<String>,
+    eligible: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    if eligible.contains(source_node_id) {
+        assigned.insert(source_node_id.to_string());
+    }
+    let desired_ha_copies = eligible.len().min(2);
+    let mut candidates = eligible.iter().cloned().collect::<Vec<_>>();
+    candidates.sort_by_key(|node_id| image_node_order(image, node_id));
+    for node_id in candidates {
+        if assigned
+            .iter()
+            .filter(|node| eligible.contains(*node))
+            .count()
+            >= desired_ha_copies
+        {
+            break;
+        }
+        assigned.insert(node_id);
+    }
+    assigned
 }
 
 fn deployment_order(status: &DeploymentStatus) -> u8 {
@@ -1209,6 +1441,60 @@ mod tests {
     use super::*;
     use crate::cluster::{NodeInfo, NodeRole};
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn single_replica_image_keeps_a_second_eligible_holder() {
+        let eligible = ["node-a", "node-b", "node-c"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        let assigned = ["node-b"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+
+        let selected = select_image_nodes("api:deployment", "node-a", assigned, &eligible);
+
+        assert!(selected.contains("node-a"));
+        assert!(selected.contains("node-b"));
+        assert_eq!(selected.len(), 2);
+    }
+
+    #[test]
+    fn draining_source_is_retained_but_does_not_count_as_an_ha_target() {
+        let eligible = ["node-b", "node-c"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        let assigned = ["node-a", "node-b"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+
+        let selected = select_image_nodes("api:deployment", "node-a", assigned, &eligible);
+
+        assert_eq!(
+            selected,
+            ["node-a", "node-b", "node-c"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+    }
+
+    #[test]
+    fn latest_stopped_build_remains_a_peer_image_but_older_builds_do_not() {
+        assert!(retain_peer_image(
+            &DeploymentStatus::Terminated,
+            "latest",
+            Some("latest")
+        ));
+        assert!(!retain_peer_image(
+            &DeploymentStatus::Terminated,
+            "older",
+            Some("latest")
+        ));
+    }
 
     fn assignment(index: u32) -> Assignment {
         Assignment {

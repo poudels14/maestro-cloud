@@ -340,6 +340,7 @@ fn restart_candidate(id: &str, status: DeploymentStatus, image: &str) -> Service
     deployment.status = status;
     deployment.build = Some(DeploymentBuildInfo {
         docker_image_id: image.to_string(),
+        source_node_id: None,
     });
     deployment
 }

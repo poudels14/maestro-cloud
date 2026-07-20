@@ -124,10 +124,6 @@ pub async fn run_rollout(
 
     let base_url = normalize_base_url(host)?;
     let client = crate::cli::contexts::build_http_client()?;
-    let cluster_mode = crate::cli::target_uses_multinode(&client, &base_url).await?;
-    for (service_id, payload) in &payloads {
-        crate::cli::validate_target_build_registry(service_id, &payload.build, cluster_mode)?;
-    }
 
     if !apply {
         let diff_url = format!("{base_url}/api/services/rollout/diff");

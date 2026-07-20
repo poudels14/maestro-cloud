@@ -198,6 +198,7 @@ fn command_planner_disables_pull_for_prepared_images() {
     let mut deployment = deployment_with_source(None, Some("traefik/whoami"), None);
     deployment.build = Some(DeploymentBuildInfo {
         docker_image_id: "traefik/whoami".to_string(),
+        source_node_id: None,
     });
 
     let planner = ContainerDeploymentProvider {
@@ -233,6 +234,7 @@ fn command_planner_allows_runtime_resolution_for_immutable_registry_images() {
     let mut deployment = deployment_with_source(None, Some("traefik/whoami:latest"), None);
     deployment.build = Some(DeploymentBuildInfo {
         docker_image_id: format!("traefik/whoami@sha256:{}", "a".repeat(64)),
+        source_node_id: None,
     });
 
     let planner = ContainerDeploymentProvider {

@@ -312,6 +312,10 @@ impl Server {
             )
             .route("/api/cluster/placements", get(Self::get_cluster_placements))
             .route(
+                "/api/cluster/images/export",
+                get(Self::export_cluster_image),
+            )
+            .route(
                 "/api/cluster/nodes/{nodeId}/drain",
                 post(Self::drain_cluster_node),
             )
@@ -552,6 +556,40 @@ impl Server {
 
     async fn healthy() -> &'static str {
         "ok"
+    }
+
+    async fn export_cluster_image(
+        State(state): State<AppState>,
+        axum::extract::Query(query): axum::extract::Query<ClusterImageExportQuery>,
+        Extension(identity): Extension<OperatorIdentity>,
+    ) -> Result<Response, (StatusCode, String)> {
+        if identity.0 != "maestro-image-peer" {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "image export requires a node peer token".to_string(),
+            ));
+        }
+        let socket = state.control_socket.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control socket is unavailable".to_string(),
+            )
+        })?;
+        let token = state.internal_control_token.as_deref().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon control authentication is unavailable".to_string(),
+            )
+        })?;
+        let stream = crate::cluster::control::open_image_export_stream(socket, token, query.image)
+            .await
+            .map_err(internal_error)?;
+        Response::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/x-tar")
+            .body(axum::body::Body::from_stream(
+                tokio_util::io::ReaderStream::new(stream),
+            ))
+            .map_err(internal_error)
     }
 
     async fn ready(State(state): State<AppState>) -> Result<&'static str, (StatusCode, String)> {
@@ -1130,7 +1168,6 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
-        validate_cluster_build_registry(&state, &service_config)?;
         reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
@@ -1241,7 +1278,6 @@ impl Server {
                 format!("invalid rollout request payload: {err}"),
             )
         })?;
-        validate_cluster_build_registry(&state, &service_config)?;
         reject_unconfigured_preview(&state, &service_config)?;
         if let Some(build) = service_config.build.as_ref()
             && build
@@ -1366,10 +1402,6 @@ impl Server {
                 format!("invalid upload request payload: {err}"),
             )
         })?;
-        if let Err(error) = validate_cluster_build_registry(&state, &service_config) {
-            cleanup_temp();
-            return Err(error);
-        }
         reject_unconfigured_preview(&state, &service_config)?;
 
         service_config.name = format!("[up] {}", service_config.name);
@@ -1998,8 +2030,6 @@ impl Server {
         }
 
         let mut config = info.config;
-        validate_cluster_build_registry(&state, &config)?;
-
         let deployments = state
             .store
             .list_service_deployments(&service_id)
@@ -2080,12 +2110,11 @@ impl Server {
             )
         })?;
 
-        let previous_image = previous
+        let previous_build = previous
             .build
             .as_ref()
-            .expect("previous deployment has build info")
-            .docker_image_id
-            .clone();
+            .expect("previous deployment has build info");
+        let previous_image = previous_build.docker_image_id.clone();
         if previous.config.build.is_none()
             && !crate::runtime::is_immutable_image_reference(&previous_image)
         {
@@ -2108,6 +2137,7 @@ impl Server {
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         deployment.build = Some(DeploymentBuildInfo {
             docker_image_id: previous_image,
+            source_node_id: previous_build.source_node_id.clone(),
         });
         deployment.git_commit = previous_git_commit;
 
@@ -3353,6 +3383,11 @@ struct PlacementQuery {
     service_id: Option<String>,
     deployment_id: Option<String>,
     replica_index: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+struct ClusterImageExportQuery {
+    image: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -5374,19 +5409,6 @@ fn parse_json_body<T: DeserializeOwned>(
             format!("invalid JSON request body: {err}"),
         )
     })
-}
-
-fn validate_cluster_build_registry(
-    state: &AppState,
-    config: &ServiceConfig,
-) -> Result<(), (StatusCode, String)> {
-    crate::validation::validate_cluster_build_registry(&config.build, state.local_node_id.is_some())
-        .map_err(|error| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("invalid service `{}`: {error}", config.id),
-            )
-        })
 }
 
 fn build_service_config(request: RolloutServiceRequest) -> Result<ServiceConfig, String> {

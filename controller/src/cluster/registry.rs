@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +12,9 @@ use etcd_client::{
 };
 use tokio::sync::{Mutex, broadcast};
 
-use crate::cluster::types::{LeadershipToken, NodeId, NodeInfo, NodeRecord, NodeState};
+use crate::cluster::types::{
+    ImageHolder, LeadershipToken, NodeId, NodeInfo, NodeRecord, NodeState,
+};
 use crate::logs::Logger;
 
 const DATA_PLANE_STALE_AFTER_MS: i64 = 15_000;
@@ -64,12 +66,17 @@ pub trait NodeRegistry: Send + Sync {
         checked_at_ms: i64,
         error: Option<String>,
     ) -> Result<()>;
+    async fn publish_image_holder(&self, image: &str) -> Result<()>;
+    async fn remove_image_holder(&self, image: &str) -> Result<()>;
+    async fn list_image_holders(&self, image: &str) -> Result<Vec<ImageHolder>>;
+    async fn list_local_image_holders(&self) -> Result<Vec<ImageHolder>>;
 }
 
 pub struct EtcdNodeRegistry {
     client: Arc<Mutex<Client>>,
     node_id: NodeId,
     lease_id: Mutex<Option<i64>>,
+    published_images: Mutex<HashSet<String>>,
 }
 
 impl EtcdNodeRegistry {
@@ -84,6 +91,7 @@ impl EtcdNodeRegistry {
             client: Arc::new(Mutex::new(client)),
             node_id,
             lease_id: Mutex::new(None),
+            published_images: Mutex::new(HashSet::new()),
         })
     }
 
@@ -266,14 +274,20 @@ impl NodeRegistry for EtcdNodeRegistry {
         if !self.put_registration(&info, lease_id).await? {
             self.replace_own_registration(&info, lease_id).await?;
         }
-        *self.lease_id.lock().await = Some(lease_id);
+        {
+            let mut current_lease = self.lease_id.lock().await;
+            *current_lease = Some(lease_id);
+        }
+        self.published_images.lock().await.clear();
         Ok(())
     }
 
     async fn deregister(&self) -> Result<()> {
-        if let Some(lease_id) = self.lease_id.lock().await.take() {
+        let lease_id = self.lease_id.lock().await.take();
+        if let Some(lease_id) = lease_id {
             self.client.lock().await.lease_revoke(lease_id).await?;
         }
+        self.published_images.lock().await.clear();
         Ok(())
     }
 
@@ -448,7 +462,100 @@ impl NodeRegistry for EtcdNodeRegistry {
         }
         Ok(())
     }
+
+    async fn publish_image_holder(&self, image: &str) -> Result<()> {
+        let mut published = self.published_images.lock().await;
+        if published.contains(image) {
+            return Ok(());
+        }
+        let lease_id =
+            (*self.lease_id.lock().await).ok_or_else(|| anyhow!("node is not registered"))?;
+        let node_key = node_key(&self.node_id);
+        let holder_key = image_holder_key(image, &self.node_id);
+        let node_holder_key = node_image_holder_key(&self.node_id, image);
+        let holder = ImageHolder {
+            image: image.to_string(),
+            node_id: self.node_id.clone(),
+            available_at_ms: now_millis(),
+        };
+        let transaction = Txn::new()
+            .when([Compare::lease(node_key, CompareOp::Equal, lease_id)])
+            .and_then([
+                TxnOp::put(
+                    holder_key,
+                    serde_json::to_vec(&holder)?,
+                    Some(PutOptions::new().with_lease(lease_id)),
+                ),
+                TxnOp::put(
+                    node_holder_key,
+                    serde_json::to_vec(&holder)?,
+                    Some(PutOptions::new().with_lease(lease_id)),
+                ),
+            ]);
+        if !self.client.lock().await.txn(transaction).await?.succeeded() {
+            bail!("node registration changed while publishing image availability");
+        }
+        published.insert(image.to_string());
+        Ok(())
+    }
+
+    async fn remove_image_holder(&self, image: &str) -> Result<()> {
+        let mut published = self.published_images.lock().await;
+        self.client
+            .lock()
+            .await
+            .txn(Txn::new().and_then([
+                TxnOp::delete(image_holder_key(image, &self.node_id), None),
+                TxnOp::delete(node_image_holder_key(&self.node_id, image), None),
+            ]))
+            .await?;
+        published.remove(image);
+        Ok(())
+    }
+
+    async fn list_image_holders(&self, image: &str) -> Result<Vec<ImageHolder>> {
+        let response = self
+            .client
+            .lock()
+            .await
+            .get(
+                image_holder_prefix(image),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        let mut holders = response
+            .kvs()
+            .iter()
+            .map(|entry| serde_json::from_slice::<ImageHolder>(entry.value()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        holders.retain(|holder| holder.image == image);
+        holders.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        Ok(holders)
+    }
+
+    async fn list_local_image_holders(&self) -> Result<Vec<ImageHolder>> {
+        let response = self
+            .client
+            .lock()
+            .await
+            .get(
+                node_image_holder_prefix(&self.node_id),
+                Some(GetOptions::new().with_prefix()),
+            )
+            .await?;
+        let mut holders = response
+            .kvs()
+            .iter()
+            .map(|entry| serde_json::from_slice::<ImageHolder>(entry.value()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        holders.retain(|holder| holder.node_id == self.node_id);
+        holders.sort_by(|left, right| left.image.cmp(&right.image));
+        Ok(holders)
+    }
 }
+
+const IMAGE_HOLDERS_PREFIX: &str = "/maetro/cluster/image-holders/";
+const NODE_IMAGE_HOLDERS_PREFIX: &str = "/maetro/cluster/node-image-holders/";
 
 fn node_key(node_id: &str) -> String {
     format!("/maetro/cluster/nodes/{node_id}")
@@ -460,6 +567,31 @@ fn node_record_key(node_id: &str) -> String {
 
 fn node_state_key(node_id: &str) -> String {
     format!("/maetro/cluster/node-state/{node_id}")
+}
+
+fn image_holder_prefix(image: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{IMAGE_HOLDERS_PREFIX}{:x}/",
+        Sha256::digest(image.as_bytes())
+    )
+}
+
+fn image_holder_key(image: &str, node_id: &str) -> String {
+    format!("{}{node_id}", image_holder_prefix(image))
+}
+
+fn node_image_holder_prefix(node_id: &str) -> String {
+    format!("{NODE_IMAGE_HOLDERS_PREFIX}{node_id}/")
+}
+
+fn node_image_holder_key(node_id: &str, image: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{}{:x}",
+        node_image_holder_prefix(node_id),
+        Sha256::digest(image.as_bytes())
+    )
 }
 
 fn reconcile_availability_record(
@@ -590,6 +722,7 @@ pub struct InMemoryNodeRegistry {
     node_id: NodeId,
     nodes: RwLock<BTreeMap<NodeId, NodeInfo>>,
     states: RwLock<BTreeMap<NodeId, NodeState>>,
+    holders: RwLock<BTreeMap<(String, NodeId), ImageHolder>>,
 }
 
 #[cfg(test)]
@@ -599,6 +732,7 @@ impl InMemoryNodeRegistry {
             node_id,
             nodes: RwLock::new(BTreeMap::new()),
             states: RwLock::new(BTreeMap::new()),
+            holders: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -633,6 +767,10 @@ impl NodeRegistry for InMemoryNodeRegistry {
             .write()
             .unwrap_or_else(|err| err.into_inner())
             .remove(&self.node_id);
+        self.holders
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|(_, node_id), _| node_id != &self.node_id);
         Ok(())
     }
 
@@ -697,6 +835,51 @@ impl NodeRegistry for InMemoryNodeRegistry {
         info.data_plane_error = error;
         Ok(())
     }
+
+    async fn publish_image_holder(&self, image: &str) -> Result<()> {
+        self.holders
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                (image.to_string(), self.node_id.clone()),
+                ImageHolder {
+                    image: image.to_string(),
+                    node_id: self.node_id.clone(),
+                    available_at_ms: now_millis(),
+                },
+            );
+        Ok(())
+    }
+
+    async fn remove_image_holder(&self, image: &str) -> Result<()> {
+        self.holders
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&(image.to_string(), self.node_id.clone()));
+        Ok(())
+    }
+
+    async fn list_image_holders(&self, image: &str) -> Result<Vec<ImageHolder>> {
+        Ok(self
+            .holders
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|holder| holder.image == image)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_local_image_holders(&self) -> Result<Vec<ImageHolder>> {
+        Ok(self
+            .holders
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|holder| holder.node_id == self.node_id)
+            .cloned()
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -740,6 +923,52 @@ mod tests {
         assert_eq!(active["gatewayPort"], 46751);
         assert_eq!(active["etcdClientPort"], 35659);
         assert_eq!(active["etcdPeerPort"], 33207);
+    }
+
+    #[tokio::test]
+    async fn image_holder_availability_is_published_and_removed_per_node() {
+        let registry = InMemoryNodeRegistry::new("node00000001".to_string());
+        registry
+            .publish_image_holder("api:deployment")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            registry
+                .list_image_holders("api:deployment")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|holder| holder.node_id)
+                .collect::<Vec<_>>(),
+            vec!["node00000001".to_string()]
+        );
+        assert_eq!(registry.list_local_image_holders().await.unwrap().len(), 1);
+
+        registry
+            .remove_image_holder("api:deployment")
+            .await
+            .unwrap();
+        assert!(
+            registry
+                .list_image_holders("api:deployment")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        registry
+            .publish_image_holder("api:deployment")
+            .await
+            .unwrap();
+        registry.deregister().await.unwrap();
+        assert!(
+            registry
+                .list_local_image_holders()
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn node_info(instance_id: &str) -> NodeInfo {

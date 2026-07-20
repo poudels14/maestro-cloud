@@ -50,6 +50,13 @@ fn service_payload_uses_map_key_as_service_id() {
             .and_then(|build| build.repo.as_deref()),
         Some("https://example.com/org/repo.git"),
     );
+    assert_eq!(
+        payload
+            .build
+            .as_ref()
+            .and_then(|build| build.registry.as_ref()),
+        None
+    );
     assert_eq!(payload.deploy.expose_ports, vec![8080, 8443]);
     assert_eq!(payload.deploy.flags, vec!["--network=host".to_string()]);
 }
@@ -82,39 +89,4 @@ fn service_payload_expands_preview_environment() {
         payload.preview.unwrap().env.items["PATH_COPY"].as_str(),
         path
     );
-}
-
-#[tokio::test]
-async fn rollout_rejects_a_build_without_registry_for_a_multinode_target() {
-    let app = axum::Router::new().route(
-        "/api/config",
-        axum::routing::get(|| async {
-            axum::Json(serde_json::json!({
-                "cluster": { "nodes": { "node1": {}, "node2": {} } }
-            }))
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let config = std::env::temp_dir().join(format!(
-        "maestro-rollout-registry-test-{}.jsonc",
-        crate::utils::nanoid::unique_id(8)
-    ));
-    std::fs::write(&config, sample_config()).unwrap();
-    let filter = vec!["service-1".to_string()];
-
-    let error = run_rollout(&config, &address.to_string(), false, false, &filter, true)
-        .await
-        .expect_err("multi-node rollout should require build.registry");
-    assert!(
-        error
-            .to_string()
-            .contains("build.registry is required for services built in multi-node mode"),
-        "unexpected error: {error}"
-    );
-
-    server.abort();
-    let _ = std::fs::remove_file(config);
 }

@@ -1211,6 +1211,7 @@ sys.exit(0 if code == int(sys.argv[1]) else 1)
                     .filter(|assignment| assignment.node_id == format!("node-{}", index + 1))
                     .cloned()
                     .collect(),
+                images: Vec::new(),
             };
             for action in diff_assignments(&node_actual, &manifest)? {
                 match action {
@@ -2565,6 +2566,16 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     };
     registry.register(info.clone()).await?;
     assert_eq!(registry.list_nodes().await?, vec![info]);
+    registry.publish_image_holder("api:deployment").await?;
+    assert_eq!(
+        registry
+            .list_image_holders("api:deployment")
+            .await?
+            .into_iter()
+            .map(|holder| holder.node_id)
+            .collect::<Vec<_>>(),
+        vec![seed_runtime.node_id.clone()]
+    );
 
     let control_key =
         super::identity::control_reservation_key(seed_runtime.host_ip, seed_runtime.api_port);
@@ -2593,6 +2604,13 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
         Some(u64::from(seed_runtime.etcd_peer_port))
     );
     registry.deregister().await?;
+    assert!(
+        registry
+            .list_image_holders("api:deployment")
+            .await?
+            .is_empty(),
+        "revoking the node lease must remove its image availability"
+    );
     Ok(())
 }
 
@@ -2911,6 +2929,7 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
                     node_id: "workload-node".to_string(),
                     generation: 0,
                     assignments: vec![first_assignment.clone()],
+                    images: Vec::new(),
                 },
             )
             .await?,
@@ -2963,6 +2982,7 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
         node_id: "workload-node".to_string(),
         generation: persisted.generation,
         assignments: vec![successor_assignment.clone()],
+        images: Vec::new(),
     };
     assert_eq!(
         assignment_store

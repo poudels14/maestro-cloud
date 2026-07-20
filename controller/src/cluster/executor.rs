@@ -1,11 +1,15 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     cluster::{
-        Assignment, AssignmentManifest, NodeGatewayEndpoint, PlacementHistory, ReplicaEndpoint,
-        assignment_store::AssignmentStore,
+        Assignment, AssignmentManifest, ImageAssignment, NodeGatewayEndpoint, PlacementHistory,
+        ReplicaEndpoint, assignment_store::AssignmentStore, registry::NodeRegistry,
     },
     deployment::{
         provider::{ContainerDeploymentProvider, ReplicaRuntimeIdentity, replica_container_name},
@@ -41,6 +45,9 @@ pub struct EngineReplicaExecutor {
     runtime: Arc<dyn RuntimeProvider>,
     store: Arc<dyn ClusterStore>,
     assignments: Arc<dyn AssignmentStore>,
+    registry: Arc<dyn NodeRegistry>,
+    image_http: reqwest::Client,
+    image_peer_secret: String,
     engine: Arc<Engine>,
     logger: Logger,
     log_sender: Option<flume::Sender<LogEntry>>,
@@ -54,12 +61,28 @@ impl EngineReplicaExecutor {
         runtime: Arc<dyn RuntimeProvider>,
         store: Arc<dyn ClusterStore>,
         assignments: Arc<dyn AssignmentStore>,
+        registry: Arc<dyn NodeRegistry>,
         log_sender: Option<flume::Sender<LogEntry>>,
     ) -> Result<Self> {
         let cluster = config
             .cluster
             .as_ref()
             .ok_or_else(|| anyhow!("assignment executor requires cluster configuration"))?;
+        let ca = std::fs::read(config.certs_dir().join("ca.pem"))?;
+        let mut identity = std::fs::read(config.certs_dir().join("client.pem"))?;
+        identity.extend_from_slice(b"\n");
+        identity.extend_from_slice(&std::fs::read(config.certs_dir().join("client-key.pem"))?);
+        let image_http = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(&ca)?)
+            .identity(reqwest::Identity::from_pem(&identity)?)
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(6 * 60 * 60))
+            .build()?;
+        let image_peer_secret = config
+            .jwt_secret_key
+            .clone()
+            .ok_or_else(|| anyhow!("cluster image distribution requires jwt-secret-key"))?;
         let dns_domain = Some(format!("{}.maestro.internal", config.cluster_name));
         let dns_server = config
             .subnet
@@ -90,6 +113,9 @@ impl EngineReplicaExecutor {
             runtime,
             store,
             assignments,
+            registry,
+            image_http,
+            image_peer_secret,
             engine: Arc::new(Engine::new(provider, supervisor, config.data_dir.clone())),
             logger: Logger::new(log_sender.clone()),
             log_sender,
@@ -104,6 +130,135 @@ impl EngineReplicaExecutor {
 
     pub fn actual(&self) -> &BTreeMap<String, RunningReplica> {
         &self.running
+    }
+
+    pub async fn reconcile_images(&self, desired: &AssignmentManifest) -> Result<()> {
+        let mut failures = Vec::new();
+        for image in &desired.images {
+            if let Err(error) = self.ensure_peer_image(image).await {
+                failures.push(format!("{}: {error}", image.image));
+            }
+        }
+        if !failures.is_empty() {
+            bail!("{}", failures.join("; "));
+        }
+        Ok(())
+    }
+
+    pub async fn prune_images(&self, desired: &AssignmentManifest) -> Result<()> {
+        let desired = desired
+            .images
+            .iter()
+            .map(|image| image.image.as_str())
+            .collect::<BTreeSet<_>>();
+        for holder in self.registry.list_local_image_holders().await? {
+            if desired.contains(holder.image.as_str()) {
+                continue;
+            }
+            self.registry.remove_image_holder(&holder.image).await?;
+            self.runtime.remove_image(&holder.image).await?;
+            self.logger.emit(
+                "info",
+                &format!("removed unassigned peer image `{}`", holder.image),
+            );
+        }
+        Ok(())
+    }
+
+    async fn ensure_peer_image(&self, desired: &ImageAssignment) -> Result<()> {
+        if self
+            .runtime
+            .image_exists(&desired.image)
+            .await
+            .unwrap_or(false)
+        {
+            self.registry.publish_image_holder(&desired.image).await?;
+            return Ok(());
+        }
+        let nodes = self
+            .registry
+            .list_nodes()
+            .await?
+            .into_iter()
+            .map(|node| (node.node_id.clone(), node))
+            .collect::<BTreeMap<_, _>>();
+        let mut candidates = self
+            .registry
+            .list_image_holders(&desired.image)
+            .await?
+            .into_iter()
+            .map(|holder| holder.node_id)
+            .collect::<Vec<_>>();
+        if !candidates.contains(&desired.source_node_id) {
+            candidates.push(desired.source_node_id.clone());
+        }
+        let mut failures = Vec::new();
+        for node_id in candidates {
+            if node_id == self.node_id {
+                continue;
+            }
+            let Some(node) = nodes.get(&node_id) else {
+                failures.push(format!("{node_id}: node is not live"));
+                continue;
+            };
+            let mut url = reqwest::Url::parse(&format!(
+                "https://{}:{}/api/cluster/images/export",
+                node.cluster_host_ip, node.cluster_api_port
+            ))?;
+            url.query_pairs_mut().append_pair("image", &desired.image);
+            let response = match self
+                .image_http
+                .get(url)
+                .bearer_auth(image_peer_token(&self.image_peer_secret)?)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    failures.push(format!("{node_id}: {error}"));
+                    continue;
+                }
+            };
+            if !response.status().is_success() {
+                let status = response.status();
+                let detail = response.text().await.unwrap_or_default();
+                failures.push(format!("{node_id}: {status} {detail}"));
+                continue;
+            }
+            use futures_util::TryStreamExt;
+            let stream = response.bytes_stream().map_err(std::io::Error::other);
+            let reader = tokio_util::io::StreamReader::new(stream);
+            match self
+                .runtime
+                .import_image(&desired.image, Box::pin(reader))
+                .await
+            {
+                Ok(()) => {
+                    self.registry.publish_image_holder(&desired.image).await?;
+                    self.logger.emit(
+                        "info",
+                        &format!(
+                            "peer image `{}` imported from node `{node_id}`",
+                            desired.image
+                        ),
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    let _ = self.runtime.remove_image(&desired.image).await;
+                    failures.push(format!("{node_id}: {error}"));
+                }
+            }
+        }
+        bail!(
+            "image `{}` is unavailable from its cluster peers{}",
+            desired.image,
+            if failures.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", failures.join("; "))
+            }
+        )
     }
 
     pub async fn reconcile_egress(&self, desired: &AssignmentManifest) -> Result<()> {
@@ -255,6 +410,14 @@ impl EngineReplicaExecutor {
             assignment.service_id, assignment.deployment_id, assignment.replica_index
         );
         if !self.runtime.image_exists(image).await.unwrap_or(false) {
+            if deployment
+                .config
+                .build
+                .as_ref()
+                .is_some_and(|build| build.registry.is_none())
+            {
+                bail!("registry-free build image `{image}` was not replicated to this node");
+            }
             self.runtime
                 .pull_image(image, self.log_sender.as_ref(), Some(&source))
                 .await
@@ -504,6 +667,22 @@ impl EngineReplicaExecutor {
             },
         }))
     }
+}
+
+fn image_peer_token(secret: &str) -> Result<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    Ok(jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &serde_json::json!({
+            "sub": "maestro-image-peer",
+            "scope": "image-export",
+            "iat": now,
+            "exp": now.saturating_add(24 * 60 * 60),
+        }),
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )?)
 }
 
 fn initial_replica_status(healthcheck_path: Option<&str>) -> DeploymentStatus {

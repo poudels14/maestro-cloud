@@ -1656,6 +1656,11 @@ async fn run() -> crate::error::Result<bool> {
                     runtime.clone(),
                     store.clone(),
                     &token,
+                    &deployment_config
+                        .cluster
+                        .as_ref()
+                        .expect("cluster mode was checked")
+                        .node_id,
                 )
                 .await
                 .map_err(|error| {
@@ -1665,7 +1670,7 @@ async fn run() -> crate::error::Result<bool> {
                 })?;
                 logger.emit(
                     "info",
-                    "migrated service images are available in their configured build registries",
+                    "migrated service images are ready for cluster distribution",
                 );
             }
             let cluster_assignment_store: Option<
@@ -1807,6 +1812,9 @@ async fn run() -> crate::error::Result<bool> {
                         runtime.clone(),
                         store.clone(),
                         assignment_store.clone(),
+                        cluster_registry
+                            .clone()
+                            .expect("cluster registry was initialized"),
                         Some(log_sender.clone()),
                     )?;
                     if let Some(firewall) = service_egress_firewall.clone() {
@@ -1948,6 +1956,9 @@ async fn run() -> crate::error::Result<bool> {
             );
             if !cluster_mode && let Some(firewall) = service_egress_firewall {
                 controller.set_egress_firewall(firewall);
+            }
+            if let Some(registry) = cluster_registry {
+                controller.set_cluster_registry(registry);
             }
             if cluster_mode && let Some(elector) = &leader_elector {
                 controller

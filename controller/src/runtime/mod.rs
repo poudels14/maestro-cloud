@@ -138,6 +138,8 @@ pub struct InteractiveExecRequest {
 
 pub type ExecStdin = Pin<Box<dyn tokio::io::AsyncWrite + Send>>;
 pub type ExecOutput = Pin<Box<dyn tokio::io::AsyncRead + Send>>;
+pub type ImageInput = Pin<Box<dyn tokio::io::AsyncRead + Send>>;
+pub type ImageOutput = Pin<Box<dyn tokio::io::AsyncWrite + Send>>;
 
 #[async_trait]
 pub trait ExecControl: Send + Sync {
@@ -246,6 +248,20 @@ pub trait RuntimeProvider: Send + Sync {
         log_source: Option<&str>,
     ) -> Result<()>;
 
+    async fn export_image(&self, image: &str, _output: ImageOutput) -> Result<()> {
+        bail!(
+            "runtime `{}` cannot export image `{image}`",
+            self.cli_name()
+        )
+    }
+
+    async fn import_image(&self, image: &str, _input: ImageInput) -> Result<()> {
+        bail!(
+            "runtime `{}` cannot import image `{image}`",
+            self.cli_name()
+        )
+    }
+
     async fn image_exists(&self, _image: &str) -> Result<bool> {
         Ok(false)
     }
@@ -271,6 +287,94 @@ pub trait RuntimeProvider: Send + Sync {
     }
 
     async fn remove_image(&self, image_id: &str) -> Result<()>;
+}
+
+pub(crate) async fn stream_command_output(
+    cli: &str,
+    args: &[&str],
+    mut output: ImageOutput,
+) -> Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let mut child = tokio::process::Command::new(cli)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture `{cli}` stdout"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture `{cli}` stderr"))?;
+    let stderr_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await.map(|_| bytes)
+    });
+    if let Err(error) = tokio::io::copy(&mut stdout, &mut output).await {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error.into());
+    }
+    tokio::io::AsyncWriteExt::shutdown(&mut output).await?;
+    drop(output);
+    let status = child.wait().await?;
+    let stderr = stderr_task.await??;
+    if !status.success() {
+        bail!(
+            "`{cli} {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn stream_command_input(
+    cli: &str,
+    args: &[&str],
+    mut input: ImageInput,
+) -> Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let mut child = tokio::process::Command::new(cli)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open `{cli}` stdin"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture `{cli}` stderr"))?;
+    let stderr_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await.map(|_| bytes)
+    });
+    if let Err(error) = tokio::io::copy(&mut input, &mut stdin).await {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error.into());
+    }
+    tokio::io::AsyncWriteExt::shutdown(&mut stdin).await?;
+    drop(stdin);
+    let status = child.wait().await?;
+    let stderr = stderr_task.await??;
+    if !status.success() {
+        bail!(
+            "`{cli} {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 pub fn create_provider(runtime_type: RuntimeType) -> Arc<dyn RuntimeProvider> {

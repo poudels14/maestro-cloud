@@ -162,15 +162,22 @@ authoritative voter cache after a voter joins.
 Remove or drain an old node through the normal cluster lifecycle before reusing
 its name, endpoint, or subnet. Removed node identities cannot silently rejoin.
 
-## Registry and scheduling
+## Images and scheduling
 
-Every service that Maestro builds in multi-node mode must set `build.registry`.
-Maestro publishes the image as
-`<build.registry>/<service-id>:<deployment-id>`. A service configured with
-`image` instead of `build` continues to use that image reference directly.
-Workload nodes must be able to pull from every configured service registry, and
-any node that can lead builds must be able to push. Configure runtime registry
-credentials independently on every host.
+`build.registry` is optional in multi-node mode. Without it, Maestro streams the
+built image directly between authenticated cluster nodes and keeps it on at
+least two eligible workload nodes when the cluster has enough capacity. Image
+availability is lease-backed, so a failed node is removed as a source and the
+leader assigns a replacement copy. Draining a node copies required images to
+its replacement nodes before their replicas start. The latest build for a
+stopped service remains replicated so a later restart does not depend on the
+original build node.
+
+With `build.registry`, Maestro instead publishes
+`<build.registry>/<service-id>:<deployment-id>`. Workload nodes must be able to
+pull from that registry and any node that can lead builds must be able to push.
+A service configured with `image` instead of `build` continues to use that
+image reference directly.
 
 ```jsonc
 {
@@ -179,8 +186,7 @@ credentials independently on every host.
       "name": "API",
       "build": {
         "repo": "git@github.com:acme/api.git",
-        "dockerfile": "Dockerfile",
-        "registry": "ghcr.io/acme"
+        "dockerfile": "Dockerfile"
       },
       "deploy": {}
     }

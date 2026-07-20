@@ -237,6 +237,7 @@ pub struct DeploymentController {
     notified_crashed: HashSet<String>,
     leadership_rx: Option<watch::Receiver<crate::cluster::types::LeadershipState>>,
     egress_firewall: Option<crate::firewall::FirewallManager>,
+    cluster_registry: Option<Arc<dyn crate::cluster::registry::NodeRegistry>>,
     maintenance_requests_initialized: bool,
 }
 
@@ -329,12 +330,20 @@ impl DeploymentController {
             notified_crashed: HashSet::new(),
             leadership_rx: None,
             egress_firewall: None,
+            cluster_registry: None,
             maintenance_requests_initialized: false,
         }
     }
 
     pub fn set_egress_firewall(&mut self, firewall: crate::firewall::FirewallManager) {
         self.egress_firewall = Some(firewall);
+    }
+
+    pub fn set_cluster_registry(
+        &mut self,
+        registry: Arc<dyn crate::cluster::registry::NodeRegistry>,
+    ) {
+        self.cluster_registry = Some(registry);
     }
 
     pub fn observe_leadership(
@@ -1799,9 +1808,35 @@ impl DeploymentController {
                 Ok(output) => {
                     let mut queued = pending.queued_deployment;
                     let cleanup_service_id = queued.service_id.clone();
+                    let image = output.image_tag;
+                    let peer_distributed = queued
+                        .deployment
+                        .config
+                        .build
+                        .as_ref()
+                        .is_some_and(|build| build.registry.is_none());
                     queued.deployment.build = Some(DeploymentBuildInfo {
-                        docker_image_id: output.image_tag,
+                        docker_image_id: image.clone(),
+                        source_node_id: if peer_distributed {
+                            self.config
+                                .cluster
+                                .as_ref()
+                                .map(|cluster| cluster.node_id.clone())
+                        } else {
+                            None
+                        },
                     });
+                    if peer_distributed
+                        && let Some(registry) = &self.cluster_registry
+                        && let Err(error) = registry.publish_image_holder(&image).await
+                    {
+                        self.logger.emit(
+                            "warn",
+                            &format!(
+                                "failed to publish local availability for image `{image}`: {error}"
+                            ),
+                        );
+                    }
                     let deployment_ref = Deployment {
                         service_id: service_id.clone(),
                         id: deployment_id.clone(),
@@ -2322,8 +2357,36 @@ impl DeploymentController {
             .filter_map(deployment_image)
             .filter(|image| !retained_images.contains(image))
             .collect::<HashSet<_>>();
+        let peer_images = deployments
+            .iter()
+            .filter(|deployment| {
+                deployment
+                    .config
+                    .build
+                    .as_ref()
+                    .is_some_and(|build| build.registry.is_none())
+            })
+            .filter_map(deployment_image)
+            .collect::<HashSet<_>>();
+        let local_image_reconciler = self
+            .config
+            .cluster
+            .as_ref()
+            .is_some_and(|cluster| cluster.role.runs_workloads());
 
         for image in stale_images {
+            if local_image_reconciler && peer_images.contains(&image) {
+                continue;
+            }
+            if let Some(registry) = &self.cluster_registry
+                && let Err(err) = registry.remove_image_holder(&image).await
+            {
+                self.logger.emit(
+                    "warn",
+                    &format!("failed to remove availability for old image `{image}`: {err}"),
+                );
+                continue;
+            }
             if let Err(err) = self.runtime.remove_image(&image).await {
                 self.logger.emit(
                     "warn",
