@@ -13,14 +13,16 @@ use clustertest::{
     ControlPlaneReadiness, CutoverCluster, CutoverObservation, DrainBehavior, ElectionCluster,
     FencedWriteOutcome, FixtureAffinityToken, FixtureControllerName, FixtureInstanceId,
     FixtureMarker, FixtureMutationName, FixtureNodeName, FixtureVersion, FormationCluster,
-    FormationMemberRole, FormationSnapshot, JoinObservation, LeadershipAgreement,
-    LeadershipSnapshot, MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze,
-    MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, MembershipAgreement,
-    NodePorts, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup, RegistrationObservation,
-    ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability, RestartCluster,
-    RollingUpgradeObservation, RoutingCluster, ScheduledAssignment, SchedulingCluster,
-    SchedulingEligibility, SchedulingSnapshot, SelectedRestartObservation, TargetRetention,
-    UpgradeCluster, UpgradeFault, scenarios,
+    FormationMemberRole, FormationSnapshot, IngressConfigurationState, IngressStartupCluster,
+    IngressStartupObservation, JoinObservation, LeadershipAgreement, LeadershipSnapshot,
+    MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze, MaintenanceNodeRole,
+    MaintenanceNodeSnapshot, MaintenanceTopology, MembershipAgreement, NodePorts, PeerStoreCluster,
+    PeerStoreObservation, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup,
+    RegistrationObservation, ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability,
+    RestartCluster, RollingUpgradeObservation, RoutingCluster, ScheduledAssignment,
+    SchedulingCluster, SchedulingEligibility, SchedulingSnapshot, SecurityRestartState,
+    SeedControlRole, SeedSecurityCluster, SeedSecurityObservation, SelectedRestartObservation,
+    TargetRetention, UpgradeCluster, UpgradeFault, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -966,48 +968,86 @@ impl FormationCluster for OldSystemFormationCluster {
     }
 }
 
+struct OldSystemSeedSecurityCluster {
+    cluster: FormingEtcdCluster,
+}
+
+impl OldSystemSeedSecurityCluster {
+    fn start() -> Result<Self> {
+        Ok(Self {
+            cluster: FormingEtcdCluster::start_seed()?,
+        })
+    }
+}
+
+#[async_trait]
+impl SeedSecurityCluster for OldSystemSeedSecurityCluster {
+    type Error = anyhow::Error;
+
+    async fn bootstrap_seed_security(&mut self) -> Result<SeedSecurityObservation> {
+        let runtime = self.cluster.runtime(0);
+        if runtime.role != NodeRole::Master {
+            bail!("designated security seed was not configured as a master");
+        }
+
+        let mut unreachable_peers = 0;
+        for peer in &self.cluster.nodes[1..] {
+            if tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, peer.etcd_peer_port))
+                .await
+                .is_err()
+            {
+                unreachable_peers += 1;
+            }
+        }
+
+        self.cluster.wait_for_seed().await?;
+        let endpoint = self.cluster.client_url(0);
+        let mut first = etcd_client::Client::connect([endpoint.clone()], None).await?;
+        // Production authenticates the no-password root user with its mTLS identity. This
+        // plain-HTTP fixture needs a password so it can reconnect after auth is enabled.
+        let root_password = "maestro-integration-root";
+        first.role_add("root").await?;
+        first.user_add("root", root_password, None).await?;
+        first.user_grant_role("root", "root").await?;
+        super::auth::bootstrap_initial_with_client(&runtime, &mut first).await?;
+
+        let options = etcd_client::ConnectOptions::new().with_user("root", root_password);
+        let mut restarted = etcd_client::Client::connect([endpoint], Some(options)).await?;
+        super::auth::bootstrap_initial_with_client(&runtime, &mut restarted).await?;
+        let gateway_root = restarted
+            .get(super::auth::gateway_root_key(&runtime.node_id), None)
+            .await?;
+        let gateway_root = gateway_root
+            .kvs()
+            .first()
+            .filter(|entry| entry.value().is_empty())
+            .map_or(ResourceAvailability::Unavailable, |_| {
+                ResourceAvailability::Available
+            });
+        let store = if restarted.status().await?.leader() == 0 {
+            ResourceAvailability::Unavailable
+        } else {
+            ResourceAvailability::Available
+        };
+
+        Ok(SeedSecurityObservation {
+            seed_role: SeedControlRole::VotingControlPlane,
+            configured_voters: self.cluster.nodes.len(),
+            unreachable_peers,
+            store,
+            security_restart: SecurityRestartState::Preserved,
+            gateway_root,
+        })
+    }
+}
+
 /// Starts the configured master as a one-member cluster with both peers offline, enables RBAC,
 /// and repeats RBAC initialization through an authenticated client to simulate a daemon restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn master_bootstrap_and_rbac_restart_do_not_require_reachable_peers() -> Result<()> {
-    let cluster = FormingEtcdCluster::start_seed()?;
-    let runtime = cluster.runtime(0);
-    assert_eq!(runtime.role, NodeRole::Master);
-    assert_eq!(cluster.nodes.len(), 3);
-
-    for peer in &cluster.nodes[1..] {
-        assert!(
-            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, peer.etcd_peer_port))
-                .await
-                .is_err(),
-            "configured peer unexpectedly accepted an etcd connection"
-        );
-    }
-
-    cluster.wait_for_seed().await?;
-    let endpoint = cluster.client_url(0);
-    let mut first = etcd_client::Client::connect([endpoint.clone()], None).await?;
-    // Production authenticates the no-password root user with its mTLS identity. This
-    // plain-HTTP fixture needs a password so it can reconnect after auth is enabled.
-    let root_password = "maestro-integration-root";
-    first.role_add("root").await?;
-    first.user_add("root", root_password, None).await?;
-    first.user_grant_role("root", "root").await?;
-    super::auth::bootstrap_initial_with_client(&runtime, &mut first).await?;
-
-    let options = etcd_client::ConnectOptions::new().with_user("root", root_password);
-    let mut restarted = etcd_client::Client::connect([endpoint], Some(options)).await?;
-    super::auth::bootstrap_initial_with_client(&runtime, &mut restarted).await?;
-    let gateway_root = restarted
-        .get(super::auth::gateway_root_key(&runtime.node_id), None)
-        .await?;
-    let gateway_root = gateway_root
-        .kvs()
-        .first()
-        .ok_or_else(|| anyhow!("node gateway root was not initialized"))?;
-    assert!(gateway_root.value().is_empty());
-    assert_ne!(restarted.status().await?.leader(), 0);
+    let mut cluster = OldSystemSeedSecurityCluster::start()?;
+    scenarios::isolated_seed_security_restart_is_idempotent(&mut cluster).await?;
     Ok(())
 }
 
@@ -2781,109 +2821,141 @@ async fn wait_for_leader(
 
 /// Verifies the exact access-log flags used by production against the pinned Traefik image.
 /// Included in `cargo test-multi-node` because it requires a container daemon.
-#[test]
+struct OldSystemIngressStartupCluster;
+
+#[async_trait]
+impl IngressStartupCluster for OldSystemIngressStartupCluster {
+    type Error = anyhow::Error;
+
+    async fn start_ingress(&mut self) -> Result<IngressStartupObservation> {
+        let runtime_cli = test_runtime_cli()?;
+        ensure_image(&runtime_cli, crate::deployment::INGRESS_IMAGE_TAG)?;
+        let name = format!(
+            "maestro-traefik-config-test-{}",
+            crate::utils::nanoid::unique_id(10).to_ascii_lowercase()
+        );
+        let port = reserve_port_excluding(Ipv4Addr::LOCALHOST, &BTreeSet::new())?;
+        let publish = format!("127.0.0.1:{port}:8888");
+        let mut arguments = vec![
+            "run".to_string(),
+            "--detach".to_string(),
+            "--name".to_string(),
+            name.clone(),
+            "--publish".to_string(),
+            publish,
+            crate::deployment::INGRESS_IMAGE_TAG.to_string(),
+            "--entrypoints.web.address=:8888".to_string(),
+        ];
+        arguments.extend(crate::deployment::ingress_access_log_args());
+        let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        let started = command_output(&runtime_cli, &references);
+        let result = started.and_then(|_| {
+            std::thread::sleep(Duration::from_secs(1));
+            let running = command_output(
+                &runtime_cli,
+                &["inspect", "--format", "{{.State.Running}}", &name],
+            )?;
+            if running.trim() != "true" {
+                bail!("pinned Traefik exited after parsing production access-log flags");
+            }
+            let socket = format!("127.0.0.1:{port}").parse()?;
+            std::net::TcpStream::connect_timeout(&socket, Duration::from_secs(2))
+                .context("the host could not reach Traefik on its published ingress port")?;
+            Ok(IngressStartupObservation {
+                configuration: IngressConfigurationState::Accepted,
+                endpoint: ResourceAvailability::Available,
+            })
+        });
+        let _ = command_output(&runtime_cli, &["rm", "--force", &name]);
+        result
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires an isolated Linux container daemon"]
-fn production_traefik_access_log_config_starts() -> Result<()> {
-    let runtime_cli = test_runtime_cli()?;
-    ensure_image(&runtime_cli, crate::deployment::INGRESS_IMAGE_TAG)?;
-    let name = format!(
-        "maestro-traefik-config-test-{}",
-        crate::utils::nanoid::unique_id(10).to_ascii_lowercase()
-    );
-    let port = reserve_port_excluding(Ipv4Addr::LOCALHOST, &BTreeSet::new())?;
-    let publish = format!("127.0.0.1:{port}:8888");
-    let mut arguments = vec![
-        "run".to_string(),
-        "--detach".to_string(),
-        "--name".to_string(),
-        name.clone(),
-        "--publish".to_string(),
-        publish,
-        crate::deployment::INGRESS_IMAGE_TAG.to_string(),
-        "--entrypoints.web.address=:8888".to_string(),
-    ];
-    arguments.extend(crate::deployment::ingress_access_log_args());
-    let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    let started = command_output(&runtime_cli, &references);
-    let result = started.and_then(|_| {
-        std::thread::sleep(Duration::from_secs(1));
-        let running = command_output(
-            &runtime_cli,
-            &["inspect", "--format", "{{.State.Running}}", &name],
-        )?;
-        if running.trim() != "true" {
-            bail!("pinned Traefik exited after parsing production access-log flags");
-        }
-        let socket = format!("127.0.0.1:{port}").parse()?;
-        std::net::TcpStream::connect_timeout(&socket, Duration::from_secs(2))
-            .context("the host could not reach Traefik on its published ingress port")?;
-        Ok(())
-    });
-    let _ = command_output(&runtime_cli, &["rm", "--force", &name]);
-    result
+async fn production_traefik_access_log_config_starts() -> Result<()> {
+    scenarios::production_ingress_access_log_configuration_starts(
+        &mut OldSystemIngressStartupCluster,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Exercises the single-node endpoint from a separate container, where host
 /// loopback would point at the caller rather than the etcd container.
-#[test]
-#[ignore = "requires an isolated Linux container daemon"]
-fn single_node_container_etcd_endpoint_is_reachable() -> Result<()> {
-    let runtime_cli = test_runtime_cli()?;
-    ensure_image(&runtime_cli, crate::deployment::ETCD_IMAGE_TAG)?;
-    let suffix = crate::utils::nanoid::unique_id(10).to_ascii_lowercase();
-    let network = format!("maestro-etcd-endpoint-test-{suffix}");
-    let etcd = format!("maestro-etcd-endpoint-{suffix}");
-    command_output(&runtime_cli, &["network", "create", &network])?;
-    let started = command_output(
-        &runtime_cli,
-        &[
-            "run",
-            "--detach",
-            "--network",
-            &network,
-            "--hostname",
-            "maestro-etcd",
-            "--name",
-            &etcd,
-            crate::deployment::ETCD_IMAGE_TAG,
-            "etcd",
-            "--listen-client-urls=http://0.0.0.0:2379",
-            "--advertise-client-urls=http://maestro-etcd:2379",
-        ],
-    );
-    let result = started.and_then(|_| {
-        let endpoint = crate::deployment::container_etcd_endpoints(
-            None,
-            &["http://127.0.0.1:39999".to_string()],
-            true,
-        )
-        .remove(0);
-        for _ in 0..30 {
-            let health = command_output(
-                &runtime_cli,
-                &[
-                    "run",
-                    "--rm",
-                    "--network",
-                    &network,
-                    crate::deployment::ETCD_IMAGE_TAG,
-                    "etcdctl",
-                    "--endpoints",
-                    &endpoint,
-                    "endpoint",
-                    "health",
-                ],
-            );
-            if health.is_ok() {
-                return Ok(());
+struct OldSystemPeerStoreCluster;
+
+#[async_trait]
+impl PeerStoreCluster for OldSystemPeerStoreCluster {
+    type Error = anyhow::Error;
+
+    async fn probe_store_from_peer(&mut self) -> Result<PeerStoreObservation> {
+        let runtime_cli = test_runtime_cli()?;
+        ensure_image(&runtime_cli, crate::deployment::ETCD_IMAGE_TAG)?;
+        let suffix = crate::utils::nanoid::unique_id(10).to_ascii_lowercase();
+        let network = format!("maestro-etcd-endpoint-test-{suffix}");
+        let etcd = format!("maestro-etcd-endpoint-{suffix}");
+        command_output(&runtime_cli, &["network", "create", &network])?;
+        let started = command_output(
+            &runtime_cli,
+            &[
+                "run",
+                "--detach",
+                "--network",
+                &network,
+                "--hostname",
+                "maestro-etcd",
+                "--name",
+                &etcd,
+                crate::deployment::ETCD_IMAGE_TAG,
+                "etcd",
+                "--listen-client-urls=http://0.0.0.0:2379",
+                "--advertise-client-urls=http://maestro-etcd:2379",
+            ],
+        );
+        let result = started.and_then(|_| {
+            let endpoint = crate::deployment::container_etcd_endpoints(
+                None,
+                &["http://127.0.0.1:39999".to_string()],
+                true,
+            )
+            .remove(0);
+            for _ in 0..30 {
+                let health = command_output(
+                    &runtime_cli,
+                    &[
+                        "run",
+                        "--rm",
+                        "--network",
+                        &network,
+                        crate::deployment::ETCD_IMAGE_TAG,
+                        "etcdctl",
+                        "--endpoints",
+                        &endpoint,
+                        "endpoint",
+                        "health",
+                    ],
+                );
+                if health.is_ok() {
+                    return Ok(PeerStoreObservation {
+                        endpoint: ResourceAvailability::Available,
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(200));
             }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        bail!("container-local etcd endpoint `{endpoint}` never became healthy")
-    });
-    let _ = command_output(&runtime_cli, &["rm", "--force", &etcd]);
-    let _ = command_output(&runtime_cli, &["network", "rm", &network]);
-    result
+            bail!("container-local etcd endpoint `{endpoint}` never became healthy")
+        });
+        let _ = command_output(&runtime_cli, &["rm", "--force", &etcd]);
+        let _ = command_output(&runtime_cli, &["network", "rm", &network]);
+        result
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated Linux container daemon"]
+async fn single_node_container_etcd_endpoint_is_reachable() -> Result<()> {
+    scenarios::single_node_store_endpoint_is_peer_reachable(&mut OldSystemPeerStoreCluster).await?;
+    Ok(())
 }
 
 async fn fetch_body(client: &reqwest::Client, url: &str) -> Option<String> {

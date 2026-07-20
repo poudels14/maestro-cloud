@@ -17,6 +17,7 @@ mod rollout;
 mod routing;
 pub mod scenarios;
 mod scheduling;
+mod smoke;
 mod upgrade;
 
 pub use affinity::AffinityCluster;
@@ -47,6 +48,11 @@ pub use restart::RestartCluster;
 pub use rollout::CutoverCluster;
 pub use routing::RoutingCluster;
 pub use scheduling::SchedulingCluster;
+pub use smoke::{
+    IngressConfigurationState, IngressStartupCluster, IngressStartupObservation, PeerStoreCluster,
+    PeerStoreObservation, SecurityRestartState, SeedControlRole, SeedSecurityCluster,
+    SeedSecurityObservation,
+};
 pub use upgrade::{
     FixtureInstanceId, MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze,
     MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, RollingUpgradeObservation,

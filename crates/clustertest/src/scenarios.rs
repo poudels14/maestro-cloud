@@ -13,6 +13,7 @@ mod restart;
 mod rollout;
 mod routing;
 mod scheduling;
+mod smoke;
 mod upgrade;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
@@ -51,4 +52,9 @@ pub use restart::serial_node_restarts_preserve_quorum_and_routing;
 pub use rollout::readiness_gated_cutover_preserves_traffic_and_inflight_requests;
 pub use routing::routing_survives_workload_and_gateway_failures;
 pub use scheduling::scheduler_scales_replicas_across_nodes;
+pub use smoke::{
+    isolated_seed_security_restart_is_idempotent,
+    production_ingress_access_log_configuration_starts,
+    single_node_store_endpoint_is_peer_reachable,
+};
 pub use upgrade::rolling_upgrade_retries_and_restores_nodes_serially;

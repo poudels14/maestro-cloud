@@ -12,4 +12,5 @@ mod restart;
 mod rollout;
 mod routing;
 mod scheduling;
+mod smoke;
 mod upgrade;
