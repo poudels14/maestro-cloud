@@ -4,8 +4,9 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use crate::{
-    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, FixtureName, FixtureVersion, ReplicaCount,
-    ReplicaOverride, ScenarioError, ServiceFixture, ServiceSnapshot,
+    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, FaultInjectableCluster, FixtureName,
+    FixtureVersion, ReplicaCount, ReplicaIndex, ReplicaOverride, RolloutFailure, ScenarioError,
+    ServiceFixture, ServiceSnapshot,
 };
 
 /// Proves that a declarative rollout converges to ready replicas.
@@ -257,6 +258,139 @@ where
     }
 }
 
+/// Proves that an artifact build failure terminates only its deployment.
+pub async fn build_failure_marks_deployment_crashed<Cluster>(
+    cluster: &mut Cluster,
+) -> Result<(), ScenarioError>
+where
+    Cluster: FaultInjectableCluster,
+{
+    let service_name = FixtureName::new("acceptance-build-failure");
+    let deployment_id = cluster
+        .rollout(ServiceFixture::new(
+            service_name.clone(),
+            FixtureVersion::new("v1"),
+            ReplicaCount::new(1),
+        ))
+        .await
+        .map_err(|error| driver_error("queue build-failure rollout", error))?;
+    cluster
+        .inject_rollout_failure(
+            &deployment_id,
+            RolloutFailure::Build("injected build failure".to_string()),
+        )
+        .await
+        .map_err(|error| driver_error("inject build failure", error))?;
+    let snapshot = cluster
+        .await_converged()
+        .await
+        .map_err(|error| driver_error("await build failure convergence", error))?;
+    assert_deployment_phase(
+        &snapshot,
+        &service_name,
+        &deployment_id,
+        DeploymentPhase::Crashed,
+    )
+}
+
+/// Proves that an artifact preparation failure terminates its deployment.
+pub async fn prepare_failure_marks_deployment_crashed<Cluster>(
+    cluster: &mut Cluster,
+) -> Result<(), ScenarioError>
+where
+    Cluster: FaultInjectableCluster,
+{
+    let service_name = FixtureName::new("acceptance-prepare-failure");
+    let deployment_id = cluster
+        .rollout(ServiceFixture::new(
+            service_name.clone(),
+            FixtureVersion::new("v1"),
+            ReplicaCount::new(1),
+        ))
+        .await
+        .map_err(|error| driver_error("queue prepare-failure rollout", error))?;
+    cluster
+        .inject_rollout_failure(
+            &deployment_id,
+            RolloutFailure::Prepare("injected preparation failure".to_string()),
+        )
+        .await
+        .map_err(|error| driver_error("inject preparation failure", error))?;
+    let snapshot = cluster
+        .await_converged()
+        .await
+        .map_err(|error| driver_error("await preparation failure convergence", error))?;
+    assert_deployment_phase(
+        &snapshot,
+        &service_name,
+        &deployment_id,
+        DeploymentPhase::Crashed,
+    )
+}
+
+/// Proves that one crashed replica restarts without failing healthy peers.
+pub async fn crashed_replica_restarts_in_place<Cluster>(
+    cluster: &mut Cluster,
+) -> Result<(), ScenarioError>
+where
+    Cluster: FaultInjectableCluster,
+{
+    let service_name = FixtureName::new("acceptance-replica-restart");
+    let deployment_id = cluster
+        .rollout(ServiceFixture::new(
+            service_name.clone(),
+            FixtureVersion::new("v1"),
+            ReplicaCount::new(3),
+        ))
+        .await
+        .map_err(|error| driver_error("rollout before replica crash", error))?;
+    cluster
+        .await_converged()
+        .await
+        .map_err(|error| driver_error("await pre-crash convergence", error))?;
+    cluster
+        .inject_replica_crash(&deployment_id, ReplicaIndex::new(0))
+        .await
+        .map_err(|error| driver_error("inject replica crash", error))?;
+    let snapshot = cluster
+        .await_converged()
+        .await
+        .map_err(|error| driver_error("await replica recovery", error))?;
+    let service = require_service(&snapshot, &service_name)?;
+    let deployment = service.deployment(&deployment_id).ok_or_else(|| {
+        ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} is absent after replica recovery"
+        ))
+    })?;
+    let restarted = deployment
+        .replicas
+        .iter()
+        .find(|replica| replica.index == 0)
+        .ok_or_else(|| {
+            ScenarioError::Assertion(format!(
+                "deployment {deployment_id:?} has no replica at index 0"
+            ))
+        })?;
+
+    if deployment.phase != DeploymentPhase::Ready {
+        Err(ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} converged to {:?} after one crash, expected Ready",
+            deployment.phase
+        )))
+    } else if ready_replica_count(deployment) != 3 {
+        Err(ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} has {} ready replicas after recovery, expected 3",
+            ready_replica_count(deployment)
+        )))
+    } else if restarted.restart_attempts == 0 {
+        Err(ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} replica 0 recovered without recording a restart"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn require_service<'snapshot, DeploymentId>(
     snapshot: &'snapshot ClusterSnapshot<DeploymentId>,
     service_name: &FixtureName,
@@ -294,6 +428,29 @@ fn assert_ready_replicas<DeploymentId: Debug + Eq>(
         )))
     } else {
         Ok(())
+    }
+}
+
+fn assert_deployment_phase<DeploymentId: Debug + Eq>(
+    snapshot: &ClusterSnapshot<DeploymentId>,
+    service_name: &FixtureName,
+    deployment_id: &DeploymentId,
+    expected: DeploymentPhase,
+) -> Result<(), ScenarioError> {
+    let service = require_service(snapshot, service_name)?;
+    let deployment = service.deployment(deployment_id).ok_or_else(|| {
+        ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} is absent while checking its phase"
+        ))
+    })?;
+
+    if deployment.phase == expected {
+        Ok(())
+    } else {
+        Err(ScenarioError::Assertion(format!(
+            "deployment {deployment_id:?} converged to {:?}, expected {expected:?}",
+            deployment.phase
+        )))
     }
 }
 

@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::{ClusterSnapshot, FixtureName, ReplicaOverride, ServiceFixture};
+use crate::{
+    ClusterSnapshot, FixtureName, ReplicaIndex, ReplicaOverride, RolloutFailure, ServiceFixture,
+};
 
 /// Drives one isolated Maestro topology through behavior-level operations.
 ///
@@ -38,4 +40,25 @@ pub trait AcceptanceCluster: Send {
     /// Waits for a quiet reconciliation window and returns the resulting state.
     async fn await_converged(&mut self)
     -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
+}
+
+/// Injects failures at production trait seams for resilience scenarios.
+///
+/// Implementations must inject the failure before returning. The subsequent
+/// `await_converged` call observes how ordinary reconciliation recovers.
+#[async_trait]
+pub trait FaultInjectableCluster: AcceptanceCluster {
+    /// Makes the selected rollout fail during preparation or artifact build.
+    async fn inject_rollout_failure(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        failure: RolloutFailure,
+    ) -> Result<(), Self::Error>;
+
+    /// Reports one replica as crashed through the implementation's runtime seam.
+    async fn inject_replica_crash(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+    ) -> Result<(), Self::Error>;
 }

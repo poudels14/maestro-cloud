@@ -14,8 +14,9 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use clustertest::{
-    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName,
-    IngressFixture, ReplicaOverride, ReplicaSnapshot, ServiceFixture, ServiceSnapshot, scenarios,
+    AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
+    FaultInjectableCluster, FixtureName, IngressFixture, ReplicaIndex, ReplicaOverride,
+    ReplicaSnapshot, RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
 };
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -2431,6 +2432,7 @@ impl OldSystemAcceptanceCluster {
                             .map(|replica| ReplicaSnapshot {
                                 index: replica.replica_index,
                                 phase: acceptance_phase(&replica.status),
+                                restart_attempts: replica.restart_attempts,
                             })
                             .collect::<Vec<_>>();
                         replicas.sort_by_key(|replica| replica.index);
@@ -2581,6 +2583,54 @@ impl AcceptanceCluster for OldSystemAcceptanceCluster {
     }
 }
 
+#[async_trait]
+impl FaultInjectableCluster for OldSystemAcceptanceCluster {
+    async fn inject_rollout_failure(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        failure: RolloutFailure,
+    ) -> Result<()> {
+        match failure {
+            RolloutFailure::Prepare(message) => {
+                self.harness
+                    .provider
+                    .set_prepare_err(deployment_id, &message);
+            }
+            RolloutFailure::Build(message) => {
+                self.harness.provider.set_build_err(deployment_id, &message);
+            }
+        }
+        Ok(())
+    }
+
+    async fn inject_replica_crash(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+    ) -> Result<()> {
+        let service_id = {
+            let state = self.harness.store.state.lock().expect("state lock");
+            state
+                .history
+                .iter()
+                .find(|(_, deployments)| {
+                    deployments
+                        .iter()
+                        .any(|deployment| deployment.id == *deployment_id)
+                })
+                .map(|(service_id, _)| service_id.clone())
+        }
+        .ok_or_else(|| anyhow::anyhow!("deployment `{deployment_id}` does not exist"))?;
+        self.harness.store.set_replica_status(
+            &service_id,
+            deployment_id,
+            replica_index.get(),
+            DeploymentStatus::Crashed,
+        );
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn acceptance_rollout_reaches_ready_on_old_system() {
     let mut cluster = OldSystemAcceptanceCluster::new();
@@ -2624,6 +2674,33 @@ async fn acceptance_drained_deployment_finalizes_on_old_system() {
     scenarios::drained_deployment_finalizes(&mut cluster)
         .await
         .expect("drain finalization acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_build_failure_marks_deployment_crashed_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::build_failure_marks_deployment_crashed(&mut cluster)
+        .await
+        .expect("build failure acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_prepare_failure_marks_deployment_crashed_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::prepare_failure_marks_deployment_crashed(&mut cluster)
+        .await
+        .expect("prepare failure acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_crashed_replica_restarts_in_place_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::crashed_replica_restarts_in_place(&mut cluster)
+        .await
+        .expect("replica restart acceptance scenario");
 }
 
 fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {

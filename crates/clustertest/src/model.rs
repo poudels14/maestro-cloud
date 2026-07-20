@@ -48,6 +48,22 @@ impl ReplicaCount {
     }
 }
 
+/// A stable replica index within one deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplicaIndex(u32);
+
+impl ReplicaIndex {
+    /// Creates a replica index.
+    pub fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the numeric replica index.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Whether a fixture exposes ingress during its lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IngressFixture {
@@ -97,6 +113,15 @@ pub enum ReplicaOverride {
     Clear,
 }
 
+/// A failure injected into a rollout before reconciliation completes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RolloutFailure {
+    /// Artifact preparation fails with the supplied diagnostic.
+    Prepare(String),
+    /// Artifact construction fails with the supplied diagnostic.
+    Build(String),
+}
+
 /// A deployment phase normalized across Maestro implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeploymentPhase {
@@ -127,6 +152,8 @@ pub struct ReplicaSnapshot {
     pub index: u32,
     /// The replica's observed lifecycle phase.
     pub phase: DeploymentPhase,
+    /// The restart attempts recorded for this replica.
+    pub restart_attempts: u32,
 }
 
 /// One deployment in a normalized cluster snapshot.

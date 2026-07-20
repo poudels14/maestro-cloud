@@ -9,10 +9,10 @@ mod error;
 mod model;
 pub mod scenarios;
 
-pub use cluster::AcceptanceCluster;
+pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use error::ScenarioError;
 pub use model::{
     ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName, FixtureVersion,
-    IngressFixture, ReplicaCount, ReplicaOverride, ReplicaSnapshot, ServiceFixture,
-    ServiceSnapshot,
+    IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot, RolloutFailure,
+    ServiceFixture, ServiceSnapshot,
 };
