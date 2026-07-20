@@ -4,6 +4,7 @@ mod assignment;
 mod assignment_plan;
 mod fake_mesh;
 mod fake_network;
+mod health;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
 mod mesh;

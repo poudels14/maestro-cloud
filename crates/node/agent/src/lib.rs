@@ -7,6 +7,9 @@
 mod assignment;
 mod assignment_plan;
 mod assignment_status;
+mod health;
+mod health_probe;
+mod health_status;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
 mod mesh;
@@ -19,6 +22,8 @@ pub use linux_mesh::LinuxMeshBackend;
 pub use assignment::{
     AssignmentAgent, AssignmentAgentError, AssignmentAgentSettings, AssignmentReconcileReport,
 };
+pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
+pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
 pub use mesh::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
     MeshError, MeshInterface, MeshPeer, MeshPlanner, MeshReconciler, MeshRoute, MeshSubnet,
