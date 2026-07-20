@@ -19,7 +19,7 @@ mod scheduling;
 mod upgrade;
 
 pub use affinity::AffinityCluster;
-pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
+pub use cluster::{AcceptanceCluster, FaultInjectableCluster, LifecycleFaultCluster};
 pub use election::ElectionCluster;
 pub use error::ScenarioError;
 pub use formation::{
@@ -33,8 +33,9 @@ pub use model::{
     CutoverObservation, DeploymentPhase, DeploymentSnapshot, DrainBehavior, FencedWriteOutcome,
     FixtureAffinityToken, FixtureControllerName, FixtureMarker, FixtureMutationName, FixtureName,
     FixtureNodeName, FixtureVersion, IngressFixture, LeadershipSnapshot, ReadinessProbe,
-    ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot, ResourceAvailability,
-    RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
+    ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot,
+    ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture,
+    ServiceSnapshot,
 };
 pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;

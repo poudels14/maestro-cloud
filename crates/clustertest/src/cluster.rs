@@ -4,7 +4,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::{
-    ClusterSnapshot, FixtureName, ReplicaIndex, ReplicaOverride, RolloutFailure, ServiceFixture,
+    ClusterSnapshot, FixtureName, ReplicaCount, ReplicaIndex, ReplicaOverride,
+    ReplicaRecordDisposition, RolloutFailure, ServiceFixture,
 };
 
 /// Drives one isolated Maestro topology through behavior-level operations.
@@ -60,5 +61,36 @@ pub trait FaultInjectableCluster: AcceptanceCluster {
         &mut self,
         deployment_id: &Self::DeploymentId,
         replica_index: ReplicaIndex,
+    ) -> Result<(), Self::Error>;
+}
+
+/// Adds runtime-level crash and pending-readiness controls to lifecycle scenarios.
+#[async_trait]
+pub trait LifecycleFaultCluster: FaultInjectableCluster {
+    /// Waits until the selected deployment has started the expected workloads.
+    async fn await_started(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replicas: ReplicaCount,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
+
+    /// Settles reconciliation without reporting pending replicas ready.
+    async fn await_stable_without_readiness(
+        &mut self,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
+
+    /// Marks a replica crashed after it has consumed its full restart budget.
+    async fn inject_exhausted_replica(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+    ) -> Result<(), Self::Error>;
+
+    /// Terminates a runtime workload independently of health reporting.
+    async fn inject_workload_termination(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+        record: ReplicaRecordDisposition,
     ) -> Result<(), Self::Error>;
 }

@@ -15,8 +15,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clustertest::{
     AcceptanceCluster, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
-    FaultInjectableCluster, FixtureName, IngressFixture, ReplicaIndex, ReplicaOverride,
-    ReplicaSnapshot, RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
+    FaultInjectableCluster, FixtureName, IngressFixture, LifecycleFaultCluster, ReplicaCount,
+    ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
+    RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
 };
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -2404,6 +2405,12 @@ struct OldSystemAcceptanceCluster {
     harness: Harness,
 }
 
+#[derive(Clone, Copy)]
+enum AcceptanceReadiness {
+    Automatic,
+    External,
+}
+
 impl OldSystemAcceptanceCluster {
     fn new() -> Self {
         Self {
@@ -2429,10 +2436,23 @@ impl OldSystemAcceptanceCluster {
                             .get(&replica_key)
                             .into_iter()
                             .flatten()
-                            .map(|replica| ReplicaSnapshot {
-                                index: replica.replica_index,
-                                phase: acceptance_phase(&replica.status),
-                                restart_attempts: replica.restart_attempts,
+                            .map(|replica| {
+                                let hostname =
+                                    deployment.hostname_for_replica(replica.replica_index);
+                                ReplicaSnapshot {
+                                    index: replica.replica_index,
+                                    phase: acceptance_phase(&replica.status),
+                                    restart_attempts: replica.restart_attempts,
+                                    workload: if self
+                                        .harness
+                                        .supervisor
+                                        .is_hostname_alive(&hostname)
+                                    {
+                                        ResourceAvailability::Available
+                                    } else {
+                                        ResourceAvailability::Unavailable
+                                    },
+                                }
                             })
                             .collect::<Vec<_>>();
                         replicas.sort_by_key(|replica| replica.index);
@@ -2486,6 +2506,55 @@ impl OldSystemAcceptanceCluster {
         for deployment_id in deployment_ids {
             self.harness.mark_all_replicas_ready(&deployment_id);
         }
+    }
+
+    async fn converge(
+        &mut self,
+        readiness: AcceptanceReadiness,
+    ) -> Result<ClusterSnapshot<String>> {
+        const MINIMUM_TICKS: usize = 32;
+        const REQUIRED_QUIET_TICKS: usize = 8;
+        const MAXIMUM_TICKS: usize = 10_000;
+
+        let mut previous = None;
+        let mut quiet_ticks = 0;
+        for tick_index in 0..MAXIMUM_TICKS {
+            if matches!(readiness, AcceptanceReadiness::Automatic) {
+                self.ready_built_deployments();
+            }
+            self.harness.tick().await;
+            tokio::task::yield_now().await;
+            let snapshot = self.snapshot();
+            if tick_index >= MINIMUM_TICKS && previous.as_ref() == Some(&snapshot) {
+                quiet_ticks += 1;
+            } else {
+                quiet_ticks = 0;
+            }
+            if quiet_ticks >= REQUIRED_QUIET_TICKS {
+                return Ok(snapshot);
+            }
+            previous = Some(snapshot);
+        }
+        Err(anyhow::anyhow!(
+            "old system did not converge after {MAXIMUM_TICKS} reconcile ticks"
+        ))
+    }
+
+    fn deployment_service(&self, deployment_id: &str) -> Result<String> {
+        self.harness
+            .store
+            .state
+            .lock()
+            .expect("state lock")
+            .history
+            .iter()
+            .find(|(_, deployments)| {
+                deployments
+                    .iter()
+                    .any(|deployment| deployment.id == deployment_id)
+            })
+            .map(|(service_id, _)| service_id.clone())
+            .ok_or_else(|| anyhow::anyhow!("deployment `{deployment_id}` does not exist"))
     }
 }
 
@@ -2556,30 +2625,7 @@ impl AcceptanceCluster for OldSystemAcceptanceCluster {
     }
 
     async fn await_converged(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>> {
-        const MINIMUM_TICKS: usize = 32;
-        const REQUIRED_QUIET_TICKS: usize = 8;
-        const MAXIMUM_TICKS: usize = 10_000;
-
-        let mut previous = None;
-        let mut quiet_ticks = 0;
-        for tick_index in 0..MAXIMUM_TICKS {
-            self.ready_built_deployments();
-            self.harness.tick().await;
-            tokio::task::yield_now().await;
-            let snapshot = self.snapshot();
-            if tick_index >= MINIMUM_TICKS && previous.as_ref() == Some(&snapshot) {
-                quiet_ticks += 1;
-            } else {
-                quiet_ticks = 0;
-            }
-            if quiet_ticks >= REQUIRED_QUIET_TICKS {
-                return Ok(snapshot);
-            }
-            previous = Some(snapshot);
-        }
-        Err(anyhow::anyhow!(
-            "old system did not converge after {MAXIMUM_TICKS} reconcile ticks"
-        ))
+        self.converge(AcceptanceReadiness::Automatic).await
     }
 }
 
@@ -2627,6 +2673,88 @@ impl FaultInjectableCluster for OldSystemAcceptanceCluster {
             replica_index.get(),
             DeploymentStatus::Crashed,
         );
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LifecycleFaultCluster for OldSystemAcceptanceCluster {
+    async fn await_started(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replicas: ReplicaCount,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>> {
+        const MAXIMUM_TICKS: usize = 10_000;
+        for _ in 0..MAXIMUM_TICKS {
+            self.harness.tick().await;
+            tokio::task::yield_now().await;
+            let snapshot = self.snapshot();
+            let started = snapshot.services.iter().any(|service| {
+                service.deployment(deployment_id).is_some_and(|deployment| {
+                    deployment
+                        .replicas
+                        .iter()
+                        .filter(|replica| replica.workload == ResourceAvailability::Available)
+                        .count()
+                        == replicas.get() as usize
+                })
+            });
+            if started {
+                return Ok(snapshot);
+            }
+        }
+        Err(anyhow::anyhow!(
+            "old system did not start {} replica(s) after {MAXIMUM_TICKS} ticks",
+            replicas.get()
+        ))
+    }
+
+    async fn await_stable_without_readiness(
+        &mut self,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>> {
+        self.converge(AcceptanceReadiness::External).await
+    }
+
+    async fn inject_exhausted_replica(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+    ) -> Result<()> {
+        let service_id = self.deployment_service(deployment_id)?;
+        self.harness.store.set_replica_state(
+            &service_id,
+            deployment_id,
+            ReplicaState {
+                service_id: None,
+                deployment_id: None,
+                replica_index: replica_index.get(),
+                status: DeploymentStatus::Crashed,
+                healthcheck_failures: crate::health::DEFAULT_MAX_HEALTHCHECK_FAILURES,
+                restart_attempts: crate::health::MAX_REPLICA_RESTART_ATTEMPTS,
+                node_id: None,
+                assignment_id: None,
+                endpoint: None,
+                error: None,
+            },
+        );
+        Ok(())
+    }
+
+    async fn inject_workload_termination(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+        replica_index: ReplicaIndex,
+        record: ReplicaRecordDisposition,
+    ) -> Result<()> {
+        let service_id = self.deployment_service(deployment_id)?;
+        if record == ReplicaRecordDisposition::Missing {
+            let mut state = self.harness.store.state.lock().expect("state lock");
+            let key = format!("{service_id}/{deployment_id}");
+            state.replicas.remove(&key);
+        }
+        self.harness
+            .supervisor
+            .crash_job(&format!("{deployment_id}-replica-{}", replica_index.get()));
         Ok(())
     }
 }
@@ -2701,6 +2829,60 @@ async fn acceptance_crashed_replica_restarts_in_place_on_old_system() {
     scenarios::crashed_replica_restarts_in_place(&mut cluster)
         .await
         .expect("replica restart acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_exhausted_replica_stays_down_while_peers_run_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::exhausted_replica_stays_down_while_peers_run(&mut cluster)
+        .await
+        .expect("exhausted replica acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_all_exhausted_replicas_crash_deployment_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::all_exhausted_replicas_crash_deployment(&mut cluster)
+        .await
+        .expect("all exhausted replicas acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_initial_replica_crash_preserves_pending_peers_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::initial_replica_crash_preserves_pending_peers(&mut cluster)
+        .await
+        .expect("initial replica crash acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_missing_workload_record_is_recovered_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::missing_workload_record_is_recovered(&mut cluster)
+        .await
+        .expect("missing workload record acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_rollout_failure_is_isolated_between_services_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::rollout_failure_is_isolated_between_services(&mut cluster)
+        .await
+        .expect("isolated rollout failure acceptance scenario");
+}
+
+#[tokio::test]
+async fn acceptance_old_workload_crash_does_not_break_redeployment_on_old_system() {
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::old_workload_crash_does_not_break_redeployment(&mut cluster)
+        .await
+        .expect("rollover workload crash acceptance scenario");
 }
 
 fn acceptance_phase(status: &DeploymentStatus) -> DeploymentPhase {

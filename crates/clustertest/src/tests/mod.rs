@@ -3,6 +3,7 @@
 mod affinity;
 mod election;
 mod formation;
+mod lifecycle;
 mod quorum;
 mod restart;
 mod rollout;

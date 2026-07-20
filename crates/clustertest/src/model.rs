@@ -282,6 +282,15 @@ pub enum ResourceAvailability {
     Unavailable,
 }
 
+/// Whether a runtime termination leaves its persisted replica record behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReplicaRecordDisposition {
+    /// Preserve the last observed replica record.
+    Retained,
+    /// Remove the record to model a workload lost before any probe verdict.
+    Missing,
+}
+
 /// A service definition applied by a shared acceptance scenario.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceFixture {
@@ -363,6 +372,8 @@ pub struct ReplicaSnapshot {
     pub phase: DeploymentPhase,
     /// The restart attempts recorded for this replica.
     pub restart_attempts: u32,
+    /// Whether the runtime workload currently exists.
+    pub workload: ResourceAvailability,
 }
 
 /// One deployment in a normalized cluster snapshot.
