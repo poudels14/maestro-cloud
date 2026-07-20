@@ -243,19 +243,9 @@ pub async fn start_system_jobs(
         Some(certs)
     };
 
-    let mut bootstrap_action =
+    let bootstrap_action =
         crate::cluster::bootstrap::decide(config.cluster.as_ref(), &config.data_dir)
             .expect("failed to determine etcd bootstrap action");
-    if let (Some(cluster), BootstrapAction::WaitForAdmission, Some(certs)) =
-        (&config.cluster, &bootstrap_action, &etcd_certs)
-    {
-        let tls = build_etcd_tls_options(Some(certs)).expect("cluster TLS options");
-        let join_info =
-            crate::cluster::bootstrap::wait_for_admission(cluster, &config.data_dir, tls, logger)
-                .await
-                .expect("failed while waiting for etcd learner admission");
-        bootstrap_action = BootstrapAction::JoinExisting(join_info);
-    }
     if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
         let tls = build_etcd_tls_options(etcd_certs.as_ref()).expect("cluster TLS options");
         crate::cluster::bootstrap::ensure_seed_is_fresh(
@@ -264,8 +254,6 @@ pub async fn start_system_jobs(
         )
         .await
         .expect("fresh cluster safety check failed");
-        crate::cluster::bootstrap::mark_seed_starting(&config.data_dir)
-            .expect("failed to consume bootstrap permit");
     }
 
     let suffix = config.system_name();
@@ -397,7 +385,15 @@ pub async fn start_system_jobs(
             config,
             runtime,
             log_sender,
+            logger,
             supervisor,
+        )
+        .await;
+    } else if config.cluster.is_some() {
+        await_etcd_quorum(
+            &config.etcd_endpoints,
+            build_etcd_tls_options(etcd_certs.as_ref()),
+            logger,
         )
         .await;
     }
@@ -433,7 +429,7 @@ pub async fn start_system_jobs(
                 .clone()
                 .spawn(shutdown.resubscribe(), logger.clone()),
         );
-        if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+        if bootstrap_action.is_seed_bootstrap() {
             elector
                 .wait_until_leading(std::time::Duration::from_secs(30))
                 .await
@@ -479,20 +475,12 @@ pub async fn start_system_jobs(
             )
             .await
             .expect("failed to provision local least-privilege etcd users");
-            if matches!(bootstrap_action, BootstrapAction::ForceNewCluster) {
-                crate::cluster::bootstrap::complete_force_new_cluster(&config.data_dir)
-                    .expect("failed to finalize automatic etcd quorum recovery");
-                logger.emit(
-                    "info",
-                    "recovered etcd quorum from the surviving voter state",
-                );
-            }
         } else {
             crate::cluster::bootstrap::validate_cluster_meta(cluster, &config.cluster_alias, tls)
                 .await
                 .expect("failed to validate cluster metadata");
         }
-        if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+        if bootstrap_action.is_seed_bootstrap() {
             crate::cluster::bootstrap::mark_seed_joined(&config.data_dir)
                 .expect("failed to finalize bootstrap permit");
         }
@@ -671,6 +659,7 @@ async fn init_etcd(
     config: &ControllerConfig,
     runtime: &Arc<dyn RuntimeProvider>,
     log_sender: &flume::Sender<LogEntry>,
+    logger: &Logger,
     supervisor: &mut JobSupervisor,
 ) {
     let static_ip = static_ip_from_flags(&ip_flags);
@@ -711,7 +700,7 @@ async fn init_etcd(
             crate::cluster::bootstrap::member_name_for_start(cluster, &config.data_dir)
                 .expect("failed to resolve clustered etcd member name");
         let initial_cluster = clustered_initial_cluster(cluster, &member_name, bootstrap_action);
-        let state = if matches!(bootstrap_action, BootstrapAction::BootstrapSeed) {
+        let state = if bootstrap_action.is_seed_bootstrap() {
             "new"
         } else {
             "existing"
@@ -733,9 +722,6 @@ async fn init_etcd(
             "--auto-compaction-retention=1h".into(),
             "--quota-backend-bytes=8589934592".into(),
         ]);
-        if matches!(bootstrap_action, BootstrapAction::ForceNewCluster) {
-            image_and_args.push("--force-new-cluster=true".into());
-        }
     } else {
         image_and_args.extend([
             format!("--name=maestro-{}", config.cluster_name),
@@ -798,6 +784,21 @@ async fn init_etcd(
         Some(&readiness_address),
     )
     .await;
+    let quorum_endpoint = config.cluster.as_ref().map_or_else(
+        || format!("{scheme}://127.0.0.1:{}", config.etcd_port),
+        |cluster| {
+            format!(
+                "{scheme}://{}:{}",
+                cluster.host_ip, cluster.etcd_client_port
+            )
+        },
+    );
+    await_etcd_quorum(
+        std::slice::from_ref(&quorum_endpoint),
+        build_etcd_tls_options(etcd_certs),
+        logger,
+    )
+    .await;
 }
 
 fn clustered_initial_cluster(
@@ -806,9 +807,11 @@ fn clustered_initial_cluster(
     bootstrap_action: &BootstrapAction,
 ) -> String {
     match bootstrap_action {
-        BootstrapAction::BootstrapSeed => format!("{member_name}={}", cluster.peer_url()),
+        BootstrapAction::BootstrapSeed | BootstrapAction::BootstrapSeedResume => {
+            format!("{member_name}={}", cluster.peer_url())
+        }
         BootstrapAction::JoinExisting(join_info) => join_info.initial_cluster.clone(),
-        BootstrapAction::Restart | BootstrapAction::ForceNewCluster => cluster
+        BootstrapAction::Restart => cluster
             .initial_voters
             .iter()
             .map(|node| {
@@ -822,6 +825,70 @@ fn clustered_initial_cluster(
             .collect::<Vec<_>>()
             .join(","),
         _ => unreachable!("invalid clustered voter bootstrap action"),
+    }
+}
+
+/// Waits for the local etcd member to participate in a live quorum. A listening client port is
+/// not sufficient: status can retain a leader ID while a majority is unavailable, so the
+/// linearizable read is the operation that proves the quorum can currently make progress.
+pub(crate) async fn await_etcd_quorum(
+    endpoints: &[String],
+    tls: Option<etcd_client::TlsOptions>,
+    logger: &Logger,
+) {
+    let mut delay = Duration::from_millis(250);
+    let mut next_warning = tokio::time::Instant::now();
+    loop {
+        let result = async {
+            let mut options = etcd_client::ConnectOptions::new()
+                .with_connect_timeout(Duration::from_secs(2))
+                .with_timeout(Duration::from_secs(2));
+            if let Some(tls) = tls.clone() {
+                options = options.with_tls(tls);
+            }
+            let mut client = etcd_client::Client::connect(endpoints, Some(options))
+                .await
+                .map_err(|error| format!("connection failed: {error}"))?;
+            let status = client
+                .status()
+                .await
+                .map_err(|error| format!("status failed: {error}"))?;
+            if status.leader() == 0 {
+                return Err("no etcd leader has been elected".to_string());
+            }
+            if !status.errors().is_empty() {
+                return Err(format!("etcd reported: {}", status.errors().join(", ")));
+            }
+            client
+                .get(
+                    "/maetro/system/cluster-meta",
+                    Some(etcd_client::GetOptions::new().with_limit(1)),
+                )
+                .await
+                .map_err(|error| format!("linearizable read failed: {error}"))?;
+            Ok::<(), String>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                logger.emit("info", "etcd writable quorum is ready");
+                return;
+            }
+            Err(error) if tokio::time::Instant::now() >= next_warning => {
+                logger.emit(
+                    "warn",
+                    &format!(
+                        "etcd quorum is not ready ({error}); waiting without modifying member data"
+                    ),
+                );
+                next_warning = tokio::time::Instant::now() + Duration::from_secs(30);
+            }
+            Err(_) => {}
+        }
+
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(2));
     }
 }
 

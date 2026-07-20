@@ -47,13 +47,11 @@ pub fn ensure_seed_identity(
         .local_endpoint(host_ip, role)
         .map_err(|error| Error::invalid_config(error.to_string()))?;
     let initial_voters = vec![local_endpoint];
-    let member_exists = data_dir.join("system/etcd/data/member").exists();
     if identity_installed(data_dir).unwrap_or(false) {
         let cluster_id = cluster::identity::load_cluster_id(data_dir)
             .map_err(|error| Error::invalid_config(error.to_string()))?;
-        if !member_exists
-            && cluster::bootstrap::seed_is_armed(data_dir)
-                .map_err(|error| Error::invalid_config(error.to_string()))?
+        if cluster::bootstrap::seed_is_armed(data_dir)
+            .map_err(|error| Error::invalid_config(error.to_string()))?
         {
             cluster::bootstrap::ensure_seed_armed(data_dir, &cluster_id, host_ip)
                 .map_err(|error| Error::invalid_config(error.to_string()))?;
@@ -63,12 +61,6 @@ pub fn ensure_seed_identity(
             created: false,
         });
     }
-    if member_exists {
-        return Err(Error::invalid_config(
-            "etcd member data exists without a cluster identity; refusing fresh bootstrap",
-        ));
-    }
-
     let cluster_id = if data_dir.join("system/cluster-id").exists() {
         cluster::identity::load_cluster_id(data_dir)
             .map_err(|error| Error::invalid_config(error.to_string()))?
@@ -293,10 +285,7 @@ pub async fn join_once_via(
 fn repair_incomplete_join(data_dir: &Path) -> Result<()> {
     let system = data_dir.join("system");
     let certs_dir = system.join("certs");
-    if certs_dir.exists()
-        && !system.join("cluster-id").exists()
-        && system.join("join-key").exists()
-        && !system.join("etcd/data/member").exists()
+    if certs_dir.exists() && !system.join("cluster-id").exists() && system.join("join-key").exists()
     {
         std::fs::remove_dir_all(&certs_dir).map_err(|error| {
             Error::internal(format!(

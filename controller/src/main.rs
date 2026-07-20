@@ -1339,65 +1339,6 @@ async fn run() -> crate::error::Result<bool> {
                 });
             deployment_config.probe_port = Some(probe_host_port);
 
-            if let Some(cluster) = deployment_config.cluster.as_ref()
-                && cluster.role.is_voter()
-            {
-                let suffix = deployment_config.system_name();
-                runtime
-                    .remove_container(&format!("maestro-etcd-{suffix}"))
-                    .await
-                    .map_err(|error| {
-                        Error::external(format!(
-                            "failed to stop local etcd before recovery coordination: {error}"
-                        ))
-                    })?;
-                runtime
-                    .remove_container(&format!("maestro-probe-{suffix}"))
-                    .await
-                    .map_err(|error| {
-                        Error::external(format!(
-                            "failed to stop local cluster API before recovery coordination: {error}"
-                        ))
-                    })?;
-                let certs = utils::certs::read_etcd_certs(&deployment_config.certs_dir()).map_err(
-                    |error| {
-                        Error::invalid_config(format!(
-                            "failed to load certificates for automatic cluster recovery: {error}"
-                        ))
-                    },
-                )?;
-                let join_secret = deployment_config
-                    .join_secret
-                    .as_ref()
-                    .ok_or_else(|| Error::invalid_config("cluster.join-secret is required"))?;
-                match cluster::recovery::coordinate(
-                    cluster,
-                    &deployment_config.cluster_alias,
-                    &deployment_config.data_dir,
-                    join_secret.as_str(),
-                    &certs,
-                    Some(runtime.cli_name()),
-                    signal_tx.subscribe(),
-                )
-                .await
-                .map_err(|error| {
-                    Error::external(format!("automatic cluster recovery failed: {error}"))
-                })? {
-                    cluster::recovery::RecoveryDecision::Normal => {}
-                    cluster::recovery::RecoveryDecision::WaitForExisting => logger.emit(
-                        "warn",
-                        "local etcd member data is absent; waiting to rejoin the recovered cluster",
-                    ),
-                    cluster::recovery::RecoveryDecision::ForceNewCluster => {
-                        logger.emit("warn", "rebuilding etcd quorum from this surviving voter");
-                    }
-                    cluster::recovery::RecoveryDecision::BootstrapClean => logger.emit(
-                        "warn",
-                        "all configured voters confirmed empty; initializing a clean cluster",
-                    ),
-                }
-            }
-
             let dns_enabled = deployment_config.cluster.is_some()
                 || deployment_config.tailscale_authkey.is_some();
             let dns_subnet = if dns_enabled {
@@ -1520,18 +1461,6 @@ async fn run() -> crate::error::Result<bool> {
                     &certs_dir.join("client-key.pem").to_string_lossy(),
                 )
             };
-            if let (Some(cluster), Some(tls)) =
-                (deployment_config.cluster.clone(), etcd_tls.clone())
-                && cluster.role.is_voter()
-            {
-                background_handles.push(cluster::recovery::spawn_local_member_monitor(
-                    cluster,
-                    tls,
-                    signal_tx.clone(),
-                    signal_tx.subscribe(),
-                    logger.clone(),
-                ));
-            }
             if let (Some(cluster), Some(tls)) =
                 (deployment_config.cluster.clone(), etcd_tls.clone())
             {

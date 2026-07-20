@@ -205,9 +205,7 @@ struct ContainerEtcdCluster {
     runtime_cli: String,
     container_names: Vec<String>,
     endpoints: Vec<String>,
-    nodes: Vec<super::ClusterNodeEndpoint>,
     root: PathBuf,
-    token: String,
 }
 
 impl ContainerEtcdCluster {
@@ -237,9 +235,7 @@ impl ContainerEtcdCluster {
             runtime_cli,
             container_names: Vec::new(),
             endpoints: Vec::new(),
-            nodes: nodes.clone(),
             root,
-            token: token.clone(),
         };
 
         for (index, node) in nodes.iter().enumerate() {
@@ -283,93 +279,12 @@ impl ContainerEtcdCluster {
         Ok(cluster)
     }
 
-    fn initial_cluster(&self) -> String {
-        self.nodes
-            .iter()
-            .enumerate()
-            .map(|(index, node)| {
-                format!(
-                    "member{}=http://127.0.0.1:{}",
-                    index + 1,
-                    node.etcd_peer_port
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-
     fn node_data_dir(&self, index: usize) -> PathBuf {
         self.root.join(format!("node-{}", index + 1))
     }
 
     fn member_data_dir(&self, index: usize) -> PathBuf {
         self.node_data_dir(index).join("system/etcd/data")
-    }
-
-    fn wipe_member(&self, index: usize) -> Result<()> {
-        command_output(
-            &self.runtime_cli,
-            &["rm", "--force", &self.container_names[index]],
-        )?;
-        let data_dir = self.member_data_dir(index);
-        std::fs::remove_dir_all(&data_dir)?;
-        std::fs::create_dir_all(data_dir)?;
-        Ok(())
-    }
-
-    fn restart_survivor_with_force_new_cluster(&self, index: usize) -> Result<()> {
-        command_output(
-            &self.runtime_cli,
-            &["rm", "--force", &self.container_names[index]],
-        )?;
-        self.run_member(index, &self.initial_cluster(), true)
-    }
-
-    fn start_replacement(&self, index: usize, initial_cluster: &str) -> Result<()> {
-        self.run_member(index, initial_cluster, false)
-    }
-
-    fn run_member(&self, index: usize, initial_cluster: &str, force_new: bool) -> Result<()> {
-        let node = self.nodes[index];
-        let member = format!("member{}", index + 1);
-        let data_dir = self.member_data_dir(index);
-        let mut arguments = vec![
-            "run".to_string(),
-            "--detach".to_string(),
-            "--network".to_string(),
-            "host".to_string(),
-            "--name".to_string(),
-            self.container_names[index].clone(),
-            "--volume".to_string(),
-            format!("{}:/etcd-data", data_dir.display()),
-            crate::deployment::ETCD_IMAGE_TAG.to_string(),
-            "etcd".to_string(),
-            format!("--name={member}"),
-            "--data-dir=/etcd-data".to_string(),
-            format!(
-                "--listen-client-urls=http://0.0.0.0:{}",
-                node.etcd_client_port
-            ),
-            format!(
-                "--advertise-client-urls=http://127.0.0.1:{}",
-                node.etcd_client_port
-            ),
-            format!("--listen-peer-urls=http://0.0.0.0:{}", node.etcd_peer_port),
-            format!(
-                "--initial-advertise-peer-urls=http://127.0.0.1:{}",
-                node.etcd_peer_port
-            ),
-            format!("--initial-cluster={initial_cluster}"),
-            "--initial-cluster-state=existing".to_string(),
-            format!("--initial-cluster-token={}", self.token),
-            "--strict-reconfig-check=true".to_string(),
-        ];
-        if force_new {
-            arguments.push("--force-new-cluster=true".to_string());
-        }
-        let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-        command_output(&self.runtime_cli, &references)?;
-        Ok(())
     }
 
     fn stop_member(&self, index: usize) -> Result<()> {
@@ -388,13 +303,6 @@ impl ContainerEtcdCluster {
     fn stop_all_members(&self) -> Result<()> {
         for index in 0..self.container_names.len() {
             self.stop_member(index)?;
-        }
-        Ok(())
-    }
-
-    fn restart_all_members(&self) -> Result<()> {
-        for index in 0..self.container_names.len() {
-            self.restart_member(index)?;
         }
         Ok(())
     }
@@ -2536,11 +2444,10 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
     super::bootstrap::mark_seed_starting(&seed_data)?;
     assert_eq!(
         super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
-        super::bootstrap::BootstrapAction::WaitForAdmission,
-        "a consumed seed permit must wait for authenticated recovery consensus"
+        super::bootstrap::BootstrapAction::BootstrapSeedResume,
+        "an interrupted seed start must replay its persisted bootstrap intent"
     );
     super::bootstrap::mark_seed_joined(&seed_data)?;
-    std::fs::create_dir_all(seed_data.join("system/etcd/data/member"))?;
     assert_eq!(
         super::bootstrap::decide(Some(&seed_runtime), &seed_data)?,
         super::bootstrap::BootstrapAction::Restart
@@ -2552,13 +2459,16 @@ async fn designated_seed_and_learners_form_one_cluster() -> Result<()> {
         let data_dir = cluster.root.join(format!("node-{}", index + 1));
         assert_eq!(
             super::bootstrap::decide(Some(&runtime), &data_dir)?,
-            super::bootstrap::BootstrapAction::WaitForAdmission
+            super::bootstrap::BootstrapAction::Restart
         );
-        let join_info = cluster.add_and_promote_learner(index).await?;
+        let mut join_info = cluster.add_and_promote_learner(index).await?;
+        // The lightweight formation fixture runs plain HTTP; persisted production join intent is
+        // bound to the configured mTLS peer URL.
+        join_info.peer_url = runtime.peer_url();
         super::bootstrap::persist_join_info(&data_dir, &join_info)?;
         assert_eq!(
             super::bootstrap::decide(Some(&runtime), &data_dir)?,
-            super::bootstrap::BootstrapAction::WaitForAdmission
+            super::bootstrap::BootstrapAction::JoinExisting(join_info)
         );
     }
 
@@ -3065,235 +2975,59 @@ async fn distributed_election_fencing_and_quorum() -> Result<()> {
     Ok(())
 }
 
-/// Stops every member of a real three-voter etcd cluster, passes each persisted member through
-/// the production planned-restart recovery gate, and starts all existing members again. This is
-/// the controller-restart equivalent of an all-node system upgrade without mutating the host OS.
+/// Stops every member of a real three-voter etcd cluster and proves the production readiness gate
+/// remains blocked with one member, then completes when all persisted members restart. This is the
+/// controller-restart equivalent of an all-node system upgrade without mutating the host OS.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
-async fn planned_all_voter_restart_restores_existing_etcd_quorum() -> Result<()> {
+async fn all_voter_restart_waits_for_etcd_quorum_and_preserves_data() -> Result<()> {
     let cluster = ContainerEtcdCluster::start()?;
     cluster.wait_until_ready().await?;
-    let cluster_id = format!(
-        "{:0<32}",
-        crate::utils::nanoid::unique_id(16).to_ascii_lowercase()
-    );
-    let runtimes = cluster
-        .nodes
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, endpoint)| super::ClusterRuntime {
-            cluster_id: cluster_id.clone(),
-            node_id: format!("node-{index}"),
-            instance_id: format!("instance-{index}"),
-            host_ip: endpoint.host_ip,
-            role: if index == 0 {
-                NodeRole::Master
-            } else {
-                NodeRole::Voter
-            },
-            initial_voters: cluster.nodes.clone(),
-            voter_endpoints: cluster.nodes.clone(),
-            subnet: format!("172.29.{}.0/24", index + 1),
-            control_allow_cidrs: vec!["127.0.0.0/8".to_string()],
-            api_port: endpoint.api_port,
-            gateway_port: endpoint.gateway_port,
-            etcd_client_port: endpoint.etcd_client_port,
-            etcd_peer_port: endpoint.etcd_peer_port,
-            labels: BTreeMap::new(),
-        })
-        .collect::<Vec<_>>();
     let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
     client
         .put(
-            "/maestro/integration/planned-restart-preserved",
+            "/maestro/integration/etcd-first-restart-preserved",
             "before-restart",
             None,
         )
         .await?;
     drop(client);
 
-    for (index, runtime) in runtimes.iter().enumerate() {
-        super::recovery::arm_planned_quorum_restart(
-            &cluster.node_data_dir(index),
-            runtime,
-            "all-node-integration-run",
-            env!("CARGO_PKG_VERSION"),
-        )?;
-    }
     cluster.stop_all_members()?;
+    cluster.restart_member(0)?;
+    let early = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::deployment::await_etcd_quorum(
+            std::slice::from_ref(&cluster.endpoints[0]),
+            None,
+            &Logger::noop(),
+        ),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "readiness passed with only one of three persisted voters running"
+    );
 
-    let ca = crate::utils::certs::generate_cluster_ca()?;
-    let (shutdown, _) = broadcast::channel(1);
-    for (index, runtime) in runtimes.iter().enumerate() {
-        let certs = crate::utils::certs::generate_cluster_node_certs_for_endpoint(
-            &ca,
-            runtime.host_ip,
-            runtime.api_port,
-            runtime.role,
-        )?;
-        let decision = super::recovery::coordinate(
-            runtime,
-            TEST_CLUSTER_NAME,
-            &cluster.node_data_dir(index),
-            "planned-restart-integration-secret",
-            &certs,
-            Some(&cluster.runtime_cli),
-            shutdown.subscribe(),
-        )
-        .await?;
-        assert_eq!(decision, super::recovery::RecoveryDecision::Normal);
-        assert!(
-            !cluster
-                .node_data_dir(index)
-                .join("system/etcd-planned-quorum-restart.json")
-                .exists(),
-            "node {} did not consume its restart authorization",
-            index + 1
-        );
-    }
-
-    cluster.restart_all_members()?;
-    cluster.wait_until_ready().await?;
+    cluster.restart_member(1)?;
+    cluster.restart_member(2)?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        crate::deployment::await_etcd_quorum(
+            std::slice::from_ref(&cluster.endpoints[0]),
+            None,
+            &Logger::noop(),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow!("etcd readiness did not observe the restored quorum"))?;
     let mut client = etcd_client::Client::connect(cluster.endpoints.clone(), None).await?;
     let preserved = client
-        .get("/maestro/integration/planned-restart-preserved", None)
+        .get("/maestro/integration/etcd-first-restart-preserved", None)
         .await?;
     assert_eq!(
         preserved.kvs().first().map(|entry| entry.value()),
         Some(b"before-restart".as_slice())
-    );
-    Ok(())
-}
-
-/// Deletes two of three voter data directories, rebuilds membership from the only surviving
-/// member with etcd's force-new-cluster recovery, and then adds both empty voters back as
-/// learners. The committed key must survive the quorum reconstruction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires an isolated Linux container daemon"]
-async fn surviving_etcd_member_recovers_empty_voters_without_a_backup() -> Result<()> {
-    let cluster = ContainerEtcdCluster::start()?;
-    cluster.wait_until_ready().await?;
-    let mut client = etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await?;
-    client
-        .put(
-            "/maestro/integration/recovery-preserved",
-            "before-data-loss",
-            None,
-        )
-        .await?;
-
-    cluster.wipe_member(1)?;
-    cluster.wipe_member(2)?;
-    cluster.restart_survivor_with_force_new_cluster(0)?;
-
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Ok(mut candidate) =
-                etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await
-                && candidate
-                    .status()
-                    .await
-                    .is_ok_and(|status| status.leader() != 0 && status.errors().is_empty())
-                && candidate
-                    .member_list()
-                    .await
-                    .is_ok_and(|members| members.members().len() == 1)
-                && candidate
-                    .put("/maestro/integration/recovery-ready", "yes", None)
-                    .await
-                    .is_ok()
-            {
-                client = candidate;
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("surviving etcd member did not establish a one-member quorum"))?;
-    let preserved = client
-        .get("/maestro/integration/recovery-preserved", None)
-        .await?;
-    assert_eq!(
-        preserved.kvs().first().map(|entry| entry.value()),
-        Some(b"before-data-loss".as_slice())
-    );
-
-    // A daemon crash after etcd recovered but before the durable recovery marker is cleared may
-    // replay the force-new-cluster start. The replay must remain a writable one-member cluster.
-    cluster.restart_survivor_with_force_new_cluster(0)?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Ok(mut candidate) =
-                etcd_client::Client::connect(vec![cluster.endpoints[0].clone()], None).await
-                && candidate
-                    .put("/maestro/integration/recovery-replay", "safe", None)
-                    .await
-                    .is_ok()
-            {
-                client = candidate;
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("force-new-cluster recovery was not crash-replay safe"))?;
-
-    for index in [1, 2] {
-        let peer_url = format!("http://127.0.0.1:{}", cluster.nodes[index].etcd_peer_port);
-        let response = tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                match client
-                    .member_add(
-                        [peer_url.clone()],
-                        Some(MemberAddOptions::new().with_is_learner()),
-                    )
-                    .await
-                {
-                    Ok(response) => return response,
-                    Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
-                }
-            }
-        })
-        .await
-        .map_err(|_| anyhow!("surviving etcd member did not admit replacement learner"))?;
-        let member = response
-            .member()
-            .ok_or_else(|| anyhow!("etcd omitted replacement learner"))?;
-        let member_id = member.id();
-        let member_name = format!("member{}", index + 1);
-        let initial_cluster = super::bootstrap::format_initial_cluster(
-            response.member_list(),
-            member_id,
-            &member_name,
-        )?;
-        cluster.start_replacement(index, &initial_cluster)?;
-
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                if let Ok(mut replacement) =
-                    etcd_client::Client::connect(vec![cluster.endpoints[index].clone()], None).await
-                    && replacement.status().await.is_ok()
-                    && client.member_promote(member_id).await.is_ok()
-                {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow!("replacement etcd learner {} did not promote", index + 1))?;
-    }
-
-    cluster.wait_until_ready().await?;
-    let preserved = client
-        .get("/maestro/integration/recovery-preserved", None)
-        .await?;
-    assert_eq!(
-        preserved.kvs().first().map(|entry| entry.value()),
-        Some(b"before-data-loss".as_slice())
     );
     Ok(())
 }

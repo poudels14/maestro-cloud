@@ -98,10 +98,6 @@ pub async fn provision_node_users(
     .await
 }
 
-pub fn ready_key() -> &'static str {
-    READY_KEY
-}
-
 async fn provision_node_users_with_client(
     client: &mut Client,
     host_ip: Ipv4Addr,
