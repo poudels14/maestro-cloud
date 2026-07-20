@@ -1780,6 +1780,11 @@ dependencies = [
  "async-trait",
  "cluster",
  "kernel-api",
+ "kernel-controller",
+ "kernel-store",
+ "node-agent",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
