@@ -1,0 +1,17 @@
+[package]
+name = "daemon"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "=0.1.89"
+cluster = { version = "0.1.0", path = "../../cluster" }
+kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+thiserror = "=2.0.18"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "=1.52.3", features = ["macros", "rt", "sync"] }

@@ -1,0 +1,40 @@
+mod plan;
+mod runtime;
+
+use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
+
+use cluster::{ClusterConfig, ClusterPorts, Ipv4Cidr, NodeDefinition, NodeEndpoint};
+use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
+
+fn cluster_with_nodes(
+    definitions: &[(&str, NodeRole)],
+) -> Result<ClusterConfig, Box<dyn std::error::Error>> {
+    let nodes = definitions
+        .iter()
+        .enumerate()
+        .map(|(index, (name, role))| {
+            let suffix = u8::try_from(index)?.saturating_add(11);
+            Ok((
+                NodeId::new(*name)?,
+                NodeDefinition {
+                    hostname: format!("{name}.internal"),
+                    endpoint: NodeEndpoint {
+                        host_address: Ipv4Addr::new(10, 20, 0, suffix),
+                        api_port: 3_000_u16.saturating_add(u16::from(suffix)),
+                    },
+                    workload_subnet: format!("172.22.{index}.0/24").parse::<Ipv4Cidr>()?,
+                    role: *role,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
+    Ok(ClusterConfig {
+        cluster_id: ClusterId::new("daemon-test")?,
+        name: "daemon-test".to_owned(),
+        nodes,
+        control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
+        ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,
+        join_secret: SecretValue::new("daemon-test-join-secret-with-32-characters"),
+    })
+}
