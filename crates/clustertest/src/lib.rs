@@ -5,6 +5,7 @@
 //! production crate so each implementation is tested through the same seam.
 
 mod cluster;
+mod election;
 mod error;
 mod model;
 mod quorum;
@@ -14,12 +15,15 @@ pub mod scenarios;
 mod scheduling;
 
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
+pub use election::ElectionCluster;
 pub use error::ScenarioError;
 pub use model::{
-    ClusterSnapshot, ControlPlaneReadiness, DeploymentPhase, DeploymentSnapshot, FixtureMarker,
-    FixtureName, FixtureNodeName, FixtureVersion, IngressFixture, ReadinessProbe, ReplicaCount,
-    ReplicaIndex, ReplicaOverride, ReplicaSnapshot, ResourceAvailability, RolloutFailure,
-    ScheduledAssignment, SchedulingSnapshot, ServiceFixture, ServiceSnapshot,
+    AssignmentManifestSnapshot, AssignmentWriteOutcome, ClusterSnapshot, ControlPlaneReadiness,
+    DeploymentPhase, DeploymentSnapshot, FencedWriteOutcome, FixtureControllerName, FixtureMarker,
+    FixtureMutationName, FixtureName, FixtureNodeName, FixtureVersion, IngressFixture,
+    LeadershipSnapshot, ReadinessProbe, ReplicaCount, ReplicaIndex, ReplicaOverride,
+    ReplicaSnapshot, ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot,
+    ServiceFixture, ServiceSnapshot,
 };
 pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;

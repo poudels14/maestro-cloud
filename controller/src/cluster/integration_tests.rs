@@ -8,9 +8,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
-    ControlPlaneReadiness, FixtureMarker, FixtureNodeName, QuorumRecoveryCluster, ReadinessProbe,
-    ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster,
-    ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
+    AssignmentManifestSnapshot, AssignmentWriteOutcome, ControlPlaneReadiness, ElectionCluster,
+    FencedWriteOutcome, FixtureControllerName, FixtureMarker, FixtureMutationName, FixtureNodeName,
+    FixtureVersion, LeadershipSnapshot, QuorumRecoveryCluster, ReadinessProbe, ReplicaCount,
+    ReplicaIndex, ResourceAvailability, RestartCluster, RoutingCluster, ScheduledAssignment,
+    SchedulingCluster, SchedulingSnapshot, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -1754,6 +1756,217 @@ impl QuorumRecoveryCluster for OldSystemQuorumRecoveryCluster {
     }
 }
 
+struct OldSystemElectionCluster {
+    cluster: ContainerEtcdCluster,
+    controllers: Vec<FixtureControllerName>,
+    electors: Vec<Arc<EtcdLeaderElector>>,
+    shutdown: Vec<broadcast::Sender<ShutdownEvent>>,
+    handles: Vec<Vec<tokio::task::JoinHandle<()>>>,
+    active: BTreeSet<usize>,
+    store: EtcdStateStore,
+    assignments: EtcdAssignmentStore,
+    mutation_sequence: i64,
+}
+
+impl OldSystemElectionCluster {
+    async fn start() -> Result<Self> {
+        let cluster = ContainerEtcdCluster::start()?;
+        cluster.wait_until_ready().await?;
+        let controllers = vec![
+            FixtureControllerName::new("node-a"),
+            FixtureControllerName::new("node-b"),
+        ];
+        let mut electors = Vec::new();
+        let mut shutdown = Vec::new();
+        let mut handles = Vec::new();
+        for controller in &controllers {
+            let elector = Arc::new(
+                EtcdLeaderElector::connect(
+                    &cluster.endpoints,
+                    None,
+                    controller.as_str().to_string(),
+                    true,
+                )
+                .await?,
+            );
+            let (shutdown_sender, _) = broadcast::channel(2);
+            handles.push(
+                elector
+                    .clone()
+                    .spawn(shutdown_sender.subscribe(), Logger::noop()),
+            );
+            electors.push(elector);
+            shutdown.push(shutdown_sender);
+        }
+        let store = EtcdStateStore::new_with_endpoints(
+            &cluster.endpoints,
+            crate::utils::crypto::derive_key("distributed-integration-test"),
+            None,
+        )
+        .await?;
+        let assignments = EtcdAssignmentStore::connect(&cluster.endpoints, None).await?;
+        Ok(Self {
+            cluster,
+            controllers,
+            electors,
+            shutdown,
+            handles,
+            active: [0, 1].into_iter().collect(),
+            store,
+            assignments,
+            mutation_sequence: 0,
+        })
+    }
+
+    fn controller_index(&self, controller: &FixtureControllerName) -> Result<usize> {
+        self.controllers
+            .iter()
+            .position(|candidate| candidate == controller)
+            .ok_or_else(|| anyhow!("controller `{}` does not exist", controller.as_str()))
+    }
+}
+
+#[async_trait]
+impl ElectionCluster for OldSystemElectionCluster {
+    type LeadershipToken = LeadershipToken;
+    type Error = anyhow::Error;
+
+    async fn await_leader(&mut self) -> Result<LeadershipSnapshot<Self::LeadershipToken>> {
+        let active_electors = self
+            .active
+            .iter()
+            .filter_map(|index| self.electors.get(*index).cloned())
+            .collect::<Vec<_>>();
+        let (_, token) = wait_for_leader(&active_electors, Duration::from_secs(20)).await?;
+        Ok(LeadershipSnapshot {
+            controller: FixtureControllerName::new(token.info.node_id.clone()),
+            token,
+        })
+    }
+
+    async fn fenced_write(
+        &mut self,
+        token: &Self::LeadershipToken,
+        mutation: FixtureMutationName,
+    ) -> Result<FencedWriteOutcome> {
+        self.mutation_sequence = self.mutation_sequence.saturating_add(1);
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.store.apply_cluster_mutation(
+                token,
+                ClusterMutation::ClaimRequest {
+                    request_id: mutation.as_str().to_string(),
+                    fingerprint: mutation.as_str().to_string(),
+                    now_ms: self.mutation_sequence,
+                },
+            ),
+        )
+        .await;
+        if matches!(result, Ok(Ok(_))) {
+            Ok(FencedWriteOutcome::Applied)
+        } else {
+            Ok(FencedWriteOutcome::Rejected)
+        }
+    }
+
+    async fn replace_assignment(
+        &mut self,
+        token: &Self::LeadershipToken,
+        expected_generation: u64,
+        version: FixtureVersion,
+    ) -> Result<AssignmentWriteOutcome> {
+        let assignment = Assignment {
+            assignment_id: format!("assignment-{}", version.as_str()),
+            placement_epoch: expected_generation.saturating_add(1),
+            service_id: "failover-service".to_string(),
+            deployment_id: version.as_str().to_string(),
+            replica_index: 0,
+            node_id: "workload-node".to_string(),
+            container_ip: None,
+            replaces_assignment_id: None,
+            created_at_ms: self.mutation_sequence,
+        };
+        let outcome = self
+            .assignments
+            .replace_for_node(
+                token,
+                expected_generation,
+                AssignmentManifest {
+                    node_id: "workload-node".to_string(),
+                    generation: expected_generation,
+                    assignments: vec![assignment],
+                    images: Vec::new(),
+                },
+            )
+            .await?;
+        Ok(match outcome {
+            ReplaceOutcome::Applied => AssignmentWriteOutcome::Applied,
+            ReplaceOutcome::GenerationConflict => AssignmentWriteOutcome::GenerationConflict,
+            ReplaceOutcome::LeadershipLost => AssignmentWriteOutcome::LeadershipLost,
+        })
+    }
+
+    async fn assignment(&mut self) -> Result<Option<AssignmentManifestSnapshot>> {
+        let manifest = self
+            .assignments
+            .get_for_node(&"workload-node".to_string())
+            .await?;
+        manifest
+            .map(|manifest| {
+                let assignment = manifest
+                    .assignments
+                    .first()
+                    .ok_or_else(|| anyhow!("assignment manifest has no assignments"))?;
+                Ok(AssignmentManifestSnapshot {
+                    generation: manifest.generation,
+                    version: FixtureVersion::new(assignment.deployment_id.clone()),
+                })
+            })
+            .transpose()
+    }
+
+    async fn stop_controller(&mut self, controller: &FixtureControllerName) -> Result<()> {
+        let controller_index = self.controller_index(controller)?;
+        if self.active.remove(&controller_index) {
+            let shutdown = self
+                .shutdown
+                .get(controller_index)
+                .ok_or_else(|| anyhow!("controller shutdown channel is missing"))?;
+            let _ = shutdown.send(ShutdownEvent::Graceful);
+            let handles = self
+                .handles
+                .get_mut(controller_index)
+                .ok_or_else(|| anyhow!("controller task handles are missing"))?;
+            for handle in handles.drain(..) {
+                handle.await?;
+            }
+            Ok(())
+        } else {
+            bail!("controller `{}` is not active", controller.as_str())
+        }
+    }
+
+    async fn lose_quorum(&mut self) -> Result<()> {
+        for member_index in 0..2 {
+            self.cluster.stop_member(member_index)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for OldSystemElectionCluster {
+    fn drop(&mut self) {
+        for shutdown in &self.shutdown {
+            let _ = shutdown.send(ShutdownEvent::Force);
+        }
+        for handles in &mut self.handles {
+            for handle in handles.drain(..) {
+                handle.abort();
+            }
+        }
+    }
+}
+
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
         if !self.container_names.is_empty() {
@@ -2970,177 +3183,9 @@ async fn multinode_rolling_upgrade_retries_and_restores_nodes_serially() -> Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn distributed_election_fencing_and_quorum() -> Result<()> {
-    let cluster = ContainerEtcdCluster::start()?;
-    cluster.wait_until_ready().await?;
+    let mut cluster = OldSystemElectionCluster::start().await?;
 
-    let elector_a = Arc::new(
-        EtcdLeaderElector::connect(&cluster.endpoints, None, "node-a".to_string(), true).await?,
-    );
-    let elector_b = Arc::new(
-        EtcdLeaderElector::connect(&cluster.endpoints, None, "node-b".to_string(), true).await?,
-    );
-    let electors = [elector_a.clone(), elector_b.clone()];
-    let (shutdown_a, _) = broadcast::channel(2);
-    let (shutdown_b, _) = broadcast::channel(2);
-    let mut handles = [
-        elector_a
-            .clone()
-            .spawn(shutdown_a.subscribe(), Logger::noop()),
-        elector_b
-            .clone()
-            .spawn(shutdown_b.subscribe(), Logger::noop()),
-    ];
-
-    let (first_leader, stale_token) = wait_for_leader(&electors, Duration::from_secs(20)).await?;
-    let store = EtcdStateStore::new_with_endpoints(
-        &cluster.endpoints,
-        crate::utils::crypto::derive_key("distributed-integration-test"),
-        None,
-    )
-    .await?;
-    store
-        .apply_cluster_mutation(
-            &stale_token,
-            ClusterMutation::ClaimRequest {
-                request_id: "before-failover".to_string(),
-                fingerprint: "before".to_string(),
-                now_ms: 1,
-            },
-        )
-        .await
-        .context("the elected leader could not perform a fenced mutation")?;
-    let assignment_store = EtcdAssignmentStore::connect(&cluster.endpoints, None).await?;
-    let first_assignment = Assignment {
-        assignment_id: "assignment-before-failover".to_string(),
-        placement_epoch: 1,
-        service_id: "failover-service".to_string(),
-        deployment_id: "deployment-v1".to_string(),
-        replica_index: 0,
-        node_id: "workload-node".to_string(),
-        container_ip: None,
-        replaces_assignment_id: None,
-        created_at_ms: 1,
-    };
-    assert_eq!(
-        assignment_store
-            .replace_for_node(
-                &stale_token,
-                0,
-                AssignmentManifest {
-                    node_id: "workload-node".to_string(),
-                    generation: 0,
-                    assignments: vec![first_assignment.clone()],
-                    images: Vec::new(),
-                },
-            )
-            .await?,
-        ReplaceOutcome::Applied
-    );
-
-    let shutdown = [&shutdown_a, &shutdown_b];
-    let _ = shutdown[first_leader].send(ShutdownEvent::Graceful);
-    for handle in handles[first_leader].drain(..) {
-        handle.await?;
-    }
-    let survivor = 1 - first_leader;
-    let (_, live_token) = wait_for_leader(
-        std::slice::from_ref(&electors[survivor]),
-        Duration::from_secs(20),
-    )
-    .await?;
-    if live_token.info.node_id == stale_token.info.node_id {
-        bail!("leadership did not move to the surviving controller");
-    }
-
-    let stale_result = store
-        .apply_cluster_mutation(
-            &stale_token,
-            ClusterMutation::ClaimRequest {
-                request_id: "stale-after-failover".to_string(),
-                fingerprint: "stale".to_string(),
-                now_ms: 2,
-            },
-        )
-        .await;
-    if stale_result.is_ok() {
-        bail!("a stale leader completed a fenced mutation after failover");
-    }
-    let persisted = assignment_store
-        .get_for_node(&"workload-node".to_string())
-        .await?
-        .ok_or_else(|| anyhow!("successor could not load the existing assignment manifest"))?;
-    assert_eq!(persisted.generation, 1);
-    assert_eq!(persisted.assignments, vec![first_assignment.clone()]);
-    let successor_assignment = Assignment {
-        assignment_id: "assignment-after-failover".to_string(),
-        placement_epoch: 2,
-        deployment_id: "deployment-v2".to_string(),
-        replaces_assignment_id: Some(first_assignment.assignment_id.clone()),
-        created_at_ms: 2,
-        ..first_assignment
-    };
-    let successor_manifest = AssignmentManifest {
-        node_id: "workload-node".to_string(),
-        generation: persisted.generation,
-        assignments: vec![successor_assignment.clone()],
-        images: Vec::new(),
-    };
-    assert_eq!(
-        assignment_store
-            .replace_for_node(
-                &stale_token,
-                persisted.generation,
-                successor_manifest.clone(),
-            )
-            .await?,
-        ReplaceOutcome::LeadershipLost
-    );
-    assert_eq!(
-        assignment_store
-            .replace_for_node(&live_token, persisted.generation, successor_manifest)
-            .await?,
-        ReplaceOutcome::Applied
-    );
-    let resumed = assignment_store
-        .get_for_node(&"workload-node".to_string())
-        .await?
-        .ok_or_else(|| anyhow!("successor assignment manifest disappeared"))?;
-    assert_eq!(resumed.generation, 2);
-    assert_eq!(resumed.assignments, vec![successor_assignment]);
-    store
-        .apply_cluster_mutation(
-            &live_token,
-            ClusterMutation::ClaimRequest {
-                request_id: "live-after-failover".to_string(),
-                fingerprint: "live".to_string(),
-                now_ms: 3,
-            },
-        )
-        .await
-        .context("the successor leader could not perform a fenced mutation")?;
-
-    cluster.stop_member(0)?;
-    cluster.stop_member(1)?;
-    let quorum_result = tokio::time::timeout(
-        Duration::from_secs(10),
-        store.apply_cluster_mutation(
-            &live_token,
-            ClusterMutation::ClaimRequest {
-                request_id: "without-quorum".to_string(),
-                fingerprint: "quorum".to_string(),
-                now_ms: 4,
-            },
-        ),
-    )
-    .await;
-    if matches!(quorum_result, Ok(Ok(_))) {
-        bail!("cluster mutation succeeded after loss of etcd quorum");
-    }
-
-    let _ = shutdown[survivor].send(ShutdownEvent::Force);
-    for handle in handles[survivor].drain(..) {
-        handle.abort();
-    }
+    scenarios::leader_failover_fences_stale_writes(&mut cluster).await?;
     Ok(())
 }
 

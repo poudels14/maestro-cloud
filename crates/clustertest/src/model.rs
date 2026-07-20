@@ -64,6 +64,76 @@ impl FixtureMarker {
     }
 }
 
+/// A stable scenario-local controller name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FixtureControllerName(String);
+
+impl FixtureControllerName {
+    /// Creates a scenario-local controller name.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the controller name as text for driver translation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A unique mutation name used to prove fencing behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixtureMutationName(String);
+
+impl FixtureMutationName {
+    /// Creates a scenario-local mutation name.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the mutation name as text for driver translation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The current leader and its opaque fencing token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeadershipSnapshot<LeadershipToken> {
+    /// The controller holding leadership.
+    pub controller: FixtureControllerName,
+    /// The token that must fence privileged writes.
+    pub token: LeadershipToken,
+}
+
+/// The result of a privileged write attempted through a fencing token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FencedWriteOutcome {
+    /// The current leader committed the mutation.
+    Applied,
+    /// The store rejected or could not commit the mutation.
+    Rejected,
+}
+
+/// The result of an assignment-manifest generation CAS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssignmentWriteOutcome {
+    /// The current leader committed the new generation.
+    Applied,
+    /// The expected generation did not match the stored generation.
+    GenerationConflict,
+    /// The fencing token no longer belongs to the leader.
+    LeadershipLost,
+}
+
+/// The persisted assignment state relevant to election failover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignmentManifestSnapshot {
+    /// The CAS generation stored for the workload node.
+    pub generation: u64,
+    /// The deployment version referenced by its assignment.
+    pub version: FixtureVersion,
+}
+
 /// The observation window used when probing control-plane readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadinessProbe {
