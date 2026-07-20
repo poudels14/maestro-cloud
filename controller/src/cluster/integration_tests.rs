@@ -8,7 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use clustertest::{
-    FixtureNodeName, ResourceAvailability, RestartCluster, RoutingCluster, scenarios,
+    FixtureNodeName, ReplicaCount, ReplicaIndex, ResourceAvailability, RestartCluster,
+    RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingSnapshot, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -1582,6 +1583,84 @@ impl RestartCluster for OldSystemRestartCluster {
     }
 }
 
+struct OldSystemSchedulingCluster {
+    cluster: SingleHostHttpCluster,
+    client: reqwest::Client,
+    running: BTreeMap<String, RunningReplica>,
+    current: Vec<Assignment>,
+    now_ms: i64,
+}
+
+impl OldSystemSchedulingCluster {
+    fn start() -> Result<Self> {
+        let cluster = SingleHostHttpCluster::start()?;
+        cluster.remove_initial_backends()?;
+        Ok(Self {
+            cluster,
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()?,
+            running: BTreeMap::new(),
+            current: Vec::new(),
+            now_ms: 1_000,
+        })
+    }
+}
+
+#[async_trait]
+impl SchedulingCluster for OldSystemSchedulingCluster {
+    type AssignmentId = String;
+    type Error = anyhow::Error;
+
+    async fn scale(
+        &mut self,
+        replicas: ReplicaCount,
+    ) -> Result<SchedulingSnapshot<Self::AssignmentId>> {
+        let plan = scaling_plan(&self.cluster, replicas.get(), &self.current, self.now_ms);
+        self.now_ms = self.now_ms.saturating_add(1_000);
+        let desired_ids = plan
+            .assignments
+            .iter()
+            .map(|assignment| assignment.assignment_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let removed_workloads = self
+            .running
+            .values()
+            .filter(|replica| !desired_ids.contains(replica.assignment.assignment_id.as_str()))
+            .map(|replica| replica.container_hostname.clone())
+            .collect::<Vec<_>>();
+        self.cluster
+            .reconcile_scaled_assignments(&mut self.running, &plan.assignments)?;
+        wait_for_assignment_routes(&self.cluster, &self.client, &plan.assignments).await?;
+        let orphaned_workloads = removed_workloads
+            .iter()
+            .filter(|workload| self.cluster.container_exists(workload))
+            .count();
+        let mut assignments = plan
+            .assignments
+            .iter()
+            .map(|assignment| ScheduledAssignment {
+                id: assignment.assignment_id.clone(),
+                replica_index: ReplicaIndex::new(assignment.replica_index),
+                node: FixtureNodeName::new(assignment.node_id.clone()),
+            })
+            .collect::<Vec<_>>();
+        assignments.sort_by_key(|assignment| assignment.replica_index.get());
+        let unschedulable_replicas = plan
+            .unschedulable
+            .iter()
+            .map(|replica| ReplicaIndex::new(replica.replica_index))
+            .collect();
+        self.current = plan.assignments;
+        Ok(SchedulingSnapshot {
+            assignments,
+            unschedulable_replicas,
+            orphaned_workloads,
+        })
+    }
+}
+
 impl Drop for ContainerEtcdCluster {
     fn drop(&mut self) {
         if !self.container_names.is_empty() {
@@ -2072,15 +2151,6 @@ fn scaling_plan(
     })
 }
 
-fn assignment_counts(assignments: &[Assignment]) -> BTreeMap<String, usize> {
-    assignments
-        .iter()
-        .fold(BTreeMap::new(), |mut counts, assignment| {
-            *counts.entry(assignment.node_id.clone()).or_default() += 1;
-            counts
-        })
-}
-
 async fn wait_for_assignment_routes(
     cluster: &SingleHostHttpCluster,
     client: &reqwest::Client,
@@ -2153,76 +2223,9 @@ async fn serial_node_restarts_preserve_quorum_and_ingress() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn scheduler_scales_live_replicas_across_logical_nodes() -> Result<()> {
-    let mut cluster = SingleHostHttpCluster::start()?;
-    cluster.remove_initial_backends()?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()?;
-    let mut actual = BTreeMap::<String, RunningReplica>::new();
+    let mut cluster = OldSystemSchedulingCluster::start()?;
 
-    let initial = scaling_plan(&cluster, 1, &[], 1_000);
-    assert!(initial.unschedulable.is_empty());
-    assert_eq!(initial.assignments.len(), 1);
-    assert_eq!(
-        assignment_counts(&initial.assignments),
-        BTreeMap::from([("node-1".to_string(), 1)])
-    );
-    cluster.reconcile_scaled_assignments(&mut actual, &initial.assignments)?;
-    wait_for_assignment_routes(&cluster, &client, &initial.assignments).await?;
-
-    let scaled_up = scaling_plan(&cluster, 5, &initial.assignments, 2_000);
-    assert!(scaled_up.unschedulable.is_empty());
-    assert_eq!(scaled_up.assignments.len(), 5);
-    assert_eq!(
-        assignment_counts(&scaled_up.assignments),
-        BTreeMap::from([
-            ("node-1".to_string(), 2),
-            ("node-2".to_string(), 2),
-            ("node-3".to_string(), 1),
-        ])
-    );
-    assert_eq!(
-        scaled_up
-            .assignments
-            .iter()
-            .find(|assignment| assignment.replica_index == 0)
-            .map(|assignment| assignment.assignment_id.as_str()),
-        Some(initial.assignments[0].assignment_id.as_str())
-    );
-    cluster.reconcile_scaled_assignments(&mut actual, &scaled_up.assignments)?;
-    wait_for_assignment_routes(&cluster, &client, &scaled_up.assignments).await?;
-
-    let removed_containers = actual
-        .values()
-        .filter(|replica| replica.assignment.replica_index >= 2)
-        .map(|replica| replica.container_hostname.clone())
-        .collect::<Vec<_>>();
-    let scaled_down = scaling_plan(&cluster, 2, &scaled_up.assignments, 3_000);
-    assert!(scaled_down.unschedulable.is_empty());
-    assert_eq!(scaled_down.assignments.len(), 2);
-    assert_eq!(
-        assignment_counts(&scaled_down.assignments),
-        BTreeMap::from([("node-1".to_string(), 1), ("node-2".to_string(), 1),])
-    );
-    for survivor in &scaled_down.assignments {
-        assert_eq!(
-            scaled_up
-                .assignments
-                .iter()
-                .find(|assignment| assignment.replica_index == survivor.replica_index)
-                .map(|assignment| assignment.assignment_id.as_str()),
-            Some(survivor.assignment_id.as_str())
-        );
-    }
-    cluster.reconcile_scaled_assignments(&mut actual, &scaled_down.assignments)?;
-    wait_for_assignment_routes(&cluster, &client, &scaled_down.assignments).await?;
-    assert!(
-        removed_containers
-            .iter()
-            .all(|name| !cluster.container_exists(name))
-    );
-    assert_eq!(actual.len(), 2);
+    scenarios::scheduler_scales_replicas_across_nodes(&mut cluster).await?;
     Ok(())
 }
 

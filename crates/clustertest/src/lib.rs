@@ -10,16 +10,19 @@ mod model;
 mod restart;
 mod routing;
 pub mod scenarios;
+mod scheduling;
 
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster};
 pub use error::ScenarioError;
 pub use model::{
     ClusterSnapshot, DeploymentPhase, DeploymentSnapshot, FixtureName, FixtureNodeName,
     FixtureVersion, IngressFixture, ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaSnapshot,
-    ResourceAvailability, RolloutFailure, ServiceFixture, ServiceSnapshot,
+    ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture,
+    ServiceSnapshot,
 };
 pub use restart::RestartCluster;
 pub use routing::RoutingCluster;
+pub use scheduling::SchedulingCluster;
 
 #[cfg(test)]
 mod tests;

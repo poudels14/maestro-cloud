@@ -232,3 +232,25 @@ impl<DeploymentId> ClusterSnapshot<DeploymentId> {
         self.services.iter().find(|service| service.name == *name)
     }
 }
+
+/// One scheduler assignment in a normalized acceptance snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduledAssignment<AssignmentId> {
+    /// The implementation-specific assignment identity.
+    pub id: AssignmentId,
+    /// The replica slot owned by this assignment.
+    pub replica_index: ReplicaIndex,
+    /// The node selected by the scheduler.
+    pub node: FixtureNodeName,
+}
+
+/// The scheduling and workload state observed after one scale operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulingSnapshot<AssignmentId> {
+    /// Assignments ordered by replica index.
+    pub assignments: Vec<ScheduledAssignment<AssignmentId>>,
+    /// Replica slots the scheduler could not place.
+    pub unschedulable_replicas: Vec<ReplicaIndex>,
+    /// Runtime workloads left behind without an assignment.
+    pub orphaned_workloads: usize,
+}
