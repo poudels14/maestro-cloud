@@ -306,12 +306,14 @@ enum ClusterCommand {
         #[arg(
             long,
             value_enum,
+            global = true,
             help = "Upgrade batch strategy (all restarts every node in one batch)"
         )]
         batch: Option<UpgradeBatchArg>,
         #[arg(
             short = 'y',
             long = "yes",
+            global = true,
             help = "Skip the cluster-confirmation prompt"
         )]
         yes: bool,
@@ -3123,6 +3125,29 @@ mod cluster_upgrade_cli_tests {
             })
         ));
         assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "--batch=rolling"]).is_err());
+    }
+
+    #[test]
+    fn system_upgrade_alias_accepts_options_after_the_target() {
+        let cli = Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "upgrade",
+            "system",
+            "--batch=all",
+            "--yes",
+        ])
+        .expect("parse upgrade options after system target");
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Cluster {
+                command: ClusterCommand::Upgrade {
+                    target: Some(super::UpgradeTarget::System),
+                    batch: Some(UpgradeBatchArg::All),
+                    yes: true,
+                }
+            })
+        ));
     }
 
     #[test]
