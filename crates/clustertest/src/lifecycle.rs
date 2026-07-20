@@ -4,8 +4,42 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeploymentPhase, FixtureName, LifecycleFaultCluster, ReplicaIndex, ResourceAvailability,
+    DeploymentPhase, FixtureName, FixtureVersion, LifecycleFaultCluster, ReplicaCount,
+    ReplicaIndex, ResourceAvailability,
 };
+
+/// One operation in a generated lifecycle state-machine sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LifecycleOperation {
+    /// Queue a new service generation.
+    Rollout {
+        /// Service receiving the generation.
+        service: FixtureName,
+        /// Version assigned to the generation.
+        version: FixtureVersion,
+        /// Configured replica floor.
+        replicas: ReplicaCount,
+    },
+    /// Cancel the most recently queued generation, if one exists.
+    CancelLatest {
+        /// Service whose latest generation is selected.
+        service: FixtureName,
+    },
+    /// Terminate one workload in the latest active generation, if present.
+    CrashLatest {
+        /// Service whose active generation is selected.
+        service: FixtureName,
+        /// Requested replica slot, clamped to the configured floor.
+        replica: ReplicaIndex,
+    },
+    /// Advance injected logical time.
+    Advance {
+        /// Milliseconds added to the logical clock.
+        millis: u32,
+    },
+    /// Run one reconciliation turn.
+    Reconcile,
+}
 
 /// A runtime artifact identity produced by a deployment build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

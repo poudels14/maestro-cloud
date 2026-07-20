@@ -38,6 +38,12 @@ pub trait AcceptanceCluster: Send {
     /// Advances injected logical time without waiting on wall-clock time.
     async fn advance(&mut self, duration: Duration) -> Result<(), Self::Error>;
 
+    /// Runs exactly one reconciliation turn without fabricating readiness.
+    async fn reconcile_once(&mut self) -> Result<(), Self::Error>;
+
+    /// Returns current normalized state without driving reconciliation.
+    async fn snapshot_now(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
+
     /// Waits for a quiet reconciliation window and returns the resulting state.
     async fn await_converged(&mut self)
     -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
@@ -67,6 +73,11 @@ pub trait FaultInjectableCluster: AcceptanceCluster {
 /// Adds runtime-level crash and pending-readiness controls to lifecycle scenarios.
 #[async_trait]
 pub trait LifecycleFaultCluster: FaultInjectableCluster {
+    /// Runs the bounded post-sequence reconciliation window with readiness enabled.
+    async fn settle_operation_sequence(
+        &mut self,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error>;
+
     /// Waits until the selected deployment has started the expected workloads.
     async fn await_started(
         &mut self,

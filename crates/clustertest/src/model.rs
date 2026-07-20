@@ -389,6 +389,8 @@ pub struct DeploymentSnapshot<DeploymentId> {
     pub version: FixtureVersion,
     /// The deployment's observed lifecycle phase.
     pub phase: DeploymentPhase,
+    /// Observed phase transitions in write order.
+    pub phase_history: Vec<DeploymentPhase>,
     /// Artifact identity persisted after a successful build.
     pub artifact: Option<FixtureArtifact>,
     /// The deployment's observed replicas, ordered by index.

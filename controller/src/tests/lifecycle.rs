@@ -16,9 +16,10 @@ use async_trait::async_trait;
 use clustertest::{
     AcceptanceCluster, ArtifactBehavior, ArtifactObservation, ArtifactStageState, ClusterSnapshot,
     DeploymentPhase, DeploymentSnapshot, FaultInjectableCluster, FixtureName, HealthObservation,
-    IngressFixture, LifecycleControlCluster, LifecycleFaultCluster, ReplicaCount, ReplicaHealth,
-    ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
-    RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
+    IngressFixture, LifecycleControlCluster, LifecycleFaultCluster, LifecycleOperation,
+    ReplicaCount, ReplicaHealth, ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition,
+    ReplicaSnapshot, ResourceAvailability, RolloutFailure, ServiceFixture, ServiceSnapshot,
+    scenarios,
 };
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -2217,7 +2218,8 @@ fn op_strategy() -> impl proptest::prelude::Strategy<Value = Op> {
     ]
 }
 
-async fn run_property_sequence(ops: Vec<Op>) {
+#[allow(dead_code)]
+async fn run_legacy_property_sequence(ops: Vec<Op>) {
     let mut harness = Harness::new();
     let mut versions: [u32; 4] = [0; 4];
 
@@ -2383,6 +2385,51 @@ async fn run_property_sequence(ops: Vec<Op>) {
     }
 }
 
+fn shared_property_operations(ops: &[Op]) -> Vec<LifecycleOperation> {
+    let mut versions = HashMap::<u8, u32>::new();
+    ops.iter()
+        .map(|operation| match operation {
+            Op::Queue {
+                service_idx,
+                replicas,
+            } => {
+                let version = versions.entry(*service_idx).or_default();
+                *version += 1;
+                let service = FixtureName::new(format!("svc-prop-{service_idx}"));
+                LifecycleOperation::Rollout {
+                    version: clustertest::FixtureVersion::new(format!(
+                        "{}-v{version}",
+                        service.as_str()
+                    )),
+                    service,
+                    replicas: ReplicaCount::new(u32::from((*replicas).max(1))),
+                }
+            }
+            Op::CancelLatest { service_idx } => LifecycleOperation::CancelLatest {
+                service: FixtureName::new(format!("svc-prop-{service_idx}")),
+            },
+            Op::CrashReplica {
+                service_idx,
+                replica,
+            } => LifecycleOperation::CrashLatest {
+                service: FixtureName::new(format!("svc-prop-{service_idx}")),
+                replica: ReplicaIndex::new(u32::from(*replica)),
+            },
+            Op::AdvanceClock { millis } => LifecycleOperation::Advance { millis: *millis },
+            Op::Tick => LifecycleOperation::Reconcile,
+        })
+        .collect()
+}
+
+async fn run_property_sequence(ops: Vec<Op>) {
+    let operations = shared_property_operations(&ops);
+    let mut cluster = OldSystemAcceptanceCluster::new();
+
+    scenarios::lifecycle_operation_sequence_preserves_invariants(&mut cluster, &operations)
+        .await
+        .expect("generated lifecycle acceptance sequence");
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config {
         cases: 32,
@@ -2464,6 +2511,18 @@ impl OldSystemAcceptanceCluster {
                                 deployment.config.version.clone(),
                             ),
                             phase: acceptance_phase(&deployment.status),
+                            phase_history: state
+                                .transitions
+                                .get(&deployment.id)
+                                .into_iter()
+                                .flatten()
+                                .fold(Vec::new(), |mut phases, status| {
+                                    let phase = acceptance_phase(status);
+                                    if phases.last() != Some(&phase) {
+                                        phases.push(phase);
+                                    }
+                                    phases
+                                }),
                             artifact: deployment.build.as_ref().map(|build| {
                                 clustertest::FixtureArtifact::new(build.docker_image_id.clone())
                             }),
@@ -2629,6 +2688,16 @@ impl AcceptanceCluster for OldSystemAcceptanceCluster {
         Ok(())
     }
 
+    async fn reconcile_once(&mut self) -> Result<()> {
+        self.harness.tick().await;
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    async fn snapshot_now(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>> {
+        Ok(self.snapshot())
+    }
+
     async fn await_converged(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>> {
         self.converge(AcceptanceReadiness::Automatic).await
     }
@@ -2684,6 +2753,15 @@ impl FaultInjectableCluster for OldSystemAcceptanceCluster {
 
 #[async_trait]
 impl LifecycleFaultCluster for OldSystemAcceptanceCluster {
+    async fn settle_operation_sequence(&mut self) -> Result<ClusterSnapshot<Self::DeploymentId>> {
+        for _ in 0..60 {
+            self.ready_built_deployments();
+            self.harness.tick().await;
+            tokio::task::yield_now().await;
+        }
+        Ok(self.snapshot())
+    }
+
     async fn await_started(
         &mut self,
         deployment_id: &Self::DeploymentId,

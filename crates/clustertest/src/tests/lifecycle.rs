@@ -56,7 +56,15 @@ impl LifecycleWorld {
                     name: name.clone(),
                     configured_replicas: service.fixture.replicas,
                     replica_override: service.replica_override,
-                    deployments: service.deployments.clone(),
+                    deployments: service
+                        .deployments
+                        .iter()
+                        .cloned()
+                        .map(|mut deployment| {
+                            deployment.phase_history = vec![deployment.phase];
+                            deployment
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
@@ -257,6 +265,7 @@ impl AcceptanceCluster for LifecycleWorld {
             id: deployment,
             version: service.version,
             phase: DeploymentPhase::Queued,
+            phase_history: vec![DeploymentPhase::Queued],
             artifact: None,
             replicas: Vec::new(),
         });
@@ -287,6 +296,15 @@ impl AcceptanceCluster for LifecycleWorld {
     async fn advance(&mut self, _duration: Duration) -> Result<(), Self::Error> {
         self.drain_grace_elapsed = true;
         Ok(())
+    }
+
+    async fn reconcile_once(&mut self) -> Result<(), Self::Error> {
+        self.settle(WorldReadiness::External);
+        Ok(())
+    }
+
+    async fn snapshot_now(&mut self) -> Result<ClusterSnapshot<u64>, Self::Error> {
+        Ok(self.snapshot())
     }
 
     async fn await_converged(&mut self) -> Result<ClusterSnapshot<u64>, Self::Error> {
@@ -325,6 +343,13 @@ impl FaultInjectableCluster for LifecycleWorld {
 
 #[async_trait]
 impl LifecycleFaultCluster for LifecycleWorld {
+    async fn settle_operation_sequence(
+        &mut self,
+    ) -> Result<ClusterSnapshot<Self::DeploymentId>, Self::Error> {
+        self.settle(WorldReadiness::Automatic);
+        Ok(self.snapshot())
+    }
+
     async fn await_started(
         &mut self,
         _deployment_id: &Self::DeploymentId,

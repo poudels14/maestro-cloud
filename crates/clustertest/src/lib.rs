@@ -30,7 +30,7 @@ pub use formation::{
 };
 pub use lifecycle::{
     ArtifactBehavior, ArtifactObservation, ArtifactStageState, FixtureArtifact, HealthObservation,
-    LifecycleControlCluster, ReplicaHealth,
+    LifecycleControlCluster, LifecycleOperation, ReplicaHealth,
 };
 pub use model::{
     AffinityCookieSet, AffinityObservation, AffinitySession, AssignmentManifestSnapshot,
