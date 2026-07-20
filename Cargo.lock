@@ -2858,6 +2858,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "async-trait",
+ "etcd-client",
  "kernel-api",
  "sha2 0.10.9",
  "thiserror",

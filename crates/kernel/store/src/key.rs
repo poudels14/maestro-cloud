@@ -2,6 +2,8 @@ use std::fmt::{Display, Formatter};
 
 use kernel_api::{ClusterId, NodeId, RequestId, ResourceKind, ResourceName};
 
+use crate::StoreError;
+
 /// An exact persistence key under the canonical `/maestro/` namespace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StoreKey(String);
@@ -10,6 +12,21 @@ impl StoreKey {
     /// Returns the backend key text.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn from_backend(bytes: &[u8]) -> Result<Self, StoreError> {
+        let value = std::str::from_utf8(bytes).map_err(|error| StoreError::Contract {
+            message: format!("store backend returned a non-UTF-8 key: {error}"),
+        })?;
+        if !value.starts_with("/maestro/clusters/") {
+            Err(StoreError::Contract {
+                message: format!(
+                    "store backend returned a key outside the Maestro namespace: {value}"
+                ),
+            })
+        } else {
+            Ok(Self(value.to_string()))
+        }
     }
 }
 
