@@ -1,6 +1,7 @@
 //! Shared acceptance scenarios that every Maestro implementation must pass.
 
 mod affinity;
+mod cluster_setup;
 mod election;
 mod formation;
 mod lifecycle;
@@ -17,6 +18,7 @@ mod smoke;
 mod upgrade;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
+pub use cluster_setup::cluster_bootstraps_joins_meshes_and_recovers;
 pub use election::leader_failover_fences_stale_writes;
 pub use formation::designated_seed_and_learners_form_registered_cluster;
 pub use lifecycle::{
