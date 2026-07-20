@@ -34,7 +34,7 @@ impl InMemoryStore {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::default()),
                 changes,
-                current_cursor: AtomicU64::new(0),
+                current_revision: AtomicU64::new(0),
                 clock,
             }),
         }
@@ -63,7 +63,7 @@ impl Store for InMemoryStore {
             .collect();
         Ok(ListResult {
             values,
-            cursor: WatchCursor(state.cursor),
+            cursor: WatchCursor::snapshot(state.version),
         })
     }
 
@@ -83,7 +83,7 @@ impl Store for InMemoryStore {
             };
             let stored = entry.stored(request.key.clone());
             state.entries.insert(request.key, entry);
-            state.push_event(WatchEventKind::Put(stored.clone()), &self.inner);
+            state.push_event(WatchEventKind::Put(stored.clone()), version, 0, &self.inner);
             Ok(CasOutcome::Applied(stored))
         }
     }
@@ -103,12 +103,14 @@ impl Store for InMemoryStore {
                         message: "a matched delete key disappeared while holding the store lock"
                             .to_string(),
                     })?;
-            state.next_version();
+            let deletion_version = state.next_version();
             state.push_event(
                 WatchEventKind::Delete {
                     key: request.key,
                     previous_version: removed.version,
                 },
+                deletion_version,
+                0,
                 &self.inner,
             );
             Ok(CasOutcome::Applied(removed.version))
@@ -124,9 +126,17 @@ impl Store for InMemoryStore {
             .iter()
             .all(|compare| compare_matches(&state, compare))
         {
+            if transaction.mutations.is_empty() {
+                return Ok(TransactionOutcome::Applied {
+                    results: Vec::new(),
+                    cursor: WatchCursor::snapshot(state.version),
+                });
+            }
             let version = state.next_version();
             let mut results = Vec::with_capacity(transaction.mutations.len());
-            for mutation in transaction.mutations {
+            let mut last_cursor = WatchCursor::snapshot(state.version);
+            for (event_index, mutation) in transaction.mutations.into_iter().enumerate() {
+                let event_index = u32::try_from(event_index).unwrap_or(u32::MAX);
                 match mutation {
                     Mutation::Put {
                         key,
@@ -140,7 +150,12 @@ impl Store for InMemoryStore {
                         };
                         let stored = entry.stored(key.clone());
                         state.entries.insert(key, entry);
-                        state.push_event(WatchEventKind::Put(stored.clone()), &self.inner);
+                        last_cursor = state.push_event(
+                            WatchEventKind::Put(stored.clone()),
+                            version,
+                            event_index,
+                            &self.inner,
+                        );
                         results.push(MutationResult::Put(stored));
                     }
                     Mutation::Delete { key } => {
@@ -150,8 +165,11 @@ impl Store for InMemoryStore {
                                     key: key.clone(),
                                     previous_version: removed.version,
                                 },
+                                version,
+                                event_index,
                                 &self.inner,
                             );
+                            last_cursor = WatchCursor::event(version.0, event_index);
                             results.push(MutationResult::Deleted {
                                 key,
                                 previous_version: removed.version,
@@ -164,7 +182,7 @@ impl Store for InMemoryStore {
             }
             Ok(TransactionOutcome::Applied {
                 results,
-                cursor: WatchCursor(state.cursor),
+                cursor: last_cursor,
             })
         } else {
             Ok(TransactionOutcome::Conflict)
@@ -177,8 +195,10 @@ impl Store for InMemoryStore {
         start: WatchStart,
     ) -> Result<Box<dyn StoreWatch>, StoreError> {
         let last_cursor = match start {
-            WatchStart::Current => self.inner.current_cursor.load(Ordering::Acquire),
-            WatchStart::After(cursor) => cursor.0,
+            WatchStart::Current => {
+                WatchCursor::snapshot(self.inner.current_revision.load(Ordering::Acquire))
+            }
+            WatchStart::After(cursor) => cursor,
         };
         Ok(Box::new(InMemoryWatch {
             inner: self.inner.clone(),
@@ -212,7 +232,7 @@ impl Store for InMemoryStore {
 struct Inner {
     state: Mutex<State>,
     changes: watch::Sender<u64>,
-    current_cursor: AtomicU64,
+    current_revision: AtomicU64,
     clock: Arc<dyn Clock>,
 }
 
@@ -222,8 +242,7 @@ struct State {
     sessions: BTreeMap<SessionId, SessionRecord>,
     history: VecDeque<RawEvent>,
     version: u64,
-    cursor: u64,
-    discarded_through: u64,
+    discarded_through: WatchCursor,
     next_session_id: u64,
     change_sequence: u64,
 }
@@ -234,19 +253,23 @@ impl State {
         Version(self.version)
     }
 
-    fn push_event(&mut self, kind: WatchEventKind, inner: &Inner) {
-        self.cursor = self.cursor.saturating_add(1);
-        self.history.push_back(RawEvent {
-            cursor: WatchCursor(self.cursor),
-            kind,
-        });
+    fn push_event(
+        &mut self,
+        kind: WatchEventKind,
+        version: Version,
+        event_index: u32,
+        inner: &Inner,
+    ) -> WatchCursor {
+        let cursor = WatchCursor::event(version.0, event_index);
+        self.history.push_back(RawEvent { cursor, kind });
         if self.history.len() > EVENT_HISTORY_CAPACITY
             && let Some(discarded) = self.history.pop_front()
         {
-            self.discarded_through = discarded.cursor.0;
+            self.discarded_through = discarded.cursor;
         }
-        inner.current_cursor.store(self.cursor, Ordering::Release);
+        inner.current_revision.store(version.0, Ordering::Release);
         self.signal_change(inner);
+        cursor
     }
 
     fn signal_change(&mut self, inner: &Inner) {
@@ -286,7 +309,7 @@ struct InMemoryWatch {
     inner: Arc<Inner>,
     changes: watch::Receiver<u64>,
     prefix: StorePrefix,
-    last_cursor: u64,
+    last_cursor: WatchCursor,
 }
 
 #[async_trait]
@@ -297,20 +320,22 @@ impl StoreWatch for InMemoryWatch {
             let state = self.inner.state.lock().await;
             if self.last_cursor < state.discarded_through {
                 return Err(StoreError::CursorExpired {
-                    cursor: WatchCursor(self.last_cursor),
+                    cursor: self.last_cursor,
                 });
             }
-            if let Some(event) = state.history.iter().find(|event| {
-                event.cursor.0 > self.last_cursor && event_matches(event, &self.prefix)
-            }) {
-                self.last_cursor = event.cursor.0;
+            if let Some(event) = state
+                .history
+                .iter()
+                .find(|event| event.cursor > self.last_cursor && event_matches(event, &self.prefix))
+            {
+                self.last_cursor = event.cursor;
                 return Ok(WatchEvent {
                     prefix: self.prefix.clone(),
                     cursor: event.cursor,
                     kind: event.kind.clone(),
                 });
             }
-            self.last_cursor = state.cursor;
+            self.last_cursor = WatchCursor::snapshot(state.version);
             let next_expiry = state
                 .sessions
                 .values()
@@ -408,16 +433,16 @@ fn remove_session_entries(state: &mut State, session_id: SessionId, inner: &Inne
             (entry.session == Some(SessionBinding { session_id })).then_some(key.clone())
         })
         .collect::<Vec<_>>();
-    if !keys.is_empty() {
-        state.next_version();
-    }
-    for key in keys {
+    let deletion_version = (!keys.is_empty()).then(|| state.next_version());
+    for (event_index, key) in keys.into_iter().enumerate() {
         if let Some(removed) = state.entries.remove(&key) {
             state.push_event(
                 WatchEventKind::Delete {
                     key,
                     previous_version: removed.version,
                 },
+                deletion_version.unwrap_or(removed.version),
+                u32::try_from(event_index).unwrap_or(u32::MAX),
                 inner,
             );
         }

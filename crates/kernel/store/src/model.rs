@@ -14,8 +14,27 @@ impl Version {
 }
 
 /// Opaque ordered watch position used to resume an event stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WatchCursor(pub(crate) u64);
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WatchCursor {
+    pub(crate) revision: u64,
+    pub(crate) event_index: u32,
+}
+
+impl WatchCursor {
+    pub(crate) const fn snapshot(revision: u64) -> Self {
+        Self {
+            revision,
+            event_index: u32::MAX,
+        }
+    }
+
+    pub(crate) const fn event(revision: u64, event_index: u32) -> Self {
+        Self {
+            revision,
+            event_index,
+        }
+    }
+}
 
 /// Opaque identity of one TTL-bound backend session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
