@@ -29,6 +29,10 @@ impl FencedStore {
         &self.token
     }
 
+    pub(crate) fn raw_store(&self) -> &dyn Store {
+        self.store.as_ref()
+    }
+
     /// Applies an atomic transaction only while this token still owns leadership.
     ///
     /// Cancellation may leave the full transaction committed, never partially

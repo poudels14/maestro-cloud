@@ -5,6 +5,7 @@
 //! or applications.
 
 mod backoff;
+mod dedup;
 mod elector;
 mod error;
 mod fencing;
@@ -12,6 +13,7 @@ mod leadership;
 mod reconciler;
 
 pub use backoff::{Backoff, BackoffError};
+pub use dedup::{DedupOutcome, RequestFingerprint};
 pub use elector::StoreLeaderElector;
 pub use error::ControllerError;
 pub use fencing::FencedStore;

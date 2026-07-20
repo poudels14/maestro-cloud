@@ -19,4 +19,13 @@ pub enum ControllerError {
         /// Serde decoding detail.
         message: String,
     },
+    /// A persisted request claim could not be decoded safely.
+    #[error("persisted request claim is malformed: {message}")]
+    MalformedRequestClaim {
+        /// Serde decoding detail.
+        message: String,
+    },
+    /// One request identity was reused for different mutation content.
+    #[error("request identity was already claimed with a different fingerprint")]
+    RequestCollision,
 }

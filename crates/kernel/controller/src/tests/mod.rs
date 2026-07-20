@@ -2,5 +2,6 @@
 
 mod backoff;
 mod clock;
+mod dedup;
 mod elector;
 mod fencing;
