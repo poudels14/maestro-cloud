@@ -1228,11 +1228,15 @@ name = "build"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "hex",
  "kernel-api",
  "kernel-controller",
  "kernel-store",
  "runtime",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

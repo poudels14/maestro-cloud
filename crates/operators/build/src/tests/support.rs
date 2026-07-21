@@ -120,6 +120,31 @@ impl TestWorld {
         Ok(serde_json::from_slice(&stored.value)?)
     }
 
+    pub(super) async fn mark_deleting(&self) -> TestResult {
+        let key = self.build_key()?;
+        let stored = self.store.get(&key).await?.ok_or("build disappeared")?;
+        let mut build: Build = serde_json::from_slice(&stored.value)?;
+        build.meta.deletion_timestamp = Some(Timestamp(20_000));
+        let outcome = self
+            .store
+            .put_cas(PutRequest {
+                key,
+                value: serde_json::to_vec(&build)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?;
+        if matches!(outcome, CasOutcome::Applied(_)) {
+            Ok(())
+        } else {
+            Err("build deletion marker conflicted".into())
+        }
+    }
+
+    pub(super) async fn build_exists(&self) -> TestResult<bool> {
+        Ok(self.store.get(&self.build_key()?).await?.is_some())
+    }
+
     pub(super) fn build_key(&self) -> TestResult<kernel_store::StoreKey> {
         Ok(self
             .keys
@@ -167,6 +192,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
 pub(super) struct RecordingSource {
     results: Mutex<VecDeque<Result<PreparedBuildSource, BuildSourceError>>>,
     calls: Mutex<Vec<Option<String>>>,
+    cleanup_calls: Mutex<Vec<BuildId>>,
 }
 
 impl RecordingSource {
@@ -178,11 +204,16 @@ impl RecordingSource {
         Self {
             results: Mutex::new(results.into()),
             calls: Mutex::new(Vec::new()),
+            cleanup_calls: Mutex::new(Vec::new()),
         }
     }
 
     pub(super) fn calls(&self) -> Vec<Option<String>> {
         lock(&self.calls).clone()
+    }
+
+    pub(super) fn cleanup_calls(&self) -> Vec<BuildId> {
+        lock(&self.cleanup_calls).clone()
     }
 }
 
@@ -190,6 +221,7 @@ impl RecordingSource {
 impl BuildSourceProvider for RecordingSource {
     async fn prepare(
         &self,
+        _build_id: &BuildId,
         _source: &BuildSource,
         resolved_revision: Option<&str>,
     ) -> Result<PreparedBuildSource, BuildSourceError> {
@@ -206,6 +238,11 @@ impl BuildSourceProvider for RecordingSource {
                 None => Err(BuildSourceError::rejected("fake source has no result")),
             }
         }
+    }
+
+    async fn cleanup(&self, build_id: &BuildId) -> Result<(), BuildSourceError> {
+        lock(&self.cleanup_calls).push(build_id.clone());
+        Ok(())
     }
 }
 

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use kernel_api::BuildSource;
+use kernel_api::{BuildId, BuildSource};
 use runtime::ArtifactSource;
 
 /// Materialized source tree and the immutable revision it represents.
@@ -54,7 +54,11 @@ pub trait BuildSourceProvider: Send + Sync {
     /// branch or tag.
     async fn prepare(
         &self,
+        build_id: &BuildId,
         source: &BuildSource,
         resolved_revision: Option<&str>,
     ) -> Result<PreparedBuildSource, BuildSourceError>;
+
+    /// Removes source material owned only by one Build resource.
+    async fn cleanup(&self, build_id: &BuildId) -> Result<(), BuildSourceError>;
 }

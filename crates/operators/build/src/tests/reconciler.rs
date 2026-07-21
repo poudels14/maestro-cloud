@@ -18,6 +18,7 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
     let artifacts = Arc::new(RecordingArtifacts::successful()?);
     let controller = world.runtime(source.clone(), artifacts.clone())?;
 
+    assert_eq!(controller.reconcile_snapshot().await?, 0);
     assert_eq!(controller.reconcile_snapshot().await?, 1);
     assert_eq!(world.build().await?.status.phase, BuildPhase::Preparing);
     assert_eq!(controller.reconcile_snapshot().await?, 1);
@@ -75,6 +76,7 @@ async fn permanent_source_rejection_is_recorded_as_failed() -> TestResult {
 
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
 
     let failed = world.build().await?;
     assert_eq!(failed.status.phase, BuildPhase::Failed);
@@ -96,6 +98,7 @@ async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResul
     let artifacts = Arc::new(RecordingArtifacts::successful()?);
     let controller = world.runtime(source, artifacts)?;
 
+    controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     assert_eq!(world.build().await?.status.phase, BuildPhase::Preparing);
@@ -120,6 +123,7 @@ async fn invalid_definition_fails_before_source_is_materialized() -> TestResult 
 
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
 
     let failed = world.build().await?;
     assert_eq!(failed.status.phase, BuildPhase::Failed);
@@ -135,6 +139,7 @@ async fn concurrent_cancellation_wins_after_artifact_side_effect() -> TestResult
     let source = Arc::new(RecordingSource::successful("commit-abc"));
     let artifacts = Arc::new(RecordingArtifacts::successful()?);
     let controller = world.runtime(source, artifacts.clone())?;
+    controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     artifacts.race_with_cancellation(world.store.clone(), world.build_key()?);
@@ -162,11 +167,31 @@ async fn source_revision_drift_fails_without_building() -> TestResult {
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
 
     let failed = world.build().await?;
     assert_eq!(failed.status.phase, BuildPhase::Failed);
     assert_eq!(only_condition(&failed)?.reason.0, "SourceRevisionChanged");
     assert!(artifacts.calls().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn deletion_finalizer_cleans_source_before_removing_build() -> TestResult {
+    let world = TestWorld::new().await?;
+    world.seed(&queued_build("Dockerfile")?).await?;
+    let source = Arc::new(RecordingSource::successful("commit-abc"));
+    let controller = world.runtime(source.clone(), Arc::new(RecordingArtifacts::successful()?))?;
+    controller.reconcile_snapshot().await?;
+    world.mark_deleting().await?;
+
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+
+    assert!(!world.build_exists().await?);
+    assert_eq!(
+        source.cleanup_calls(),
+        [kernel_api::BuildId::new("build-1")?]
+    );
     Ok(())
 }
 

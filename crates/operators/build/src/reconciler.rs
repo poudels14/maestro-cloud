@@ -95,7 +95,11 @@ impl BuildReconciler {
                 .fail(build, context, "InvalidBuildDefinition", message)
                 .await;
         }
-        match self.source.prepare(&build.spec.template.source, None).await {
+        match self
+            .source
+            .prepare(&build.meta.id, &build.spec.template.source, None)
+            .await
+        {
             Ok(prepared) => {
                 if prepared.revision.trim().is_empty() {
                     return self
@@ -139,7 +143,7 @@ impl BuildReconciler {
         };
         let prepared = match self
             .source
-            .prepare(&build.spec.template.source, Some(&revision))
+            .prepare(&build.meta.id, &build.spec.template.source, Some(&revision))
             .await
         {
             Ok(prepared) => prepared,
@@ -273,6 +277,7 @@ impl Reconciler for BuildReconciler {
     type Status = BuildStatus;
 
     const KIND: &'static str = "Build";
+    const FINALIZER: Option<&'static str> = Some("build.maestro.dev/source");
 
     async fn reconcile(
         &self,
@@ -280,6 +285,23 @@ impl Reconciler for BuildReconciler {
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
         self.advance(resource, &context).await
+    }
+
+    async fn finalize(
+        &self,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
+        _context: ReconcileContext,
+    ) -> Result<Action, ReconcileError> {
+        match self.source.cleanup(&resource.meta.id).await {
+            Ok(()) => Ok(Action::Done),
+            Err(BuildSourceError::Unavailable { message }) => {
+                Err(ReconcileError::Retryable { message })
+            }
+            Err(BuildSourceError::Rejected { message }) => Err(ReconcileError::Terminal {
+                reason: "BuildSourceCleanupRejected".to_string(),
+                message,
+            }),
+        }
     }
 }
 

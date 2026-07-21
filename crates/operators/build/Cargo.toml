@@ -6,15 +6,20 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64 = "=0.22.1"
+hex = "=0.4.3"
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "process"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+tempfile = "=3.27.0"
 tokio = { workspace = true, features = ["sync"] }
