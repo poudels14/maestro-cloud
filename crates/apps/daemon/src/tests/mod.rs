@@ -3,6 +3,7 @@ mod control_plane_resources;
 mod control_plane_store;
 mod launch;
 mod leadership;
+mod log_maintenance;
 mod operators;
 mod orchestration;
 mod orchestration_acceptance;

@@ -13,6 +13,7 @@ mod error;
 mod launch;
 mod leadership;
 mod log_delivery;
+mod log_maintenance;
 mod metric_delivery;
 mod operators;
 mod plan;
@@ -30,6 +31,9 @@ pub use dead_letter_admin::{
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_daemon, load_launch_config,
+};
+pub use log_maintenance::{
+    LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
 pub use operators::{
     OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload, OperatorSettings,
