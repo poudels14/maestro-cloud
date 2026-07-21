@@ -26,7 +26,7 @@ pub(crate) fn new_deployment(
             &service.meta.generation.0.to_string(),
         ],
     ))?;
-    let build_id = matches!(service.spec.artifact, ArtifactTemplate::Build(_))
+    let build_id = matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
         .then(|| {
             BuildId::new(stable_id(
                 "build",
@@ -57,7 +57,7 @@ pub(crate) fn new_build(
     deployment: &Deployment,
     build_id: BuildId,
 ) -> Result<Build, DeploymentPlanError> {
-    let ArtifactTemplate::Build(template) = &deployment.spec.service.artifact else {
+    let ArtifactTemplate::Build { template } = &deployment.spec.service.artifact else {
         return Err(DeploymentPlanError::UnexpectedBuild {
             deployment_id: deployment.meta.id.clone(),
             build_id,

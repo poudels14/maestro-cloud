@@ -347,7 +347,9 @@ fn service(generation: Generation, rollout: RolloutState) -> Service {
 }
 
 fn build_artifact() -> ArtifactTemplate {
-    ArtifactTemplate::Build(build_template())
+    ArtifactTemplate::Build {
+        template: build_template(),
+    }
 }
 
 fn build_template() -> BuildTemplate {
@@ -378,7 +380,7 @@ fn deployment_generation(
             service_id: service.meta.id.clone(),
             service_generation: generation,
             service: service.spec.clone(),
-            build_id: matches!(service.spec.artifact, ArtifactTemplate::Build(_))
+            build_id: matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
                 .then(|| kernel_api::BuildId::new(format!("build-{id}")).unwrap()),
         },
         status: kernel_api::DeploymentStatus {
@@ -392,7 +394,7 @@ fn deployment_generation(
     }
 }
 
-fn assignment(deployment: &Deployment, id: &str, epoch: u64) -> Assignment {
+pub(super) fn assignment(deployment: &Deployment, id: &str, epoch: u64) -> Assignment {
     assignment_slot(deployment, id, 0, epoch)
 }
 

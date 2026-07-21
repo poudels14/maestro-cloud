@@ -11,7 +11,7 @@ use crate::{
 
 /// Runtime artifact selected for a service deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "source", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ArtifactTemplate {
     /// Pull an existing immutable or tag-addressed image.
     Image {
@@ -19,7 +19,11 @@ pub enum ArtifactTemplate {
         reference: String,
     },
     /// Build an image from a source repository or uploaded archive.
-    Build(BuildTemplate),
+    Build {
+        /// Build template flattened beside the artifact discriminator.
+        #[serde(flatten)]
+        template: BuildTemplate,
+    },
 }
 
 /// Source and build environment applied to each generated build resource.

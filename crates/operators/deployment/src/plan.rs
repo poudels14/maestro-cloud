@@ -64,18 +64,6 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 && deployment.status.phase == DeploymentPhase::Removed
             {
                 output.delete_deployments.push(deployment.meta.id.clone());
-                if let Some(build_id) = deployment.spec.build_id.as_ref()
-                    && builds.contains_key(build_id)
-                {
-                    output.delete_builds.push(build_id.clone());
-                }
-                output.delete_replicas.extend(
-                    input
-                        .replicas
-                        .iter()
-                        .filter(|replica| replica.spec.deployment_id == deployment.meta.id)
-                        .map(|replica| replica.meta.id.clone()),
-                );
                 desired_statuses.remove(&deployment.meta.id);
                 continue;
             }
@@ -100,6 +88,16 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 input.now,
                 &mut desired_statuses,
                 &mut output.service_updates,
+            );
+        } else {
+            collect_finalized_children(
+                service,
+                &deployments,
+                &builds,
+                &input.replicas,
+                &output.delete_deployments,
+                &mut output.delete_builds,
+                &mut output.delete_replicas,
             );
         }
     }
@@ -133,7 +131,9 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .sort_by(|left, right| left.meta.id.cmp(&right.meta.id));
     output.delete_deployments.sort();
     output.delete_builds.sort();
+    output.delete_builds.dedup();
     output.delete_replicas.sort();
+    output.delete_replicas.dedup();
     output
         .deployment_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
@@ -141,6 +141,38 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .service_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     Ok(output)
+}
+
+fn collect_finalized_children(
+    service: &Service,
+    deployments: &BTreeMap<DeploymentId, Deployment>,
+    builds: &BTreeMap<BuildId, Build>,
+    replicas: &[ReplicaState],
+    removed: &[DeploymentId],
+    delete_builds: &mut Vec<BuildId>,
+    delete_replicas: &mut Vec<kernel_api::ReplicaStateId>,
+) {
+    let removed = removed.iter().collect::<std::collections::BTreeSet<_>>();
+    delete_builds.extend(
+        builds
+            .values()
+            .filter(|build| {
+                removed.contains(&build.spec.deployment_id)
+                    || (build.spec.service_id == service.meta.id
+                        && !deployments.contains_key(&build.spec.deployment_id))
+            })
+            .map(|build| build.meta.id.clone()),
+    );
+    delete_replicas.extend(
+        replicas
+            .iter()
+            .filter(|replica| {
+                removed.contains(&replica.spec.deployment_id)
+                    || (replica.spec.service_id == service.meta.id
+                        && !deployments.contains_key(&replica.spec.deployment_id))
+            })
+            .map(|replica| replica.meta.id.clone()),
+    );
 }
 
 fn desired_deployment_status(
@@ -159,7 +191,10 @@ fn desired_deployment_status(
     let mut desired = deployment.status.clone();
     match desired.phase {
         DeploymentPhase::Queued if service.status.rollout == kernel_api::RolloutState::Active => {
-            if matches!(deployment.spec.service.artifact, ArtifactTemplate::Build(_)) {
+            if matches!(
+                deployment.spec.service.artifact,
+                ArtifactTemplate::Build { .. }
+            ) {
                 ensure_build(deployment, builds, create_builds)?;
             }
             desired.phase = DeploymentPhase::Building;
@@ -167,7 +202,7 @@ fn desired_deployment_status(
         DeploymentPhase::Building => {
             let artifact_ready = match &deployment.spec.service.artifact {
                 ArtifactTemplate::Image { .. } => true,
-                ArtifactTemplate::Build(_) => {
+                ArtifactTemplate::Build { .. } => {
                     let build = ensure_build(deployment, builds, create_builds)?;
                     match build {
                         Some(build) if build.status.phase == BuildPhase::Succeeded => {
@@ -385,7 +420,7 @@ fn ensure_build<'a>(
 }
 
 fn validate_build(deployment: &Deployment, build: &Build) -> Result<(), DeploymentPlanError> {
-    let ArtifactTemplate::Build(template) = &deployment.spec.service.artifact else {
+    let ArtifactTemplate::Build { template } = &deployment.spec.service.artifact else {
         return Err(DeploymentPlanError::UnexpectedBuild {
             deployment_id: deployment.meta.id.clone(),
             build_id: build.meta.id.clone(),

@@ -4,13 +4,19 @@
 //! projection, atomic writes, and the controller-runtime adapter are kept at
 //! separate boundaries so lifecycle behavior remains exhaustively testable.
 
+mod controller;
 mod model;
 mod plan;
 mod readiness;
+mod reconciler;
 mod resource;
+mod snapshot;
+mod writer;
 
+pub use controller::{DeploymentController, DeploymentError, DeploymentReport};
 pub use model::{DeploymentInput, DeploymentPlan, LifecycleSettings, ResourceStatusUpdate};
 pub use plan::{DeploymentPlanError, plan};
+pub use reconciler::DeploymentReconciler;
 
 #[cfg(test)]
 mod tests;

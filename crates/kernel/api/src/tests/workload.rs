@@ -1,4 +1,9 @@
-use crate::{ArtifactArchiveId, BuildPhase, BuildSource, DeploymentPhase, NodeId, VolumeSource};
+use std::collections::BTreeMap;
+
+use crate::{
+    ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentPhase,
+    NodeId, VolumeSource,
+};
 
 #[test]
 fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
@@ -17,6 +22,32 @@ fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
     assert_eq!(
         serde_json::to_value(volume_source).expect("serialize volume source"),
         serde_json::json!({"type": "hostPath", "path": "/srv/data", "nodeId": "node-1"})
+    );
+}
+
+#[test]
+fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
+    let artifact = ArtifactTemplate::Build {
+        template: BuildTemplate {
+            source: BuildSource::Git {
+                repository: "https://example.test/repo.git".to_string(),
+                revision: "main".to_string(),
+            },
+            dockerfile: "Dockerfile".to_string(),
+            environment: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+        },
+    };
+    let encoded = serde_json::to_value(&artifact).expect("serialize build artifact");
+    assert_eq!(encoded.get("type"), Some(&serde_json::json!("build")));
+    assert!(
+        encoded
+            .get("source")
+            .is_some_and(serde_json::Value::is_object)
+    );
+    assert_eq!(
+        serde_json::from_value::<ArtifactTemplate>(encoded).expect("deserialize build artifact"),
+        artifact
     );
 }
 

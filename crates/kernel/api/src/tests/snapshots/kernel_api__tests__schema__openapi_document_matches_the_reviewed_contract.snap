@@ -19,7 +19,7 @@ expression: openapi_document()
                 "description": "Registry image reference.",
                 "type": "string"
               },
-              "source": {
+              "type": {
                 "enum": [
                   "image"
                 ],
@@ -27,20 +27,41 @@ expression: openapi_document()
               }
             },
             "required": [
-              "source",
+              "type",
               "reference"
             ],
             "type": "object"
           },
           {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BuildTemplate"
-              }
-            ],
             "description": "Build an image from a source repository or uploaded archive.",
             "properties": {
+              "dockerfile": {
+                "description": "Path to the container build definition within the source.",
+                "type": "string"
+              },
+              "environment": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Non-secret build variables.",
+                "type": "object"
+              },
+              "secrets": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SecretValue"
+                },
+                "description": "Secret build variables that are redacted from debug output.",
+                "type": "object"
+              },
               "source": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BuildSource"
+                  }
+                ],
+                "description": "Source material to build."
+              },
+              "type": {
                 "enum": [
                   "build"
                 ],
@@ -48,7 +69,9 @@ expression: openapi_document()
               }
             },
             "required": [
-              "source"
+              "type",
+              "source",
+              "dockerfile"
             ],
             "type": "object"
           }
