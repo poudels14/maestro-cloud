@@ -21,6 +21,7 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
+mod deployments;
 mod services;
 
 #[test]
@@ -190,6 +191,16 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     );
     assert!(
         document
+            .pointer("/paths/~1api~1services~1{serviceId}~1deployments/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1deployments~1{deploymentId}/get")
+            .is_some()
+    );
+    assert!(
+        document
             .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}/get")
             .is_some()
     );
@@ -199,7 +210,8 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     );
 }
 
-async fn seeded_store() -> Result<(Arc<InMemoryStore>, ClusterId), Box<dyn std::error::Error>> {
+pub(super) async fn seeded_store()
+-> Result<(Arc<InMemoryStore>, ClusterId), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let cluster_id = ClusterId::new("server-test")?;
     put(&store, &cluster_id, "Node", "node-1", &node()?).await?;
@@ -207,7 +219,7 @@ async fn seeded_store() -> Result<(Arc<InMemoryStore>, ClusterId), Box<dyn std::
     Ok((store, cluster_id))
 }
 
-async fn put(
+pub(super) async fn put(
     store: &InMemoryStore,
     cluster_id: &ClusterId,
     kind: &str,
@@ -286,7 +298,7 @@ pub(super) fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
     })
 }
 
-fn metadata<Id>(id: Id) -> ObjectMeta<Id> {
+pub(super) fn metadata<Id>(id: Id) -> ObjectMeta<Id> {
     ObjectMeta {
         id,
         labels: BTreeMap::new(),

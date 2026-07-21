@@ -17,6 +17,14 @@ pub fn openapi_document() -> Value {
             list_operation("listServices", "Service"),
         ),
         ("/api/services/{serviceId}".to_string(), service_operation()),
+        (
+            "/api/services/{serviceId}/deployments".to_string(),
+            nested_list_operation("listDeployments", "serviceId", "Deployment"),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}".to_string(),
+            deployment_operation(),
+        ),
         ("/healthz".to_string(), health_operation()),
         ("/openapi.json".to_string(), openapi_operation()),
     ]));
@@ -161,6 +169,41 @@ fn get_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
             }
         }
     })
+}
+
+fn nested_list_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
+    let mut operation = list_operation(operation_id, schema);
+    if let Some(get) = operation.get_mut("get").and_then(Value::as_object_mut) {
+        get.insert("parameters".to_string(), path_parameters(&[parameter]));
+    }
+    operation
+}
+
+fn deployment_operation() -> Value {
+    let mut operation = get_operation("getDeployment", "deploymentId", "Deployment");
+    if let Some(get) = operation.get_mut("get").and_then(Value::as_object_mut) {
+        get.insert(
+            "parameters".to_string(),
+            path_parameters(&["serviceId", "deploymentId"]),
+        );
+    }
+    operation
+}
+
+fn path_parameters(parameters: &[&str]) -> Value {
+    Value::Array(
+        parameters
+            .iter()
+            .map(|parameter| {
+                json!({
+                    "name": parameter,
+                    "in": "path",
+                    "required": true,
+                    "schema": {"type": "string"}
+                })
+            })
+            .collect(),
+    )
 }
 
 fn health_operation() -> Value {

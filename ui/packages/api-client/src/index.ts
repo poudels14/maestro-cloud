@@ -96,6 +96,15 @@ export interface MaestroApiClient {
   getNode(nodeId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Node"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
+  listDeployments(
+    serviceId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Deployment"][]>;
+  getDeployment(
+    serviceId: string,
+    deploymentId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Deployment"]>;
   putService(
     serviceId: string,
     request: ApiSchemas["ServiceWriteRequest"],
@@ -149,6 +158,13 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}`, options),
+    listDeployments: (serviceId, options) =>
+      get(`/api/services/${encodeURIComponent(serviceId)}/deployments`, options),
+    getDeployment: (serviceId, deploymentId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}`,
+        options
+      ),
     putService: (serviceId, request, idempotencyKey, options) =>
       put(
         `/api/services/${encodeURIComponent(serviceId)}`,

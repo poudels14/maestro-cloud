@@ -6,6 +6,7 @@
 
 mod auth;
 mod error;
+mod mask;
 mod openapi;
 mod resource;
 mod routes;

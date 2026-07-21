@@ -6,15 +6,15 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use kernel_api::{
-    ArtifactTemplate, BuiltinKind, Generation, Object, ObjectMeta, RequestId, ResourceKind,
-    ResourceRevision, RolloutState, SecretValue, Service, ServiceId, ServiceSpec, ServiceStatus,
+    BuiltinKind, Generation, Object, ObjectMeta, RequestId, ResourceKind, ResourceRevision,
+    RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus,
 };
 use kernel_controller::{ControllerError, DedupOutcome, RequestFingerprint};
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{ApiError, AppState, OperatorIdentity, resource};
+use crate::{ApiError, AppState, OperatorIdentity, mask, resource};
 
 const MAXIMUM_SERVICE_REQUEST_BYTES: usize = 1024 * 1_024;
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
@@ -251,7 +251,7 @@ async fn list_services(State(state): State<AppState>) -> Result<Json<Vec<Service
     let services = resource::list(&state, BuiltinKind::Service)
         .await?
         .into_iter()
-        .map(mask_service)
+        .map(mask::service)
         .collect();
     Ok(Json(services))
 }
@@ -262,23 +262,7 @@ async fn get_service(
 ) -> Result<Json<Service>, ApiError> {
     let service_id =
         ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    Ok(Json(mask_service(
+    Ok(Json(mask::service(
         resource::get(&state, BuiltinKind::Service, service_id).await?,
     )))
-}
-
-fn mask_service(mut service: Service) -> Service {
-    if let ArtifactTemplate::Build { template } = &mut service.spec.artifact {
-        mask_values(template.secrets.values_mut());
-    }
-    if let Some(secrets) = &mut service.spec.secrets {
-        mask_values(secrets.items.values_mut());
-    }
-    service
-}
-
-fn mask_values<'a>(values: impl Iterator<Item = &'a mut SecretValue>) {
-    for value in values {
-        *value = SecretValue::new(value.masked().as_str());
-    }
 }

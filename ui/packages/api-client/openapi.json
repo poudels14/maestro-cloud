@@ -5060,6 +5060,84 @@
         ]
       }
     },
+    "/api/services/{serviceId}/deployments": {
+      "get": {
+        "operationId": "listDeployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Deployment"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Ordered resource list"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/deployments/{deploymentId}": {
+      "get": {
+        "operationId": "getDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Requested resource"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "health",
