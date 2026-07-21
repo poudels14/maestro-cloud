@@ -3469,6 +3469,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kernel-api",
+ "node-agent",
+ "runtime",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
