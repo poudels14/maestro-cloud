@@ -473,6 +473,7 @@ fn traffic(deployment: &Deployment) -> TrafficGeneration {
             }],
             targets: vec![kernel_api::TrafficTarget {
                 assignment_id: AssignmentId::new("assignment-new").unwrap(),
+                node_id: NodeId::new("node-1").unwrap(),
                 endpoint: SocketAddr::from(([10, 42, 1, 10], 8080)),
             }],
         },

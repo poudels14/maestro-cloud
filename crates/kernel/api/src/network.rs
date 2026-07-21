@@ -54,6 +54,8 @@ pub type IngressRoute = Object<IngressRouteId, IngressRouteSpec, IngressRouteSta
 pub struct TrafficTarget {
     /// Assignment owning this target.
     pub assignment_id: AssignmentId,
+    /// Node hosting the assignment, used only to group opaque affinity targets.
+    pub node_id: NodeId,
     /// Workload address and ingress port dialed directly over the mesh.
     pub endpoint: SocketAddr,
 }

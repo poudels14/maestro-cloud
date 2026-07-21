@@ -349,7 +349,7 @@ impl World {
         }
     }
 
-    fn input(&self) -> IngressInput {
+    pub(super) fn input(&self) -> IngressInput {
         IngressInput {
             cluster_id: ClusterId::new("cluster-1").unwrap(),
             now: self.now,

@@ -49,6 +49,7 @@ pub(crate) fn desired_spec(
             .flat_map(|assignment| {
                 ports.iter().map(move |port| TrafficTarget {
                     assignment_id: assignment.meta.id.clone(),
+                    node_id: assignment.spec.node_id.clone(),
                     endpoint: SocketAddr::new(assignment.spec.workload_address, *port),
                 })
             })

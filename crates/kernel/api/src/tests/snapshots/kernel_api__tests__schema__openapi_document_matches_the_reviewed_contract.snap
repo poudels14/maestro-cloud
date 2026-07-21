@@ -4103,10 +4103,19 @@ expression: openapi_document()
           "endpoint": {
             "description": "Workload address and ingress port dialed directly over the mesh.",
             "type": "string"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node hosting the assignment, used only to group opaque affinity targets."
           }
         },
         "required": [
           "assignmentId",
+          "nodeId",
           "endpoint"
         ],
         "type": "object"

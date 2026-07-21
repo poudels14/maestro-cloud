@@ -2,3 +2,4 @@
 
 mod plan;
 mod store;
+mod traefik;

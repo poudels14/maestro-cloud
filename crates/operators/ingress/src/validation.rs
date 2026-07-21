@@ -24,7 +24,10 @@ pub(crate) fn capture_routes(
             });
         }
         if let Some(path) = route.spec.path_prefix.as_deref()
-            && (!path.starts_with('/') || path.contains(['?', '#']))
+            && (!path.starts_with('/')
+                || path.chars().any(|character| {
+                    matches!(character, '?' | '#' | '`' | '\\') || character.is_control()
+                }))
         {
             return Err(IngressPlanError::InvalidPathPrefix {
                 route_id: route.meta.id,
