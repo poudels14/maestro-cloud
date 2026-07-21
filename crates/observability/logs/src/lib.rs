@@ -8,6 +8,8 @@ pub mod conformance;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
 mod model;
+#[cfg(unix)]
+mod otlp;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
@@ -18,6 +20,8 @@ pub use fake::InMemoryLogStore;
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,
 };
+#[cfg(unix)]
+pub use otlp::OtlpLogHandler;
 pub use parser::{JsonLogParser, LogParser, ParsedLog, PlainTextLogParser, standard_parsers};
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
