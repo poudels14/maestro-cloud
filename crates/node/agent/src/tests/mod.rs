@@ -17,6 +17,8 @@ mod host_disks;
 #[cfg(target_os = "linux")]
 mod host_stats;
 #[cfg(target_os = "linux")]
+mod host_telemetry;
+#[cfg(target_os = "linux")]
 mod linux_bridge;
 #[cfg(target_os = "linux")]
 mod linux_firewall;

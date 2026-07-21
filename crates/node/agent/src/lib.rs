@@ -29,6 +29,8 @@ mod host_disks;
 #[cfg(target_os = "linux")]
 mod host_stats;
 #[cfg(target_os = "linux")]
+mod host_telemetry;
+#[cfg(target_os = "linux")]
 mod linux_bridge;
 #[cfg(target_os = "linux")]
 mod linux_firewall;
@@ -102,6 +104,12 @@ pub use host_disks::{
 pub use host_stats::{
     HostCpuStats, HostMemoryStats, HostNetworkStats, HostResourceStats, HostStatsError,
     HostStatsReader, LinuxHostStatsReader,
+};
+#[cfg(target_os = "linux")]
+pub use host_telemetry::{
+    HostTelemetryAgent, HostTelemetryAgentError, HostTelemetryFailure, HostTelemetryFailureStage,
+    HostTelemetryReport, HostTelemetrySample, HostTelemetrySettings, HostTelemetrySink,
+    HostTelemetrySinkError,
 };
 pub use mesh::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
