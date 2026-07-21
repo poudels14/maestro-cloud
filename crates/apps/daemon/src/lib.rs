@@ -7,9 +7,11 @@
 mod agent_lifecycle;
 mod agent_role;
 mod control_plane;
+mod datadog;
 mod error;
 mod launch;
 mod leadership;
+mod log_delivery;
 mod operators;
 mod plan;
 mod runtime;
@@ -18,6 +20,7 @@ mod workload_agents;
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
 };
+pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig};
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_daemon, load_launch_config,

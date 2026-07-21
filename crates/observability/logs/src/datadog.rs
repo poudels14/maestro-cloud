@@ -34,12 +34,7 @@ impl DatadogLogSinkSettings {
         site: impl Into<String>,
     ) -> Result<Self, DatadogLogSinkSettingsError> {
         let site = site.into();
-        if site.is_empty()
-            || site.len() > 255
-            || !site
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
-        {
+        if !valid_datadog_site(&site) {
             return Err(DatadogLogSinkSettingsError::InvalidSite);
         }
         Self::with_endpoint(
@@ -424,6 +419,26 @@ fn datadog_status(severity: &str) -> &'static str {
         "debug" | "trace" => "debug",
         _ => "info",
     }
+}
+
+fn valid_datadog_site(site: &str) -> bool {
+    !site.is_empty()
+        && site.len() <= 255
+        && site.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn invalid_split() -> LogSinkError {

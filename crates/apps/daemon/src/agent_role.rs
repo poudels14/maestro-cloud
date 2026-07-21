@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::control_plane::{DaemonRoleFactory, role_error};
+use crate::log_delivery::build_sink_workers;
 use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_log_agent, build_stats_agent,
 };
@@ -80,6 +81,14 @@ where
     };
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
+    let sink_workers = match build_sink_workers(
+        &factory.log_sinks,
+        runtimes.log_delivery_store(),
+        factory.settings.sink_worker_settings,
+    ) {
+        Ok(workers) => workers,
+        Err(error) => return runtimes.fail(error).await,
+    };
 
     let bridge_agent = match build_bridge_agent(factory, plan, spec, bridge_backend) {
         Ok(agent) => agent,
@@ -311,6 +320,13 @@ where
                 .run(stats_shutdown)
                 .await
                 .map_err(|error| role_error("run workload stats agent", error))
+        }));
+    }
+    for worker in sink_workers {
+        let sink_shutdown = shutdown.subscribe();
+        tasks.push(tokio::spawn(async move {
+            worker.run(sink_shutdown).await;
+            Ok(())
         }));
     }
     let owned_runtimes = runtimes.into_owned();

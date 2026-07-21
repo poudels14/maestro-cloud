@@ -246,6 +246,8 @@ async fn operational_failures_are_retryable_and_never_quarantined()
 fn settings_and_transport_bounds_fail_closed() {
     assert!(DatadogLogSinkSettings::new("", "datadoghq.com").is_err());
     assert!(DatadogLogSinkSettings::new("key", "https://evil.example").is_err());
+    assert!(DatadogLogSinkSettings::new("key", ".datadoghq.com").is_err());
+    assert!(DatadogLogSinkSettings::new("key", "us..datadoghq.com").is_err());
     assert!(crate::ReqwestHttpTransport::new(std::time::Duration::ZERO).is_err());
 }
 

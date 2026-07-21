@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::watch;
 
 use crate::{
     LogDeliveryStore, LogDeliveryStoreError, LogSequence, LogSink, LogSinkError, LogSinkOutcome,
@@ -21,6 +22,8 @@ pub struct SinkWorkerSettings {
     pub initial_retry_delay: Duration,
     /// Maximum delay after exponential growth.
     pub max_retry_delay: Duration,
+    /// Delay between bounded drain passes when no append notification is available.
+    pub poll_interval: Duration,
 }
 
 impl SinkWorkerSettings {
@@ -31,10 +34,24 @@ impl SinkWorkerSettings {
             || self.max_attempts == 0
             || self.initial_retry_delay.is_zero()
             || self.max_retry_delay < self.initial_retry_delay
+            || self.poll_interval.is_zero()
         {
             return Err(SinkWorkerSettingsError);
         }
         Ok(self)
+    }
+}
+
+impl Default for SinkWorkerSettings {
+    fn default() -> Self {
+        Self {
+            batch_size: 200,
+            max_batches_per_run: 20,
+            max_attempts: 5,
+            initial_retry_delay: Duration::from_millis(500),
+            max_retry_delay: Duration::from_secs(8),
+            poll_interval: Duration::from_secs(5),
+        }
     }
 }
 
@@ -142,6 +159,35 @@ impl SinkWorker {
             }
         }
         Ok(report)
+    }
+
+    /// Repeatedly performs bounded drains until shutdown, retrying failed passes on the next poll.
+    ///
+    /// Cancellation may interrupt a destination request after remote acceptance but before the
+    /// local cursor commit. The next pass deliberately replays that batch, so sinks must remain
+    /// idempotent under the [`LogSink`] contract.
+    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
+        loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                }
+                _result = self.drain_once() => {}
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                }
+                () = self.sleeper.sleep(self.settings.poll_interval) => {}
+            }
+        }
     }
 
     async fn send_with_retry(

@@ -279,6 +279,7 @@ impl RealProcessCluster {
                 NodeInstanceId::new(format!("{}-process-{launch_sequence}", node.node_id))
                     .map_err(RealClusterError::from_display)?,
             ),
+            datadog: None,
         };
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;

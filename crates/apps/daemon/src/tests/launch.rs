@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use cluster::{CertificateKeyPair, NodeCertificateBundle, StoreJoinTicket};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
-use crate::{DaemonLaunchConfig, StoreLaunchMode, load_launch_config};
+use crate::{
+    DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, StoreLaunchMode,
+    load_launch_config,
+};
 
 use super::cluster_with_nodes;
 
@@ -79,6 +82,29 @@ fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+#[test]
+fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.datadog = Some(DatadogLaunchConfig {
+        api_key: SecretValue::new("test-super-secret"),
+        site: "us3.datadoghq.com".to_owned(),
+        include_ingress_logs: true,
+        include_tailscale_logs: false,
+        logs: DatadogLogsLaunchConfig {
+            include_healthcheck: false,
+        },
+    });
+    launch.validate()?;
+    assert!(!format!("{launch:?}").contains("test-super-secret"));
+
+    let mut invalid = launch;
+    let datadog = invalid.datadog.as_mut().ok_or("Datadog config missing")?;
+    datadog.site = "https://example.invalid".to_owned();
+    assert!(invalid.validate().is_err());
+    Ok(())
+}
+
 fn config(
     node_id: &str,
     role: NodeRole,
@@ -98,5 +124,6 @@ fn config(
             },
         },
         instance_id: Some(NodeInstanceId::new("instance-1")?),
+        datadog: None,
     })
 }

@@ -9,7 +9,10 @@ use kernel_api::{
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
-use logs::{InMemoryLogStoreRuntime, LogBody, LogOrigin};
+use logs::{
+    InMemoryLogStoreRuntime, LogBody, LogOrigin, LogSequence, LogSinkId, RecordingLogSink,
+    SinkWorkerSettings,
+};
 use metrics::InMemoryMetricStoreRuntime;
 use node_agent::{
     AuthoritativeDnsResolver, CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats,
@@ -51,6 +54,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let health_targets = Arc::new(Mutex::new(Vec::new()));
     let log_store_runtime = InMemoryLogStoreRuntime::new();
     let log_store = log_store_runtime.store_handle();
+    let delivery_sink = Arc::new(RecordingLogSink::new(LogSinkId::new("test-delivery")?, []));
     let metric_store_runtime = InMemoryMetricStoreRuntime::new();
     let metric_store = metric_store_runtime.store_handle();
     let directory = tempfile::tempdir()?;
@@ -89,6 +93,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             }),
             workload_runtime: workload_runtime.clone(),
             log_store_runtime: Box::new(log_store_runtime),
+            log_sinks: vec![delivery_sink.clone()],
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(FixedStatsReader),
             network_provider: network_provider.clone(),
@@ -101,7 +106,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
         },
-        DaemonRoleSettings::default(),
+        DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {
+            poll_interval: Duration::from_millis(1),
+            ..SinkWorkerSettings::default()
+        })?,
     )
     .with_leader_workload(workload.clone());
 
@@ -200,6 +208,17 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     };
     assert_eq!(metadata.service_id.as_str(), "api");
     assert_eq!(metadata.deployment_id.as_str(), "deployment-1");
+    let delivered_batches = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let batches = delivery_sink.attempts()?;
+            if !batches.is_empty() {
+                return Ok::<_, logs::LogSinkError>(batches);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(delivered_batches, vec![vec![LogSequence(1)]]);
     assert_eq!(
         load_replica(&store, &cluster.cluster_id)
             .await?
@@ -300,6 +319,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             }),
             workload_runtime: workload_runtime.clone(),
             log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
+            log_sinks: Vec::new(),
             metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),
             stats_reader: Arc::new(FixedStatsReader),
             network_provider: network_provider.clone(),

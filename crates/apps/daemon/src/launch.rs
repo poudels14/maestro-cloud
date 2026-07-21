@@ -18,9 +18,10 @@ use node_agent::{
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
+use crate::datadog::{build_log_sinks, configure_datadog};
 use crate::{
     AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    DatadogLaunchConfig, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -68,12 +69,18 @@ pub struct DaemonLaunchConfig {
     /// Optional deterministic process identity, primarily for cluster tests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<NodeInstanceId>,
+    /// Optional node-local Datadog log delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datadog: Option<DatadogLaunchConfig>,
 }
 
 impl DaemonLaunchConfig {
     /// Validates all launch choices before local state or processes are touched.
     pub fn validate(&self) -> Result<(), DaemonLaunchError> {
         self.cluster.preflight()?;
+        if let Some(datadog) = &self.datadog {
+            datadog.validate()?;
+        }
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));
         }
@@ -149,7 +156,9 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         store_mode,
         security,
         instance_id,
+        datadog,
     } = config;
+    let configured_datadog = configure_datadog(datadog.as_ref())?;
     let known_members = control_plane_members(&cluster);
     let clock = Arc::new(TokioClock::new());
     let local_node = cluster
@@ -214,6 +223,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
+    let log_sinks = build_log_sinks(configured_datadog, &log_store_runtime);
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
@@ -223,6 +233,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: containerd.clone(),
             log_store_runtime: Box::new(log_store_runtime),
+            log_sinks,
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(CgroupV2StatsReader),
             network_provider: containerd,
@@ -375,6 +386,12 @@ pub enum DaemonLaunchError {
         #[source]
         source: serde_json::Error,
     },
+    /// Datadog log delivery configuration was unsafe or incomplete.
+    #[error(transparent)]
+    DatadogSettings(#[from] logs::DatadogLogSinkSettingsError),
+    /// The bounded production sink HTTP adapter could not be constructed.
+    #[error(transparent)]
+    HttpTransport(#[from] logs::ReqwestHttpTransportError),
     /// Provider configuration or store lifecycle failed.
     #[error(transparent)]
     StoreProvider(#[from] cluster::StoreProviderError),

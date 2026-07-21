@@ -7,7 +7,7 @@ use cluster::{StoreProvider, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
-use logs::LogStoreRuntime;
+use logs::{LogSink, LogStoreRuntime, SinkWorkerSettings};
 use metrics::MetricStoreRuntime;
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity,
@@ -57,6 +57,7 @@ pub struct DaemonRoleSettings {
     pub(crate) stats_poll_interval: Duration,
     pub(crate) log_poll_interval: Duration,
     pub(crate) max_log_frames_per_workload: usize,
+    pub(crate) sink_worker_settings: SinkWorkerSettings,
     pub(crate) workload_stop_timeout: Duration,
     pub(crate) restart_backoff_base: Duration,
     pub(crate) restart_backoff_max: Duration,
@@ -110,6 +111,7 @@ impl DaemonRoleSettings {
             stats_poll_interval,
             log_poll_interval,
             max_log_frames_per_workload,
+            sink_worker_settings: SinkWorkerSettings::default(),
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -133,6 +135,7 @@ impl Default for DaemonRoleSettings {
             stats_poll_interval: Duration::from_secs(5),
             log_poll_interval: Duration::from_secs(1),
             max_log_frames_per_workload: 1_000,
+            sink_worker_settings: SinkWorkerSettings::default(),
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -141,6 +144,19 @@ impl Default for DaemonRoleSettings {
             campaign_retry_interval: Duration::from_secs(1),
             store_shutdown_grace: Duration::from_secs(10),
         }
+    }
+}
+
+impl DaemonRoleSettings {
+    /// Overrides bounded sink drain, retry, and poll settings for this daemon instance.
+    pub fn with_sink_worker_settings(
+        mut self,
+        settings: SinkWorkerSettings,
+    ) -> Result<Self, RoleError> {
+        self.sink_worker_settings = settings
+            .validate()
+            .map_err(|error| RoleError::new(error.to_string()))?;
+        Ok(self)
     }
 }
 
@@ -160,6 +176,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
     /// Owned normalized-log storage runtime for this node.
     pub log_store_runtime: Box<dyn LogStoreRuntime>,
+    /// Independently checkpointed normalized-log destinations owned by this node.
+    pub log_sinks: Vec<Arc<dyn LogSink>>,
     /// Owned normalized-metric storage runtime for this node.
     pub metric_store_runtime: Box<dyn MetricStoreRuntime>,
     /// Direct cgroup v2 reader used for backend-neutral workload samples.
@@ -189,6 +207,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
+    pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
@@ -223,6 +242,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
+            log_sinks: dependencies.log_sinks,
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             stats_reader: dependencies.stats_reader,
             network_provider: dependencies.network_provider,

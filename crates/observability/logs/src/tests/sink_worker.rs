@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, Timestamp};
+use tokio::sync::Semaphore;
 
 use crate::{
     DeadLetterStore, InMemoryDeadLetterStore, InMemoryLogDeliveryStore, IngestLogEntry, LogBody,
@@ -24,6 +25,7 @@ fn sink_ids_and_worker_bounds_fail_closed() {
         max_attempts: 1,
         initial_retry_delay: Duration::from_millis(1),
         max_retry_delay: Duration::from_millis(1),
+        poll_interval: Duration::from_millis(1),
     };
     assert!(settings.validate().is_err());
 }
@@ -113,6 +115,42 @@ async fn exhausted_delivery_never_advances_the_cursor() -> Result<(), Box<dyn st
 }
 
 #[tokio::test]
+async fn continuous_worker_recovers_on_a_later_poll_and_stops_cleanly()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryLogDeliveryStore::new(entries(1)?)?);
+    let sink = Arc::new(RecordingLogSink::new(
+        sink_id()?,
+        [Err(unavailable_sink()), Ok(LogSinkOutcome::default())],
+    ));
+    let sleeper = Arc::new(ControlledSleeper::default());
+    let worker = SinkWorker::new(
+        store.clone(),
+        sink.clone(),
+        sleeper.clone(),
+        SinkWorkerSettings {
+            batch_size: 1,
+            max_batches_per_run: 1,
+            max_attempts: 1,
+            initial_retry_delay: Duration::from_millis(1),
+            max_retry_delay: Duration::from_millis(1),
+            poll_interval: Duration::from_millis(5),
+        },
+    )?;
+    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(async move { worker.run(shutdown_receiver).await });
+
+    sleeper.wait_for_sleeps(1).await?;
+    assert_eq!(store.cursor(sink.id())?, None);
+    sleeper.release();
+    wait_for_attempts(&sink, 2).await?;
+    assert_eq!(store.cursor(sink.id())?, Some(LogSequence(1)));
+
+    shutdown.send(true)?;
+    task.await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn cursor_commit_failure_deliberately_replays_the_accepted_batch()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryLogDeliveryStore::new(entries(1)?)?);
@@ -189,6 +227,47 @@ struct RecordingSleeper {
     delays: Mutex<Vec<Duration>>,
 }
 
+struct ControlledSleeper {
+    sleeps: std::sync::atomic::AtomicUsize,
+    permits: Semaphore,
+}
+
+impl Default for ControlledSleeper {
+    fn default() -> Self {
+        Self {
+            sleeps: std::sync::atomic::AtomicUsize::new(0),
+            permits: Semaphore::new(0),
+        }
+    }
+}
+
+impl ControlledSleeper {
+    async fn wait_for_sleeps(&self, expected: usize) -> Result<(), &'static str> {
+        for _ in 0..10_000 {
+            if self.sleeps.load(std::sync::atomic::Ordering::SeqCst) >= expected {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+        Err("sink worker did not enter its poll wait")
+    }
+
+    fn release(&self) {
+        self.permits.add_permits(1);
+    }
+}
+
+#[async_trait]
+impl SinkSleeper for ControlledSleeper {
+    async fn sleep(&self, _duration: Duration) {
+        self.sleeps
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(permit) = self.permits.acquire().await {
+            permit.forget();
+        }
+    }
+}
+
 impl RecordingSleeper {
     fn delays(&self) -> Result<Vec<Duration>, LogSinkError> {
         self.delays
@@ -222,6 +301,7 @@ fn worker(
             max_attempts: 3,
             initial_retry_delay: Duration::from_millis(5),
             max_retry_delay: Duration::from_millis(20),
+            poll_interval: Duration::from_millis(25),
         },
     )
 }
@@ -275,4 +355,16 @@ fn unavailable_sink() -> LogSinkError {
     LogSinkError::Unavailable {
         message: "injected destination failure".to_owned(),
     }
+}
+
+async fn wait_for_attempts(sink: &RecordingLogSink, expected: usize) -> Result<(), LogSinkError> {
+    for _ in 0..10_000 {
+        if sink.attempts()?.len() >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(LogSinkError::Unavailable {
+        message: "sink worker did not make bounded retry progress".to_owned(),
+    })
 }
