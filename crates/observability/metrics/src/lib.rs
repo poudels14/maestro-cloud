@@ -19,6 +19,7 @@ mod http;
 mod model;
 mod pipeline;
 mod query;
+mod resource_view;
 mod sink_worker;
 mod store;
 
@@ -50,6 +51,10 @@ pub use pipeline::WorkloadMetricPipeline;
 pub use query::{
     WorkloadMetricHistoryPoint, WorkloadMetricQuery, WorkloadMetricQueryError,
     WorkloadMetricQueryStore, WorkloadMetricQueryStoreError,
+};
+pub use resource_view::{
+    DiskInfo, ResourceMetricPoint, ResourceMetricSource, aggregate_workload_resource_metrics,
+    project_host_resource_metrics, project_latest_disks, project_workload_resource_metrics,
 };
 pub use sink_worker::{
     MetricSinkSleeper, MetricSinkWorker, MetricSinkWorkerError, MetricSinkWorkerReport,

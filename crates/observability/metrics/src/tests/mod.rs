@@ -3,5 +3,6 @@
 mod datadog;
 mod host_pipeline;
 mod pipeline;
+mod resource_view;
 mod sink_worker;
 mod store;
