@@ -12,10 +12,12 @@ mod pipeline;
 mod store;
 
 #[cfg(any(test, feature = "test-util"))]
-pub use fake::InMemoryMetricStore;
+pub use fake::{InMemoryMetricStore, InMemoryMetricStoreRuntime};
 pub use model::{MetricRecordId, WorkloadMetricPoint};
 pub use pipeline::WorkloadMetricPipeline;
-pub use store::{MetricAppendReport, MetricStore, MetricStoreError};
+pub use store::{
+    MetricAppendReport, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
+};
 
 #[cfg(test)]
 mod tests;

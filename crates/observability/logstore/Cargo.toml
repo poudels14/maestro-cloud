@@ -8,6 +8,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 duckdb = { version = "=1.4.1", features = ["bundled"] }
 logs = { version = "0.1.0", path = "../logs" }
+metrics = { version = "0.1.0", path = "../metrics" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { version = "=1.52.3", features = ["rt", "sync"] }
@@ -15,6 +16,8 @@ tokio = { version = "=1.52.3", features = ["rt", "sync"] }
 [dev-dependencies]
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 logs = { path = "../logs", features = ["test-util"] }
+metrics = { path = "../metrics", features = ["test-util"] }
+runtime = { path = "../../runtime", default-features = false }
 tempfile = "=3.27.0"
 tokio.workspace = true
 

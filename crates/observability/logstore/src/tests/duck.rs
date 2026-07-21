@@ -5,7 +5,7 @@ use logs::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore, LogStream, OriginCursor,
 };
 
-use crate::{DuckLogStoreError, DuckLogStoreRuntime, DuckLogStoreSettings};
+use crate::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
 
 #[tokio::test]
 async fn duck_store_rejects_ambiguous_schema_history() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,8 +18,8 @@ async fn duck_store_rejects_ambiguous_schema_history() -> Result<(), Box<dyn std
     )?;
     drop(connection);
 
-    let result = DuckLogStoreRuntime::open(DuckLogStoreSettings::new(path, 8)?).await;
-    assert!(matches!(result, Err(DuckLogStoreError::Initialize { .. })));
+    let result = DuckLogStoreRuntime::open(DuckStoreSettings::new(path, 8)?).await;
+    assert!(matches!(result, Err(DuckStoreError::Initialize { .. })));
     Ok(())
 }
 
@@ -27,7 +27,7 @@ async fn duck_store_rejects_ambiguous_schema_history() -> Result<(), Box<dyn std
 async fn duck_store_passes_shared_conformance_and_closes_cleanly()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
-    let runtime = DuckLogStoreRuntime::open(DuckLogStoreSettings::new(
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
         temporary.path().join("logs.duckdb"),
         8,
     )?)
@@ -41,7 +41,7 @@ async fn duck_store_passes_shared_conformance_and_closes_cleanly()
 async fn duck_store_replays_persisted_entries_after_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
-    let settings = DuckLogStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
+    let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
     let entry = entry()?;
     let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
     assert_eq!(

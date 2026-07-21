@@ -1,26 +1,26 @@
 use std::path::PathBuf;
 
-use crate::DuckLogStoreError;
+use crate::DuckStoreError;
 
 /// Host persistence and bounded ingestion settings for one DuckDB writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DuckLogStoreSettings {
+pub struct DuckStoreSettings {
     /// Absolute database path owned by this daemon node.
     pub path: PathBuf,
     /// Maximum append or shutdown commands awaiting the single writer thread.
     pub queue_capacity: usize,
 }
 
-impl DuckLogStoreSettings {
+impl DuckStoreSettings {
     /// Validates an absolute database path and a positive backpressure bound.
-    pub fn new(path: PathBuf, queue_capacity: usize) -> Result<Self, DuckLogStoreError> {
+    pub fn new(path: PathBuf, queue_capacity: usize) -> Result<Self, DuckStoreError> {
         if !path.is_absolute() {
-            Err(DuckLogStoreError::InvalidConfiguration {
-                message: "DuckDB log path must be absolute".to_owned(),
+            Err(DuckStoreError::InvalidConfiguration {
+                message: "DuckDB path must be absolute".to_owned(),
             })
         } else if queue_capacity == 0 {
-            Err(DuckLogStoreError::InvalidConfiguration {
-                message: "DuckDB log queue capacity must be positive".to_owned(),
+            Err(DuckStoreError::InvalidConfiguration {
+                message: "DuckDB queue capacity must be positive".to_owned(),
             })
         } else {
             Ok(Self {

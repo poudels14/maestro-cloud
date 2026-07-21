@@ -2,49 +2,50 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
-use logs::{
-    IngestLogEntry, LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
+use metrics::{
+    MetricAppendReport, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
+    WorkloadMetricPoint,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::schema;
+use crate::metric_schema;
 use crate::{DuckStoreError, DuckStoreSettings};
 
 enum Command {
     Append {
-        entries: Vec<IngestLogEntry>,
-        response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
+        points: Vec<WorkloadMetricPoint>,
+        response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
     },
 }
 
-/// Async append handle applying bounded backpressure to one DuckDB owner thread.
-pub struct DuckLogStore {
+/// Async metric append handle applying bounded backpressure to one DuckDB owner thread.
+pub struct DuckMetricStore {
     commands: mpsc::Sender<Command>,
 }
 
-/// Explicit lifetime owner for the blocking DuckDB writer thread.
-pub struct DuckLogStoreRuntime {
-    store: Arc<DuckLogStore>,
+/// Explicit lifetime owner for the blocking metric DuckDB writer thread.
+pub struct DuckMetricStoreRuntime {
+    store: Arc<DuckMetricStore>,
     worker: Option<JoinHandle<()>>,
 }
 
-impl DuckLogStoreRuntime {
-    /// Opens and migrates the database on its dedicated thread before returning.
+impl DuckMetricStoreRuntime {
+    /// Opens and migrates the metric database on its dedicated thread before returning.
     pub async fn open(settings: DuckStoreSettings) -> Result<Self, DuckStoreError> {
         let (commands, receiver) = mpsc::channel(settings.queue_capacity);
         let (initialized, initialization) = oneshot::channel();
         let path = settings.path.clone();
         let worker_path = path.clone();
         let worker = std::thread::Builder::new()
-            .name("maestro-logstore".to_owned())
+            .name("maestro-metricstore".to_owned())
             .spawn(move || run_worker(&worker_path, receiver, initialized))
             .map_err(|source| DuckStoreError::Spawn { path, source })?;
         match initialization.await {
             Ok(Ok(())) => Ok(Self {
-                store: Arc::new(DuckLogStore { commands }),
+                store: Arc::new(DuckMetricStore { commands }),
                 worker: Some(worker),
             }),
             Ok(Err(message)) => {
@@ -57,14 +58,14 @@ impl DuckLogStoreRuntime {
             Err(_) => {
                 join(worker).await?;
                 Err(DuckStoreError::WorkerStopped {
-                    action: "reporting initialization",
+                    action: "reporting metric initialization",
                 })
             }
         }
     }
 
-    /// Returns the append contract shared by runtime and OTLP ingestion.
-    pub fn store(&self) -> Arc<DuckLogStore> {
+    /// Returns the normalized metric append contract.
+    pub fn store(&self) -> Arc<DuckMetricStore> {
         self.store.clone()
     }
 
@@ -78,10 +79,10 @@ impl DuckLogStoreRuntime {
             .await
         {
             Ok(()) => stopped.await.map_err(|_| DuckStoreError::WorkerStopped {
-                action: "confirming shutdown",
+                action: "confirming metric shutdown",
             }),
             Err(_) => Err(DuckStoreError::WorkerStopped {
-                action: "requesting shutdown",
+                action: "requesting metric shutdown",
             }),
         };
         if let Some(worker) = self.worker.take() {
@@ -91,7 +92,7 @@ impl DuckLogStoreRuntime {
     }
 }
 
-impl Drop for DuckLogStoreRuntime {
+impl Drop for DuckMetricStoreRuntime {
     fn drop(&mut self) {
         if self.worker.is_some() {
             let (response, _stopped) = oneshot::channel();
@@ -101,34 +102,37 @@ impl Drop for DuckLogStoreRuntime {
 }
 
 #[async_trait]
-impl LogStore for DuckLogStore {
-    async fn append(&self, entries: &[IngestLogEntry]) -> Result<LogAppendReport, LogStoreError> {
+impl MetricStore for DuckMetricStore {
+    async fn append(
+        &self,
+        points: &[WorkloadMetricPoint],
+    ) -> Result<MetricAppendReport, MetricStoreError> {
         let (response, result) = oneshot::channel();
         self.commands
             .send(Command::Append {
-                entries: entries.to_vec(),
+                points: points.to_vec(),
                 response,
             })
             .await
-            .map_err(|_| LogStoreError::Unavailable {
-                message: "DuckDB writer stopped before accepting append".to_owned(),
+            .map_err(|_| MetricStoreError::Unavailable {
+                message: "DuckDB metric writer stopped before accepting append".to_owned(),
             })?;
-        result.await.map_err(|_| LogStoreError::Unavailable {
-            message: "DuckDB writer stopped before completing append".to_owned(),
+        result.await.map_err(|_| MetricStoreError::Unavailable {
+            message: "DuckDB metric writer stopped before completing append".to_owned(),
         })?
     }
 }
 
 #[async_trait]
-impl LogStoreRuntime for DuckLogStoreRuntime {
-    fn store(&self) -> Arc<dyn LogStore> {
+impl MetricStoreRuntime for DuckMetricStoreRuntime {
+    fn store(&self) -> Arc<dyn MetricStore> {
         self.store.clone()
     }
 
-    async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
-        DuckLogStoreRuntime::shutdown(*self)
+    async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {
+        DuckMetricStoreRuntime::shutdown(*self)
             .await
-            .map_err(|error| LogStoreRuntimeError {
+            .map_err(|error| MetricStoreRuntimeError {
                 message: error.to_string(),
             })
     }
@@ -139,7 +143,7 @@ fn run_worker(
     mut commands: mpsc::Receiver<Command>,
     initialized: oneshot::Sender<Result<(), String>>,
 ) {
-    let mut connection = match schema::open(path) {
+    let mut connection = match metric_schema::open(path) {
         Ok(connection) => {
             if initialized.send(Ok(())).is_err() {
                 return;
@@ -153,8 +157,8 @@ fn run_worker(
     };
     while let Some(command) = commands.blocking_recv() {
         match command {
-            Command::Append { entries, response } => {
-                let _ignored = response.send(schema::append(&mut connection, &entries));
+            Command::Append { points, response } => {
+                let _ignored = response.send(metric_schema::append(&mut connection, &points));
             }
             Command::Shutdown { response } => {
                 drop(connection);

@@ -10,7 +10,7 @@ use cluster::{
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
-use logstore::{DuckLogStoreError, DuckLogStoreRuntime, DuckLogStoreSettings};
+use logstore::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
 use node_agent::{
     HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
     NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
@@ -212,7 +212,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
-    let log_store_runtime = DuckLogStoreRuntime::open(DuckLogStoreSettings::new(
+    let log_store_runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
         plan.data_directory().join("agent").join("logs.duckdb"),
         1_024,
     )?)
@@ -374,7 +374,7 @@ pub enum DaemonLaunchError {
     Runtime(#[from] runtime::RuntimeError),
     /// The node-local normalized log store could not be opened or initialized.
     #[error(transparent)]
-    LogStore(#[from] DuckLogStoreError),
+    LogStore(#[from] DuckStoreError),
     /// A generated process identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),

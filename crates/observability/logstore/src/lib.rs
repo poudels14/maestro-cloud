@@ -1,16 +1,19 @@
-//! Durable DuckDB hot-tier storage for normalized Maestro logs.
+//! Durable DuckDB hot-tier storage for normalized Maestro observability data.
 //!
-//! This crate implements observability storage contracts. It may depend on `logs`, but must not
-//! depend on runtimes, node agents, operators, cluster provisioning, or application composition.
+//! This crate implements log and metric storage contracts. It must not depend on operators,
+//! cluster provisioning, or application composition.
 
 mod duck;
 mod error;
+mod metric_duck;
+mod metric_schema;
 mod schema;
 mod settings;
 
 pub use duck::{DuckLogStore, DuckLogStoreRuntime};
-pub use error::DuckLogStoreError;
-pub use settings::DuckLogStoreSettings;
+pub use error::DuckStoreError;
+pub use metric_duck::{DuckMetricStore, DuckMetricStoreRuntime};
+pub use settings::DuckStoreSettings;
 
 #[cfg(test)]
 mod tests;

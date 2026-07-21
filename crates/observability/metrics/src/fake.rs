@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
 use crate::{
-    MetricAppendReport, MetricRecordId, MetricStore, MetricStoreError, WorkloadMetricPoint,
+    MetricAppendReport, MetricRecordId, MetricStore, MetricStoreError, MetricStoreRuntime,
+    MetricStoreRuntimeError, WorkloadMetricPoint,
 };
 
 /// Deterministic idempotent metric store for pipeline and composition tests.
@@ -69,5 +70,41 @@ impl MetricStore for InMemoryMetricStore {
             committed: committed_count,
             deduplicated,
         })
+    }
+}
+
+/// No-op lifecycle owner for an in-memory metric store used by composition tests.
+pub struct InMemoryMetricStoreRuntime {
+    store: Arc<InMemoryMetricStore>,
+}
+
+impl InMemoryMetricStoreRuntime {
+    /// Creates an empty in-memory runtime.
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(InMemoryMetricStore::new()),
+        }
+    }
+
+    /// Returns a typed handle for inspecting committed points.
+    pub fn store_handle(&self) -> Arc<InMemoryMetricStore> {
+        self.store.clone()
+    }
+}
+
+impl Default for InMemoryMetricStoreRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl MetricStoreRuntime for InMemoryMetricStoreRuntime {
+    fn store(&self) -> Arc<dyn MetricStore> {
+        self.store.clone()
+    }
+
+    async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {
+        Ok(())
     }
 }

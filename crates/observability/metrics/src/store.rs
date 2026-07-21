@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::WorkloadMetricPoint;
 
@@ -24,6 +25,16 @@ pub trait MetricStore: Send + Sync {
     ) -> Result<MetricAppendReport, MetricStoreError>;
 }
 
+/// Explicit lifetime owner for a metric store and any workers behind it.
+#[async_trait]
+pub trait MetricStoreRuntime: Send {
+    /// Returns the shared append boundary while retaining lifecycle ownership.
+    fn store(&self) -> Arc<dyn MetricStore>;
+
+    /// Drains accepted writes and releases the store's owned resources.
+    async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError>;
+}
+
 /// A normalized metric batch could not cross the durable storage boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum MetricStoreError {
@@ -39,4 +50,12 @@ pub enum MetricStoreError {
         /// Safe availability detail.
         message: String,
     },
+}
+
+/// Failure to stop an owned metric-store runtime cleanly.
+#[derive(Debug, thiserror::Error)]
+#[error("metric-store runtime shutdown failed: {message}")]
+pub struct MetricStoreRuntimeError {
+    /// Stable backend-neutral shutdown detail.
+    pub message: String,
 }

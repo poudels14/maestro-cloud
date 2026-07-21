@@ -3407,6 +3407,8 @@ dependencies = [
  "duckdb",
  "kernel-api",
  "logs",
+ "metrics",
+ "runtime",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
