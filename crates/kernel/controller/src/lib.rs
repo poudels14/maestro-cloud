@@ -12,6 +12,7 @@ mod fencing;
 #[cfg(feature = "test-util")]
 mod journal;
 mod leadership;
+mod queue;
 mod reconciler;
 mod runtime;
 

@@ -67,6 +67,11 @@ impl Keyspace {
         }
     }
 
+    /// Prefix containing every resource, control key, and liveness record.
+    pub fn cluster(&self) -> StorePrefix {
+        StorePrefix(format!("{}/", self.root))
+    }
+
     /// Prefix containing every typed resource in the cluster.
     pub fn resources(&self) -> StorePrefix {
         self.prefix("resources")

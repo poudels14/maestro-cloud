@@ -156,7 +156,7 @@ async fn runtime_installs_and_executes_finalizers_before_physical_deletion()
 }
 
 #[tokio::test]
-async fn runtime_processes_watch_events_and_level_triggered_resyncs()
+async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
 -> Result<(), Box<dyn std::error::Error>> {
     let clock = Arc::new(ManualClock::new());
     let store = Arc::new(InMemoryStore::new(clock.clone()));
@@ -203,9 +203,10 @@ async fn runtime_processes_watch_events_and_level_triggered_resyncs()
         reconciles: AtomicUsize::new(0),
         finalizes: AtomicUsize::new(0),
     });
-    let runtime = Arc::new(ControllerRuntime::new(
+    let runtime = Arc::new(ControllerRuntime::new_with_trigger_prefix(
         reconciler.clone(),
         keys.resource_kind(&kind),
+        keys.resources(),
         fenced,
         clock.clone(),
         RuntimeConfig::new(
@@ -232,8 +233,21 @@ async fn runtime_processes_watch_events_and_level_triggered_resyncs()
     assert!(matches!(second, CasOutcome::Applied(_)));
     wait_for_count(&reconciler.reconciles, 2).await?;
 
-    clock.advance(Duration::from_secs(30));
+    let dependency_kind = ResourceKind::new("Dependency")?;
+    let dependency_key = keys.resource(&dependency_kind, &ResourceName::new("shared")?);
+    let dependency = store
+        .put_cas(PutRequest {
+            key: dependency_key,
+            value: b"dependency events are never decoded as Toy resources".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(dependency, CasOutcome::Applied(_)));
     wait_for_count(&reconciler.reconciles, 4).await?;
+
+    clock.advance(Duration::from_secs(30));
+    wait_for_count(&reconciler.reconciles, 6).await?;
     shutdown_tx.send_replace(true);
     runtime_task.await??;
     Ok(())

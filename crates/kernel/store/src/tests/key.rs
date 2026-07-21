@@ -11,6 +11,7 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
     let resource_id = ResourceName::new("api").expect("resource name");
     let keys = Keyspace::new(&cluster_id);
 
+    assert_eq!(keys.cluster().as_str(), "/maestro/clusters/production/");
     assert_eq!(
         keys.resources().as_str(),
         "/maestro/clusters/production/resources/"

@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,13 +5,14 @@ use std::time::Duration;
 use kernel_api::{FinalizerName, Object};
 use kernel_store::{
     Clock, Compare, ExpectedVersion, MonotonicTime, Mutation, StoreKey, StorePrefix, StoredValue,
-    Transaction, TransactionOutcome, Version, WatchEventKind, WatchStart,
+    Transaction, TransactionOutcome, Version, WatchCursor, WatchEventKind, WatchStart,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 use tracing::Instrument;
 
+use crate::queue::WorkQueue;
 use crate::{
     Action, Backoff, ControllerError, FencedStore, ReconcileContext, ReconcileError, Reconciler,
 };
@@ -54,7 +54,8 @@ pub enum RuntimeConfigError {
 /// Watch-driven, level-triggered executor for one typed reconciler.
 pub struct ControllerRuntime<R> {
     reconciler: Arc<R>,
-    prefix: StorePrefix,
+    resource_prefix: StorePrefix,
+    trigger_prefix: StorePrefix,
     fenced_store: Arc<FencedStore>,
     clock: Arc<dyn Clock>,
     config: RuntimeConfig,
@@ -77,9 +78,33 @@ where
         clock: Arc<dyn Clock>,
         config: RuntimeConfig,
     ) -> Self {
+        Self::new_with_trigger_prefix(
+            reconciler,
+            prefix.clone(),
+            prefix,
+            fenced_store,
+            clock,
+            config,
+        )
+    }
+
+    /// Binds a typed reconciler to a broader prefix containing dependency events.
+    ///
+    /// Values under `resource_prefix` remain the only objects passed to the
+    /// reconciler. A change elsewhere under `trigger_prefix` immediately
+    /// reschedules every known primary object, coalescing repeated events by key.
+    pub fn new_with_trigger_prefix(
+        reconciler: Arc<R>,
+        resource_prefix: StorePrefix,
+        trigger_prefix: StorePrefix,
+        fenced_store: Arc<FencedStore>,
+        clock: Arc<dyn Clock>,
+        config: RuntimeConfig,
+    ) -> Self {
         Self {
             reconciler,
-            prefix,
+            resource_prefix,
+            trigger_prefix,
             fenced_store,
             clock,
             config,
@@ -100,7 +125,11 @@ where
     /// validation. Production controllers normally use [`Self::run`].
     pub async fn reconcile_snapshot(&self) -> Result<usize, ControllerError> {
         self.fenced_store.verify_leadership().await?;
-        let snapshot = self.fenced_store.raw_store().list(&self.prefix).await?;
+        let snapshot = self
+            .fenced_store
+            .raw_store()
+            .list(&self.resource_prefix)
+            .await?;
         let mut invoked = 0_usize;
         for stored in snapshot.values {
             if self.process(stored, 0).await?.invoked {
@@ -116,16 +145,16 @@ where
     /// processing is serialized by key; this implementation deliberately uses
     /// one executor, which also bounds total concurrency for a controller.
     pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), ControllerError> {
-        let snapshot = self.fenced_store.raw_store().list(&self.prefix).await?;
+        let (trigger_cursor, resources) = self.snapshot_inputs().await?;
         let mut queue = WorkQueue::default();
         let now = self.clock.now();
-        for stored in &snapshot.values {
+        for stored in &resources {
             queue.schedule(stored.key.clone(), now, 0);
         }
-        let mut stream = self
-            .fenced_store
-            .raw_store()
-            .watch(self.prefix.clone(), WatchStart::After(snapshot.cursor))?;
+        let mut stream = self.fenced_store.raw_store().watch(
+            self.trigger_prefix.clone(),
+            WatchStart::After(trigger_cursor),
+        )?;
         let mut resync_at = now.saturating_add(self.config.resync_interval);
 
         loop {
@@ -141,16 +170,13 @@ where
                 }
                 event = stream.next() => {
                     match event {
-                        Ok(event) => match event.kind {
-                            WatchEventKind::Put(value) => queue.schedule(value.key, self.clock.now(), 0),
-                            WatchEventKind::Delete { key, .. } => queue.remove(&key),
-                        },
+                        Ok(event) => self.schedule_event(&mut queue, event.kind),
                         Err(kernel_store::StoreError::CursorExpired { .. }) => {
-                            let relisted = self.fenced_store.raw_store().list(&self.prefix).await?;
-                            queue.replace_with(&relisted.values, self.clock.now());
+                            let (trigger_cursor, resources) = self.snapshot_inputs().await?;
+                            queue.replace_with(&resources, self.clock.now());
                             stream = self.fenced_store.raw_store().watch(
-                                self.prefix.clone(),
-                                WatchStart::After(relisted.cursor),
+                                self.trigger_prefix.clone(),
+                                WatchStart::After(trigger_cursor),
                             )?;
                         }
                         Err(error) => return Err(error.into()),
@@ -160,11 +186,11 @@ where
                     let now = self.clock.now();
                     if now >= resync_at {
                         self.fenced_store.verify_leadership().await?;
-                        let relisted = self.fenced_store.raw_store().list(&self.prefix).await?;
-                        queue.replace_with(&relisted.values, now);
+                        let (trigger_cursor, resources) = self.snapshot_inputs().await?;
+                        queue.replace_with(&resources, now);
                         stream = self.fenced_store.raw_store().watch(
-                            self.prefix.clone(),
-                            WatchStart::After(relisted.cursor),
+                            self.trigger_prefix.clone(),
+                            WatchStart::After(trigger_cursor),
                         )?;
                         resync_at = now.saturating_add(self.config.resync_interval);
                     }
@@ -173,6 +199,47 @@ where
                     }
                 }
             }
+        }
+    }
+
+    async fn snapshot_inputs(&self) -> Result<(WatchCursor, Vec<StoredValue>), ControllerError> {
+        let trigger_snapshot = self
+            .fenced_store
+            .raw_store()
+            .list(&self.trigger_prefix)
+            .await?;
+        let resources = if self.trigger_prefix == self.resource_prefix {
+            trigger_snapshot.values
+        } else {
+            self.fenced_store
+                .raw_store()
+                .list(&self.resource_prefix)
+                .await?
+                .values
+        };
+        Ok((trigger_snapshot.cursor, resources))
+    }
+
+    fn schedule_event(&self, queue: &mut WorkQueue, event: WatchEventKind) {
+        let now = self.clock.now();
+        match event {
+            WatchEventKind::Put(value)
+                if value
+                    .key
+                    .as_str()
+                    .starts_with(self.resource_prefix.as_str()) =>
+            {
+                queue.schedule(value.key, now, 0);
+            }
+            WatchEventKind::Delete { key, .. }
+                if key.as_str().starts_with(self.resource_prefix.as_str()) =>
+            {
+                queue.remove(&key);
+                if self.trigger_prefix != self.resource_prefix {
+                    queue.schedule_all(now);
+                }
+            }
+            WatchEventKind::Put(_) | WatchEventKind::Delete { .. } => queue.schedule_all(now),
         }
     }
 
@@ -419,53 +486,6 @@ impl ProcessResult {
             action: None,
             invoked: false,
             next_attempt: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Scheduled {
-    deadline: MonotonicTime,
-    attempt: u32,
-}
-
-#[derive(Default)]
-struct WorkQueue {
-    scheduled: BTreeMap<StoreKey, Scheduled>,
-}
-
-impl WorkQueue {
-    fn schedule(&mut self, key: StoreKey, deadline: MonotonicTime, attempt: u32) {
-        self.scheduled.insert(key, Scheduled { deadline, attempt });
-    }
-
-    fn remove(&mut self, key: &StoreKey) {
-        self.scheduled.remove(key);
-    }
-
-    fn next_deadline(&self) -> MonotonicTime {
-        self.scheduled
-            .values()
-            .map(|scheduled| scheduled.deadline)
-            .min()
-            .unwrap_or_else(|| MonotonicTime::from_duration(Duration::MAX))
-    }
-
-    fn take_due(&mut self, now: MonotonicTime) -> Option<(StoreKey, u32)> {
-        let key = self
-            .scheduled
-            .iter()
-            .find_map(|(key, scheduled)| (scheduled.deadline <= now).then(|| key.clone()))?;
-        self.scheduled
-            .remove(&key)
-            .map(|scheduled| (key, scheduled.attempt))
-    }
-
-    fn replace_with(&mut self, values: &[StoredValue], now: MonotonicTime) {
-        let present: BTreeSet<_> = values.iter().map(|stored| stored.key.clone()).collect();
-        self.scheduled.retain(|key, _| present.contains(key));
-        for key in present {
-            self.schedule(key, now, 0);
         }
     }
 }
