@@ -4,6 +4,7 @@
 //! topology. Production adapters implement the role factory; the composition
 //! runtime guarantees ordered startup, reverse shutdown, and rollback.
 
+mod agent_role;
 mod control_plane;
 mod error;
 mod launch;

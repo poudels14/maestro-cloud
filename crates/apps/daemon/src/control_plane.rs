@@ -2,17 +2,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cluster::{StoreProvider, StoreRuntime, StoreShutdown, StoreStartMode};
+use cluster::{StoreProvider, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
-use node_agent::{
-    FirewallBackend, MeshBackend, MeshIdentity, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
-    StatusClock,
-};
+use node_agent::{FirewallBackend, MeshBackend, MeshIdentity, StatusClock};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
 use crate::{DaemonPlan, DaemonRole, RoleError, RoleFactory, RoleRuntime, RoleSpec};
 
@@ -30,12 +28,12 @@ pub trait LeaderWorkload: Send + Sync {
 /// Time bounds for node resync, leadership, and graceful store shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlPlaneRoleSettings {
-    mesh_resync_interval: Duration,
-    firewall_resync_interval: Duration,
+    pub(crate) mesh_resync_interval: Duration,
+    pub(crate) firewall_resync_interval: Duration,
     pub(crate) leadership_ttl: Duration,
     pub(crate) leadership_keepalive_interval: Duration,
     pub(crate) campaign_retry_interval: Duration,
-    store_shutdown_grace: Duration,
+    pub(crate) store_shutdown_grace: Duration,
 }
 
 impl ControlPlaneRoleSettings {
@@ -106,16 +104,16 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType> {
 
 /// Concrete control-plane factory composing a store provider, mesh agent, and leader lease.
 pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType> {
-    provider: Arc<dyn StoreProvider>,
-    store_start_mode: StoreStartMode,
-    mesh_backend: Mutex<Option<MeshBackendType>>,
-    firewall_backend: Mutex<Option<FirewallBackendType>>,
-    mesh_identity: MeshIdentity,
+    pub(crate) provider: Arc<dyn StoreProvider>,
+    pub(crate) store_start_mode: StoreStartMode,
+    pub(crate) mesh_backend: Mutex<Option<MeshBackendType>>,
+    pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
+    pub(crate) mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
-    monotonic_clock: Arc<dyn Clock>,
-    status_clock: Arc<dyn StatusClock>,
-    settings: ControlPlaneRoleSettings,
-    store: Mutex<Option<Arc<dyn Store>>>,
+    pub(crate) monotonic_clock: Arc<dyn Clock>,
+    pub(crate) status_clock: Arc<dyn StatusClock>,
+    pub(crate) settings: ControlPlaneRoleSettings,
+    pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
 }
 
@@ -167,7 +165,7 @@ where
             ));
         }
         match spec.role {
-            DaemonRole::Agent => self.start_agent(plan, spec).await,
+            DaemonRole::Agent => start_agent(self, plan, spec).await,
             DaemonRole::Controller => self.start_controller(spec).await,
         }
     }
@@ -179,81 +177,6 @@ where
     MeshBackendType: MeshBackend + 'static,
     FirewallBackendType: FirewallBackend + 'static,
 {
-    async fn start_agent(
-        &self,
-        plan: &DaemonPlan,
-        spec: &RoleSpec,
-    ) -> Result<Box<dyn RoleRuntime>, RoleError> {
-        let backend = self
-            .mesh_backend
-            .lock()
-            .map_err(|_| RoleError::new("mesh backend lock was poisoned"))?
-            .take()
-            .ok_or_else(|| RoleError::new("agent role was already started"))?;
-        let firewall_backend = self
-            .firewall_backend
-            .lock()
-            .map_err(|_| RoleError::new("firewall backend lock was poisoned"))?
-            .take()
-            .ok_or_else(|| RoleError::new("agent role was already started"))?;
-        let runtime = self
-            .provider
-            .start(self.store_start_mode.clone())
-            .await
-            .map_err(|error| role_error("start local store provider", error))?;
-        let store = runtime.store();
-
-        let agent = match build_mesh_agent(self, plan, spec, store.clone(), backend) {
-            Ok(agent) => agent,
-            Err(error) => return fail_after_store_start(runtime, error).await,
-        };
-        let firewall_agent =
-            match build_firewall_agent(self, plan, spec, store.clone(), firewall_backend) {
-                Ok(agent) => agent,
-                Err(error) => return fail_after_store_start(runtime, error).await,
-            };
-        if let Err(error) = agent.reconcile_once().await {
-            return fail_after_store_start(
-                runtime,
-                role_error("establish initial mesh snapshot", error),
-            )
-            .await;
-        }
-        if let Err(error) = firewall_agent.reconcile_once().await {
-            return fail_after_store_start(
-                runtime,
-                role_error("establish initial firewall snapshot", error),
-            )
-            .await;
-        }
-
-        *self
-            .store
-            .lock()
-            .map_err(|_| RoleError::new("shared store lock was poisoned"))? = Some(store);
-        let (shutdown, shutdown_receiver) = watch::channel(false);
-        let firewall_shutdown = shutdown_receiver.clone();
-        let mesh_task = tokio::spawn(async move {
-            agent
-                .run(shutdown_receiver)
-                .await
-                .map_err(|error| role_error("run mesh agent", error))
-        });
-        let firewall_task = tokio::spawn(async move {
-            firewall_agent
-                .run(firewall_shutdown)
-                .await
-                .map_err(|error| role_error("run firewall agent", error))
-        });
-        Ok(Box::new(AgentRoleRuntime {
-            shutdown,
-            tasks: vec![mesh_task, firewall_task],
-            store_runtime: Some(runtime),
-            clock: self.monotonic_clock.clone(),
-            shutdown_grace: self.settings.store_shutdown_grace,
-        }))
-    }
-
     async fn start_controller(&self, spec: &RoleSpec) -> Result<Box<dyn RoleRuntime>, RoleError> {
         let store = self
             .store
@@ -294,123 +217,6 @@ where
             shutdown,
             task: Some(task),
         }))
-    }
-}
-
-fn build_mesh_agent<MeshBackendType, FirewallBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-    backend: MeshBackendType,
-) -> Result<MeshResourceAgent<MeshBackendType>, RoleError>
-where
-    MeshBackendType: MeshBackend,
-{
-    let node = plan
-        .cluster()
-        .nodes
-        .get(&spec.node_id)
-        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
-    let planner = MeshPlanner::new(
-        spec.node_id.clone(),
-        factory.mesh_identity.clone(),
-        plan.cluster().ports.wireguard,
-    )
-    .map_err(|error| role_error("build local mesh planner", error))?;
-    let publication = planner
-        .publication(
-            node.endpoint.host_address,
-            node.workload_subnet
-                .to_string()
-                .parse()
-                .map_err(|error| role_error("convert local workload subnet", error))?,
-        )
-        .map_err(|error| role_error("build local mesh publication", error))?;
-    MeshResourceAgent::new(
-        store,
-        &plan.cluster().cluster_id,
-        planner,
-        publication,
-        backend,
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-        factory.settings.mesh_resync_interval,
-    )
-    .map_err(|error| role_error("construct mesh resource agent", error))
-}
-
-fn build_firewall_agent<MeshBackendType, FirewallBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-    backend: FirewallBackendType,
-) -> Result<NodeFirewallAgent<FirewallBackendType>, RoleError>
-where
-    FirewallBackendType: FirewallBackend,
-{
-    NodeFirewallAgent::new(
-        store,
-        &plan.cluster().cluster_id,
-        spec.node_id.clone(),
-        backend,
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-        factory.settings.firewall_resync_interval,
-    )
-    .map_err(|error| role_error("construct firewall resource agent", error))
-}
-
-async fn fail_after_store_start<T>(
-    runtime: Box<dyn StoreRuntime>,
-    error: RoleError,
-) -> Result<T, RoleError> {
-    match runtime.shutdown(StoreShutdown::Immediate).await {
-        Ok(()) => Err(error),
-        Err(shutdown_error) => Err(RoleError::new(format!(
-            "{}; failed to roll back local store: {shutdown_error}",
-            error.detail()
-        ))),
-    }
-}
-
-struct AgentRoleRuntime {
-    shutdown: watch::Sender<bool>,
-    tasks: Vec<JoinHandle<Result<(), RoleError>>>,
-    store_runtime: Option<Box<dyn StoreRuntime>>,
-    clock: Arc<dyn Clock>,
-    shutdown_grace: Duration,
-}
-
-#[async_trait]
-impl RoleRuntime for AgentRoleRuntime {
-    async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
-        let _ = self.shutdown.send(true);
-        let mut failures = Vec::new();
-        for task in self.tasks.drain(..) {
-            match task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(error.to_string()),
-                Err(error) => failures.push(format!("node agent task failed: {error}")),
-            }
-        }
-        if let Some(runtime) = self.store_runtime.take() {
-            let deadline = self.clock.now().saturating_add(self.shutdown_grace);
-            if let Err(error) = runtime.shutdown(StoreShutdown::Graceful { deadline }).await {
-                failures.push(format!("store shutdown failed: {error}"));
-            }
-        }
-        finish_shutdown(failures)
-    }
-}
-
-impl Drop for AgentRoleRuntime {
-    fn drop(&mut self) {
-        let _ = self.shutdown.send(true);
-        for task in &self.tasks {
-            task.abort();
-        }
     }
 }
 
