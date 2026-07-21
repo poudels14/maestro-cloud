@@ -79,6 +79,7 @@ fn network_spec() -> NetworkSpec {
         name: "maestro-node-1".to_owned(),
         range: NetworkCidr::new(address(0), 24).unwrap(),
         gateway: address(1),
+        mtu_bytes: 1_420,
     }
 }
 

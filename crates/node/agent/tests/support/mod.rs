@@ -102,6 +102,7 @@ impl ExitWorld {
                     name: "maestro-node-1".to_owned(),
                     range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
                     gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                    mtu_bytes: 1_420,
                 },
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),

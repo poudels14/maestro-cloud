@@ -23,6 +23,8 @@ use crate::{
 const NETWORK_MANAGED_LABEL: &str = "com.maestro.network";
 const NETWORK_SUBNET_LABEL: &str = "com.maestro.network-subnet";
 const NETWORK_GATEWAY_LABEL: &str = "com.maestro.network-gateway";
+const NETWORK_MTU_LABEL: &str = "com.maestro.network-mtu";
+const DOCKER_MTU_OPTION: &str = "com.docker.network.driver.mtu";
 
 #[async_trait]
 impl NetworkProvider for DockerRuntime {
@@ -209,14 +211,19 @@ pub(crate) fn network_create_request(spec: &NetworkSpec) -> NetworkCreateRequest
             (NETWORK_MANAGED_LABEL.to_owned(), "true".to_owned()),
             (NETWORK_SUBNET_LABEL.to_owned(), subnet),
             (NETWORK_GATEWAY_LABEL.to_owned(), spec.gateway.to_string()),
+            (NETWORK_MTU_LABEL.to_owned(), spec.mtu_bytes.to_string()),
         ])),
+        options: Some(HashMap::from([(
+            DOCKER_MTU_OPTION.to_owned(),
+            spec.mtu_bytes.to_string(),
+        )])),
         ..Default::default()
     }
 }
 
 fn validate_spec(spec: &NetworkSpec) -> Result<(), NetworkProviderError> {
     let gateway_valid = gateway_is_usable(spec.range, spec.gateway);
-    if spec.name.is_empty() || !gateway_valid {
+    if spec.name.is_empty() || !gateway_valid || spec.mtu_bytes == 0 {
         Err(NetworkProviderError::InvalidRange {
             message: format!(
                 "network `{}` gateway `{}` is not a usable address in `{}`",
@@ -275,10 +282,20 @@ fn inspected_network_spec(inspect: &NetworkInspect) -> Result<NetworkSpec, Netwo
         .map_err(|error| NetworkProviderError::Rejected {
             message: format!("docker network `{name}` has an invalid gateway: {error}"),
         })?;
+    let mtu_bytes = inspect
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(NETWORK_MTU_LABEL))
+        .ok_or_else(|| malformed_network("MTU label"))?
+        .parse()
+        .map_err(|error| NetworkProviderError::Rejected {
+            message: format!("docker network `{name}` has an invalid MTU: {error}"),
+        })?;
     Ok(NetworkSpec {
         name,
         range: parse_cidr(subnet)?,
         gateway,
+        mtu_bytes,
     })
 }
 

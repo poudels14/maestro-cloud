@@ -63,6 +63,8 @@ pub struct NetworkSpec {
     pub range: NetworkCidr,
     /// Host-side gateway inside the range.
     pub gateway: IpAddr,
+    /// Link MTU applied consistently to runtime bridges and workload interfaces.
+    pub mtu_bytes: u16,
 }
 
 /// Stable handle returned after ensuring a runtime network.

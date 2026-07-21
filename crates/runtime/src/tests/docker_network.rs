@@ -14,6 +14,7 @@ fn docker_network_request_uses_exact_host_owned_ipam() {
         name: "maestro-node-1".to_owned(),
         range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 24).unwrap(),
         gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1)),
+        mtu_bytes: 1_420,
     };
     let request = network_create_request(&spec);
     assert_eq!(request.name, spec.name);
@@ -21,6 +22,14 @@ fn docker_network_request_uses_exact_host_owned_ipam() {
     assert_eq!(request.scope.as_deref(), Some("local"));
     assert_eq!(request.enable_ipv4, Some(true));
     assert_eq!(request.enable_ipv6, Some(false));
+    assert_eq!(
+        request
+            .options
+            .as_ref()
+            .and_then(|options| options.get("com.docker.network.driver.mtu"))
+            .map(String::as_str),
+        Some("1420")
+    );
     let ipam = request.ipam.unwrap();
     let config = ipam.config.unwrap();
     assert_eq!(
