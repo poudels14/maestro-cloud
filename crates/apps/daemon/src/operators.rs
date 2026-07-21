@@ -28,6 +28,7 @@ use preview::{
 use runtime::ArtifactStore;
 use scheduler::{SchedulerReconciler, SchedulerSettings};
 use tokio::sync::watch;
+use upgrade::{NodeUpgradeBackend, UpgradeReconciler, UpgradeSettings};
 
 use crate::{LeaderWorkload, RoleError};
 
@@ -50,6 +51,8 @@ pub struct OperatorSettings {
     pub build_watch: BuildWatchSettings,
     /// Pull-request preview discovery and derivation, when configured.
     pub preview: Option<PreviewOperatorSettings>,
+    /// Coordinated node upgrades, when a host-maintenance backend is configured.
+    pub upgrade: Option<UpgradeSettings>,
 }
 
 /// Leader-owned settings for both halves of pull-request preview reconciliation.
@@ -117,6 +120,7 @@ impl OperatorSettings {
                 poll_interval: Duration::from_secs(60),
             },
             preview: None,
+            upgrade: None,
         })
     }
 }
@@ -134,6 +138,8 @@ pub struct OperatorBackends {
     pub artifacts: Arc<dyn ArtifactStore>,
     /// Lists pull requests and upserts preview feedback when previews are configured.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
+    /// Applies idempotent rolling or all-node host upgrade batches.
+    pub upgrades: Option<Arc<dyn NodeUpgradeBackend>>,
 }
 
 /// Fence-independent build integrations retained across leadership terms.
@@ -147,6 +153,8 @@ pub struct BuildOperatorBackends {
     pub artifacts: Arc<dyn ArtifactStore>,
     /// Fence-independent pull-request API retained across leadership terms.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
+    /// Fence-independent node-upgrade backend retained across leadership terms.
+    pub upgrades: Option<Arc<dyn NodeUpgradeBackend>>,
 }
 
 /// Rebuilds and runs the complete operator suite for each leadership fence.
@@ -200,6 +208,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
                 pull_requests: self.builds.pull_requests.clone(),
+                upgrades: self.builds.upgrades.clone(),
             },
         )
         .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
@@ -221,6 +230,8 @@ pub struct OperatorInvocationReport {
     pub preview_sources: usize,
     /// Preview resources passed to derived-resource reconciliation.
     pub previews: usize,
+    /// UpgradeRun resources passed to coordinated node maintenance.
+    pub upgrades: usize,
     /// Service resources passed to deployment reconciliation.
     pub deployment: usize,
     /// Service resources passed to scheduling reconciliation.
@@ -241,6 +252,7 @@ pub struct OperatorSuite {
     build_watch: ControllerRuntime<BuildWatchReconciler>,
     preview_sources: Option<ControllerRuntime<PreviewSourceReconciler>>,
     previews: Option<ControllerRuntime<PreviewReconciler>>,
+    upgrades: Option<ControllerRuntime<UpgradeReconciler>>,
     deployment: ControllerRuntime<DeploymentReconciler>,
     scheduler: ControllerRuntime<SchedulerReconciler>,
     ingress: ControllerRuntime<IngressReconciler>,
@@ -307,6 +319,21 @@ impl OperatorSuite {
                 (Some(_), None) => return Err(OperatorSuiteError::PreviewBackendMissing),
                 (None, Some(_)) => return Err(OperatorSuiteError::PreviewBackendUnexpected),
             };
+        let upgrades = match (settings.upgrade, backends.upgrades.as_ref()) {
+            (Some(upgrade_settings), Some(backend)) => Some(
+                Arc::new(UpgradeReconciler::new(
+                    cluster_id.clone(),
+                    monotonic_clock.clone(),
+                    timestamp_clock.clone(),
+                    upgrade_settings,
+                    backend.clone(),
+                )?)
+                .runtime(store.clone(), settings.runtime.clone()),
+            ),
+            (None, None) => None,
+            (Some(_), None) => return Err(OperatorSuiteError::UpgradeBackendMissing),
+            (None, Some(_)) => return Err(OperatorSuiteError::UpgradeBackendUnexpected),
+        };
         let deployment = Arc::new(DeploymentReconciler::new(
             cluster_id.clone(),
             settings.deployment,
@@ -359,6 +386,7 @@ impl OperatorSuite {
             build_watch,
             preview_sources,
             previews,
+            upgrades,
             deployment,
             scheduler,
             ingress,
@@ -371,6 +399,10 @@ impl OperatorSuite {
     /// Runs one bounded pass in dependency order for startup and deterministic tests.
     pub async fn reconcile_snapshot(&self) -> Result<OperatorInvocationReport, ControllerError> {
         Ok(OperatorInvocationReport {
+            upgrades: match &self.upgrades {
+                Some(runtime) => runtime.reconcile_snapshot().await?,
+                None => 0,
+            },
             deployment: self.deployment.reconcile_snapshot().await?,
             builds: self.builds.reconcile_snapshot().await?,
             scheduler: self.scheduler.reconcile_snapshot().await?,
@@ -397,6 +429,7 @@ impl OperatorSuite {
         let build_watch = self.build_watch.run(shutdown.clone());
         let preview_sources = run_optional(self.preview_sources.as_ref(), shutdown.clone());
         let previews = run_optional(self.previews.as_ref(), shutdown.clone());
+        let upgrades = run_optional(self.upgrades.as_ref(), shutdown.clone());
         let scheduler = self.scheduler.run(shutdown.clone());
         let ingress = self.ingress.run(shutdown.clone());
         let dns = self.dns.run(shutdown.clone());
@@ -408,6 +441,7 @@ impl OperatorSuite {
             build_watch,
             preview_sources,
             previews,
+            upgrades,
             scheduler,
             ingress,
             dns,
@@ -483,4 +517,13 @@ pub enum OperatorSuiteError {
     /// A pull-request API without preview settings would never be consumed.
     #[error("pull-request API backend was configured without preview settings")]
     PreviewBackendUnexpected,
+    /// Upgrade settings require an injected node-maintenance backend.
+    #[error("upgrade settings require a node-upgrade backend")]
+    UpgradeBackendMissing,
+    /// A node-upgrade backend without upgrade settings would never be consumed.
+    #[error("node-upgrade backend was configured without upgrade settings")]
+    UpgradeBackendUnexpected,
+    /// Upgrade settings or resource identifiers were invalid.
+    #[error(transparent)]
+    Upgrade(#[from] upgrade::UpgradeError),
 }

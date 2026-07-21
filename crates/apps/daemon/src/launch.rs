@@ -256,6 +256,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             revisions: build_source,
             artifacts: containerd.clone(),
             pull_requests: configured_preview.map(|preview| preview.pull_requests),
+            upgrades: None,
         },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;

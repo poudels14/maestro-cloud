@@ -44,6 +44,7 @@ impl FakeBuildBackend {
                 build_revisions: build.clone(),
                 artifacts: build.clone(),
                 pull_requests: None,
+                upgrades: None,
             },
             build,
         )

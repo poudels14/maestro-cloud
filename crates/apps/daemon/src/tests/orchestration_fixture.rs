@@ -50,6 +50,7 @@ pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error +
             poll_interval: Duration::from_secs(60),
         },
         preview: None,
+        upgrade: None,
     })
 }
 

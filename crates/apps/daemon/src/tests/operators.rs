@@ -22,7 +22,7 @@ use kernel_store::{
 };
 use tokio::sync::watch;
 
-use crate::{OperatorSettings, OperatorSuite, PreviewOperatorSettings};
+use crate::{OperatorSettings, OperatorSuite, OperatorSuiteError, PreviewOperatorSettings};
 
 use super::build_backend::FakeBuildBackend;
 use super::cluster_with_nodes;
@@ -67,6 +67,7 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     let ingress = Arc::new(RecordingIngress::default());
     let (mut backends, build_backend) = FakeBuildBackend::operator_backends(ingress.clone());
     backends.pull_requests = Some(Arc::new(EmptyPullRequests));
+    backends.upgrades = Some(Arc::new(AcceptingUpgrades));
     let mut operator_settings = settings()?;
     operator_settings.preview = Some(PreviewOperatorSettings {
         source: preview::PreviewSourceSettings {
@@ -77,6 +78,37 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
         },
         derivation: preview::PreviewSettings::new("preview.example.test")?,
     });
+    operator_settings.upgrade = Some(upgrade::UpgradeSettings::new(
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        3,
+    )?);
+    let mut missing_upgrade_backend = backends.clone();
+    missing_upgrade_backend.upgrades = None;
+    assert!(matches!(
+        OperatorSuite::new(
+            cluster_id.clone(),
+            fenced.clone(),
+            monotonic.clone(),
+            Arc::new(FixedTimestampClock),
+            operator_settings.clone(),
+            missing_upgrade_backend,
+        ),
+        Err(OperatorSuiteError::UpgradeBackendMissing)
+    ));
+    let mut missing_upgrade_settings = operator_settings.clone();
+    missing_upgrade_settings.upgrade = None;
+    assert!(matches!(
+        OperatorSuite::new(
+            cluster_id.clone(),
+            fenced.clone(),
+            monotonic.clone(),
+            Arc::new(FixedTimestampClock),
+            missing_upgrade_settings,
+            backends.clone(),
+        ),
+        Err(OperatorSuiteError::UpgradeBackendUnexpected)
+    ));
     let suite = OperatorSuite::new(
         cluster_id,
         fenced,
@@ -92,6 +124,7 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     assert_eq!(first.build_watch, 1);
     assert_eq!(first.preview_sources, 1);
     assert_eq!(first.previews, 0);
+    assert_eq!(first.upgrades, 0);
     let stored = one::<Service>(&store, &keys, "Service").await?;
     assert_eq!(stored.meta.finalizers.len(), 4);
 
@@ -242,10 +275,23 @@ fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
             poll_interval: Duration::from_secs(60),
         },
         preview: None,
+        upgrade: None,
     })
 }
 
 struct EmptyPullRequests;
+
+struct AcceptingUpgrades;
+
+#[async_trait]
+impl upgrade::NodeUpgradeBackend for AcceptingUpgrades {
+    async fn apply(
+        &self,
+        _request: &upgrade::NodeUpgradeRequest,
+    ) -> Result<(), upgrade::NodeUpgradeBackendError> {
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl preview::PullRequestApi for EmptyPullRequests {
