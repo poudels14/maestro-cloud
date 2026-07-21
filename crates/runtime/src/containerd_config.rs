@@ -129,12 +129,6 @@ fn environment(
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .collect::<BTreeMap<_, _>>();
     variables.extend(configuration.environment.clone());
-    variables.extend(
-        configuration
-            .secret_environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
-    );
     let metadata = &configuration.metadata;
     variables.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

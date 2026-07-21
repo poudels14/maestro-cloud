@@ -68,7 +68,6 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             },
             hostname: hostname.to_owned(),
             environment: BTreeMap::new(),
-            secret_environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
             user: None,

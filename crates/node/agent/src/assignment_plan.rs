@@ -13,21 +13,23 @@ pub(crate) fn workload_spec(
     cluster_id: &ClusterId,
     assignment: &Assignment,
     deployment: &Deployment,
+    secret_mount: Option<WorkloadMount>,
 ) -> Result<WorkloadSpec, WorkloadPlanError> {
     if assignment.spec.deployment_id != deployment.meta.id
         || assignment.spec.service_id != deployment.spec.service_id
     {
         return Err(WorkloadPlanError::DeploymentIdentityMismatch);
     }
-    let workload_id = WorkloadId::new(assignment.meta.id.as_str())?;
+    let workload_id = workload_id(assignment)?;
     let image = image_reference(deployment)?;
-    let mounts = deployment
+    let mut mounts = deployment
         .spec
         .service
         .volumes
         .iter()
         .map(|mount| workload_mount(assignment, mount))
         .collect::<Result<Vec<_>, _>>()?;
+    mounts.extend(secret_mount);
     let mut labels = assignment
         .meta
         .labels
@@ -57,7 +59,6 @@ pub(crate) fn workload_spec(
             },
             hostname: workload_hostname(assignment),
             environment: deployment.spec.service.environment.clone(),
-            secret_environment: deployment.spec.service.secrets.clone(),
             mounts,
             workload_address: Some(assignment.spec.workload_address),
             user: None,
@@ -65,6 +66,10 @@ pub(crate) fn workload_spec(
         image,
         command: deployment.spec.service.command.clone(),
     }))
+}
+
+pub(crate) fn workload_id(assignment: &Assignment) -> Result<WorkloadId, WorkloadPlanError> {
+    WorkloadId::new(assignment.meta.id.as_str()).map_err(WorkloadPlanError::from)
 }
 
 fn image_reference(deployment: &Deployment) -> Result<ArtifactReference, WorkloadPlanError> {

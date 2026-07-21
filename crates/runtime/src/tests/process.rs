@@ -133,7 +133,6 @@ fn process_spec(executable: &str, arguments: &[&str]) -> WorkloadSpec {
             },
             hostname: "workload-1".to_owned(),
             environment: BTreeMap::new(),
-            secret_environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
             user: None,

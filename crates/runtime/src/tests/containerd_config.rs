@@ -34,12 +34,7 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
         record.labels.get("com.maestro.spec-sha256"),
         Some(&fingerprint)
     );
-    assert!(
-        !record
-            .labels
-            .values()
-            .any(|value| value.contains("sensitive"))
-    );
+    assert!(!record.labels.values().any(|value| value.contains("TOKEN")));
 
     let oci: Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
     assert_eq!(oci.get("hostname").unwrap(), "workload-1");
@@ -54,7 +49,11 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
     let environment = oci.pointer("/process/env").unwrap().as_array().unwrap();
     assert!(environment.contains(&Value::String("IMAGE=yes".to_owned())));
     assert!(environment.contains(&Value::String("PLAIN=visible".to_owned())));
-    assert!(environment.contains(&Value::String("TOKEN=sensitive".to_owned())));
+    assert!(!environment.iter().any(|value| {
+        value
+            .as_str()
+            .is_some_and(|value| value.starts_with("TOKEN="))
+    }));
     assert!(environment.contains(&Value::String(
         "MAESTRO_WORKLOAD_ADDRESS=10.42.0.8".to_owned()
     )));

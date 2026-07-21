@@ -36,13 +36,6 @@ pub(crate) fn build_supervised_spec(
         });
     }
     let mut environment = process.configuration.environment.clone();
-    environment.extend(
-        process
-            .configuration
-            .secret_environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
-    );
     let metadata = &process.configuration.metadata;
     environment.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

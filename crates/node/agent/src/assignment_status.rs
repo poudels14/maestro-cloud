@@ -5,6 +5,7 @@ use kernel_api::{
 use runtime::{NetworkProviderError, RuntimeError, WorkloadHandle, WorkloadStatus};
 
 use crate::assignment_plan::WorkloadPlanError;
+use crate::secret_mount::SecretMountError;
 
 const RUNTIME_READY_CONDITION: &str = "RuntimeReady";
 const WORKLOAD_RUNNING_REASON: &str = "WorkloadRunning";
@@ -99,6 +100,24 @@ impl From<NetworkProviderError> for ConvergeFailure {
             | NetworkProviderError::AddressConflict { .. }
             | NetworkProviderError::Unavailable { .. } => {
                 Self::pending(RUNTIME_RETRY_REASON, error.to_string())
+            }
+        }
+    }
+}
+
+impl From<SecretMountError> for ConvergeFailure {
+    fn from(error: SecretMountError) -> Self {
+        match error {
+            SecretMountError::InvalidRoot { .. }
+            | SecretMountError::InvalidTarget { .. }
+            | SecretMountError::InvalidKey { .. }
+            | SecretMountError::UnsafePath { .. }
+            | SecretMountError::ContentConflict { .. }
+            | SecretMountError::Encode { .. } => {
+                Self::failed("SecretMountRejected", error.to_string())
+            }
+            SecretMountError::Task { .. } | SecretMountError::Io { .. } => {
+                Self::pending("SecretMountUnavailable", error.to_string())
             }
         }
     }

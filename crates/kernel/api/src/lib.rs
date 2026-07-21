@@ -50,8 +50,9 @@ pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, Build,
     BuildPhase, BuildSource, BuildSpec, BuildStatus, BuildTemplate, CommandSpec, Deployment,
     DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe,
-    PlacementConstraint, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState, Service,
-    ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource,
+    PlacementConstraint, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState,
+    SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec,
+    VolumeSource,
 };
 
 #[cfg(test)]

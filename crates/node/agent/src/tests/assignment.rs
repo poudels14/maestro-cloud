@@ -9,8 +9,9 @@ use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     ClusterId, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus,
     ExecPolicy, Generation, NodeId, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
-    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, ResourceRevision, ServiceId,
-    ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec, VolumeSource,
+    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, ResourceRevision,
+    SecretMountSpec, SecretValue, ServiceId, ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec,
+    VolumeSource,
 };
 use kernel_store::{
     Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
@@ -307,6 +308,37 @@ async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
 }
 
 #[tokio::test]
+async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.secrets = Some(SecretMountSpec {
+        mount_path: "/run/secrets/maestro.env".to_owned(),
+        items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("sensitive"))]),
+    });
+    world.seed(&deployment, &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    let secret_path = world.secrets.path().join("assignment-1/secrets.env");
+    assert_eq!(
+        std::fs::read_to_string(&secret_path)?,
+        "TOKEN=\"sensitive\"\n"
+    );
+
+    let key = world.assignment_key();
+    let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
+    world
+        .store
+        .delete_cas(DeleteRequest {
+            key,
+            expected: stored.version,
+        })
+        .await?;
+    world.agent().reconcile_once().await?;
+    assert!(!secret_path.exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn assignment_reconcile_skips_gc_when_assignment_ownership_is_malformed()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
@@ -405,7 +437,7 @@ pub(crate) fn deployment() -> Deployment {
                 health_check: None,
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
-                secrets: BTreeMap::new(),
+                secrets: None,
                 volumes: vec![VolumeMountSpec {
                     source: VolumeSource::HostPath {
                         path: "/srv/api".to_owned(),
@@ -454,6 +486,7 @@ struct World {
     network: Arc<FakeNetworkProvider>,
     monotonic_clock: Arc<TestMonotonicClock>,
     status_clock: Arc<TestStatusClock>,
+    secrets: tempfile::TempDir,
 }
 
 impl World {
@@ -465,6 +498,7 @@ impl World {
             network: Arc::new(FakeNetworkProvider::default()),
             monotonic_clock,
             status_clock: Arc::new(TestStatusClock::new(1_750_000_000_000)),
+            secrets: tempfile::tempdir().unwrap(),
         }
     }
 
@@ -487,6 +521,7 @@ impl World {
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),
                 restart_backoff_max: Duration::from_secs(60),
+                secrets_root: self.secrets.path().to_path_buf(),
             },
             self.monotonic_clock.clone(),
             self.status_clock.clone(),

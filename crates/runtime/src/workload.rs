@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, SecretValue, WorkloadId};
+use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -86,8 +86,6 @@ pub struct WorkloadConfiguration {
     pub hostname: String,
     /// Non-secret environment passed to the primary process.
     pub environment: BTreeMap<String, String>,
-    /// Secret environment kept redacted by the API type.
-    pub secret_environment: BTreeMap<String, SecretValue>,
     /// Filesystem mounts applied before the workload starts.
     pub mounts: Vec<WorkloadMount>,
     /// Cluster-routable address allocated by host-owned IPAM.

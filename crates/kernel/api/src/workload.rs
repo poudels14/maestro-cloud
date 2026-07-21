@@ -101,6 +101,17 @@ pub struct HealthCheckSpec {
     pub unhealthy_threshold: u32,
 }
 
+/// Secret values rendered into one private, read-only workload file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretMountSpec {
+    /// Absolute workload-visible file path.
+    pub mount_path: String,
+    /// Dotenv keys and plaintext values encrypted by the store boundary.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub items: BTreeMap<String, SecretValue>,
+}
+
 /// Whether API-initiated interactive execution is available to a workload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -194,9 +205,9 @@ pub struct ServiceSpec {
     /// Non-secret runtime environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
-    /// Secret runtime environment, always redacted from debug output.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub secrets: BTreeMap<String, SecretValue>,
+    /// Secret values delivered through a private read-only file mount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<SecretMountSpec>,
     /// Filesystem mounts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeMountSpec>,

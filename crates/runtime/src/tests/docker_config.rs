@@ -22,11 +22,11 @@ fn docker_config_preserves_identity_and_disables_runtime_restarts() {
     );
     let environment = config.body.env.unwrap();
     assert!(environment.contains(&"PLAIN=visible".to_owned()));
-    assert!(environment.contains(&"TOKEN=sensitive".to_owned()));
+    assert!(!environment.iter().any(|value| value.starts_with("TOKEN=")));
     assert!(environment.contains(&"MAESTRO_WORKLOAD_ADDRESS=10.42.0.8".to_owned()));
     let labels = config.body.labels.unwrap();
     assert_eq!(labels.get(SPEC_LABEL), Some(&config.fingerprint));
-    assert!(!labels.get(METADATA_LABEL).unwrap().contains("sensitive"));
+    assert!(!labels.get(METADATA_LABEL).unwrap().contains("TOKEN"));
 
     let host = config.body.host_config.unwrap();
     assert_eq!(host.network_mode.as_deref(), Some("none"));

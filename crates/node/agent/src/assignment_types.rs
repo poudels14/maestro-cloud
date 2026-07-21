@@ -1,7 +1,11 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use kernel_api::{ClusterId, NodeId, Timestamp};
-use runtime::NetworkSpec;
+use kernel_store::{Clock, MonotonicTime};
+use runtime::{NetworkSpec, WorkloadHandle};
+
+use crate::StatusClock;
 
 /// Node-scoped assignment reconciliation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +24,8 @@ pub struct AssignmentAgentSettings {
     pub restart_backoff_base: Duration,
     /// Maximum exponential delay between an exit and its restart attempt.
     pub restart_backoff_max: Duration,
+    /// Volatile host directory containing per-workload secret files.
+    pub secrets_root: PathBuf,
 }
 
 /// Results of one complete desired/runtime-state comparison.
@@ -37,8 +43,15 @@ pub struct AssignmentReconcileReport {
     pub unresolved: usize,
     /// Runtime workloads removed because no active local assignment owned them.
     pub garbage_collected: usize,
+    /// Stale per-workload secret directories zeroized and removed.
+    pub secret_mounts_collected: usize,
     /// Malformed resources skipped without crashing the agent loop.
     pub malformed_resources: usize,
+}
+
+pub(crate) struct ConvergedAssignment {
+    pub(crate) handle: WorkloadHandle,
+    pub(crate) restarted: bool,
 }
 
 pub(crate) fn earliest(
@@ -49,4 +62,14 @@ pub(crate) fn earliest(
         (Some(current), Some(candidate)) => Some(std::cmp::min(current, candidate)),
         (current, candidate) => current.or(candidate),
     }
+}
+
+pub(crate) fn monotonic_deadline(
+    monotonic_clock: &dyn Clock,
+    status_clock: &dyn StatusClock,
+    deadline: Timestamp,
+) -> MonotonicTime {
+    let remaining = deadline.0.saturating_sub(status_clock.now().0);
+    let delay = Duration::from_millis(u64::try_from(remaining).unwrap_or_default());
+    monotonic_clock.now().saturating_add(delay)
 }

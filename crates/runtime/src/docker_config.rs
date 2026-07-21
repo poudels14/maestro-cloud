@@ -101,12 +101,6 @@ fn validate_mount(mount: &WorkloadMount) -> Result<(), RuntimeError> {
 
 fn environment(configuration: &WorkloadConfiguration) -> Vec<String> {
     let mut environment = configuration.environment.clone();
-    environment.extend(
-        configuration
-            .secret_environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
-    );
     let metadata = &configuration.metadata;
     environment.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

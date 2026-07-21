@@ -1,6 +1,8 @@
 use kernel_store::StoreError;
 use runtime::{NetworkProviderError, RuntimeError};
 
+use crate::secret_mount::SecretMountError;
+
 /// Why node-local assignment reconciliation could not complete its snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum AssignmentAgentError {
@@ -19,6 +21,9 @@ pub enum AssignmentAgentError {
     /// Network cleanup failed and will be retried by a later resync.
     #[error(transparent)]
     Network(#[from] NetworkProviderError),
+    /// Secret materialization or zeroizing cleanup failed.
+    #[error(transparent)]
+    Secret(#[from] SecretMountError),
     /// The assignment disappeared while its observed status was being committed.
     #[error("assignment `{assignment_id}` disappeared before status update")]
     AssignmentDisappeared { assignment_id: String },

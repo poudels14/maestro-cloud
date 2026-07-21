@@ -11,3 +11,4 @@ mod linux_mesh;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
+mod secret_mount;

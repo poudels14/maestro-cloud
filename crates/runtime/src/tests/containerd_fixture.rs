@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
-use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, SecretValue, WorkloadId};
+use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 
 use crate::{
     ArtifactReference, ContainerWorkload, MountAccess, MountSource, WorkloadConfiguration,
@@ -15,10 +15,6 @@ pub(crate) fn container_spec() -> WorkloadSpec {
             metadata: metadata(),
             hostname: "workload-1".to_owned(),
             environment: BTreeMap::from([("PLAIN".to_owned(), "visible".to_owned())]),
-            secret_environment: BTreeMap::from([(
-                "TOKEN".to_owned(),
-                SecretValue::new("sensitive"),
-            )]),
             mounts: vec![WorkloadMount {
                 source: MountSource::HostPath(PathBuf::from("/run/maestro/workload-1")),
                 target: PathBuf::from("/run/maestro"),

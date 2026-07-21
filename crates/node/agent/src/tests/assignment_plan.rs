@@ -10,7 +10,8 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
 -> Result<(), Box<dyn std::error::Error>> {
     let assignment = assignment();
     let deployment = deployment();
-    let WorkloadSpec::Container(workload) = workload_spec(&cluster_id(), &assignment, &deployment)?
+    let WorkloadSpec::Container(workload) =
+        workload_spec(&cluster_id(), &assignment, &deployment, None)?
     else {
         return Err("assignment did not produce a container workload".into());
     };
@@ -57,7 +58,7 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
         node_id: kernel_api::NodeId::new("node-2").unwrap(),
     };
     assert!(matches!(
-        workload_spec(&cluster_id(), &assignment, &deployment),
+        workload_spec(&cluster_id(), &assignment, &deployment, None),
         Err(WorkloadPlanError::HostVolumeNodeMismatch { .. })
     ));
     assert_ne!(assignment.spec.node_id, node_id("node-2"));

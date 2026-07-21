@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use crate::StatusClock;
 use crate::assignment_error::AssignmentAgentError;
-use crate::assignment_plan::workload_spec;
+use crate::assignment_plan::{workload_id, workload_spec};
 use crate::assignment_resource::{
     decode_assignment, decode_assignments, decode_deployments, decode_replicas,
 };
@@ -25,7 +25,11 @@ use crate::assignment_restart::{
 use crate::assignment_status::{
     AssignmentOutcome, ConvergeFailure, desired_status, runtime_status_message,
 };
-use crate::assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport, earliest};
+use crate::assignment_types::{
+    AssignmentAgentSettings, AssignmentReconcileReport, ConvergedAssignment, earliest,
+    monotonic_deadline,
+};
+use crate::secret_mount::SecretMountManager;
 
 const ASSIGNMENT_KIND: &str = "Assignment";
 const DEPLOYMENT_KIND: &str = "Deployment";
@@ -46,6 +50,7 @@ pub struct AssignmentAgent {
     replica_kind: ResourceKind,
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
+    secrets: SecretMountManager,
 }
 
 impl AssignmentAgent {
@@ -65,6 +70,7 @@ impl AssignmentAgent {
         {
             return Err(AssignmentAgentError::ZeroDeadline);
         }
+        let secrets = SecretMountManager::new(settings.secrets_root.clone())?;
         Ok(Self {
             keyspace: Keyspace::new(&settings.cluster_id),
             assignment_kind: ResourceKind::new(ASSIGNMENT_KIND)?,
@@ -76,6 +82,7 @@ impl AssignmentAgent {
             settings,
             monotonic_clock,
             status_clock,
+            secrets,
         })
     }
 
@@ -100,9 +107,13 @@ impl AssignmentAgent {
                 return Ok(());
             }
             let (report, cursor) = self.reconcile_with_cursor().await?;
-            let retry_at = report
-                .requeue_at
-                .map(|deadline| self.monotonic_deadline(deadline));
+            let retry_at = report.requeue_at.map(|deadline| {
+                monotonic_deadline(
+                    self.monotonic_clock.as_ref(),
+                    self.status_clock.as_ref(),
+                    deadline,
+                )
+            });
             let mut events = self
                 .store
                 .watch(self.keyspace.resources(), WatchStart::After(cursor))?;
@@ -269,6 +280,11 @@ impl AssignmentAgent {
                     report.garbage_collected = report.garbage_collected.saturating_add(1);
                 }
             }
+            let active_workloads = active
+                .iter()
+                .map(|assignment| assignment.meta.id.to_string())
+                .collect::<BTreeSet<_>>();
+            report.secret_mounts_collected = self.secrets.cleanup_stale(&active_workloads).await?;
         }
         for assignment in local
             .iter()
@@ -293,7 +309,17 @@ impl AssignmentAgent {
         replica: Option<&ReplicaState>,
         network: &NetworkHandle,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
-        let spec = workload_spec(&self.settings.cluster_id, assignment, deployment)?;
+        let workload_id = workload_id(assignment)?;
+        let secret_mount = match deployment.spec.service.secrets.as_ref() {
+            Some(secrets) => Some(self.secrets.materialize(&workload_id, secrets).await?),
+            None => None,
+        };
+        let spec = workload_spec(
+            &self.settings.cluster_id,
+            assignment,
+            deployment,
+            secret_mount,
+        )?;
         let handle = self.runtime.create(&spec).await?;
         let lease = self
             .network
@@ -417,6 +443,7 @@ impl AssignmentAgent {
             self.network.detach(handle, &attachment.network).await?;
         }
         self.runtime.remove(handle).await?;
+        self.secrets.cleanup(handle.workload_id()).await?;
         Ok(())
     }
 
@@ -469,15 +496,4 @@ impl AssignmentAgent {
             assignment_id: assignment.meta.id.to_string(),
         })
     }
-
-    fn monotonic_deadline(&self, deadline: kernel_api::Timestamp) -> kernel_store::MonotonicTime {
-        let remaining = deadline.0.saturating_sub(self.status_clock.now().0);
-        let delay = Duration::from_millis(u64::try_from(remaining).unwrap_or_default());
-        self.monotonic_clock.now().saturating_add(delay)
-    }
-}
-
-struct ConvergedAssignment {
-    handle: WorkloadHandle,
-    restarted: bool,
 }

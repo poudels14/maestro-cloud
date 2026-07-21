@@ -21,7 +21,6 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
             },
             hostname: "process-1".to_owned(),
             environment: BTreeMap::new(),
-            secret_environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
             user: None,

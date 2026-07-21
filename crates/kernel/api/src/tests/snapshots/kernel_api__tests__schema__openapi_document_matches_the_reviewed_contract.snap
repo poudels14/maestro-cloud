@@ -3594,6 +3594,26 @@ expression: openapi_document()
           }
         ]
       },
+      "SecretMountSpec": {
+        "description": "Secret values rendered into one private, read-only workload file.",
+        "properties": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SecretValue"
+            },
+            "description": "Dotenv keys and plaintext values encrypted by the store boundary.",
+            "type": "object"
+          },
+          "mountPath": {
+            "description": "Absolute workload-visible file path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mountPath"
+        ],
+        "type": "object"
+      },
       "SecretValue": {
         "description": "A secret-bearing wire value whose debug representation is always redacted.",
         "type": "string"
@@ -3696,11 +3716,18 @@ expression: openapi_document()
             "type": "integer"
           },
           "secrets": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/SecretValue"
-            },
-            "description": "Secret runtime environment, always redacted from debug output.",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecretMountSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Secret values delivered through a private read-only file mount."
           },
           "version": {
             "description": "Operator-supplied version used in rollout history.",
