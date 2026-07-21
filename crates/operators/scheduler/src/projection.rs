@@ -37,6 +37,11 @@ pub(crate) fn project(
     let (services, validation_errors, mut retained_assignments) =
         schedule_services(snapshot, now, deployment_drain_grace);
     retained_assignments.extend(active_traffic_assignments(snapshot));
+    retained_assignments.extend(deleting_service_assignments(
+        snapshot,
+        now,
+        deployment_drain_grace,
+    ));
     Ok(Projection {
         input: ScheduleInput {
             cluster_id,
@@ -67,6 +72,49 @@ fn active_traffic_assignments(snapshot: &ResourceSnapshot) -> Vec<Assignment> {
         .assignments
         .values()
         .filter(|assignment| assignment_ids.contains(&assignment.meta.id))
+        .cloned()
+        .collect()
+}
+
+fn deleting_service_assignments(
+    snapshot: &ResourceSnapshot,
+    now: Timestamp,
+    deployment_drain_grace: Duration,
+) -> Vec<Assignment> {
+    let deleting_services = snapshot
+        .services
+        .values()
+        .filter_map(|service| {
+            service
+                .meta
+                .deletion_timestamp
+                .map(|deleted_at| (service.meta.id.clone(), deleted_at))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let draining_deployments = snapshot
+        .deployments
+        .values()
+        .filter(|deployment| {
+            let Some(deleted_at) = deleting_services.get(&deployment.spec.service_id) else {
+                return false;
+            };
+            if deployment.status.phase == DeploymentPhase::Draining {
+                active_deployment(deployment, now, deployment_drain_grace)
+            } else {
+                matches!(
+                    deployment.status.phase,
+                    DeploymentPhase::Building
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Ready
+                ) && within_grace(now, *deleted_at, deployment_drain_grace)
+            }
+        })
+        .map(|deployment| deployment.meta.id.clone())
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .assignments
+        .values()
+        .filter(|assignment| draining_deployments.contains(&assignment.spec.deployment_id))
         .cloned()
         .collect()
 }

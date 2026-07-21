@@ -55,13 +55,17 @@ impl SchedulerReconciler {
         )
     }
 
-    async fn converge(&self, context: &ReconcileContext) -> Result<Action, ReconcileError> {
+    async fn converge(
+        &self,
+        context: &ReconcileContext,
+        finalizing: Option<&ServiceId>,
+    ) -> Result<Action, ReconcileError> {
         let report = self
             .scheduler
             .reconcile_once(context.store(), self.timestamp_clock.now())
             .await
             .map_err(classify_error)?;
-        if report.conflict {
+        if report.conflict || finalizing.is_some_and(|id| report.has_assignments(id)) {
             Ok(Action::Requeue(CONFLICT_RETRY))
         } else {
             Ok(Action::Done)
@@ -83,15 +87,15 @@ impl Reconciler for SchedulerReconciler {
         _resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context).await
+        self.converge(&context, None).await
     }
 
     async fn finalize(
         &self,
-        _resource: Object<Self::Id, Self::Spec, Self::Status>,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context).await
+        self.converge(&context, Some(&resource.meta.id)).await
     }
 }
 

@@ -22,6 +22,7 @@ async fn scheduler_holds_scaled_down_targets_until_traffic_cutover()
     world.set_replica_override(1).await?;
     let held = world.reconcile(Timestamp(2_000)).await?;
     assert_eq!((held.desired, held.created, held.deleted), (3, 0, 0));
+    assert!(held.has_assignments(&ServiceId::new("api")?));
     assert_eq!(assignment_ids(&world.assignments().await?), original_ids);
 
     let survivor = original
@@ -34,6 +35,7 @@ async fn scheduler_holds_scaled_down_targets_until_traffic_cutover()
         (released.desired, released.created, released.deleted),
         (1, 0, 2)
     );
+    assert!(released.has_assignments(&ServiceId::new("api")?));
     assert_eq!(world.assignments().await?, vec![survivor.clone()]);
     Ok(())
 }

@@ -50,6 +50,8 @@ async fn scheduler_runtime_watches_liveness_resyncs_grace_and_finalizes_assignme
     assert_eq!(replacement.spec.placement_epoch, 2);
 
     mark_service_deleting(&world, Timestamp(41_000)).await?;
+    wall_clock.set(71_000);
+    monotonic_clock.advance(Duration::from_secs(30));
     wait_for_service_and_assignments_removed(&world).await?;
 
     shutdown_tx.send_replace(true);

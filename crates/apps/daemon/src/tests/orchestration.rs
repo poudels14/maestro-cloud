@@ -8,7 +8,7 @@ use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
     DeploymentPhase, DnsRecord, Generation, NodeId, NodeInstanceId, Object, ResourceKind,
-    ResourceName, Service, ServiceId, TrafficGeneration, TrafficGenerationPhase,
+    ResourceName, Service, ServiceId, Timestamp, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -213,46 +213,53 @@ impl RolloutWorld {
     }
 
     async fn begin_redeploy(&self) -> Result<DeploymentId, Box<dyn std::error::Error>> {
-        let key = self.keys.resource(
-            &ResourceKind::new("Service")?,
-            &ResourceName::from(ServiceId::new("api")?),
-        );
-        let stored = self.store.get(&key).await?.ok_or("service missing")?;
-        let mut service: Service = serde_json::from_slice(&stored.value)?;
+        let service = self
+            .update_service(|service| {
+                service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
+                service.spec.version = "2.0.0".to_string();
+            })
+            .await?;
         let old_deployment = service
             .status
             .active_deployment_id
             .clone()
             .ok_or("service has no active deployment")?;
-        service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
-        service.spec.version = "2.0.0".to_string();
-        let outcome = self
-            .store
-            .put_cas(PutRequest {
-                key,
-                value: serde_json::to_vec(&service)?,
-                expected: ExpectedVersion::Exact(stored.version),
-                session: None,
-            })
-            .await?;
-        if matches!(outcome, CasOutcome::Applied(_)) {
-            Ok(old_deployment)
-        } else {
-            Err("service redeploy conflicted".into())
-        }
+        Ok(old_deployment)
     }
 
     pub(super) async fn set_replica_override(
         &self,
-        replicas: u32,
+        replicas: Option<u32>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.update_service(|service| service.status.replica_override = replicas)
+            .await
+            .map(|_service| ())
+    }
+
+    pub(super) async fn mark_service_deleting(
+        &self,
+        at: Timestamp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.update_service(|service| service.meta.deletion_timestamp = Some(at))
+            .await
+            .map(|_service| ())
+    }
+
+    pub(super) fn set_time(&self, millis: i64) {
+        self.timestamp.set(millis);
+    }
+
+    async fn update_service(
+        &self,
+        change: impl FnOnce(&mut Service),
+    ) -> Result<Service, Box<dyn std::error::Error>> {
         let key = self.keys.resource(
             &ResourceKind::new("Service")?,
             &ResourceName::from(ServiceId::new("api")?),
         );
         let stored = self.store.get(&key).await?.ok_or("service missing")?;
         let mut service: Service = serde_json::from_slice(&stored.value)?;
-        service.status.replica_override = Some(replicas);
+        change(&mut service);
         let outcome = self
             .store
             .put_cas(PutRequest {
@@ -263,9 +270,9 @@ impl RolloutWorld {
             })
             .await?;
         if matches!(outcome, CasOutcome::Applied(_)) {
-            Ok(())
+            Ok(service)
         } else {
-            Err("service scale conflicted".into())
+            Err("service update conflicted".into())
         }
     }
 

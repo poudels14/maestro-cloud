@@ -7,7 +7,7 @@ async fn scale_down_keeps_old_targets_until_ingress_cutover()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = RolloutWorld::new(3).await?;
     world.converge().await?;
-    world.set_replica_override(1).await?;
+    world.set_replica_override(Some(1)).await?;
 
     let mut cut_over = false;
     for _pass in 0..8 {

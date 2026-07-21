@@ -45,6 +45,13 @@ pub struct SchedulerReport {
     pub conflict: bool,
     /// Replica slots that could not receive a new placement.
     pub unschedulable: Vec<UnschedulableReplica>,
+    services_with_assignments: BTreeSet<kernel_api::ServiceId>,
+}
+
+impl SchedulerReport {
+    pub(crate) fn has_assignments(&self, service_id: &kernel_api::ServiceId) -> bool {
+        self.services_with_assignments.contains(service_id)
+    }
 }
 
 /// Store-backed scheduler that projects resources, plans placements, and commits one generation.
@@ -125,12 +132,18 @@ impl Scheduler {
                 snapshot.dependency_compares,
             )
             .await?;
+        let services_with_assignments = schedule
+            .assignments
+            .iter()
+            .map(|assignment| assignment.spec.service_id.clone())
+            .collect();
         Ok(SchedulerReport {
             desired: schedule.assignments.len(),
             created: write.created,
             deleted: write.deleted,
             conflict: write.conflict,
             unschedulable: schedule.unschedulable,
+            services_with_assignments,
         })
     }
 
