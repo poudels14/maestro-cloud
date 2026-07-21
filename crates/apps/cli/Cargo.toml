@@ -10,14 +10,16 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+futures-util.workspace = true
 jsonwebtoken.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 rpassword = "=7.5.4"
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "=3.27.0"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

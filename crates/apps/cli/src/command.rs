@@ -1,10 +1,13 @@
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
 use crate::CliError;
+use crate::api_client::ApiClient;
 use crate::contexts::ContextStore;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
+use crate::services;
 
 /// Rewritten Maestro operator command-line client.
 #[derive(Debug, Parser)]
@@ -21,6 +24,17 @@ enum Command {
         #[command(subcommand)]
         command: ContextCommand,
     },
+    /// Inspect and operate deployable services.
+    Services {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// List services from the active Maestro API context.
+    Ls,
 }
 
 #[derive(Debug, Subcommand)]
@@ -31,6 +45,9 @@ enum ContextCommand {
         name: Option<String>,
         /// Maestro API origin; prompted when omitted.
         host: Option<String>,
+        /// PEM certificate authority used to verify the API server.
+        #[arg(long, value_name = "PATH")]
+        ca_certificate: Option<PathBuf>,
     },
     /// Select the active context.
     Use {
@@ -53,14 +70,32 @@ enum ContextCommand {
 }
 
 /// Executes one parsed CLI invocation against its configured context store.
-pub fn run(cli: Cli, input: &mut dyn BufRead, output: &mut dyn Write) -> Result<(), CliError> {
+pub async fn run(
+    cli: Cli,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     let contexts = ContextStore::from_environment()?;
     match cli.command {
         Command::Contexts { command } => match command {
-            ContextCommand::Set { name, host } => {
+            ContextCommand::Set {
+                name,
+                host,
+                ca_certificate,
+            } => {
                 let name = required(name, "Context name", input, output)?;
                 let host = required(host, "Maestro API host", input, output)?;
-                let normalized = contexts.set(&name, &host)?;
+                let ca_certificate = ca_certificate
+                    .map(|path| {
+                        std::fs::read_to_string(&path).map_err(|source| {
+                            CliError::io(
+                                format!("failed to read CA certificate {}", path.display()),
+                                source,
+                            )
+                        })
+                    })
+                    .transpose()?;
+                let normalized = contexts.set(&name, &host, ca_certificate)?;
                 writeln!(output, "[maestro]: set context `{name}` -> {normalized}")
                     .map_err(|source| CliError::io("failed to write command output", source))
             }
@@ -85,6 +120,12 @@ pub fn run(cli: Cli, input: &mut dyn BufRead, output: &mut dyn Write) -> Result<
                 .map_err(|source| CliError::io("failed to write command output", source))
             }
         },
+        Command::Services { command } => {
+            let client = ApiClient::new(contexts.active()?)?;
+            match command {
+                ServiceCommand::Ls => services::list(&client, output).await,
+            }
+        }
     }
 }
 

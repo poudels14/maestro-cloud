@@ -17,6 +17,8 @@ pub(crate) struct Context {
     pub(crate) host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) token: Option<SecretValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ca_certificate_pem: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +65,12 @@ impl ContextStore {
         Self { path }
     }
 
-    pub(crate) fn set(&self, name: &str, host: &str) -> Result<String, CliError> {
+    pub(crate) fn set(
+        &self,
+        name: &str,
+        host: &str,
+        ca_certificate_pem: Option<String>,
+    ) -> Result<String, CliError> {
         let name = validate_name(name)?;
         let host = normalize_origin(host)?;
         let mut contexts = self.load()?;
@@ -71,11 +78,18 @@ impl ContextStore {
             .contexts
             .get(&name)
             .and_then(|context| context.token.clone());
+        let ca_certificate_pem = ca_certificate_pem.or_else(|| {
+            contexts
+                .contexts
+                .get(&name)
+                .and_then(|context| context.ca_certificate_pem.clone())
+        });
         contexts.contexts.insert(
             name.clone(),
             Context {
                 host: host.clone(),
                 token,
+                ca_certificate_pem,
             },
         );
         if contexts.active.is_none() {
@@ -133,6 +147,14 @@ impl ContextStore {
             )));
         }
         Ok(active)
+    }
+
+    pub(crate) fn active(&self) -> Result<Context, CliError> {
+        let contexts = self.load()?;
+        let active = contexts.active.ok_or_else(no_active_context)?;
+        contexts.contexts.get(&active).cloned().ok_or_else(|| {
+            CliError::invalid_contexts(format!("active context `{active}` is not present"))
+        })
     }
 
     pub(crate) fn save_active_token(&self, token: SecretValue) -> Result<(), CliError> {

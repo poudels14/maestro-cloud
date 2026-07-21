@@ -23,6 +23,20 @@ pub enum CliError {
     },
     #[error("failed to sign operator token")]
     Token(#[source] jsonwebtoken::errors::Error),
+    #[error("{action}: {source}")]
+    Transport {
+        action: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("API request failed with HTTP {status} ({code}): {message}")]
+    Api {
+        status: u16,
+        code: String,
+        message: String,
+    },
+    #[error("API response exceeded the {limit_bytes}-byte client limit")]
+    ResponseTooLarge { limit_bytes: usize },
 }
 
 impl CliError {
@@ -53,6 +67,13 @@ impl CliError {
 
     pub(crate) fn json(action: impl Into<String>, source: serde_json::Error) -> Self {
         Self::Json {
+            action: action.into(),
+            source,
+        }
+    }
+
+    pub(crate) fn transport(action: impl Into<String>, source: reqwest::Error) -> Self {
+        Self::Transport {
             action: action.into(),
             source,
         }

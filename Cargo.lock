@@ -3476,6 +3476,7 @@ name = "maestro-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "futures-util",
  "jsonwebtoken",
  "kernel-api",
  "reqwest",
@@ -3484,6 +3485,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
