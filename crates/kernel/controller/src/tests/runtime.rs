@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -30,6 +30,7 @@ struct ToyStatus;
 struct ToyReconciler {
     reconciles: AtomicUsize,
     finalizes: AtomicUsize,
+    terminal: AtomicBool,
 }
 
 #[async_trait]
@@ -47,7 +48,7 @@ impl Reconciler for ToyReconciler {
         _context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
         self.reconciles.fetch_add(1, Ordering::SeqCst);
-        Ok(Action::Done)
+        self.result()
     }
 
     async fn finalize(
@@ -56,7 +57,20 @@ impl Reconciler for ToyReconciler {
         _context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
         self.finalizes.fetch_add(1, Ordering::SeqCst);
-        Ok(Action::Done)
+        self.result()
+    }
+}
+
+impl ToyReconciler {
+    fn result(&self) -> Result<Action, ReconcileError> {
+        if self.terminal.load(Ordering::SeqCst) {
+            Err(ReconcileError::Terminal {
+                reason: "InvalidToy".to_string(),
+                message: "toy input requires correction".to_string(),
+            })
+        } else {
+            Ok(Action::Done)
+        }
     }
 }
 
@@ -107,6 +121,7 @@ async fn runtime_installs_and_executes_finalizers_before_physical_deletion()
     let reconciler = Arc::new(ToyReconciler {
         reconciles: AtomicUsize::new(0),
         finalizes: AtomicUsize::new(0),
+        terminal: AtomicBool::new(false),
     });
     let runtime = ControllerRuntime::new(
         reconciler.clone(),
@@ -137,19 +152,28 @@ async fn runtime_installs_and_executes_finalizers_before_physical_deletion()
         .await?;
     assert!(matches!(marked, CasOutcome::Applied(_)));
 
+    reconciler.terminal.store(true, Ordering::SeqCst);
     assert_eq!(runtime.reconcile_snapshot().await?, 1);
     assert_eq!(reconciler.finalizes.load(Ordering::SeqCst), 1);
+    assert!(store.get(&key).await?.is_some());
+
+    reconciler.terminal.store(false, Ordering::SeqCst);
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert_eq!(reconciler.finalizes.load(Ordering::SeqCst), 2);
     assert!(store.get(&key).await?.is_none());
     #[cfg(feature = "test-util")]
     {
         let entries = runtime.journal().entries();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         let first = entries.first().ok_or("first journal entry should exist")?;
         let second = entries.get(1).ok_or("second journal entry should exist")?;
+        let third = entries.get(2).ok_or("third journal entry should exist")?;
         assert_eq!(first.sequence, 1);
         assert!(!first.deleting);
         assert_eq!(second.sequence, 2);
         assert!(second.deleting);
+        assert_eq!(third.sequence, 3);
+        assert!(third.deleting);
         assert!(entries.iter().all(|entry| entry.observed_revision.0 > 0));
     }
     Ok(())
@@ -202,6 +226,7 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
     let reconciler = Arc::new(ToyReconciler {
         reconciles: AtomicUsize::new(0),
         finalizes: AtomicUsize::new(0),
+        terminal: AtomicBool::new(false),
     });
     let runtime = Arc::new(ControllerRuntime::new_with_trigger_prefix(
         reconciler.clone(),

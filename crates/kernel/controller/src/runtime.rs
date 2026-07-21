@@ -332,7 +332,7 @@ where
         let outcome = self
             .invoke(resource.clone(), version, attempt, true)
             .await?;
-        if outcome.action == Some(Action::Done) {
+        if outcome.action == Some(Action::Done) && outcome.successful {
             resource.meta.finalizers.remove(&finalizer);
             let delete = resource.meta.finalizers.is_empty();
             self.persist_resource(&key, version, &resource, delete)
@@ -341,6 +341,7 @@ where
                 action: None,
                 invoked: true,
                 next_attempt: 0,
+                successful: true,
             })
         } else {
             Ok(outcome)
@@ -389,6 +390,7 @@ where
                 action: Some(action),
                 invoked: true,
                 next_attempt: 0,
+                successful: true,
             },
             Err(ReconcileError::Retryable { message }) => {
                 span.in_scope(|| {
@@ -398,6 +400,7 @@ where
                     action: Some(Action::Requeue(self.config.retry_backoff.delay(attempt))),
                     invoked: true,
                     next_attempt: attempt.saturating_add(1),
+                    successful: false,
                 }
             }
             Err(ReconcileError::Terminal { reason, message }) => {
@@ -413,6 +416,7 @@ where
                     action: Some(Action::Done),
                     invoked: true,
                     next_attempt: 0,
+                    successful: false,
                 }
             }
             Err(ReconcileError::Infrastructure(error)) => return Err(error),
@@ -478,6 +482,7 @@ struct ProcessResult {
     action: Option<Action>,
     invoked: bool,
     next_attempt: u32,
+    successful: bool,
 }
 
 impl ProcessResult {
@@ -486,6 +491,7 @@ impl ProcessResult {
             action: None,
             invoked: false,
             next_attempt: 0,
+            successful: false,
         }
     }
 }
