@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -181,11 +182,21 @@ fn metadata<Id>(id: Id) -> ObjectMeta<Id> {
     }
 }
 
-pub(super) struct FixedTimestampClock;
+pub(super) struct ManualTimestampClock(AtomicI64);
 
-impl TimestampClock for FixedTimestampClock {
+impl ManualTimestampClock {
+    pub(super) fn new(millis: i64) -> Self {
+        Self(AtomicI64::new(millis))
+    }
+
+    pub(super) fn set(&self, millis: i64) {
+        self.0.store(millis, Ordering::SeqCst);
+    }
+}
+
+impl TimestampClock for ManualTimestampClock {
     fn now(&self) -> Timestamp {
-        Timestamp(10_000)
+        Timestamp(self.0.load(Ordering::SeqCst))
     }
 }
 

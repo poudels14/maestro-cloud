@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use firewall::{FirewallBackend, FirewallBackendError, FirewallBundle};
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
-    Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentPhase, DnsRecord,
-    NodeId, NodeInstanceId, Object, ResourceKind, ResourceName, Service, TrafficGeneration,
-    TrafficGenerationPhase,
+    Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
+    DeploymentPhase, DnsRecord, Generation, NodeId, NodeInstanceId, Object, ResourceKind,
+    ResourceName, Service, ServiceId, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -17,7 +17,7 @@ use kernel_store::{
 };
 
 use super::orchestration_fixture::{
-    FixedTimestampClock, NoopClock, network, node, ready_replica, route, service, settings,
+    ManualTimestampClock, NoopClock, network, node, ready_replica, route, service, settings,
 };
 use crate::{OperatorBackends, OperatorSuite};
 
@@ -32,12 +32,74 @@ async fn rollout_converges_across_one_and_three_node_topologies()
     Ok(())
 }
 
+#[tokio::test]
+async fn redeploy_cuts_over_before_collecting_drained_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    for node_count in [1_u8, 3_u8] {
+        let world = RolloutWorld::new(node_count).await?;
+        world.converge().await?;
+        let old_deployment = world.begin_redeploy().await?;
+        let ingress_start = world.ingress_len()?;
+
+        world.converge().await?;
+
+        let deployments = world.list::<Deployment>("Deployment").await?;
+        assert_eq!(deployments.len(), 2);
+        assert!(
+            deployments.iter().any(|deployment| {
+                deployment.meta.id == old_deployment
+                    && deployment.status.phase == DeploymentPhase::Draining
+            }),
+            "deployments after cutover: {deployments:#?}"
+        );
+        assert!(deployments.iter().any(|deployment| {
+            deployment.meta.id != old_deployment
+                && deployment.status.phase == DeploymentPhase::Ready
+        }));
+        assert_eq!(
+            world.list::<Assignment>("Assignment").await?.len(),
+            usize::from(node_count) * 2
+        );
+        assert!(
+            world
+                .ingress_since(ingress_start)?
+                .iter()
+                .all(|change| change.active.is_some())
+        );
+
+        world.timestamp.set(41_000);
+        world.converge().await?;
+
+        let deployments = world.list::<Deployment>("Deployment").await?;
+        assert!(deployments.iter().any(|deployment| {
+            deployment.meta.id == old_deployment
+                && deployment.status.phase == DeploymentPhase::Removed
+        }));
+        assert_eq!(
+            world.list::<Assignment>("Assignment").await?.len(),
+            usize::from(node_count)
+        );
+        let traffic = world.list::<TrafficGeneration>("TrafficGeneration").await?;
+        assert_eq!(traffic.len(), 1);
+        assert_eq!(
+            traffic
+                .first()
+                .ok_or("active traffic missing")?
+                .status
+                .phase,
+            TrafficGenerationPhase::Active
+        );
+    }
+    Ok(())
+}
+
 struct RolloutWorld {
     keys: Keyspace,
     store: Arc<InMemoryStore>,
     suite: OperatorSuite,
     ingress: Arc<RecordingIngress>,
     firewall: Arc<RecordingFirewall>,
+    timestamp: Arc<ManualTimestampClock>,
     _session: Box<dyn Session>,
 }
 
@@ -84,11 +146,12 @@ impl RolloutWorld {
 
         let ingress = Arc::new(RecordingIngress::default());
         let firewall = Arc::new(RecordingFirewall::default());
+        let timestamp = Arc::new(ManualTimestampClock::new(10_000));
         let suite = OperatorSuite::new(
-            cluster_id,
-            fenced,
+            cluster_id.clone(),
+            fenced.clone(),
             monotonic,
-            Arc::new(FixedTimestampClock),
+            timestamp.clone(),
             settings()?,
             OperatorBackends {
                 ingress: ingress.clone(),
@@ -101,6 +164,7 @@ impl RolloutWorld {
             suite,
             ingress,
             firewall,
+            timestamp,
             _session: session,
         })
     }
@@ -142,6 +206,59 @@ impl RolloutWorld {
             }
         }
         Ok(())
+    }
+
+    async fn begin_redeploy(&self) -> Result<DeploymentId, Box<dyn std::error::Error>> {
+        let key = self.keys.resource(
+            &ResourceKind::new("Service")?,
+            &ResourceName::from(ServiceId::new("api")?),
+        );
+        let stored = self.store.get(&key).await?.ok_or("service missing")?;
+        let mut service: Service = serde_json::from_slice(&stored.value)?;
+        let old_deployment = service
+            .status
+            .active_deployment_id
+            .clone()
+            .ok_or("service has no active deployment")?;
+        service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
+        service.spec.version = "2.0.0".to_string();
+        let outcome = self
+            .store
+            .put_cas(PutRequest {
+                key,
+                value: serde_json::to_vec(&service)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?;
+        if matches!(outcome, CasOutcome::Applied(_)) {
+            Ok(old_deployment)
+        } else {
+            Err("service redeploy conflicted".into())
+        }
+    }
+
+    fn ingress_len(&self) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(self
+            .ingress
+            .changes
+            .lock()
+            .map_err(|_| "ingress change lock poisoned")?
+            .len())
+    }
+
+    fn ingress_since(
+        &self,
+        start: usize,
+    ) -> Result<Vec<BackendChange>, Box<dyn std::error::Error>> {
+        Ok(self
+            .ingress
+            .changes
+            .lock()
+            .map_err(|_| "ingress change lock poisoned")?
+            .get(start..)
+            .ok_or("invalid ingress history cursor")?
+            .to_vec())
     }
 
     async fn assert_ready(&self, node_count: u8) -> Result<(), Box<dyn std::error::Error>> {
