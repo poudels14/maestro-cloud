@@ -29,6 +29,16 @@ fn sink_ids_and_worker_bounds_fail_closed() {
 }
 
 #[tokio::test]
+async fn in_memory_delivery_and_dead_letter_stores_pass_shared_conformance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let entries = entries(3)?;
+    let delivery = InMemoryLogDeliveryStore::new(entries.clone())?;
+    crate::conformance::check_log_delivery_store(&delivery, &entries).await?;
+    crate::conformance::check_dead_letter_store(&InMemoryDeadLetterStore::default()).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn worker_drains_bounded_batches_and_advances_only_complete_progress()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryLogDeliveryStore::new(entries(5)?)?);
@@ -167,7 +177,7 @@ async fn dead_letters_are_idempotent_collision_safe_and_explicitly_purgeable()
     assert_eq!(store.list(&sink_id()?, 1).await?, vec![first.clone()]);
 
     let mut collision = first;
-    collision.reason = "different".to_owned();
+    collision.payload = b"different".to_vec();
     assert!(store.record(&collision).await.is_err());
     assert_eq!(store.purge(&sink_id()?, Some(LogSequence(1))).await?, 1);
     assert_eq!(store.purge(&sink_id()?, None).await?, 1);

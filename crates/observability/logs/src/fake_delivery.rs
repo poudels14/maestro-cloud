@@ -180,7 +180,7 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
         let mut records = lock_dead_letters(&self.records)?;
         let key = (dead_letter.sink_id.clone(), dead_letter.source_sequence);
         match records.get(&key) {
-            Some(existing) if existing == dead_letter => Ok(()),
+            Some(existing) if existing.payload == dead_letter.payload => Ok(()),
             Some(_) => Err(DeadLetterStoreError::Rejected {
                 message: "dead-letter identity was reused with different content".to_owned(),
             }),

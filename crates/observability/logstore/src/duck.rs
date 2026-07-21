@@ -3,17 +3,51 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use logs::{
-    IngestLogEntry, LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
+    DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
+    LogDeliveryStoreError, LogSequence, LogSinkId, LogStore, LogStoreError, LogStoreRuntime,
+    LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::schema;
 use crate::{DuckStoreError, DuckStoreSettings};
+use crate::{delivery_schema, schema};
 
 enum Command {
     Append {
         entries: Vec<IngestLogEntry>,
         response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
+    },
+    ReadAfter {
+        cursor: Option<LogSequence>,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<SequencedLogEntry>, LogDeliveryStoreError>>,
+    },
+    LoadCursor {
+        sink_id: LogSinkId,
+        response: oneshot::Sender<Result<Option<LogSequence>, LogDeliveryStoreError>>,
+    },
+    CommitCursor {
+        sink_id: LogSinkId,
+        sequence: LogSequence,
+        response: oneshot::Sender<Result<(), LogDeliveryStoreError>>,
+    },
+    RecordDeadLetter {
+        dead_letter: SinkDeadLetter,
+        response: oneshot::Sender<Result<(), DeadLetterStoreError>>,
+    },
+    ListDeadLetters {
+        sink_id: LogSinkId,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<SinkDeadLetter>, DeadLetterStoreError>>,
+    },
+    DeadLetterStats {
+        sink_id: LogSinkId,
+        response: oneshot::Sender<Result<SinkDeadLetterStats, DeadLetterStoreError>>,
+    },
+    PurgeDeadLetters {
+        sink_id: LogSinkId,
+        through: Option<LogSequence>,
+        response: oneshot::Sender<Result<u64, DeadLetterStoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -120,8 +154,146 @@ impl LogStore for DuckLogStore {
 }
 
 #[async_trait]
+impl LogDeliveryStore for DuckLogStore {
+    async fn read_after(
+        &self,
+        cursor: Option<LogSequence>,
+        limit: usize,
+    ) -> Result<Vec<SequencedLogEntry>, LogDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::ReadAfter {
+                cursor,
+                limit,
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting delivery read"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing delivery read"))?
+    }
+
+    async fn load_sink_cursor(
+        &self,
+        sink_id: &LogSinkId,
+    ) -> Result<Option<LogSequence>, LogDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::LoadCursor {
+                sink_id: sink_id.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting cursor read"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing cursor read"))?
+    }
+
+    async fn commit_sink_cursor(
+        &self,
+        sink_id: &LogSinkId,
+        sequence: LogSequence,
+    ) -> Result<(), LogDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::CommitCursor {
+                sink_id: sink_id.clone(),
+                sequence,
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting cursor commit"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing cursor commit"))?
+    }
+}
+
+#[async_trait]
+impl DeadLetterStore for DuckLogStore {
+    async fn record(&self, dead_letter: &SinkDeadLetter) -> Result<(), DeadLetterStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::RecordDeadLetter {
+                dead_letter: dead_letter.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| dead_worker_stopped("accepting dead letter"))?;
+        result
+            .await
+            .map_err(|_| dead_worker_stopped("recording dead letter"))?
+    }
+
+    async fn list(
+        &self,
+        sink_id: &LogSinkId,
+        limit: usize,
+    ) -> Result<Vec<SinkDeadLetter>, DeadLetterStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::ListDeadLetters {
+                sink_id: sink_id.clone(),
+                limit,
+                response,
+            })
+            .await
+            .map_err(|_| dead_worker_stopped("accepting dead-letter list"))?;
+        result
+            .await
+            .map_err(|_| dead_worker_stopped("listing dead letters"))?
+    }
+
+    async fn stats(
+        &self,
+        sink_id: &LogSinkId,
+    ) -> Result<SinkDeadLetterStats, DeadLetterStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::DeadLetterStats {
+                sink_id: sink_id.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| dead_worker_stopped("accepting dead-letter stats read"))?;
+        result
+            .await
+            .map_err(|_| dead_worker_stopped("reading dead-letter stats"))?
+    }
+
+    async fn purge(
+        &self,
+        sink_id: &LogSinkId,
+        through: Option<LogSequence>,
+    ) -> Result<u64, DeadLetterStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::PurgeDeadLetters {
+                sink_id: sink_id.clone(),
+                through,
+                response,
+            })
+            .await
+            .map_err(|_| dead_worker_stopped("accepting dead-letter purge"))?;
+        result
+            .await
+            .map_err(|_| dead_worker_stopped("purging dead letters"))?
+    }
+}
+
+#[async_trait]
 impl LogStoreRuntime for DuckLogStoreRuntime {
     fn store(&self) -> Arc<dyn LogStore> {
+        self.store.clone()
+    }
+
+    fn delivery_store(&self) -> Arc<dyn LogDeliveryStore> {
+        self.store.clone()
+    }
+
+    fn dead_letter_store(&self) -> Arc<dyn DeadLetterStore> {
         self.store.clone()
     }
 
@@ -156,12 +328,81 @@ fn run_worker(
             Command::Append { entries, response } => {
                 let _ignored = response.send(schema::append(&mut connection, &entries));
             }
+            Command::ReadAfter {
+                cursor,
+                limit,
+                response,
+            } => {
+                let _ignored =
+                    response.send(delivery_schema::read_after(&connection, cursor, limit));
+            }
+            Command::LoadCursor { sink_id, response } => {
+                let _ignored = response.send(delivery_schema::load_cursor(&connection, &sink_id));
+            }
+            Command::CommitCursor {
+                sink_id,
+                sequence,
+                response,
+            } => {
+                let _ignored = response.send(delivery_schema::commit_cursor(
+                    &mut connection,
+                    &sink_id,
+                    sequence,
+                ));
+            }
+            Command::RecordDeadLetter {
+                dead_letter,
+                response,
+            } => {
+                let _ignored = response.send(delivery_schema::record_dead_letter(
+                    &mut connection,
+                    &dead_letter,
+                ));
+            }
+            Command::ListDeadLetters {
+                sink_id,
+                limit,
+                response,
+            } => {
+                let _ignored = response.send(delivery_schema::list_dead_letters(
+                    &connection,
+                    &sink_id,
+                    limit,
+                ));
+            }
+            Command::DeadLetterStats { sink_id, response } => {
+                let _ignored =
+                    response.send(delivery_schema::dead_letter_stats(&connection, &sink_id));
+            }
+            Command::PurgeDeadLetters {
+                sink_id,
+                through,
+                response,
+            } => {
+                let _ignored = response.send(delivery_schema::purge_dead_letters(
+                    &connection,
+                    &sink_id,
+                    through,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
                 return;
             }
         }
+    }
+}
+
+fn delivery_worker_stopped(action: &'static str) -> LogDeliveryStoreError {
+    LogDeliveryStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+fn dead_worker_stopped(action: &'static str) -> DeadLetterStoreError {
+    DeadLetterStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
     }
 }
 

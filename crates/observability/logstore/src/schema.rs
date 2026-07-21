@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,8 +22,9 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v1(&mut connection)?,
+        (0, _) => initialize_v2(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
+        (1, 1) => migrate_v1_to_v2(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -41,6 +42,13 @@ pub(crate) fn append(
     let transaction = connection
         .transaction()
         .map_err(unavailable("begin append transaction"))?;
+    let mut last_sequence = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM normalized_logs",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(unavailable("read log sequence high watermark"))?;
     let mut report = LogAppendReport::default();
     for entry in entries {
         let encoded = serde_json::to_string(entry).map_err(|error| LogStoreError::Rejected {
@@ -74,12 +82,19 @@ pub(crate) fn append(
                 });
             }
             None => {
+                let sequence =
+                    last_sequence
+                        .checked_add(1)
+                        .ok_or_else(|| LogStoreError::Rejected {
+                            message: "normalized log sequence space is exhausted".to_owned(),
+                        })?;
                 transaction
                     .execute(
                         "INSERT INTO normalized_logs
-                         (node_id, producer_type, producer_id, cursor, event_at_ms, entry_json)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         (sequence, node_id, producer_type, producer_id, cursor, event_at_ms, entry_json)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         params![
+                            sequence,
                             entry.id.node_id.as_str(),
                             producer_type,
                             producer_id,
@@ -90,6 +105,7 @@ pub(crate) fn append(
                     )
                     .map_err(unavailable("insert normalized log"))?;
                 report.committed = report.committed.saturating_add(1);
+                last_sequence = sequence;
             }
         }
     }
@@ -99,22 +115,79 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v1(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v2(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
     transaction
         .execute_batch(
             "CREATE TABLE normalized_logs (
+                 sequence BIGINT PRIMARY KEY,
                  node_id VARCHAR NOT NULL,
                  producer_type VARCHAR NOT NULL,
                  producer_id VARCHAR NOT NULL,
                  cursor VARCHAR NOT NULL,
                  event_at_ms BIGINT NOT NULL,
                  entry_json VARCHAR NOT NULL,
-                 PRIMARY KEY (node_id, producer_type, producer_id, cursor)
+                 UNIQUE (node_id, producer_type, producer_id, cursor)
              );
-             INSERT INTO schema_version (version) VALUES (1);",
+             CREATE TABLE sink_cursors (
+                 sink_id VARCHAR PRIMARY KEY,
+                 last_sequence BIGINT NOT NULL
+             );
+             CREATE TABLE sink_dead_letters (
+                 sink_id VARCHAR NOT NULL,
+                 source_sequence BIGINT NOT NULL,
+                 status_code INTEGER,
+                 reason VARCHAR NOT NULL,
+                 payload BLOB NOT NULL,
+                 recorded_at_ms BIGINT NOT NULL,
+                 PRIMARY KEY (sink_id, source_sequence)
+             );
+             INSERT INTO schema_version (version) VALUES (2);",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v1_to_v2(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE normalized_logs_v2 (
+                 sequence BIGINT PRIMARY KEY,
+                 node_id VARCHAR NOT NULL,
+                 producer_type VARCHAR NOT NULL,
+                 producer_id VARCHAR NOT NULL,
+                 cursor VARCHAR NOT NULL,
+                 event_at_ms BIGINT NOT NULL,
+                 entry_json VARCHAR NOT NULL,
+                 UNIQUE (node_id, producer_type, producer_id, cursor)
+             );
+             INSERT INTO normalized_logs_v2
+             SELECT ROW_NUMBER() OVER (
+                        ORDER BY event_at_ms, node_id, producer_type, producer_id, cursor
+                    ),
+                    node_id, producer_type, producer_id, cursor, event_at_ms, entry_json
+             FROM normalized_logs;
+             DROP TABLE normalized_logs;
+             ALTER TABLE normalized_logs_v2 RENAME TO normalized_logs;
+             CREATE TABLE sink_cursors (
+                 sink_id VARCHAR PRIMARY KEY,
+                 last_sequence BIGINT NOT NULL
+             );
+             CREATE TABLE sink_dead_letters (
+                 sink_id VARCHAR NOT NULL,
+                 source_sequence BIGINT NOT NULL,
+                 status_code INTEGER,
+                 reason VARCHAR NOT NULL,
+                 payload BLOB NOT NULL,
+                 recorded_at_ms BIGINT NOT NULL,
+                 PRIMARY KEY (sink_id, source_sequence)
+             );
+             UPDATE schema_version SET version = 2;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

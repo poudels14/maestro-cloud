@@ -35,7 +35,7 @@ pub struct SinkDeadLetterStats {
 /// Durable idempotent dead-letter administration boundary.
 #[async_trait]
 pub trait DeadLetterStore: Send + Sync {
-    /// Records a poison payload, deduplicating an exact `(sink, source_sequence)` replay.
+    /// Records a poison payload, deduplicating the same outbound payload on source replay.
     async fn record(&self, dead_letter: &SinkDeadLetter) -> Result<(), DeadLetterStoreError>;
 
     /// Lists retained records for a sink in ascending source order.

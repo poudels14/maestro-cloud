@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::IngestLogEntry;
+use crate::{DeadLetterStore, IngestLogEntry, LogDeliveryStore};
 
 /// Outcome of one atomic idempotent append batch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -27,6 +27,12 @@ pub trait LogStore: Send + Sync {
 pub trait LogStoreRuntime: Send {
     /// Returns the shared append boundary while retaining lifecycle ownership.
     fn store(&self) -> Arc<dyn LogStore>;
+
+    /// Returns the ordered read and cursor boundary backed by the same committed records.
+    fn delivery_store(&self) -> Arc<dyn LogDeliveryStore>;
+
+    /// Returns the durable poison-payload quarantine owned by this runtime.
+    fn dead_letter_store(&self) -> Arc<dyn DeadLetterStore>;
 
     /// Drains accepted writes and releases the store's owned resources.
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError>;

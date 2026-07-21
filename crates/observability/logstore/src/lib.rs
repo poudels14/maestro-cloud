@@ -3,6 +3,7 @@
 //! This crate implements log and metric storage contracts. It must not depend on operators,
 //! cluster provisioning, or application composition.
 
+mod delivery_schema;
 mod duck;
 mod error;
 mod metric_duck;
