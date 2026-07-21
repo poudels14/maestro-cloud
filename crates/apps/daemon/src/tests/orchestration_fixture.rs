@@ -49,6 +49,7 @@ pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error +
         build_watch: build::BuildWatchSettings {
             poll_interval: Duration::from_secs(60),
         },
+        preview: None,
     })
 }
 

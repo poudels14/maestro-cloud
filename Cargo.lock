@@ -1875,6 +1875,7 @@ dependencies = [
  "logstore",
  "metrics",
  "node-agent",
+ "preview",
  "runtime",
  "scheduler",
  "serde",

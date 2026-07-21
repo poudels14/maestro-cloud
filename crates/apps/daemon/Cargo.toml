@@ -32,6 +32,7 @@ logs = { version = "0.1.0", path = "../../observability/logs" }
 logstore = { version = "0.1.0", path = "../../observability/logstore" }
 metrics = { version = "0.1.0", path = "../../observability/metrics" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
+preview = { version = "0.1.0", path = "../../operators/preview" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
 scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
 serde = { version = "=1.0.228", features = ["derive"] }

@@ -21,6 +21,10 @@ use kernel_controller::{
 };
 use kernel_store::Clock;
 use node_agent::{AUTHORITATIVE_DNS_PORT, WORKLOAD_BRIDGE_NAME};
+use preview::{
+    PreviewReconciler, PreviewSettings, PreviewSourceReconciler, PreviewSourceSettings,
+    PullRequestApi,
+};
 use runtime::ArtifactStore;
 use scheduler::{SchedulerReconciler, SchedulerSettings};
 use tokio::sync::watch;
@@ -44,6 +48,17 @@ pub struct OperatorSettings {
     pub firewall: FirewallSettings,
     /// Git revision polling cadence for watched build-backed services.
     pub build_watch: BuildWatchSettings,
+    /// Pull-request preview discovery and derivation, when configured.
+    pub preview: Option<PreviewOperatorSettings>,
+}
+
+/// Leader-owned settings for both halves of pull-request preview reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewOperatorSettings {
+    /// GitHub polling, retry, and global quota policy.
+    pub source: PreviewSourceSettings,
+    /// Stable preview hostname derivation policy.
+    pub derivation: PreviewSettings,
 }
 
 impl OperatorSettings {
@@ -101,6 +116,7 @@ impl OperatorSettings {
             build_watch: BuildWatchSettings {
                 poll_interval: Duration::from_secs(60),
             },
+            preview: None,
         })
     }
 }
@@ -116,6 +132,8 @@ pub struct OperatorBackends {
     pub build_revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Lists pull requests and upserts preview feedback when previews are configured.
+    pub pull_requests: Option<Arc<dyn PullRequestApi>>,
 }
 
 /// Fence-independent build integrations retained across leadership terms.
@@ -127,6 +145,8 @@ pub struct BuildOperatorBackends {
     pub revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Fence-independent pull-request API retained across leadership terms.
+    pub pull_requests: Option<Arc<dyn PullRequestApi>>,
 }
 
 /// Rebuilds and runs the complete operator suite for each leadership fence.
@@ -179,6 +199,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 build_source: self.builds.source.clone(),
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
+                pull_requests: self.builds.pull_requests.clone(),
             },
         )
         .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
@@ -196,6 +217,10 @@ pub struct OperatorInvocationReport {
     pub builds: usize,
     /// Services passed to Git revision polling.
     pub build_watch: usize,
+    /// Nodes considered for cluster-wide pull-request discovery.
+    pub preview_sources: usize,
+    /// Preview resources passed to derived-resource reconciliation.
+    pub previews: usize,
     /// Service resources passed to deployment reconciliation.
     pub deployment: usize,
     /// Service resources passed to scheduling reconciliation.
@@ -214,6 +239,8 @@ pub struct OperatorInvocationReport {
 pub struct OperatorSuite {
     builds: ControllerRuntime<BuildReconciler>,
     build_watch: ControllerRuntime<BuildWatchReconciler>,
+    preview_sources: Option<ControllerRuntime<PreviewSourceReconciler>>,
+    previews: Option<ControllerRuntime<PreviewReconciler>>,
     deployment: ControllerRuntime<DeploymentReconciler>,
     scheduler: ControllerRuntime<SchedulerReconciler>,
     ingress: ControllerRuntime<IngressReconciler>,
@@ -253,6 +280,33 @@ impl OperatorSuite {
             monotonic_clock.clone(),
             settings.runtime.clone(),
         );
+        let (preview_sources, previews) =
+            match (settings.preview.as_ref(), backends.pull_requests.as_ref()) {
+                (Some(preview), Some(pull_requests)) => (
+                    Some(
+                        Arc::new(PreviewSourceReconciler::new(
+                            cluster_id.clone(),
+                            pull_requests.clone(),
+                            preview.source,
+                            timestamp_clock.clone(),
+                            monotonic_clock.clone(),
+                        )?)
+                        .runtime(store.clone(), settings.runtime.clone()),
+                    ),
+                    Some(
+                        Arc::new(PreviewReconciler::new(
+                            cluster_id.clone(),
+                            timestamp_clock.clone(),
+                            monotonic_clock.clone(),
+                            preview.derivation.clone(),
+                        )?)
+                        .runtime(store.clone(), settings.runtime.clone()),
+                    ),
+                ),
+                (None, None) => (None, None),
+                (Some(_), None) => return Err(OperatorSuiteError::PreviewBackendMissing),
+                (None, Some(_)) => return Err(OperatorSuiteError::PreviewBackendUnexpected),
+            };
         let deployment = Arc::new(DeploymentReconciler::new(
             cluster_id.clone(),
             settings.deployment,
@@ -303,6 +357,8 @@ impl OperatorSuite {
         Ok(Self {
             builds,
             build_watch,
+            preview_sources,
+            previews,
             deployment,
             scheduler,
             ingress,
@@ -323,6 +379,14 @@ impl OperatorSuite {
             firewall_policies: self.firewall_policies.reconcile_snapshot().await?,
             firewall_baselines: self.firewall_baselines.reconcile_snapshot().await?,
             build_watch: self.build_watch.reconcile_snapshot().await?,
+            preview_sources: match &self.preview_sources {
+                Some(runtime) => runtime.reconcile_snapshot().await?,
+                None => 0,
+            },
+            previews: match &self.previews {
+                Some(runtime) => runtime.reconcile_snapshot().await?,
+                None => 0,
+            },
         })
     }
 
@@ -331,6 +395,8 @@ impl OperatorSuite {
         let deployment = self.deployment.run(shutdown.clone());
         let builds = self.builds.run(shutdown.clone());
         let build_watch = self.build_watch.run(shutdown.clone());
+        let preview_sources = run_optional(self.preview_sources.as_ref(), shutdown.clone());
+        let previews = run_optional(self.previews.as_ref(), shutdown.clone());
         let scheduler = self.scheduler.run(shutdown.clone());
         let ingress = self.ingress.run(shutdown.clone());
         let dns = self.dns.run(shutdown.clone());
@@ -340,6 +406,8 @@ impl OperatorSuite {
             deployment,
             builds,
             build_watch,
+            preview_sources,
+            previews,
             scheduler,
             ingress,
             dns,
@@ -347,6 +415,29 @@ impl OperatorSuite {
             baselines
         )?;
         Ok(())
+    }
+}
+
+async fn run_optional<Reconciler>(
+    runtime: Option<&ControllerRuntime<Reconciler>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), ControllerError>
+where
+    Reconciler: kernel_controller::Reconciler + 'static,
+    Reconciler::Id: serde::de::DeserializeOwned + serde::Serialize + std::fmt::Display,
+    Reconciler::Spec: serde::de::DeserializeOwned + serde::Serialize,
+    Reconciler::Status: serde::de::DeserializeOwned + serde::Serialize,
+{
+    match runtime {
+        Some(runtime) => runtime.run(shutdown).await,
+        None => {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -380,4 +471,16 @@ pub enum OperatorSuiteError {
     /// Git build-watch settings or identifiers were invalid.
     #[error(transparent)]
     BuildWatch(#[from] build::BuildWatchError),
+    /// Preview derivation settings or resource state were invalid.
+    #[error(transparent)]
+    Preview(#[from] preview::PreviewError),
+    /// Preview source polling or quota settings were invalid.
+    #[error(transparent)]
+    PreviewSource(#[from] preview::PreviewSourceError),
+    /// Preview settings require an injected pull-request API.
+    #[error("preview settings require a pull-request API backend")]
+    PreviewBackendMissing,
+    /// A pull-request API without preview settings would never be consumed.
+    #[error("pull-request API backend was configured without preview settings")]
+    PreviewBackendUnexpected,
 }

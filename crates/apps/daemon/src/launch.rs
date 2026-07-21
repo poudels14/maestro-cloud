@@ -79,6 +79,9 @@ pub struct DaemonLaunchConfig {
     /// Optional node-local S3 log backup and retention target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_backup: Option<LogBackupLaunchConfig>,
+    /// Optional cluster-wide GitHub pull-request previews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<crate::PreviewLaunchConfig>,
 }
 
 impl DaemonLaunchConfig {
@@ -90,6 +93,9 @@ impl DaemonLaunchConfig {
         }
         if let Some(log_backup) = &self.log_backup {
             log_backup.validate(&self.cluster.name, &self.node_id)?;
+        }
+        if let Some(preview) = &self.preview {
+            preview.validate()?;
         }
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));
@@ -168,6 +174,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         instance_id,
         datadog,
         log_backup,
+        preview,
     } = config;
     let known_members = control_plane_members(&cluster);
     let clock = Arc::new(TokioClock::new());
@@ -231,15 +238,24 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         build_root.join("workspaces"),
         build_root.join("archives"),
     )?);
+    let configured_preview = preview
+        .as_ref()
+        .map(|preview| preview.configure())
+        .transpose()?;
+    let mut operator_settings = OperatorSettings::production(&cluster)?;
+    operator_settings.preview = configured_preview
+        .as_ref()
+        .map(|preview| preview.settings.clone());
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
         timestamp_clock.clone(),
-        OperatorSettings::production(&cluster)?,
+        operator_settings,
         BuildOperatorBackends {
             source: build_source.clone(),
             revisions: build_source,
             artifacts: containerd.clone(),
+            pull_requests: configured_preview.map(|preview| preview.pull_requests),
         },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
@@ -483,6 +499,9 @@ pub enum DaemonLaunchError {
     /// Build source roots or Git integration settings were invalid.
     #[error(transparent)]
     BuildSource(#[from] build::BuildSourceError),
+    /// Pull-request preview launch settings were invalid.
+    #[error(transparent)]
+    Preview(#[from] crate::PreviewLaunchError),
     /// Role planning, startup, or rollback failed.
     #[error(transparent)]
     Daemon(#[from] crate::DaemonError),

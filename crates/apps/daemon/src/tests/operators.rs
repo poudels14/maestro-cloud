@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     ArtifactTemplate, Build, BuildId, BuildPhase, BuildSource, BuildSpec, BuildStatus,
-    BuildTemplate, ClusterId, Deployment, DeploymentId, ExecPolicy, Generation, NodeApiAccess,
-    NodeFirewall, NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec,
-    NodeNetworkStatus, NodeRole, Object, ObjectMeta, PlacementConstraint, ResourceKind,
-    ResourceName, ResourceRevision, RolloutState, SecretValue, Service, ServiceId, ServiceSpec,
-    ServiceStatus, Timestamp,
+    BuildTemplate, ClusterId, Deployment, DeploymentId, ExecPolicy, Generation, Node,
+    NodeApiAccess, NodeFirewall, NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId,
+    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta,
+    PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState, SecretValue,
+    Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -22,7 +22,7 @@ use kernel_store::{
 };
 use tokio::sync::watch;
 
-use crate::{OperatorSettings, OperatorSuite};
+use crate::{OperatorSettings, OperatorSuite, PreviewOperatorSettings};
 
 use super::build_backend::FakeBuildBackend;
 use super::cluster_with_nodes;
@@ -60,17 +60,29 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
             leader.version,
         ),
     ));
+    put(&store, &keys, "Node", &node()?).await?;
     put(&store, &keys, "Service", &service()?).await?;
     put(&store, &keys, "NodeNetwork", &network()?).await?;
     put(&store, &keys, "Build", &queued_build()?).await?;
     let ingress = Arc::new(RecordingIngress::default());
-    let (backends, build_backend) = FakeBuildBackend::operator_backends(ingress.clone());
+    let (mut backends, build_backend) = FakeBuildBackend::operator_backends(ingress.clone());
+    backends.pull_requests = Some(Arc::new(EmptyPullRequests));
+    let mut operator_settings = settings()?;
+    operator_settings.preview = Some(PreviewOperatorSettings {
+        source: preview::PreviewSourceSettings {
+            poll_interval: Duration::from_secs(60),
+            max_concurrent_previews: 3,
+            initial_backoff: Duration::from_secs(5),
+            max_backoff: Duration::from_secs(60),
+        },
+        derivation: preview::PreviewSettings::new("preview.example.test")?,
+    });
     let suite = OperatorSuite::new(
         cluster_id,
         fenced,
         monotonic,
         Arc::new(FixedTimestampClock),
-        settings()?,
+        operator_settings,
         backends,
     )?;
 
@@ -78,6 +90,8 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     assert_eq!(first.firewall_baselines, 1);
     assert_eq!(first.deployment, 0);
     assert_eq!(first.build_watch, 1);
+    assert_eq!(first.preview_sources, 1);
+    assert_eq!(first.previews, 0);
     let stored = one::<Service>(&store, &keys, "Service").await?;
     assert_eq!(stored.meta.finalizers.len(), 4);
 
@@ -226,6 +240,48 @@ fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
         },
         build_watch: build::BuildWatchSettings {
             poll_interval: Duration::from_secs(60),
+        },
+        preview: None,
+    })
+}
+
+struct EmptyPullRequests;
+
+#[async_trait]
+impl preview::PullRequestApi for EmptyPullRequests {
+    async fn list_open(
+        &self,
+        _owner: &str,
+        _repository: &str,
+    ) -> Result<Vec<preview::PullRequest>, preview::PullRequestApiError> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert_comment(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _pull_request_number: u64,
+        _comment_key: &str,
+        _body: &str,
+    ) -> Result<(), preview::PullRequestApiError> {
+        Ok(())
+    }
+}
+
+fn node() -> Result<Node, kernel_api::InvalidIdentifier> {
+    Ok(Object {
+        meta: metadata(NodeId::new("node-1")?),
+        spec: NodeSpec {
+            hostname: "node-1.internal".to_string(),
+            host_address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            role: NodeRole::Master,
+            scheduling_labels: BTreeMap::new(),
+        },
+        status: NodeStatus {
+            instance_id: NodeInstanceId::new("node-instance-1")?,
+            last_seen: Timestamp(10_000),
+            conditions: Vec::new(),
         },
     })
 }

@@ -18,6 +18,7 @@ mod log_maintenance;
 mod metric_delivery;
 mod operators;
 mod plan;
+mod preview_config;
 mod runtime;
 mod s3_backup;
 mod workload_agents;
@@ -39,9 +40,10 @@ pub use log_maintenance::{
 };
 pub use operators::{
     BuildOperatorBackends, OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload,
-    OperatorSettings, OperatorSuite, OperatorSuiteError,
+    OperatorSettings, OperatorSuite, OperatorSuiteError, PreviewOperatorSettings,
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
+pub use preview_config::{PreviewLaunchConfig, PreviewLaunchError};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};
 pub use s3_backup::{S3BackupObjectStore, S3BackupObjectStoreError};
 

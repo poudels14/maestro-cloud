@@ -5,7 +5,7 @@ use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    LogBackupLaunchConfig, StoreLaunchMode, load_launch_config,
+    LogBackupLaunchConfig, PreviewLaunchConfig, StoreLaunchMode, load_launch_config,
 };
 
 use super::cluster_with_nodes;
@@ -117,6 +117,28 @@ fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn
 }
 
 #[test]
+fn preview_launch_config_validates_domain_quota_and_redacts_token()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.preview = Some(PreviewLaunchConfig {
+        domain: "preview.example.test".to_string(),
+        github_token: SecretValue::new("github-super-secret"),
+        max_concurrent_previews: 5,
+    });
+    launch.validate()?;
+    assert!(!format!("{launch:?}").contains("github-super-secret"));
+
+    let preview = launch.preview.as_mut().ok_or("preview config missing")?;
+    preview.domain = "not a domain!".to_string();
+    assert!(launch.validate().is_err());
+    let preview = launch.preview.as_mut().ok_or("preview config missing")?;
+    preview.domain = "preview.example.test".to_string();
+    preview.max_concurrent_previews = 0;
+    assert!(launch.validate().is_err());
+    Ok(())
+}
+
+#[test]
 fn log_backup_launch_config_validates_s3_kms_prefix_and_retention()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
@@ -168,5 +190,6 @@ fn config(
         instance_id: Some(NodeInstanceId::new("instance-1")?),
         datadog: None,
         log_backup: None,
+        preview: None,
     })
 }
