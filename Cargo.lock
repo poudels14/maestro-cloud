@@ -2969,6 +2969,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingress"
+version = "0.1.0"
+dependencies = [
+ "kernel-api",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

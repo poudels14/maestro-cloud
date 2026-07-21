@@ -58,6 +58,26 @@ pub struct TrafficTarget {
     pub endpoint: SocketAddr,
 }
 
+/// Immutable route configuration captured for one traffic generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficRoute {
+    /// Ingress route whose desired generation was captured.
+    pub route_id: IngressRouteId,
+    /// Desired route generation included in this traffic generation.
+    pub route_generation: Generation,
+    /// Canonical hostnames accepted by the route.
+    pub hosts: Vec<String>,
+    /// Optional path prefix required after the host matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
+    /// Workload port receiving requests.
+    pub target_port: u16,
+    /// Optional opaque-header affinity policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_affinity: Option<SessionAffinity>,
+}
+
 /// Desired immutable target set staged for an ingress cutover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -66,8 +86,10 @@ pub struct TrafficGenerationSpec {
     pub service_id: ServiceId,
     /// Deployment receiving traffic in this generation.
     pub deployment_id: DeploymentId,
-    /// Routes published with the target set.
-    pub route_ids: Vec<IngressRouteId>,
+    /// Monotonic per-service cutover epoch used to distinguish repeated target sets.
+    pub epoch: u64,
+    /// Immutable routes published with the target set.
+    pub routes: Vec<TrafficRoute>,
     /// Ready workload targets included in the generation.
     pub targets: Vec<TrafficTarget>,
 }
@@ -101,6 +123,14 @@ impl TrafficGenerationPhase {
 pub struct TrafficGenerationStatus {
     /// Current cutover phase.
     pub phase: TrafficGenerationPhase,
+    /// Time the immutable generation was staged.
+    pub staged_at: crate::Timestamp,
+    /// Time this generation began receiving traffic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activated_at: Option<crate::Timestamp>,
+    /// Time this generation stopped receiving new traffic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<crate::Timestamp>,
     /// Generic readiness and collection evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

@@ -35,7 +35,7 @@ pub use network::{
     FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject, FirewallVerdict,
     IngressRoute, IngressRouteSpec, IngressRouteStatus, NetworkAddress, PortRange, SessionAffinity,
     TrafficGeneration, TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus,
-    TrafficTarget, TransportProtocol,
+    TrafficRoute, TrafficTarget, TransportProtocol,
 };
 pub use node::{
     Node, NodeNetwork, NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,

@@ -3929,10 +3929,16 @@ expression: openapi_document()
             ],
             "description": "Deployment receiving traffic in this generation."
           },
-          "routeIds": {
-            "description": "Routes published with the target set.",
+          "epoch": {
+            "description": "Monotonic per-service cutover epoch used to distinguish repeated target sets.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "routes": {
+            "description": "Immutable routes published with the target set.",
             "items": {
-              "$ref": "#/components/schemas/IngressRouteId"
+              "$ref": "#/components/schemas/TrafficRoute"
             },
             "type": "array"
           },
@@ -3955,7 +3961,8 @@ expression: openapi_document()
         "required": [
           "serviceId",
           "deploymentId",
-          "routeIds",
+          "epoch",
+          "routes",
           "targets"
         ],
         "type": "object"
@@ -3963,6 +3970,20 @@ expression: openapi_document()
       "TrafficGenerationStatus": {
         "description": "Observed publication and garbage-collection state for one generation.",
         "properties": {
+          "activatedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time this generation began receiving traffic."
+          },
           "conditions": {
             "description": "Generic readiness and collection evidence.",
             "items": {
@@ -3977,10 +3998,94 @@ expression: openapi_document()
               }
             ],
             "description": "Current cutover phase."
+          },
+          "retiredAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time this generation stopped receiving new traffic."
+          },
+          "stagedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time the immutable generation was staged."
           }
         },
         "required": [
-          "phase"
+          "phase",
+          "stagedAt"
+        ],
+        "type": "object"
+      },
+      "TrafficRoute": {
+        "description": "Immutable route configuration captured for one traffic generation.",
+        "properties": {
+          "hosts": {
+            "description": "Canonical hostnames accepted by the route.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pathPrefix": {
+            "description": "Optional path prefix required after the host matches.",
+            "nullable": true,
+            "type": "string"
+          },
+          "routeGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired route generation included in this traffic generation."
+          },
+          "routeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteId"
+              }
+            ],
+            "description": "Ingress route whose desired generation was captured."
+          },
+          "sessionAffinity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionAffinity"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional opaque-header affinity policy."
+          },
+          "targetPort": {
+            "description": "Workload port receiving requests.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "routeId",
+          "routeGeneration",
+          "hosts",
+          "targetPort"
         ],
         "type": "object"
       },

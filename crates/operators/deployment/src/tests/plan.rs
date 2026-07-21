@@ -462,7 +462,15 @@ fn traffic(deployment: &Deployment) -> TrafficGeneration {
         spec: TrafficGenerationSpec {
             service_id: deployment.spec.service_id.clone(),
             deployment_id: deployment.meta.id.clone(),
-            route_ids: vec![IngressRouteId::new("route-1").unwrap()],
+            epoch: 1,
+            routes: vec![kernel_api::TrafficRoute {
+                route_id: IngressRouteId::new("route-1").unwrap(),
+                route_generation: Generation(1),
+                hosts: vec!["api.example.test".to_string()],
+                path_prefix: None,
+                target_port: 8080,
+                session_affinity: None,
+            }],
             targets: vec![kernel_api::TrafficTarget {
                 assignment_id: AssignmentId::new("assignment-new").unwrap(),
                 endpoint: SocketAddr::from(([10, 42, 1, 10], 8080)),
@@ -470,6 +478,9 @@ fn traffic(deployment: &Deployment) -> TrafficGeneration {
         },
         status: TrafficGenerationStatus {
             phase: TrafficGenerationPhase::Active,
+            staged_at: Timestamp(900),
+            activated_at: Some(Timestamp(1_000)),
+            retired_at: None,
             conditions: Vec::new(),
         },
     }
