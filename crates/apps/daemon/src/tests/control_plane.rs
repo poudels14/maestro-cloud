@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -6,10 +7,18 @@ use cluster::{
     MemberActivation, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderError,
     StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreShutdown, StoreStartMode,
 };
-use kernel_api::{NodeId, NodeInstanceId, NodeRole, Timestamp};
+use kernel_api::{
+    Generation, NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId,
+    NodeInstanceId, NodeRole, Object, ObjectMeta, ResourceRevision, Timestamp,
+};
 use kernel_controller::{FencedStore, LeaderIdentity};
-use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
-use node_agent::{MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock};
+use kernel_store::{
+    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
+};
+use node_agent::{
+    FirewallBackend, FirewallBackendError, MeshBackend, MeshBackendError, MeshConfiguration,
+    MeshIdentity, StatusClock,
+};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -34,6 +43,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         applications: applications.clone(),
     };
     let workload = Arc::new(RecordingLeaderWorkload::default());
+    let firewall_applications = Arc::new(Mutex::new(Vec::new()));
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -41,11 +51,15 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         NodeId::new("master")?,
         directory.path().to_path_buf(),
     )?;
+    put_firewall(&store, &cluster.cluster_id, "master").await?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
             provider,
             store_start_mode: StoreStartMode::Bootstrap,
             mesh_backend: backend,
+            firewall_backend: RecordingFirewallBackend {
+                applications: firewall_applications.clone(),
+            },
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
             monotonic_clock: clock,
@@ -64,6 +78,13 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         assert!(!applied.is_empty());
         assert!(applied.first().is_some_and(|mesh| mesh.peers.is_empty()));
     }
+    assert_eq!(
+        firewall_applications
+            .lock()
+            .map_err(|_| "firewall application lock poisoned")?
+            .len(),
+        2
+    );
 
     let leader_key = Keyspace::new(&cluster.cluster_id).leader();
     let stored_leader = store.get(&leader_key).await?.ok_or("leader key missing")?;
@@ -101,6 +122,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
 fn settings_reject_keepalive_at_or_after_leadership_ttl() {
     assert!(
         ControlPlaneRoleSettings::new(
+            Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(5),
             Duration::from_secs(5),
@@ -177,6 +199,67 @@ impl MeshBackend for RecordingMeshBackend {
             .map_err(|_| MeshBackendError::new("mesh application lock poisoned"))?
             .push(desired.clone());
         Ok(())
+    }
+}
+
+struct RecordingFirewallBackend {
+    applications: Arc<Mutex<Vec<NodeFirewallSpec>>>,
+}
+
+#[async_trait]
+impl FirewallBackend for RecordingFirewallBackend {
+    async fn apply(&self, desired: &NodeFirewallSpec) -> Result<(), FirewallBackendError> {
+        self.applications
+            .lock()
+            .map_err(|_| FirewallBackendError::new("firewall application lock poisoned"))?
+            .push(desired.clone());
+        Ok(())
+    }
+}
+
+async fn put_firewall(
+    store: &InMemoryStore,
+    cluster_id: &kernel_api::ClusterId,
+    node_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resource: NodeFirewall = Object {
+        meta: ObjectMeta {
+            id: NodeFirewallId::new(node_id)?,
+            labels: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            revision: ResourceRevision::default(),
+            generation: Generation(1),
+            owner_refs: Vec::new(),
+            finalizers: BTreeSet::new(),
+            deletion_timestamp: None,
+        },
+        spec: NodeFirewallSpec {
+            node_id: NodeId::new(node_id)?,
+            table_name: "maestro_firewall".to_string(),
+            script: String::new(),
+            digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+        },
+        status: NodeFirewallStatus {
+            applied_generation: Generation::default(),
+            applied_digest: None,
+            conditions: Vec::new(),
+        },
+    };
+    let outcome = store
+        .put_cas(PutRequest {
+            key: Keyspace::new(cluster_id).resource(
+                &kernel_api::ResourceKind::new("NodeFirewall")?,
+                &kernel_api::ResourceName::new(node_id)?,
+            ),
+            value: serde_json::to_vec(&resource)?,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    if matches!(outcome, CasOutcome::Applied(_)) {
+        Ok(())
+    } else {
+        Err("NodeFirewall create conflicted".into())
     }
 }
 

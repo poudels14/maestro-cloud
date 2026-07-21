@@ -6,7 +6,10 @@ use cluster::{StoreProvider, StoreRuntime, StoreShutdown, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
-use node_agent::{MeshBackend, MeshIdentity, MeshPlanner, MeshResourceAgent, StatusClock};
+use node_agent::{
+    FirewallBackend, MeshBackend, MeshIdentity, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
+    StatusClock,
+};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -24,10 +27,11 @@ pub trait LeaderWorkload: Send + Sync {
     ) -> Result<(), RoleError>;
 }
 
-/// Time bounds for mesh resync, leadership, and graceful store shutdown.
+/// Time bounds for node resync, leadership, and graceful store shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlPlaneRoleSettings {
     mesh_resync_interval: Duration,
+    firewall_resync_interval: Duration,
     pub(crate) leadership_ttl: Duration,
     pub(crate) leadership_keepalive_interval: Duration,
     pub(crate) campaign_retry_interval: Duration,
@@ -38,12 +42,14 @@ impl ControlPlaneRoleSettings {
     /// Creates bounded settings and rejects hot loops or expired leadership.
     pub fn new(
         mesh_resync_interval: Duration,
+        firewall_resync_interval: Duration,
         leadership_ttl: Duration,
         leadership_keepalive_interval: Duration,
         campaign_retry_interval: Duration,
         store_shutdown_grace: Duration,
     ) -> Result<Self, RoleError> {
         if mesh_resync_interval.is_zero()
+            || firewall_resync_interval.is_zero()
             || leadership_ttl.is_zero()
             || leadership_keepalive_interval.is_zero()
             || campaign_retry_interval.is_zero()
@@ -56,6 +62,7 @@ impl ControlPlaneRoleSettings {
         }
         Ok(Self {
             mesh_resync_interval,
+            firewall_resync_interval,
             leadership_ttl,
             leadership_keepalive_interval,
             campaign_retry_interval,
@@ -68,6 +75,7 @@ impl Default for ControlPlaneRoleSettings {
     fn default() -> Self {
         Self {
             mesh_resync_interval: Duration::from_secs(30),
+            firewall_resync_interval: Duration::from_secs(30),
             leadership_ttl: Duration::from_secs(15),
             leadership_keepalive_interval: Duration::from_secs(5),
             campaign_retry_interval: Duration::from_secs(1),
@@ -77,13 +85,15 @@ impl Default for ControlPlaneRoleSettings {
 }
 
 /// Production adapters and identities required by the concrete role factory.
-pub struct ControlPlaneRoleDependencies<Backend> {
+pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType> {
     /// Provisioning boundary for the node-local cluster store member.
     pub provider: Arc<dyn StoreProvider>,
     /// Explicit bootstrap, join, or restart decision for the local member.
     pub store_start_mode: StoreStartMode,
     /// Host-network adapter that applies exact WireGuard and route state.
-    pub mesh_backend: Backend,
+    pub mesh_backend: MeshBackendType,
+    /// Host-network adapter that applies complete node-local nftables state.
+    pub firewall_backend: FirewallBackendType,
     /// Persisted node-local WireGuard identity.
     pub mesh_identity: MeshIdentity,
     /// Unique identity of this daemon process for leader election.
@@ -95,10 +105,11 @@ pub struct ControlPlaneRoleDependencies<Backend> {
 }
 
 /// Concrete control-plane factory composing a store provider, mesh agent, and leader lease.
-pub struct ControlPlaneRoleFactory<Backend> {
+pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType> {
     provider: Arc<dyn StoreProvider>,
     store_start_mode: StoreStartMode,
-    mesh_backend: Mutex<Option<Backend>>,
+    mesh_backend: Mutex<Option<MeshBackendType>>,
+    firewall_backend: Mutex<Option<FirewallBackendType>>,
     mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
     monotonic_clock: Arc<dyn Clock>,
@@ -108,16 +119,19 @@ pub struct ControlPlaneRoleFactory<Backend> {
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
 }
 
-impl<Backend> ControlPlaneRoleFactory<Backend> {
+impl<MeshBackendType, FirewallBackendType>
+    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
+{
     /// Binds all production adapters without starting tasks or processes.
     pub fn new(
-        dependencies: ControlPlaneRoleDependencies<Backend>,
+        dependencies: ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType>,
         settings: ControlPlaneRoleSettings,
     ) -> Self {
         Self {
             provider: dependencies.provider,
             store_start_mode: dependencies.store_start_mode,
             mesh_backend: Mutex::new(Some(dependencies.mesh_backend)),
+            firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
             mesh_identity: dependencies.mesh_identity,
             instance_id: dependencies.instance_id,
             monotonic_clock: dependencies.monotonic_clock,
@@ -136,9 +150,11 @@ impl<Backend> ControlPlaneRoleFactory<Backend> {
 }
 
 #[async_trait]
-impl<Backend> RoleFactory for ControlPlaneRoleFactory<Backend>
+impl<MeshBackendType, FirewallBackendType> RoleFactory
+    for ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
 where
-    Backend: MeshBackend + 'static,
+    MeshBackendType: MeshBackend + 'static,
+    FirewallBackendType: FirewallBackend + 'static,
 {
     async fn start(
         &self,
@@ -157,9 +173,11 @@ where
     }
 }
 
-impl<Backend> ControlPlaneRoleFactory<Backend>
+impl<MeshBackendType, FirewallBackendType>
+    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
 where
-    Backend: MeshBackend + 'static,
+    MeshBackendType: MeshBackend + 'static,
+    FirewallBackendType: FirewallBackend + 'static,
 {
     async fn start_agent(
         &self,
@@ -170,6 +188,12 @@ where
             .mesh_backend
             .lock()
             .map_err(|_| RoleError::new("mesh backend lock was poisoned"))?
+            .take()
+            .ok_or_else(|| RoleError::new("agent role was already started"))?;
+        let firewall_backend = self
+            .firewall_backend
+            .lock()
+            .map_err(|_| RoleError::new("firewall backend lock was poisoned"))?
             .take()
             .ok_or_else(|| RoleError::new("agent role was already started"))?;
         let runtime = self
@@ -183,10 +207,22 @@ where
             Ok(agent) => agent,
             Err(error) => return fail_after_store_start(runtime, error).await,
         };
+        let firewall_agent =
+            match build_firewall_agent(self, plan, spec, store.clone(), firewall_backend) {
+                Ok(agent) => agent,
+                Err(error) => return fail_after_store_start(runtime, error).await,
+            };
         if let Err(error) = agent.reconcile_once().await {
             return fail_after_store_start(
                 runtime,
                 role_error("establish initial mesh snapshot", error),
+            )
+            .await;
+        }
+        if let Err(error) = firewall_agent.reconcile_once().await {
+            return fail_after_store_start(
+                runtime,
+                role_error("establish initial firewall snapshot", error),
             )
             .await;
         }
@@ -196,10 +232,22 @@ where
             .lock()
             .map_err(|_| RoleError::new("shared store lock was poisoned"))? = Some(store);
         let (shutdown, shutdown_receiver) = watch::channel(false);
-        let task = tokio::spawn(async move { agent.run(shutdown_receiver).await });
+        let firewall_shutdown = shutdown_receiver.clone();
+        let mesh_task = tokio::spawn(async move {
+            agent
+                .run(shutdown_receiver)
+                .await
+                .map_err(|error| role_error("run mesh agent", error))
+        });
+        let firewall_task = tokio::spawn(async move {
+            firewall_agent
+                .run(firewall_shutdown)
+                .await
+                .map_err(|error| role_error("run firewall agent", error))
+        });
         Ok(Box::new(AgentRoleRuntime {
             shutdown,
-            task: Some(task),
+            tasks: vec![mesh_task, firewall_task],
             store_runtime: Some(runtime),
             clock: self.monotonic_clock.clone(),
             shutdown_grace: self.settings.store_shutdown_grace,
@@ -249,15 +297,15 @@ where
     }
 }
 
-fn build_mesh_agent<Backend>(
-    factory: &ControlPlaneRoleFactory<Backend>,
+fn build_mesh_agent<MeshBackendType, FirewallBackendType>(
+    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
-    backend: Backend,
-) -> Result<MeshResourceAgent<Backend>, RoleError>
+    backend: MeshBackendType,
+) -> Result<MeshResourceAgent<MeshBackendType>, RoleError>
 where
-    Backend: MeshBackend,
+    MeshBackendType: MeshBackend,
 {
     let node = plan
         .cluster()
@@ -292,6 +340,28 @@ where
     .map_err(|error| role_error("construct mesh resource agent", error))
 }
 
+fn build_firewall_agent<MeshBackendType, FirewallBackendType>(
+    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+    backend: FirewallBackendType,
+) -> Result<NodeFirewallAgent<FirewallBackendType>, RoleError>
+where
+    FirewallBackendType: FirewallBackend,
+{
+    NodeFirewallAgent::new(
+        store,
+        &plan.cluster().cluster_id,
+        spec.node_id.clone(),
+        backend,
+        factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
+        factory.settings.firewall_resync_interval,
+    )
+    .map_err(|error| role_error("construct firewall resource agent", error))
+}
+
 async fn fail_after_store_start<T>(
     runtime: Box<dyn StoreRuntime>,
     error: RoleError,
@@ -307,7 +377,7 @@ async fn fail_after_store_start<T>(
 
 struct AgentRoleRuntime {
     shutdown: watch::Sender<bool>,
-    task: Option<JoinHandle<Result<(), node_agent::MeshResourceError>>>,
+    tasks: Vec<JoinHandle<Result<(), RoleError>>>,
     store_runtime: Option<Box<dyn StoreRuntime>>,
     clock: Arc<dyn Clock>,
     shutdown_grace: Duration,
@@ -318,11 +388,11 @@ impl RoleRuntime for AgentRoleRuntime {
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
         let mut failures = Vec::new();
-        if let Some(task) = self.task.take() {
+        for task in self.tasks.drain(..) {
             match task.await {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(format!("mesh agent failed: {error}")),
-                Err(error) => failures.push(format!("mesh agent task failed: {error}")),
+                Ok(Err(error)) => failures.push(error.to_string()),
+                Err(error) => failures.push(format!("node agent task failed: {error}")),
             }
         }
         if let Some(runtime) = self.store_runtime.take() {
@@ -338,7 +408,7 @@ impl RoleRuntime for AgentRoleRuntime {
 impl Drop for AgentRoleRuntime {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
-        if let Some(task) = self.task.as_ref() {
+        for task in &self.tasks {
             task.abort();
         }
     }

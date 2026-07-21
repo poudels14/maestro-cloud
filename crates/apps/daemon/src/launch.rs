@@ -9,7 +9,7 @@ use cluster::{
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_store::TokioClock;
-use node_agent::{LinuxMeshBackend, MeshIdentity, SystemStatusClock};
+use node_agent::{LinuxMeshBackend, MeshIdentity, NftablesFirewallBackend, SystemStatusClock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -161,6 +161,7 @@ pub async fn launch_control_plane(
             provider,
             store_start_mode: start_mode,
             mesh_backend: LinuxMeshBackend::new(),
+            firewall_backend: NftablesFirewallBackend::new(),
             mesh_identity,
             instance_id,
             monotonic_clock: clock,
