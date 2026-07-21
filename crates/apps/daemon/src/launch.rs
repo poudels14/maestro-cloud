@@ -18,6 +18,7 @@ use node_agent::{
     NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
 
@@ -255,6 +256,11 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .as_ref()
         .map(crate::NixosUpgradeLaunchConfig::configure)
         .transpose()?;
+    let running_version = match configured_upgrade.as_ref() {
+        Some(upgrade) => upgrade.running_version.clone(),
+        None => Version::parse(env!("CARGO_PKG_VERSION"))
+            .map_err(|error| invalid(format!("daemon package version is invalid: {error}")))?,
+    };
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
@@ -327,12 +333,12 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             volatile_root,
             mesh_identity,
             instance_id,
+            running_version,
             monotonic_clock: clock,
             status_clock: Arc::new(SystemStatusClock),
             node_upgrade: configured_upgrade.map(|upgrade| NodeUpgradeDependencies {
                 stager: upgrade.stager,
                 rebooter: upgrade.rebooter,
-                running_version: upgrade.running_version,
             }),
         },
         DaemonRoleSettings::default(),

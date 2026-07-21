@@ -14,6 +14,7 @@ kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 node-fabric = { version = "0.1.0", path = "../fabric" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls"] }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
+semver.workspace = true
 serde = "=1.0.228"
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"

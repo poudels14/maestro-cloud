@@ -1,20 +1,54 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use kernel_api::NodeSpec;
 use kernel_store::Store;
 use logs::{LogStore, OtlpLogHandler, RuntimeLogPipeline};
 use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
 use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
     HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, NodeApiServices,
-    RuntimeLogAgent, RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent,
-    WorkloadStatsSettings,
+    NodeRegistryAgent, NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings,
+    WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::{DaemonPlan, RoleError, RoleSpec};
+
+pub(crate) fn build_node_registry_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+) -> Result<NodeRegistryAgent, RoleError> {
+    let node = plan
+        .cluster()
+        .nodes
+        .get(&spec.node_id)
+        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
+    NodeRegistryAgent::new(
+        store,
+        NodeRegistrySettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            node_spec: NodeSpec {
+                hostname: node.hostname.clone(),
+                host_address: node.endpoint.host_address.into(),
+                role: node.role,
+                scheduling_labels: Default::default(),
+            },
+            instance_id: factory.instance_id().clone(),
+            running_version: factory.running_version.clone(),
+            session_ttl: factory.settings.node_liveness_ttl,
+            keepalive_interval: factory.settings.node_liveness_keepalive_interval,
+        },
+        factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
+    )
+    .map_err(|error| role_error("construct node registry agent", error))
+}
 
 pub(crate) fn build_node_upgrade_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
     factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
@@ -31,7 +65,7 @@ pub(crate) fn build_node_upgrade_agent<MeshBackendType, FirewallBackendType, Bri
             cluster_id: plan.cluster().cluster_id.clone(),
             node_id: spec.node_id.clone(),
             instance_id: factory.instance_id().clone(),
-            running_version: dependencies.running_version.clone(),
+            running_version: factory.running_version.clone(),
             resync_interval: factory.settings.upgrade_resync_interval,
         },
         dependencies.stager.clone(),

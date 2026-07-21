@@ -6,8 +6,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cluster::StoreStartMode;
 use kernel_api::{
-    AssignmentPhase, DeploymentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
-    Timestamp, WorkloadUserSpec,
+    AssignmentPhase, DeploymentPhase, Node, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
+    ResourceKind, ResourceName, Timestamp, WorkloadUserSpec,
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
@@ -31,6 +31,7 @@ use node_agent::{
     WorkloadNetworkStatsError, WorkloadNetworkStatsReader,
 };
 use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
+use semver::Version;
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -129,6 +130,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
+            running_version: Version::new(0, 1, 0),
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
@@ -324,9 +326,31 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .as_slice(),
         &[leader]
     );
+    let node_liveness_key =
+        Keyspace::new(&cluster.cluster_id).node_liveness(&NodeId::new("master")?);
+    assert_eq!(
+        store
+            .get(&node_liveness_key)
+            .await?
+            .map(|stored| stored.value),
+        Some(b"instance-1".to_vec())
+    );
+    let node_key = Keyspace::new(&cluster.cluster_id)
+        .resource(&ResourceKind::new("Node")?, &ResourceName::new("master")?);
+    let node: Node = serde_json::from_slice(
+        &store
+            .get(&node_key)
+            .await?
+            .ok_or("Node resource missing")?
+            .value,
+    )?;
+    assert_eq!(node.status.instance_id.as_str(), "instance-1");
+    assert_eq!(node.status.version, "0.1.0");
 
     running.shutdown().await?;
     assert_eq!(store.get(&leader_key).await?, None);
+    assert_eq!(store.get(&node_liveness_key).await?, None);
+    assert!(store.get(&node_key).await?.is_some());
     assert_eq!(
         *shutdowns
             .lock()
@@ -404,6 +428,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("worker-instance")?,
+            running_version: Version::new(0, 1, 0),
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,

@@ -16,7 +16,7 @@ use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
 use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_host_telemetry_agent, build_log_agent,
-    build_node_upgrade_agent, build_stats_agent,
+    build_node_registry_agent, build_node_upgrade_agent, build_stats_agent,
 };
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
@@ -191,6 +191,10 @@ where
         Ok(agent) => agent,
         Err(error) => return runtimes.fail(error).await,
     };
+    let node_registry_agent = match build_node_registry_agent(factory, plan, spec, store.clone()) {
+        Ok(agent) => agent,
+        Err(error) => return runtimes.fail(error).await,
+    };
     if let Err(error) = bridge_agent.reconcile_once().await {
         return runtimes
             .fail(role_error("establish workload bridge", error))
@@ -264,6 +268,14 @@ where
             ))
             .await;
     }
+    let node_registration = match node_registry_agent.register().await {
+        Ok(registration) => registration,
+        Err(error) => {
+            return runtimes
+                .fail(role_error("register node liveness", error))
+                .await;
+        }
+    };
     let publish_store_error = {
         match factory.store.lock() {
             Ok(mut shared_store) => {
@@ -274,6 +286,13 @@ where
         }
     };
     if let Some(error) = publish_store_error {
+        let error = match node_registration.close().await {
+            Ok(()) => error,
+            Err(close_error) => RoleError::new(format!(
+                "{}; failed to roll back node liveness: {close_error}",
+                error.detail()
+            )),
+        };
         return runtimes.fail(error).await;
     }
     let (shutdown, bridge_shutdown) = watch::channel(false);
@@ -287,6 +306,13 @@ where
     let stats_shutdown = bridge_shutdown.clone();
     let host_telemetry_shutdown = bridge_shutdown.clone();
     let node_upgrade_shutdown = bridge_shutdown.clone();
+    let node_registry_shutdown = bridge_shutdown.clone();
+    let node_registry_task = tokio::spawn(async move {
+        node_registry_agent
+            .run_registered(node_registration, node_registry_shutdown)
+            .await
+            .map_err(|error| role_error("run node registry agent", error))
+    });
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -323,6 +349,7 @@ where
         dns_resource_task,
         firewall_task,
         dns_server_task,
+        node_registry_task,
     ];
     if let Some(agent) = assignment_agent {
         tasks.push(tokio::spawn(async move {

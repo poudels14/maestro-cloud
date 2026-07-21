@@ -37,6 +37,7 @@ mod node_api;
 mod node_api_mount;
 #[cfg(unix)]
 mod node_api_support;
+mod node_registry;
 mod secret_mount;
 #[cfg(target_os = "linux")]
 mod stats;

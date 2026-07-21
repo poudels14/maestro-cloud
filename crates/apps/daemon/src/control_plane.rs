@@ -45,8 +45,6 @@ pub struct NodeUpgradeDependencies {
     pub stager: Arc<dyn NixosUpgradeStager>,
     /// Requests host reboot only after collective leader release.
     pub rebooter: Arc<dyn NodeRebooter>,
-    /// Semantic version reported by this daemon process.
-    pub running_version: Version,
 }
 
 /// One leader-owned workload bound to the exact fence for an election term.
@@ -71,6 +69,8 @@ pub struct DaemonRoleSettings {
     pub(crate) health_poll_interval: Duration,
     pub(crate) stats_poll_interval: Duration,
     pub(crate) host_telemetry_poll_interval: Duration,
+    pub(crate) node_liveness_ttl: Duration,
+    pub(crate) node_liveness_keepalive_interval: Duration,
     pub(crate) upgrade_resync_interval: Duration,
     pub(crate) log_poll_interval: Duration,
     pub(crate) max_log_frames_per_workload: usize,
@@ -128,6 +128,8 @@ impl DaemonRoleSettings {
             health_poll_interval,
             stats_poll_interval,
             host_telemetry_poll_interval: Duration::from_secs(15),
+            node_liveness_ttl: Duration::from_secs(15),
+            node_liveness_keepalive_interval: Duration::from_secs(5),
             upgrade_resync_interval: Duration::from_secs(2),
             log_poll_interval,
             max_log_frames_per_workload,
@@ -155,6 +157,8 @@ impl Default for DaemonRoleSettings {
             health_poll_interval: Duration::from_secs(5),
             stats_poll_interval: Duration::from_secs(5),
             host_telemetry_poll_interval: Duration::from_secs(15),
+            node_liveness_ttl: Duration::from_secs(15),
+            node_liveness_keepalive_interval: Duration::from_secs(5),
             upgrade_resync_interval: Duration::from_secs(2),
             log_poll_interval: Duration::from_secs(1),
             max_log_frames_per_workload: 1_000,
@@ -237,6 +241,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub mesh_identity: MeshIdentity,
     /// Unique identity of this daemon process for leader election.
     pub instance_id: NodeInstanceId,
+    /// Semantic version reported in node status and upgrade observations.
+    pub running_version: Version,
     /// Monotonic clock shared by resync, leadership, and shutdown deadlines.
     pub monotonic_clock: Arc<dyn Clock>,
     /// Wall clock used only for status condition transition timestamps.
@@ -269,6 +275,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) volatile_root: PathBuf,
     pub(crate) mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
+    pub(crate) running_version: Version,
     pub(crate) monotonic_clock: Arc<dyn Clock>,
     pub(crate) status_clock: Arc<dyn StatusClock>,
     pub(crate) node_upgrade: Option<NodeUpgradeDependencies>,
@@ -312,6 +319,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             volatile_root: dependencies.volatile_root,
             mesh_identity: dependencies.mesh_identity,
             instance_id: dependencies.instance_id,
+            running_version: dependencies.running_version,
             monotonic_clock: dependencies.monotonic_clock,
             status_clock: dependencies.status_clock,
             node_upgrade: dependencies.node_upgrade,

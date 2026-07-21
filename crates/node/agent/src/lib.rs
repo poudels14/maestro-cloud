@@ -51,6 +51,7 @@ mod node_api;
 mod node_api_files;
 #[cfg(unix)]
 mod node_api_mount;
+mod node_registry;
 mod secret_mount;
 #[cfg(target_os = "linux")]
 mod stats;
@@ -129,6 +130,10 @@ pub use node_api::{
 };
 #[cfg(unix)]
 pub use node_api_files::NodeApiMountError;
+pub use node_registry::{
+    NodeRegistration, NodeRegistryAction, NodeRegistryAgent, NodeRegistryError,
+    NodeRegistrySettings, NodeRegistrySettingsError,
+};
 pub use secret_mount::SecretMountError;
 #[cfg(target_os = "linux")]
 pub use stats::{
