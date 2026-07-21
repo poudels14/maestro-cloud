@@ -118,15 +118,15 @@ fn ambiguous_current_assignments_fail_closed() {
     ));
 }
 
-struct World {
-    service: Service,
-    assignments: Vec<Assignment>,
-    replicas: Vec<ReplicaState>,
-    records: Vec<DnsRecord>,
+pub(super) struct World {
+    pub(super) service: Service,
+    pub(super) assignments: Vec<Assignment>,
+    pub(super) replicas: Vec<ReplicaState>,
+    pub(super) records: Vec<DnsRecord>,
 }
 
 impl World {
-    fn ready() -> Self {
+    pub(super) fn ready() -> Self {
         let service_id = ServiceId::new("api").unwrap();
         let deployment_id = DeploymentId::new("deployment-1").unwrap();
         let mut service = Object {
@@ -168,7 +168,7 @@ impl World {
         }
     }
 
-    fn input(&self) -> DnsInput {
+    pub(super) fn input(&self) -> DnsInput {
         DnsInput {
             cluster_id: ClusterId::new("cluster-1").unwrap(),
             settings: DnsSettings { ttl_secs: 5 },
