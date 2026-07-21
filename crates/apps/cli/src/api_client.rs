@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use serde::Deserialize;
+use kernel_api::RequestId;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::CliError;
 use crate::contexts::Context;
@@ -60,6 +61,39 @@ impl ApiClient {
         decode_response(response).await
     }
 
+    pub(crate) async fn post<Request, Response>(
+        &self,
+        path: &str,
+        request_id: &RequestId,
+        body: &Request,
+    ) -> Result<Response, CliError>
+    where
+        Request: Serialize,
+        Response: DeserializeOwned,
+    {
+        let endpoint = self.endpoint(path)?;
+        let encoded = serde_json::to_vec(body)
+            .map_err(|source| CliError::json("failed to encode API request", source))?;
+        let response = self
+            .client
+            .post(endpoint)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Idempotency-Key", request_id.as_str())
+            .body(encoded)
+            .send()
+            .await
+            .map_err(|source| {
+                CliError::transport(
+                    format!(
+                        "API mutation failed; retry with --idempotency-key {}",
+                        request_id.as_str()
+                    ),
+                    source,
+                )
+            })?;
+        decode_response(response).await
+    }
+
     pub(crate) fn endpoint(&self, path: &str) -> Result<reqwest::Url, CliError> {
         if !path.starts_with('/') {
             return Err(CliError::invalid_input(
@@ -69,6 +103,15 @@ impl ApiClient {
         self.origin
             .join(path)
             .map_err(|error| CliError::invalid_input(format!("invalid API endpoint: {error}")))
+    }
+}
+
+pub(crate) fn request_id(value: Option<String>) -> Result<RequestId, CliError> {
+    match value {
+        Some(value) => RequestId::new(value)
+            .map_err(|error| CliError::invalid_input(format!("invalid idempotency key: {error}"))),
+        None => RequestId::new(uuid::Uuid::new_v4().simple().to_string())
+            .map_err(|error| CliError::invalid_input(error.to_string())),
     }
 }
 

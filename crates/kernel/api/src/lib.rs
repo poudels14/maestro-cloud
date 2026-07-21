@@ -4,6 +4,7 @@
 //! controller runtimes, node implementations, operators, or applications.
 
 mod automation;
+mod command;
 mod condition;
 mod identity;
 mod metadata;
@@ -20,6 +21,7 @@ pub use automation::{
     UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookEvent,
     WebhookNodeAvailability, WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
 };
+pub use command::{CommandRequest, DeploymentCommandResponse, ServiceCommandResponse};
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,

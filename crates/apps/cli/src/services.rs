@@ -1,13 +1,149 @@
 use std::io::Write;
 
-use kernel_api::{ArtifactTemplate, RolloutState, Service};
+use kernel_api::{
+    ArtifactTemplate, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId,
+    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+};
 
 use crate::CliError;
 use crate::api_client::ApiClient;
 
-pub(crate) async fn list(client: &ApiClient, output: &mut dyn Write) -> Result<(), CliError> {
-    let services = client.get::<Vec<Service>>("/api/services").await?;
+pub(crate) async fn list(client: &impl ServiceApi, output: &mut dyn Write) -> Result<(), CliError> {
+    let services = client.list_services().await?;
     write_services(services, output)
+}
+
+pub(crate) async fn redeploy(
+    client: &impl ServiceApi,
+    service_id: String,
+    request_id: RequestId,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let service_id =
+        ServiceId::new(service_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
+    let service = client.get_service(&service_id).await?;
+    let response = client
+        .redeploy_service(
+            &service_id,
+            &request_id,
+            CommandRequest {
+                expected_revision: service.meta.revision,
+            },
+        )
+        .await?;
+    writeln!(
+        output,
+        "[maestro]: redeploy accepted for `{}` at generation {}",
+        response.service_id, response.generation.0
+    )
+    .map_err(|source| CliError::io("failed to write command output", source))
+}
+
+pub(crate) async fn cancel(
+    client: &impl ServiceApi,
+    service_id: String,
+    deployment_id: String,
+    request_id: RequestId,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let service_id =
+        ServiceId::new(service_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
+    let deployment_id = DeploymentId::new(deployment_id)
+        .map_err(|error| CliError::invalid_input(error.to_string()))?;
+    let deployment = client.get_deployment(&service_id, &deployment_id).await?;
+    let response = client
+        .cancel_deployment(
+            &service_id,
+            &deployment_id,
+            &request_id,
+            CommandRequest {
+                expected_revision: deployment.meta.revision,
+            },
+        )
+        .await?;
+    writeln!(
+        output,
+        "[maestro]: cancel accepted for deployment `{}`",
+        response.deployment_id
+    )
+    .map_err(|source| CliError::io("failed to write command output", source))
+}
+
+pub(crate) trait ServiceApi {
+    async fn list_services(&self) -> Result<Vec<Service>, CliError>;
+
+    async fn get_service(&self, service_id: &ServiceId) -> Result<Service, CliError>;
+
+    async fn get_deployment(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+    ) -> Result<Deployment, CliError>;
+
+    async fn redeploy_service(
+        &self,
+        service_id: &ServiceId,
+        request_id: &RequestId,
+        request: CommandRequest,
+    ) -> Result<ServiceCommandResponse, CliError>;
+
+    async fn cancel_deployment(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+        request_id: &RequestId,
+        request: CommandRequest,
+    ) -> Result<DeploymentCommandResponse, CliError>;
+}
+
+impl ServiceApi for ApiClient {
+    async fn list_services(&self) -> Result<Vec<Service>, CliError> {
+        self.get("/api/services").await
+    }
+
+    async fn get_service(&self, service_id: &ServiceId) -> Result<Service, CliError> {
+        self.get(&format!("/api/services/{service_id}")).await
+    }
+
+    async fn get_deployment(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+    ) -> Result<Deployment, CliError> {
+        self.get(&format!(
+            "/api/services/{service_id}/deployments/{deployment_id}"
+        ))
+        .await
+    }
+
+    async fn redeploy_service(
+        &self,
+        service_id: &ServiceId,
+        request_id: &RequestId,
+        request: CommandRequest,
+    ) -> Result<ServiceCommandResponse, CliError> {
+        self.post(
+            &format!("/api/services/{service_id}/redeploy"),
+            request_id,
+            &request,
+        )
+        .await
+    }
+
+    async fn cancel_deployment(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+        request_id: &RequestId,
+        request: CommandRequest,
+    ) -> Result<DeploymentCommandResponse, CliError> {
+        self.post(
+            &format!("/api/services/{service_id}/deployments/{deployment_id}/cancel"),
+            request_id,
+            &request,
+        )
+        .await
+    }
 }
 
 pub(crate) fn write_services(

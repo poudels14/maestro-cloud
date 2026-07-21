@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::CliError;
-use crate::api_client::ApiClient;
+use crate::api_client::{ApiClient, request_id};
 use crate::contexts::ContextStore;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
 use crate::services;
@@ -35,6 +35,24 @@ enum Command {
 enum ServiceCommand {
     /// List services from the active Maestro API context.
     Ls,
+    /// Trigger a new deployment generation for a service.
+    Redeploy {
+        /// Service identity.
+        service_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Cancel a queued or building deployment.
+    Cancel {
+        /// Owning service identity.
+        service_id: String,
+        /// Deployment identity.
+        deployment_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -124,6 +142,27 @@ pub async fn run(
             let client = ApiClient::new(contexts.active()?)?;
             match command {
                 ServiceCommand::Ls => services::list(&client, output).await,
+                ServiceCommand::Redeploy {
+                    service_id,
+                    idempotency_key,
+                } => {
+                    services::redeploy(&client, service_id, request_id(idempotency_key)?, output)
+                        .await
+                }
+                ServiceCommand::Cancel {
+                    service_id,
+                    deployment_id,
+                    idempotency_key,
+                } => {
+                    services::cancel(
+                        &client,
+                        service_id,
+                        deployment_id,
+                        request_id(idempotency_key)?,
+                        output,
+                    )
+                    .await
+                }
             }
         }
     }

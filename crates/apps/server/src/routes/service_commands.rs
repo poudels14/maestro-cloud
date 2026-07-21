@@ -4,8 +4,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, post, put};
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, Generation, ResourceKind, ResourceRevision, RolloutState, Service, ServiceId,
-    Timestamp,
+    BuiltinKind, CommandRequest, Generation, ResourceKind, ResourceRevision, RolloutState, Service,
+    ServiceCommandResponse, ServiceId, Timestamp,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ async fn redeploy(
     Path(service_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<ExpectedRevisionRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
     command(
         state,
@@ -47,7 +47,7 @@ async fn freeze(
     Path(service_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<ExpectedRevisionRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
     command(
         state,
@@ -66,7 +66,7 @@ async fn unfreeze(
     Path(service_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<ExpectedRevisionRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
     command(
         state,
@@ -112,7 +112,7 @@ async fn delete_service(
     Path(service_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<ExpectedRevisionRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
     let now = state.timestamp_clock.now();
     command(
@@ -132,7 +132,7 @@ async fn command(
     service_id: String,
     operator: OperatorIdentity,
     headers: HeaderMap,
-    payload: ExpectedRevisionRequest,
+    payload: CommandRequest,
     operation: &'static str,
     action: ServiceMutation,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
@@ -196,7 +196,7 @@ async fn command_with_payload<Payload: Serialize>(
         ));
     }
     let write = mutate_service(&mut service, action)?;
-    let response = ServiceCommandResponse::from(&service);
+    let response = command_response(&service);
     let mutations = if write {
         vec![Mutation::Put {
             key: key.clone(),
@@ -266,18 +266,10 @@ pub(super) fn next_generation(current: Generation, kind: &str) -> Result<Generat
     })
 }
 
-fn parse(
-    payload: Result<Json<ExpectedRevisionRequest>, JsonRejection>,
-) -> Result<ExpectedRevisionRequest, ApiError> {
+fn parse(payload: Result<Json<CommandRequest>, JsonRejection>) -> Result<CommandRequest, ApiError> {
     Ok(payload
         .map_err(|rejection| mutation::json_rejection(rejection, "service command"))?
         .0)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExpectedRevisionRequest {
-    expected_revision: ResourceRevision,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -297,27 +289,13 @@ where
     Option::<u32>::deserialize(deserializer)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ServiceCommandResponse {
-    service_id: ServiceId,
-    generation: Generation,
-    rollout: RolloutState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    replica_override: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_timestamp: Option<Timestamp>,
-}
-
-impl From<&Service> for ServiceCommandResponse {
-    fn from(service: &Service) -> Self {
-        Self {
-            service_id: service.meta.id.clone(),
-            generation: service.meta.generation,
-            rollout: service.status.rollout,
-            replica_override: service.status.replica_override,
-            deletion_timestamp: service.meta.deletion_timestamp,
-        }
+fn command_response(service: &Service) -> ServiceCommandResponse {
+    ServiceCommandResponse {
+        service_id: service.meta.id.clone(),
+        generation: service.meta.generation,
+        rollout: service.status.rollout,
+        replica_override: service.status.replica_override,
+        deletion_timestamp: service.meta.deletion_timestamp,
     }
 }
 

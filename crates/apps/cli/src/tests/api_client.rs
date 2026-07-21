@@ -1,6 +1,6 @@
 use kernel_api::SecretValue;
 
-use crate::api_client::ApiClient;
+use crate::api_client::{ApiClient, request_id};
 use crate::contexts::Context;
 
 #[test]
@@ -24,5 +24,10 @@ fn api_client_builds_origin_scoped_endpoints_and_rejects_bad_credentials()
         })
         .is_err()
     );
+    assert_eq!(
+        request_id(Some("retry-key".to_string()))?.as_str(),
+        "retry-key"
+    );
+    assert!(!request_id(None)?.as_str().is_empty());
     Ok(())
 }

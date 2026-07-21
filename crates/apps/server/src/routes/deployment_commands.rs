@@ -4,11 +4,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase, Generation,
-    ResourceKind, ResourceRevision, Service, ServiceId,
+    BuiltinKind, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentGoal,
+    DeploymentId, DeploymentPhase, ResourceKind, Service, ServiceId,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
-use serde::{Deserialize, Serialize};
 
 use super::service_commands::next_generation;
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
@@ -36,7 +35,7 @@ async fn restart(
     path: Path<(String, String)>,
     operator: Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<DeploymentCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<DeploymentCommandResponse>), ApiError> {
     command(
         state,
@@ -57,7 +56,7 @@ async fn cancel(
     path: Path<(String, String)>,
     operator: Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<DeploymentCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<DeploymentCommandResponse>), ApiError> {
     command(
         state,
@@ -78,7 +77,7 @@ async fn remove(
     path: Path<(String, String)>,
     operator: Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<DeploymentCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<DeploymentCommandResponse>), ApiError> {
     command(
         state,
@@ -99,7 +98,7 @@ async fn command(
     Path((service_id, deployment_id)): Path<(String, String)>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<DeploymentCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
     command: DeploymentCommandKind,
 ) -> Result<(StatusCode, Json<DeploymentCommandResponse>), ApiError> {
     let service_id =
@@ -147,7 +146,7 @@ async fn command(
         ));
     }
     let write = mutate_deployment(&mut deployment, command.action)?;
-    let response = DeploymentCommandResponse::from(&deployment);
+    let response = command_response(&deployment);
     let mutations = if write {
         vec![Mutation::Put {
             key: key.clone(),
@@ -244,29 +243,12 @@ fn set_goal(deployment: &mut Deployment, goal: DeploymentGoal) -> Result<bool, A
     Ok(true)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeploymentCommandRequest {
-    expected_revision: ResourceRevision,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DeploymentCommandResponse {
-    deployment_id: DeploymentId,
-    generation: Generation,
-    restart_generation: Generation,
-    goal: DeploymentGoal,
-}
-
-impl From<&Deployment> for DeploymentCommandResponse {
-    fn from(deployment: &Deployment) -> Self {
-        Self {
-            deployment_id: deployment.meta.id.clone(),
-            generation: deployment.meta.generation,
-            restart_generation: deployment.spec.restart_generation,
-            goal: deployment.spec.goal,
-        }
+fn command_response(deployment: &Deployment) -> DeploymentCommandResponse {
+    DeploymentCommandResponse {
+        deployment_id: deployment.meta.id.clone(),
+        generation: deployment.meta.generation,
+        restart_generation: deployment.spec.restart_generation,
+        goal: deployment.spec.goal,
     }
 }
 
