@@ -272,6 +272,9 @@ fn process_spec(id: &str) -> WorkloadSpec {
             metadata: WorkloadMetadata {
                 cluster_id: cluster_id(),
                 node_id: node_id(),
+                service_id: kernel_api::ServiceId::new("api").expect("service id"),
+                deployment_id: kernel_api::DeploymentId::new("deployment-1")
+                    .expect("deployment id"),
                 assignment_id: AssignmentId::new(id).expect("assignment id"),
                 workload_id: workload_id(id),
                 labels: BTreeMap::from([("service".to_owned(), "api".to_owned())]),

@@ -40,6 +40,8 @@ pub(crate) fn workload_spec(
             metadata: WorkloadMetadata {
                 cluster_id: cluster_id.clone(),
                 node_id: assignment.spec.node_id.clone(),
+                service_id: assignment.spec.service_id.clone(),
+                deployment_id: assignment.spec.deployment_id.clone(),
                 assignment_id: assignment.meta.id.clone(),
                 workload_id,
                 labels,

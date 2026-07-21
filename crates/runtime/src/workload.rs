@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
+use kernel_api::{
+    AssignmentId, ClusterId, CommandSpec, DeploymentId, NodeId, ServiceId, WorkloadId,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -20,6 +22,10 @@ pub struct WorkloadMetadata {
     pub cluster_id: ClusterId,
     /// Node agent responsible for reconciliation.
     pub node_id: NodeId,
+    /// Service whose desired state owns this workload.
+    pub service_id: ServiceId,
+    /// Immutable deployment whose configuration created this workload.
+    pub deployment_id: DeploymentId,
     /// Assignment that requested the workload.
     pub assignment_id: AssignmentId,
     /// Stable identity of this runtime instance.

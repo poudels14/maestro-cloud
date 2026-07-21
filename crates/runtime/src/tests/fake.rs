@@ -186,6 +186,8 @@ fn process_spec(executable: &str) -> WorkloadSpec {
             metadata: WorkloadMetadata {
                 cluster_id: ClusterId::new("cluster-1").unwrap(),
                 node_id: NodeId::new("node-1").unwrap(),
+                service_id: kernel_api::ServiceId::new("api").unwrap(),
+                deployment_id: kernel_api::DeploymentId::new("deployment-1").unwrap(),
                 assignment_id: AssignmentId::new("assignment-1").unwrap(),
                 workload_id: WorkloadId::new("workload-1").unwrap(),
                 labels: BTreeMap::new(),
