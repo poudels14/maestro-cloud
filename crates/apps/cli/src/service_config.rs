@@ -8,7 +8,7 @@ use kernel_api::{
 use serde::Deserialize;
 
 use crate::CliError;
-use crate::config_source::{ConfigSourceReader, load_merged};
+use crate::config_source::{ConfigSourceReader, decode_document, load_merged};
 use crate::service_config_convert::convert_service;
 
 #[derive(Debug)]
@@ -92,25 +92,21 @@ pub(crate) async fn load_services(
     reader: &impl ConfigSourceReader,
 ) -> Result<LoadedServices, CliError> {
     let merged = load_merged(source, reader).await?;
-    let encoded = serde_json::to_vec(&merged)
-        .map_err(|error| CliError::json("failed to encode merged services config", error))?;
-    let mut deserializer = serde_json::Deserializer::from_slice(&encoded);
-    let mut ignored_fields = Vec::new();
-    let document: ServicesDocument = serde_ignored::deserialize(&mut deserializer, |path| {
-        ignored_fields.push(path.to_string());
-    })
-    .map_err(|error| {
-        CliError::invalid_input(format!(
-            "failed to parse services config `{source}`: {error}"
-        ))
-    })?;
+    decode_services(source, merged, reader).await
+}
+
+pub(crate) async fn decode_services(
+    source: &str,
+    merged: serde_json::Value,
+    reader: &impl ConfigSourceReader,
+) -> Result<LoadedServices, CliError> {
+    let (document, ignored_fields): (ServicesDocument, _) =
+        decode_document(&merged, &format!("services config `{source}`"))?;
     if document.services.is_empty() {
         return Err(CliError::invalid_input(format!(
             "services: no services configured in `{source}`"
         )));
     }
-    ignored_fields.sort();
-    ignored_fields.dedup();
     let mut services = BTreeMap::new();
     for (raw_id, template) in document.services {
         let id = ServiceId::new(raw_id.clone())

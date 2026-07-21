@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::CliError;
@@ -107,6 +108,33 @@ pub(crate) async fn load_merged(
         merge(&mut merged, layer);
     }
     Ok(merged)
+}
+
+pub(crate) fn decode_document<Document: DeserializeOwned>(
+    value: &Value,
+    description: &str,
+) -> Result<(Document, Vec<String>), CliError> {
+    let encoded = serde_json::to_vec(value)
+        .map_err(|error| CliError::json(format!("failed to encode {description}"), error))?;
+    let mut deserializer = serde_json::Deserializer::from_slice(&encoded);
+    let mut tracker = serde_path_to_error::Track::new();
+    let tracked = serde_path_to_error::Deserializer::new(&mut deserializer, &mut tracker);
+    let mut ignored_fields = Vec::new();
+    let document = serde_ignored::deserialize(tracked, |path| {
+        ignored_fields.push(path.to_string());
+    })
+    .map_err(|error| {
+        let path = tracker.path().to_string();
+        let detail = if path.is_empty() {
+            error.to_string()
+        } else {
+            format!("{path}: {error}")
+        };
+        CliError::invalid_input(format!("failed to parse {description}: {detail}"))
+    })?;
+    ignored_fields.sort();
+    ignored_fields.dedup();
+    Ok((document, ignored_fields))
 }
 
 pub(crate) fn resolve_relative_source(

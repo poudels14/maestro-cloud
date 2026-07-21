@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 
 use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
+use crate::config::{self, ConfigKind};
 use crate::contexts::ContextStore;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
 use crate::rollout;
@@ -20,6 +21,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create and validate Maestro configuration files.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Manage API origins and operator credentials.
     Contexts {
         #[command(subcommand)]
@@ -29,6 +35,24 @@ enum Command {
     Services {
         #[command(subcommand)]
         command: ServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Create a cluster or services config without overwriting existing files.
+    Init {
+        /// Config kind; prompted when omitted.
+        #[arg(value_enum)]
+        kind: Option<ConfigKind>,
+        /// Destination path instead of the conventional filename.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+    /// Validate a local, file://, or aws-secret:// config source.
+    Validate {
+        /// Config source to validate.
+        source: String,
     },
 }
 
@@ -112,52 +136,77 @@ pub async fn run(
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let contexts = ContextStore::from_environment()?;
     match cli.command {
-        Command::Contexts { command } => match command {
-            ContextCommand::Set {
-                name,
-                host,
-                ca_certificate,
-            } => {
-                let name = required(name, "Context name", input, output)?;
-                let host = required(host, "Maestro API host", input, output)?;
-                let ca_certificate = ca_certificate
-                    .map(|path| {
-                        std::fs::read_to_string(&path).map_err(|source| {
-                            CliError::io(
-                                format!("failed to read CA certificate {}", path.display()),
-                                source,
-                            )
-                        })
-                    })
-                    .transpose()?;
-                let normalized = contexts.set(&name, &host, ca_certificate)?;
-                writeln!(output, "[maestro]: set context `{name}` -> {normalized}")
-                    .map_err(|source| CliError::io("failed to write command output", source))
+        Command::Config { command } => match command {
+            ConfigCommand::Init { kind, output: path } => {
+                let kind = match kind {
+                    Some(kind) => kind,
+                    None => ConfigKind::parse(&required(
+                        None,
+                        "Config kind (cluster/services)",
+                        input,
+                        output,
+                    )?)?,
+                };
+                config::init(kind, path.as_deref(), output).map(|_| ())
             }
-            ContextCommand::Use { name } => {
-                let name = required(name, "Context name", input, output)?;
-                contexts.use_context(&name)?;
-                writeln!(output, "[maestro]: active context set to `{name}`")
-                    .map_err(|source| CliError::io("failed to write command output", source))
-            }
-            ContextCommand::Ls => list_contexts(&contexts, output),
-            ContextCommand::Remove { name } => {
-                contexts.remove(&name)?;
-                writeln!(output, "[maestro]: removed context `{name}`")
-                    .map_err(|source| CliError::io("failed to write command output", source))
-            }
-            ContextCommand::Login { days } => {
-                login(&contexts, days)?;
-                writeln!(
+            ConfigCommand::Validate { source } => {
+                config::validate(
+                    &source,
                     output,
-                    "[maestro]: operator token saved to the active context (expires in {days} days)"
+                    &crate::config_source::SystemConfigSourceReader,
                 )
-                .map_err(|source| CliError::io("failed to write command output", source))
+                .await
             }
         },
+        Command::Contexts { command } => {
+            let contexts = ContextStore::from_environment()?;
+            match command {
+                ContextCommand::Set {
+                    name,
+                    host,
+                    ca_certificate,
+                } => {
+                    let name = required(name, "Context name", input, output)?;
+                    let host = required(host, "Maestro API host", input, output)?;
+                    let ca_certificate = ca_certificate
+                        .map(|path| {
+                            std::fs::read_to_string(&path).map_err(|source| {
+                                CliError::io(
+                                    format!("failed to read CA certificate {}", path.display()),
+                                    source,
+                                )
+                            })
+                        })
+                        .transpose()?;
+                    let normalized = contexts.set(&name, &host, ca_certificate)?;
+                    writeln!(output, "[maestro]: set context `{name}` -> {normalized}")
+                        .map_err(|source| CliError::io("failed to write command output", source))
+                }
+                ContextCommand::Use { name } => {
+                    let name = required(name, "Context name", input, output)?;
+                    contexts.use_context(&name)?;
+                    writeln!(output, "[maestro]: active context set to `{name}`")
+                        .map_err(|source| CliError::io("failed to write command output", source))
+                }
+                ContextCommand::Ls => list_contexts(&contexts, output),
+                ContextCommand::Remove { name } => {
+                    contexts.remove(&name)?;
+                    writeln!(output, "[maestro]: removed context `{name}`")
+                        .map_err(|source| CliError::io("failed to write command output", source))
+                }
+                ContextCommand::Login { days } => {
+                    login(&contexts, days)?;
+                    writeln!(
+                        output,
+                        "[maestro]: operator token saved to the active context (expires in {days} days)"
+                    )
+                    .map_err(|source| CliError::io("failed to write command output", source))
+                }
+            }
+        }
         Command::Services { command } => {
+            let contexts = ContextStore::from_environment()?;
             let client = ApiClient::new(contexts.active()?)?;
             match command {
                 ServiceCommand::Ls => services::list(&client, output).await,

@@ -1,0 +1,191 @@
+use std::collections::BTreeMap;
+
+use crate::CliError;
+use crate::config::{ConfigKind, init, validate};
+use crate::config_source::{ConfigSourceReader, SystemConfigSourceReader};
+
+struct MemoryReader {
+    sources: BTreeMap<String, String>,
+}
+
+impl ConfigSourceReader for MemoryReader {
+    async fn read(&self, source: &str) -> Result<String, CliError> {
+        self.sources
+            .get(source)
+            .cloned()
+            .ok_or_else(|| CliError::not_found(format!("missing fixture `{source}`")))
+    }
+}
+
+#[tokio::test]
+async fn init_creates_private_valid_templates_and_refuses_overwrite()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let cluster_path = directory.path().join("maestro.jsonc");
+    let services_path = directory.path().join("maestro.services.jsonc");
+    let mut output = Vec::new();
+    init(ConfigKind::Cluster, Some(&cluster_path), &mut output)?;
+    init(ConfigKind::Services, Some(&services_path), &mut output)?;
+
+    let cluster = std::fs::read_to_string(&cluster_path)?;
+    assert!(!cluster.contains("CHANGE_ME"));
+    let cluster_value: serde_json::Value = json5::from_str(&cluster)?;
+    assert!(
+        cluster_value
+            .pointer("/cluster/join-secret")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|secret| secret.len() == 64)
+    );
+    let mut validation = Vec::new();
+    validate(
+        cluster_path.to_str().ok_or("non-UTF-8 cluster path")?,
+        &mut validation,
+        &SystemConfigSourceReader,
+    )
+    .await?;
+    validate(
+        services_path.to_str().ok_or("non-UTF-8 services path")?,
+        &mut validation,
+        &SystemConfigSourceReader,
+    )
+    .await?;
+    let validation = String::from_utf8(validation)?;
+    assert!(validation.contains("is a valid cluster config"));
+    assert!(validation.contains("is a valid services config (1 services)"));
+    let error = init(ConfigKind::Cluster, Some(&cluster_path), &mut output)
+        .expect_err("existing config must not be overwritten");
+    assert!(error.to_string().contains("refusing to overwrite"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(cluster_path)?.permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(services_path)?.permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn validate_detects_inherited_cluster_config_and_reports_ignored_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let child = "file:///config/maestro.jsonc";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (
+                child.to_string(),
+                r#"{ $extends: "base.jsonc", futureRoot: true }"#.to_string(),
+            ),
+            (
+                "file:///config/base.jsonc".to_string(),
+                cluster_document("172.22.1.0/24"),
+            ),
+        ]),
+    };
+    let mut output = Vec::new();
+    validate(child, &mut output, &reader).await?;
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("valid cluster config for `test-cluster` on node `node-1`"));
+    assert!(output.contains("  - futureRoot"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn validate_reports_exact_cluster_paths_and_rejects_ambiguous_documents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let invalid_source = "file:///config/invalid.jsonc";
+    let ambiguous_source = "file:///config/ambiguous.jsonc";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (
+                invalid_source.to_string(),
+                cluster_document("172.22.1.7/24"),
+            ),
+            (
+                ambiguous_source.to_string(),
+                r#"{ cluster: {}, services: {} }"#.to_string(),
+            ),
+        ]),
+    };
+    let mut output = Vec::new();
+    let error = validate(invalid_source, &mut output, &reader)
+        .await
+        .expect_err("non-canonical subnet must fail");
+    assert!(error.to_string().contains("cluster.nodes.node-1.subnet:"));
+    let error = validate(ambiguous_source, &mut output, &reader)
+        .await
+        .expect_err("ambiguous config must fail");
+    assert!(error.to_string().contains("both `cluster` and `services`"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn validate_reports_nested_paths_for_cluster_and_service_type_errors()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_source = "file:///config/type-cluster.jsonc";
+    let services_source = "file:///config/type-services.jsonc";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (
+                cluster_source.to_string(),
+                cluster_document("172.22.1.0/24").replace("\"10.20.0.11\"", "7"),
+            ),
+            (
+                services_source.to_string(),
+                r#"{
+                    services: {
+                        api: {
+                            name: "API",
+                            image: "api:latest",
+                            deploy: { replicas: "two" }
+                        }
+                    }
+                }"#
+                .to_string(),
+            ),
+        ]),
+    };
+    let mut output = Vec::new();
+    let cluster_error = validate(cluster_source, &mut output, &reader)
+        .await
+        .expect_err("numeric endpoint must fail");
+    assert!(
+        cluster_error
+            .to_string()
+            .contains("cluster.nodes.node-1.endpoint:")
+    );
+    let services_error = validate(services_source, &mut output, &reader)
+        .await
+        .expect_err("text replica count must fail");
+    assert!(
+        services_error
+            .to_string()
+            .contains("services.api.deploy.replicas:")
+    );
+    Ok(())
+}
+
+fn cluster_document(subnet: &str) -> String {
+    format!(
+        r#"{{
+            cluster: {{
+                name: "test-cluster",
+                nodes: {{
+                    "node-1": {{
+                        endpoint: "10.20.0.11",
+                        subnet: "{subnet}",
+                        role: "master"
+                    }}
+                }},
+                controlAllowCidrs: ["10.20.0.0/24"],
+                joinSecret: "a-test-join-secret-with-at-least-32-characters"
+            }},
+            node: "node-1"
+        }}"#
+    )
+}

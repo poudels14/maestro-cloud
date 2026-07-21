@@ -1,10 +1,13 @@
 //! Operator CLI for the rewritten Maestro API.
 //!
-//! The CLI is an API client only. It must not reach into daemon internals,
-//! cluster storage, or operator implementation modules.
+//! Operational commands use only the public HTTP API. Local config validation
+//! may use public cluster contracts, but this crate must not reach into daemon
+//! internals, cluster storage, or operator implementation modules.
 
 mod api_client;
+mod cluster_config;
 mod command;
+mod config;
 mod config_source;
 mod contexts;
 mod error;

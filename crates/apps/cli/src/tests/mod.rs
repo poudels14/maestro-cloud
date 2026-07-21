@@ -2,6 +2,7 @@
 
 mod api_client;
 mod command;
+mod config;
 mod config_source;
 mod contexts;
 mod login;
