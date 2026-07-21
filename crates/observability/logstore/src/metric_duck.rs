@@ -3,11 +3,11 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use metrics::{
-    HostMetricPoint, HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError,
-    HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricDeliveryStore,
-    MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
-    MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricHistoryPoint,
-    WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
+    HostMetricHistoryPoint, HostMetricPoint, HostMetricQuery, HostMetricQueryStore,
+    HostMetricQueryStoreError, HostMetricStore, LatestHostMetricQuery, MetricAppendReport,
+    MetricDeliveryStore, MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore,
+    MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint,
+    WorkloadMetricHistoryPoint, WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
     WorkloadMetricQueryStoreError,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -26,7 +26,7 @@ enum Command {
     },
     QueryHost {
         query: HostMetricQuery,
-        response: oneshot::Sender<Result<Vec<HostMetricPoint>, HostMetricQueryStoreError>>,
+        response: oneshot::Sender<Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError>>,
     },
     LatestHost {
         query: LatestHostMetricQuery,
@@ -185,7 +185,7 @@ impl HostMetricQueryStore for DuckMetricStore {
     async fn query_host_metrics(
         &self,
         query: &HostMetricQuery,
-    ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
+    ) -> Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError> {
         let (response, result) = oneshot::channel();
         self.commands
             .send(Command::QueryHost {

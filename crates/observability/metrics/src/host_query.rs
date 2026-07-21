@@ -1,9 +1,20 @@
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, Timestamp};
+use serde::{Deserialize, Serialize};
 
 use crate::HostMetricPoint;
 
 const MAX_HOST_QUERY_POINTS: usize = 10_000;
+
+/// One host sample paired with the preceding sample for the requested component.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostMetricHistoryPoint {
+    /// Sample inside the requested time range.
+    pub point: HostMetricPoint,
+    /// Previous matching sample for the node, even when it predates the range.
+    pub previous: Option<HostMetricPoint>,
+}
 
 /// Host sample component required by a history or latest-per-node query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +147,7 @@ pub trait HostMetricQueryStore: Send + Sync {
     async fn query_host_metrics(
         &self,
         query: &HostMetricQuery,
-    ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError>;
+    ) -> Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError>;
 
     /// Reads at most one latest matching sample per node in node-id order.
     async fn latest_host_metrics(

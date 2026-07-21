@@ -1,7 +1,7 @@
 use duckdb::{Connection, OptionalExt, params};
 use metrics::{
-    HostMetricComponent, HostMetricPoint, HostMetricQuery, HostMetricQueryStoreError,
-    LatestHostMetricQuery, MetricAppendReport, MetricStoreError,
+    HostMetricComponent, HostMetricHistoryPoint, HostMetricPoint, HostMetricQuery,
+    HostMetricQueryStoreError, LatestHostMetricQuery, MetricAppendReport, MetricStoreError,
 };
 
 pub(crate) fn append(
@@ -76,18 +76,33 @@ pub(crate) fn append(
 pub(crate) fn query(
     connection: &Connection,
     query: &HostMetricQuery,
-) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
+) -> Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError> {
     let limit =
         i64::try_from(query.limit()).map_err(|_| query_unavailable("convert query limit"))?;
     let component = component_code(query.component());
     let mut statement = connection
         .prepare(
-            "SELECT cluster_id, node_id, collected_at_ms, point_json FROM host_metrics
-             WHERE cluster_id = ?1
-               AND (?2 IS NULL OR node_id = ?2)
-               AND collected_at_ms >= ?3 AND collected_at_ms <= ?4
-               AND (?5 = 0 OR (?5 = 1 AND has_resources) OR (?5 = 2 AND has_disks))
-             ORDER BY node_id, collected_at_ms
+            "SELECT current.cluster_id, current.node_id, current.collected_at_ms,
+                    current.point_json, previous.cluster_id, previous.node_id,
+                    previous.collected_at_ms, previous.point_json
+             FROM host_metrics AS current
+             LEFT JOIN LATERAL (
+                 SELECT cluster_id, node_id, collected_at_ms, point_json
+                 FROM host_metrics AS candidate
+                 WHERE candidate.cluster_id = current.cluster_id
+                   AND candidate.node_id = current.node_id
+                   AND candidate.collected_at_ms < current.collected_at_ms
+                   AND (?5 = 0 OR (?5 = 1 AND candidate.has_resources)
+                        OR (?5 = 2 AND candidate.has_disks))
+                 ORDER BY candidate.collected_at_ms DESC
+                 LIMIT 1
+             ) AS previous ON TRUE
+             WHERE current.cluster_id = ?1
+               AND (?2 IS NULL OR current.node_id = ?2)
+               AND current.collected_at_ms >= ?3 AND current.collected_at_ms <= ?4
+               AND (?5 = 0 OR (?5 = 1 AND current.has_resources)
+                    OR (?5 = 2 AND current.has_disks))
+             ORDER BY current.node_id, current.collected_at_ms
              LIMIT ?6",
         )
         .map_err(query_failed("prepare host history query"))?;
@@ -101,13 +116,43 @@ pub(crate) fn query(
                 component,
                 limit,
             ],
-            stored_row,
+            |row| {
+                let previous = if let Some(encoded) = row.get::<_, Option<String>>(7)? {
+                    Some((
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                        encoded,
+                    ))
+                } else {
+                    None
+                };
+                Ok((stored_row(row)?, previous))
+            },
         )
         .map_err(query_failed("execute host history query"))?;
-    let encoded = rows
+    let rows = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(query_failed("read host history query row"))?;
-    decode_rows(encoded, "host history")
+    rows.into_iter()
+        .map(|(current, previous)| {
+            let current = decode_stored_row(current, "host history")?;
+            let previous = previous
+                .map(|previous| decode_stored_row(previous, "host history baseline"))
+                .transpose()?;
+            if previous.as_ref().is_some_and(|previous| {
+                previous.id.cluster_id != current.id.cluster_id
+                    || previous.id.node_id != current.id.node_id
+                    || previous.id.collected_at.0 >= current.id.collected_at.0
+            }) {
+                return Err(query_unavailable("validate host history baseline"));
+            }
+            Ok(HostMetricHistoryPoint {
+                point: current,
+                previous,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn latest(
@@ -180,6 +225,13 @@ fn stored_row(row: &duckdb::Row<'_>) -> duckdb::Result<(String, String, i64, Str
         row.get::<_, i64>(2)?,
         row.get::<_, String>(3)?,
     ))
+}
+
+fn decode_stored_row(
+    stored: (String, String, i64, String),
+    kind: &'static str,
+) -> Result<HostMetricPoint, HostMetricQueryStoreError> {
+    decode_row(&stored.0, &stored.1, stored.2, &stored.3, kind)
 }
 
 fn component_code(component: HostMetricComponent) -> i8 {

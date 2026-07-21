@@ -23,6 +23,9 @@ pub async fn check_host_metric_query_store(
     queries: &dyn HostMetricQueryStore,
 ) -> Result<(), MetricStoreConformanceError> {
     let cluster_id = ClusterId::new("metric-query-conformance")?;
+    let mut node_one_before = host_metric_point("node-1", 1, 100)?;
+    node_one_before.id.cluster_id = cluster_id.clone();
+    node_one_before.disks = None;
     let mut node_one_resources = host_metric_point("node-1", 2, 200)?;
     node_one_resources.id.cluster_id = cluster_id.clone();
     node_one_resources.disks = None;
@@ -36,6 +39,7 @@ pub async fn check_host_metric_query_store(
     node_two_resources.disks = None;
     store
         .append_host_metrics(&[
+            node_one_before.clone(),
             node_two_both.clone(),
             node_one_disks.clone(),
             node_one_resources.clone(),
@@ -47,7 +51,7 @@ pub async fn check_host_metric_query_store(
         .query_host_metrics(&HostMetricQuery::new(
             cluster_id.clone(),
             None,
-            Timestamp(1),
+            Timestamp(2),
             Timestamp(4),
             HostMetricComponent::Resources,
             2,
@@ -67,7 +71,14 @@ pub async fn check_host_metric_query_store(
             8,
         )?)
         .await?;
-    if history != [node_one_resources.clone(), node_two_both.clone()]
+    if history.len() != 2
+        || history.first().map(|history| &history.point) != Some(&node_one_resources)
+        || history
+            .first()
+            .and_then(|history| history.previous.as_ref())
+            != Some(&node_one_before)
+        || history.get(1).map(|history| &history.point) != Some(&node_two_resources)
+        || history.get(1).and_then(|history| history.previous.as_ref()) != Some(&node_two_both)
         || latest_resources != [node_one_resources, node_two_resources]
         || latest_disks != [node_one_disks, node_two_both]
     {

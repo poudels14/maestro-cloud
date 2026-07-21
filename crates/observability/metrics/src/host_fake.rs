@@ -4,9 +4,9 @@ use std::sync::{Mutex, MutexGuard};
 use async_trait::async_trait;
 
 use crate::{
-    HostMetricPoint, HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError,
-    HostMetricRecordId, HostMetricStore, LatestHostMetricQuery, MetricAppendReport,
-    MetricStoreError,
+    HostMetricHistoryPoint, HostMetricPoint, HostMetricQuery, HostMetricQueryStore,
+    HostMetricQueryStoreError, HostMetricRecordId, HostMetricStore, LatestHostMetricQuery,
+    MetricAppendReport, MetricStoreError,
 };
 
 /// Deterministic idempotent host metric store for pipeline and composition tests.
@@ -74,18 +74,30 @@ impl HostMetricQueryStore for InMemoryHostMetricStore {
     async fn query_host_metrics(
         &self,
         query: &HostMetricQuery,
-    ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
-        Ok(lock_query(&self.points)?
-            .values()
-            .filter(|point| point.id.cluster_id == *query.cluster_id())
-            .filter(|point| query.node_id().is_none_or(|node| point.id.node_id == *node))
-            .filter(|point| {
-                point.id.collected_at.0 >= query.from().0 && point.id.collected_at.0 <= query.to().0
-            })
-            .filter(|point| query.component().matches(point))
-            .take(query.limit())
-            .cloned()
-            .collect())
+    ) -> Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError> {
+        let points = lock_query(&self.points)?;
+        let mut previous = BTreeMap::new();
+        let mut history = Vec::new();
+        for point in points.values().filter(|point| {
+            point.id.cluster_id == *query.cluster_id()
+                && query.node_id().is_none_or(|node| point.id.node_id == *node)
+                && query.component().matches(point)
+        }) {
+            if point.id.collected_at.0 > query.to().0 {
+                continue;
+            }
+            let baseline = previous.insert(point.id.node_id.clone(), point.clone());
+            if point.id.collected_at.0 >= query.from().0 {
+                history.push(HostMetricHistoryPoint {
+                    point: point.clone(),
+                    previous: baseline,
+                });
+                if history.len() == query.limit() {
+                    break;
+                }
+            }
+        }
+        Ok(history)
     }
 
     async fn latest_host_metrics(

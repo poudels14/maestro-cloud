@@ -37,8 +37,8 @@ pub use host_model::{
 };
 pub use host_pipeline::HostMetricPipeline;
 pub use host_query::{
-    HostMetricComponent, HostMetricQuery, HostMetricQueryError, HostMetricQueryStore,
-    HostMetricQueryStoreError, LatestHostMetricQuery,
+    HostMetricComponent, HostMetricHistoryPoint, HostMetricQuery, HostMetricQueryError,
+    HostMetricQueryStore, HostMetricQueryStoreError, LatestHostMetricQuery,
 };
 pub use host_store::HostMetricStore;
 pub use http::{
