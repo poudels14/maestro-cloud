@@ -182,6 +182,7 @@ fn deleting_service_retires_then_collects_active_traffic() {
         retiring.generation_updates[0].status.retired_at,
         Some(Timestamp(40_000))
     );
+    assert_eq!(retiring.requeue_at, Some(Timestamp(70_000)));
 
     active.status = retiring.generation_updates[0].status.clone();
     world.generations = vec![active.clone()];
@@ -243,18 +244,18 @@ fn update_phase(
         .phase
 }
 
-struct World {
+pub(super) struct World {
     now: Timestamp,
-    service: Service,
-    deployment: Deployment,
-    routes: Vec<IngressRoute>,
-    assignments: Vec<Assignment>,
-    replicas: Vec<ReplicaState>,
-    generations: Vec<TrafficGeneration>,
+    pub(super) service: Service,
+    pub(super) deployment: Deployment,
+    pub(super) routes: Vec<IngressRoute>,
+    pub(super) assignments: Vec<Assignment>,
+    pub(super) replicas: Vec<ReplicaState>,
+    pub(super) generations: Vec<TrafficGeneration>,
 }
 
 impl World {
-    fn ready() -> Self {
+    pub(super) fn ready() -> Self {
         let service_id = ServiceId::new("api").unwrap();
         let deployment_id = DeploymentId::new("deployment-1").unwrap();
         let assignment_id = AssignmentId::new("assignment-1").unwrap();

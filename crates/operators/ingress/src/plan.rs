@@ -100,9 +100,26 @@ pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
         });
     }
 
+    output.requeue_at =
+        next_retirement_deadline(&desired_statuses, now, input.settings.retirement_grace);
     append_status_updates(&generations, desired_statuses, &mut output)?;
     sort_plan(&mut output);
     Ok(output)
+}
+
+fn next_retirement_deadline(
+    statuses: &BTreeMap<TrafficGenerationId, TrafficGenerationStatus>,
+    now: kernel_api::Timestamp,
+    grace: std::time::Duration,
+) -> Option<kernel_api::Timestamp> {
+    let grace = i64::try_from(grace.as_millis()).unwrap_or(i64::MAX);
+    statuses
+        .values()
+        .filter(|status| status.phase == TrafficGenerationPhase::Retired)
+        .filter_map(|status| status.retired_at)
+        .map(|retired| kernel_api::Timestamp(retired.0.saturating_add(grace)))
+        .filter(|deadline| *deadline > now)
+        .min()
 }
 
 fn append_status_updates(

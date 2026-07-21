@@ -80,4 +80,6 @@ pub struct IngressPlan {
     pub route_updates: Vec<ResourceStatusUpdate<IngressRouteId, IngressRouteStatus>>,
     /// Idempotent side effects which must precede the matching status commit.
     pub backend_changes: Vec<BackendChange>,
+    /// Earliest persisted retirement deadline requiring another lifecycle pass.
+    pub requeue_at: Option<Timestamp>,
 }
