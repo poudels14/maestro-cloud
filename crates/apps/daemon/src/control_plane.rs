@@ -4,21 +4,33 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cluster::{StoreProvider, StoreRuntime, StoreShutdown, StoreStartMode};
 use kernel_api::NodeInstanceId;
-use kernel_controller::{LeaderElector, LeaderIdentity, LeadershipLease, StoreLeaderElector};
+use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use node_agent::{MeshBackend, MeshIdentity, MeshPlanner, MeshResourceAgent, StatusClock};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::leadership::run_leadership;
 use crate::{DaemonPlan, DaemonRole, RoleError, RoleFactory, RoleRuntime, RoleSpec};
+
+/// One leader-owned workload bound to the exact fence for an election term.
+#[async_trait]
+pub trait LeaderWorkload: Send + Sync {
+    /// Runs until shutdown, returning only after every fenced worker has stopped.
+    async fn run(
+        &self,
+        store: Arc<FencedStore>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RoleError>;
+}
 
 /// Time bounds for mesh resync, leadership, and graceful store shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlPlaneRoleSettings {
     mesh_resync_interval: Duration,
-    leadership_ttl: Duration,
-    leadership_keepalive_interval: Duration,
-    campaign_retry_interval: Duration,
+    pub(crate) leadership_ttl: Duration,
+    pub(crate) leadership_keepalive_interval: Duration,
+    pub(crate) campaign_retry_interval: Duration,
     store_shutdown_grace: Duration,
 }
 
@@ -93,6 +105,7 @@ pub struct ControlPlaneRoleFactory<Backend> {
     status_clock: Arc<dyn StatusClock>,
     settings: ControlPlaneRoleSettings,
     store: Mutex<Option<Arc<dyn Store>>>,
+    leader_workload: Option<Arc<dyn LeaderWorkload>>,
 }
 
 impl<Backend> ControlPlaneRoleFactory<Backend> {
@@ -111,7 +124,14 @@ impl<Backend> ControlPlaneRoleFactory<Backend> {
             status_clock: dependencies.status_clock,
             settings,
             store: Mutex::new(None),
+            leader_workload: None,
         }
+    }
+
+    /// Attaches the workload started for each successfully fenced leadership term.
+    pub fn with_leader_workload(mut self, workload: Arc<dyn LeaderWorkload>) -> Self {
+        self.leader_workload = Some(workload);
+        self
     }
 }
 
@@ -197,7 +217,9 @@ where
             node_id: spec.node_id.clone(),
             instance_id: self.instance_id.clone(),
         };
-        let elector = StoreLeaderElector::new(store, Keyspace::new(&spec.cluster_id).leader());
+        let leader_key = Keyspace::new(&spec.cluster_id).leader();
+        let elector: Arc<dyn LeaderElector> =
+            Arc::new(StoreLeaderElector::new(store.clone(), leader_key.clone()));
         let lease = elector
             .campaign(identity.clone(), self.settings.leadership_ttl)
             .await
@@ -205,8 +227,20 @@ where
         let (shutdown, shutdown_receiver) = watch::channel(false);
         let clock = self.monotonic_clock.clone();
         let settings = self.settings;
+        let workload = self.leader_workload.clone();
         let task = tokio::spawn(async move {
-            run_leadership(elector, identity, lease, clock, settings, shutdown_receiver).await
+            run_leadership(
+                store,
+                leader_key,
+                elector,
+                identity,
+                lease,
+                workload,
+                clock,
+                settings,
+                shutdown_receiver,
+            )
+            .await
         });
         Ok(Box::new(ControllerRoleRuntime {
             shutdown,
@@ -269,63 +303,6 @@ async fn fail_after_store_start<T>(
             error.detail()
         ))),
     }
-}
-
-async fn run_leadership(
-    elector: StoreLeaderElector,
-    identity: LeaderIdentity,
-    mut lease: Option<Box<dyn LeadershipLease>>,
-    clock: Arc<dyn Clock>,
-    settings: ControlPlaneRoleSettings,
-    mut shutdown: watch::Receiver<bool>,
-) -> Result<(), RoleError> {
-    loop {
-        if *shutdown.borrow() {
-            return resign(lease).await;
-        }
-        if let Some(active) = lease.as_ref() {
-            let keepalive_at = clock
-                .now()
-                .saturating_add(settings.leadership_keepalive_interval);
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        return resign(lease).await;
-                    }
-                }
-                () = clock.sleep_until(keepalive_at) => {
-                    if active.keep_alive().await.is_err() {
-                        lease = None;
-                    }
-                }
-            }
-        } else {
-            let retry_at = clock.now().saturating_add(settings.campaign_retry_interval);
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        return Ok(());
-                    }
-                }
-                () = clock.sleep_until(retry_at) => {
-                    lease = elector
-                        .campaign(identity.clone(), settings.leadership_ttl)
-                        .await
-                        .map_err(|error| role_error("retry controller leadership campaign", error))?;
-                }
-            }
-        }
-    }
-}
-
-async fn resign(lease: Option<Box<dyn LeadershipLease>>) -> Result<(), RoleError> {
-    if let Some(lease) = lease {
-        lease
-            .resign()
-            .await
-            .map_err(|error| role_error("resign controller leadership", error))?;
-    }
-    Ok(())
 }
 
 struct AgentRoleRuntime {
@@ -405,6 +382,6 @@ fn finish_shutdown(failures: Vec<String>) -> Result<(), RoleError> {
     }
 }
 
-fn role_error(action: &str, error: impl std::fmt::Display) -> RoleError {
+pub(crate) fn role_error(action: &str, error: impl std::fmt::Display) -> RoleError {
     RoleError::new(format!("failed to {action}: {error}"))
 }

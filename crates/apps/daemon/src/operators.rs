@@ -15,6 +15,8 @@ use kernel_store::Clock;
 use scheduler::{SchedulerReconciler, SchedulerSettings};
 use tokio::sync::watch;
 
+use crate::{LeaderWorkload, RoleError};
+
 /// Pure settings used to construct every M4 operator runtime.
 #[derive(Debug, Clone)]
 pub struct OperatorSettings {
@@ -33,11 +35,63 @@ pub struct OperatorSettings {
 }
 
 /// Side-effect integrations shared by leader-owned operators.
+#[derive(Clone)]
 pub struct OperatorBackends {
     /// Publishes staged and active ingress configuration.
     pub ingress: Arc<dyn IngressBackend>,
     /// Applies complete deterministic per-node firewall bundles.
     pub firewall: Arc<dyn FirewallBackend>,
+}
+
+/// Rebuilds and runs the complete operator suite for each leadership fence.
+pub struct OperatorLeaderWorkload {
+    cluster_id: ClusterId,
+    monotonic_clock: Arc<dyn Clock>,
+    timestamp_clock: Arc<dyn TimestampClock>,
+    settings: OperatorSettings,
+    backends: OperatorBackends,
+}
+
+impl OperatorLeaderWorkload {
+    /// Captures fence-independent dependencies shared by successive election terms.
+    pub fn new(
+        cluster_id: ClusterId,
+        monotonic_clock: Arc<dyn Clock>,
+        timestamp_clock: Arc<dyn TimestampClock>,
+        settings: OperatorSettings,
+        backends: OperatorBackends,
+    ) -> Self {
+        Self {
+            cluster_id,
+            monotonic_clock,
+            timestamp_clock,
+            settings,
+            backends,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LeaderWorkload for OperatorLeaderWorkload {
+    async fn run(
+        &self,
+        store: Arc<FencedStore>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RoleError> {
+        let suite = OperatorSuite::new(
+            self.cluster_id.clone(),
+            store,
+            self.monotonic_clock.clone(),
+            self.timestamp_clock.clone(),
+            self.settings.clone(),
+            self.backends.clone(),
+        )
+        .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
+        suite
+            .run(shutdown)
+            .await
+            .map_err(|error| RoleError::new(format!("operator suite failed: {error}")))
+    }
 }
 
 /// Invocation counts from one deterministic bounded suite pass.

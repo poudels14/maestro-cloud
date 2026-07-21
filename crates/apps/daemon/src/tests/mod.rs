@@ -1,5 +1,6 @@
 mod control_plane;
 mod launch;
+mod leadership;
 mod operators;
 mod orchestration;
 mod orchestration_acceptance;

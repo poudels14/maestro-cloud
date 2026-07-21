@@ -7,12 +7,13 @@
 mod control_plane;
 mod error;
 mod launch;
+mod leadership;
 mod operators;
 mod plan;
 mod runtime;
 
 pub use control_plane::{
-    ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
+    ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, LeaderWorkload,
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
@@ -20,7 +21,8 @@ pub use launch::{
     load_launch_config,
 };
 pub use operators::{
-    OperatorBackends, OperatorInvocationReport, OperatorSettings, OperatorSuite, OperatorSuiteError,
+    OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload, OperatorSettings,
+    OperatorSuite, OperatorSuiteError,
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};

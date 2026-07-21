@@ -7,13 +7,14 @@ use cluster::{
     StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, Timestamp};
-use kernel_controller::LeaderIdentity;
+use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
 use node_agent::{MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock};
+use tokio::sync::{Notify, watch};
 
 use crate::{
     ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, Daemon,
-    DaemonPlan,
+    DaemonPlan, LeaderWorkload, RoleError,
 };
 
 use super::cluster_with_nodes;
@@ -32,6 +33,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let backend = RecordingMeshBackend {
         applications: applications.clone(),
     };
+    let workload = Arc::new(RecordingLeaderWorkload::default());
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -50,9 +52,11 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             status_clock: Arc::new(FixedStatusClock),
         },
         ControlPlaneRoleSettings::default(),
-    );
+    )
+    .with_leader_workload(workload.clone());
 
     let running = Daemon::new(plan, factory).start().await?;
+    tokio::time::timeout(Duration::from_secs(1), workload.started.notified()).await?;
     {
         let applied = applications
             .lock()
@@ -65,6 +69,14 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let stored_leader = store.get(&leader_key).await?.ok_or("leader key missing")?;
     let leader: LeaderIdentity = serde_json::from_slice(&stored_leader.value)?;
     assert_eq!(leader.node_id, NodeId::new("master")?);
+    assert_eq!(
+        workload
+            .terms
+            .lock()
+            .map_err(|_| "leader term lock poisoned")?
+            .as_slice(),
+        &[leader]
+    );
 
     running.shutdown().await?;
     assert_eq!(store.get(&leader_key).await?, None);
@@ -73,6 +85,14 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .lock()
             .map_err(|_| "shutdown count lock poisoned")?,
         1
+    );
+    assert_eq!(
+        workload
+            .stopped_while_fenced
+            .lock()
+            .map_err(|_| "leader stop lock poisoned")?
+            .as_slice(),
+        &[true]
     );
     Ok(())
 }
@@ -114,6 +134,39 @@ impl StatusClock for FixedStatusClock {
 
 struct RecordingMeshBackend {
     applications: Arc<Mutex<Vec<MeshConfiguration>>>,
+}
+
+#[derive(Default)]
+struct RecordingLeaderWorkload {
+    started: Notify,
+    terms: Mutex<Vec<LeaderIdentity>>,
+    stopped_while_fenced: Mutex<Vec<bool>>,
+}
+
+#[async_trait]
+impl LeaderWorkload for RecordingLeaderWorkload {
+    async fn run(
+        &self,
+        store: Arc<FencedStore>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RoleError> {
+        self.terms
+            .lock()
+            .map_err(|_| RoleError::new("leader term lock poisoned"))?
+            .push(store.token().identity().clone());
+        self.started.notify_one();
+        while !*shutdown.borrow() {
+            if shutdown.changed().await.is_err() {
+                break;
+            }
+        }
+        let fenced = store.verify_leadership().await.is_ok();
+        self.stopped_while_fenced
+            .lock()
+            .map_err(|_| RoleError::new("leader stop lock poisoned"))?
+            .push(fenced);
+        Ok(())
+    }
 }
 
 #[async_trait]
