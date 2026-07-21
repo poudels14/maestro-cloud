@@ -2,6 +2,7 @@ mod cluster;
 mod cluster_commands;
 mod deployment_commands;
 mod deployments;
+mod network_observations;
 mod observations;
 mod service_commands;
 mod services;
@@ -20,6 +21,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(cluster_commands::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
+        .merge(network_observations::router())
         .merge(observations::router())
         .merge(service_commands::router())
         .merge(services::router())

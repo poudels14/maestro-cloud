@@ -122,6 +122,26 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["UpgradeCommandResponse"]>;
+  listNodeNetworks(options?: ApiRequestOptions): Promise<ApiSchemas["NodeNetwork"][]>;
+  getNodeNetwork(
+    networkId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["NodeNetwork"]>;
+  listNodeFirewalls(options?: ApiRequestOptions): Promise<ApiSchemas["NodeFirewall"][]>;
+  getNodeFirewall(
+    firewallId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["NodeFirewall"]>;
+  listDnsRecords(options?: ApiRequestOptions): Promise<ApiSchemas["DnsRecord"][]>;
+  getDnsRecord(
+    recordId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["DnsRecord"]>;
+  listFirewallPolicies(options?: ApiRequestOptions): Promise<ApiSchemas["FirewallPolicy"][]>;
+  getFirewallPolicy(
+    policyId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["FirewallPolicy"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -164,6 +184,24 @@ export interface MaestroApiClient {
     buildId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["Build"]>;
+  listIngressRoutes(
+    serviceId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["IngressRoute"][]>;
+  getIngressRoute(
+    serviceId: string,
+    routeId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["IngressRoute"]>;
+  listTrafficGenerations(
+    serviceId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["TrafficGeneration"][]>;
+  getTrafficGeneration(
+    serviceId: string,
+    generationId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["TrafficGeneration"]>;
   redeployService(
     serviceId: string,
     request: ApiSchemas["CommandRequest"],
@@ -295,6 +333,18 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         idempotencyKey,
         options
       ),
+    listNodeNetworks: (options) => get("/api/cluster/networks", options),
+    getNodeNetwork: (networkId, options) =>
+      get(`/api/cluster/networks/${encodeURIComponent(networkId)}`, options),
+    listNodeFirewalls: (options) => get("/api/cluster/node-firewalls", options),
+    getNodeFirewall: (firewallId, options) =>
+      get(`/api/cluster/node-firewalls/${encodeURIComponent(firewallId)}`, options),
+    listDnsRecords: (options) => get("/api/cluster/dns-records", options),
+    getDnsRecord: (recordId, options) =>
+      get(`/api/cluster/dns-records/${encodeURIComponent(recordId)}`, options),
+    listFirewallPolicies: (options) => get("/api/firewall/policies", options),
+    getFirewallPolicy: (policyId, options) =>
+      get(`/api/firewall/policies/${encodeURIComponent(policyId)}`, options),
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}`, options),
@@ -330,6 +380,23 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     getBuild: (serviceId, buildId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}`,
+        options
+      ),
+    listIngressRoutes: (serviceId, options) =>
+      get(`/api/services/${encodeURIComponent(serviceId)}/routes`, options),
+    getIngressRoute: (serviceId, routeId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/routes/${encodeURIComponent(routeId)}`,
+        options
+      ),
+    listTrafficGenerations: (serviceId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/traffic-generations`,
+        options
+      ),
+    getTrafficGeneration: (serviceId, generationId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/traffic-generations/${encodeURIComponent(generationId)}`,
         options
       ),
     redeployService: (serviceId, request, idempotencyKey, options) =>

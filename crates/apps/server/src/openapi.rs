@@ -45,6 +45,38 @@ pub fn openapi_document() -> Value {
             upgrade_operation(),
         ),
         (
+            "/api/cluster/networks".to_string(),
+            list_operation("listNodeNetworks", "NodeNetwork"),
+        ),
+        (
+            "/api/cluster/networks/{networkId}".to_string(),
+            get_operation("getNodeNetwork", "networkId", "NodeNetwork"),
+        ),
+        (
+            "/api/cluster/node-firewalls".to_string(),
+            list_operation("listNodeFirewalls", "NodeFirewall"),
+        ),
+        (
+            "/api/cluster/node-firewalls/{firewallId}".to_string(),
+            get_operation("getNodeFirewall", "firewallId", "NodeFirewall"),
+        ),
+        (
+            "/api/cluster/dns-records".to_string(),
+            list_operation("listDnsRecords", "DnsRecord"),
+        ),
+        (
+            "/api/cluster/dns-records/{recordId}".to_string(),
+            get_operation("getDnsRecord", "recordId", "DnsRecord"),
+        ),
+        (
+            "/api/firewall/policies".to_string(),
+            list_operation("listFirewallPolicies", "FirewallPolicy"),
+        ),
+        (
+            "/api/firewall/policies/{policyId}".to_string(),
+            get_operation("getFirewallPolicy", "policyId", "FirewallPolicy"),
+        ),
+        (
             "/api/services".to_string(),
             list_operation("listServices", "Service"),
         ),
@@ -137,6 +169,30 @@ pub fn openapi_document() -> Value {
         (
             "/api/services/{serviceId}/builds/{buildId}".to_string(),
             scoped_get_operation("getBuild", &["serviceId", "buildId"], "Build"),
+        ),
+        (
+            "/api/services/{serviceId}/routes".to_string(),
+            nested_list_operation("listIngressRoutes", &["serviceId"], "IngressRoute"),
+        ),
+        (
+            "/api/services/{serviceId}/routes/{routeId}".to_string(),
+            scoped_get_operation("getIngressRoute", &["serviceId", "routeId"], "IngressRoute"),
+        ),
+        (
+            "/api/services/{serviceId}/traffic-generations".to_string(),
+            nested_list_operation(
+                "listTrafficGenerations",
+                &["serviceId"],
+                "TrafficGeneration",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/traffic-generations/{generationId}".to_string(),
+            scoped_get_operation(
+                "getTrafficGeneration",
+                &["serviceId", "generationId"],
+                "TrafficGeneration",
+            ),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}/restart".to_string(),
