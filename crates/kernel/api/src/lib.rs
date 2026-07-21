@@ -12,6 +12,7 @@ mod node;
 mod resource;
 mod schema;
 mod secret;
+mod service_validation;
 mod workload;
 
 pub use automation::{
@@ -47,6 +48,7 @@ pub use schema::{
     openapi_document,
 };
 pub use secret::{MaskedSecret, SecretValue};
+pub use service_validation::ServiceSpecError;
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,

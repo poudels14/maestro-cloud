@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
-    DeploymentPhase, NodeId, PreviewPolicy, ServiceId, VolumeSource, workload_hostname,
+    DeploymentPhase, ExecPolicy, NodeApiAccess, NodeId, PlacementConstraint, PreviewPolicy,
+    ServiceId, ServiceSpec, VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -138,4 +139,58 @@ fn build_terminal_phases_do_not_restart_themselves() {
     assert!(!BuildPhase::Succeeded.can_transition_to(BuildPhase::Building));
     assert!(!BuildPhase::Failed.can_transition_to(BuildPhase::Queued));
     assert!(BuildPhase::Canceled.can_transition_to(BuildPhase::Canceled));
+}
+
+#[test]
+fn service_admission_rejects_unsafe_runtime_shapes() {
+    let mut spec = valid_service_spec();
+    spec.exposed_ports = vec![8080, 8080];
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.environment
+        .insert("BAD-KEY".to_string(), "x".to_string());
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.node_api = NodeApiAccess::IdentityAndTelemetry;
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.artifact = ArtifactTemplate::Build {
+        template: BuildTemplate {
+            source: BuildSource::Git {
+                repository: "https://example.test/repo.git".to_string(),
+                revision: "main".to_string(),
+            },
+            dockerfile: "../Dockerfile".to_string(),
+            watch: false,
+            environment: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+        },
+    };
+    assert!(spec.validate().is_err());
+}
+
+fn valid_service_spec() -> ServiceSpec {
+    ServiceSpec {
+        name: "API".to_string(),
+        version: "1.0.0".to_string(),
+        artifact: ArtifactTemplate::Image {
+            reference: "registry.test/api:1.0.0".to_string(),
+        },
+        preview: None,
+        command: None,
+        replicas: 1,
+        exposed_ports: vec![8080],
+        health_check: None,
+        max_restarts: Some(3),
+        environment: BTreeMap::new(),
+        user: None,
+        node_api: NodeApiAccess::Disabled,
+        secrets: None,
+        volumes: Vec::new(),
+        placement: PlacementConstraint::default(),
+        exec: ExecPolicy::Allowed,
+    }
 }
