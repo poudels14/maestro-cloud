@@ -4,8 +4,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use kernel_api::{ArtifactArchiveId, BuildId, BuildSource, SecretValue};
 use runtime::ArtifactSource;
+use sha2::{Digest, Sha256};
 
 use super::*;
+use crate::{ArtifactArchiveStore, ArtifactArchiveWrite};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -102,13 +104,23 @@ async fn remote_revision_resolves_only_the_exact_branch_head() -> TestResult {
 #[tokio::test]
 async fn archive_source_hashes_content_and_rejects_mutation() -> TestResult {
     let paths = TestPaths::new()?;
-    tokio::fs::create_dir_all(&paths.archives).await?;
-    let archive_id = ArtifactArchiveId::new("archive-1")?;
-    let archive = paths.archives.join(archive_id.as_str());
-    tokio::fs::write(&archive, b"first archive").await?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
-    let provider =
-        LocalBuildSourceProvider::with_runner(paths.workspaces, paths.archives, runner.clone())?;
+    let provider = LocalBuildSourceProvider::with_runner(
+        paths.workspaces,
+        paths.archives.clone(),
+        runner.clone(),
+    )?;
+    let content = b"first archive";
+    let archive_id = ArtifactArchiveId::from_sha256(Sha256::digest(content).into());
+    let archive = paths.archives.join(archive_id.as_str());
+    assert_eq!(
+        provider.put(&archive_id, content).await?,
+        ArtifactArchiveWrite::Created
+    );
+    assert_eq!(
+        provider.put(&archive_id, content).await?,
+        ArtifactArchiveWrite::Existing
+    );
     let source = BuildSource::Tarball {
         archive_id: archive_id.clone(),
     };
@@ -147,6 +159,19 @@ async fn archive_source_hashes_content_and_rejects_mutation() -> TestResult {
     )?;
     assert!(matches!(error, BuildSourceError::Rejected { .. }));
     assert!(runner.calls().is_empty());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            std::fs::metadata(&paths.archives)?.permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&archive)?.permissions().mode() & 0o777,
+            0o600
+        );
+    }
     Ok(())
 }
 

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use build::LocalBuildSourceProvider;
 use cluster::StoreStartMode;
 use kernel_api::{
     AssignmentPhase, DeploymentPhase, Node, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
@@ -118,6 +119,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
                 bindings: dns_bindings.clone(),
             }),
             workload_runtime: workload_runtime.clone(),
+            artifact_archives: Arc::new(LocalBuildSourceProvider::new(
+                directory.path().join("archive-workspaces"),
+                directory.path().join("archives"),
+            )?),
             log_store_runtime: Box::new(log_store_runtime),
             log_sinks: vec![delivery_sink.clone()],
             metric_store_runtime: Box::new(metric_store_runtime),
@@ -420,6 +425,10 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),
             workload_runtime: workload_runtime.clone(),
+            artifact_archives: Arc::new(LocalBuildSourceProvider::new(
+                directory.path().join("archive-workspaces"),
+                directory.path().join("archives"),
+            )?),
             log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
             log_sinks: Vec::new(),
             metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),

@@ -94,7 +94,9 @@ where
         factory.api_settings.clone(),
     )
     .map(|server| {
-        let server = server.with_firewall_settings(factory.firewall_settings.clone());
+        let server = server
+            .with_artifact_archive_store(factory.artifact_archives.clone())
+            .with_firewall_settings(factory.firewall_settings.clone());
         match &factory.webhook_backend {
             Some(backend) => server.with_webhook_backend(backend.clone()),
             None => server,

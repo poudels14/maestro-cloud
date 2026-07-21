@@ -1,3 +1,4 @@
+mod artifact_archives;
 mod automation;
 mod cluster;
 mod cluster_commands;
@@ -25,6 +26,7 @@ use crate::auth::{AuthPolicy, require_operator};
 pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
     let protected = Router::new()
         .merge(automation::router())
+        .merge(artifact_archives::router())
         .merge(cluster::router())
         .merge(cluster_commands::router())
         .merge(deployment_commands::router())

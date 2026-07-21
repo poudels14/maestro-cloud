@@ -4,6 +4,7 @@
 //! artifact build. Both external boundaries are injected so controller state
 //! transitions remain deterministic and independently testable.
 
+mod archive;
 mod git_process;
 mod local_fs;
 mod local_source;
@@ -13,6 +14,7 @@ mod watch;
 mod watch_writer;
 mod writer;
 
+pub use archive::{ArtifactArchiveStore, ArtifactArchiveWrite};
 pub use local_source::LocalBuildSourceProvider;
 pub use reconciler::BuildReconciler;
 pub use source::{

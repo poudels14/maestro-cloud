@@ -9,6 +9,30 @@ expression: openapi_document()
         "description": "Stable identity of one uploaded artifact source archive.",
         "type": "string"
       },
+      "ArtifactArchiveUploadResponse": {
+        "description": "Result of accepting one content-addressed build context archive.",
+        "properties": {
+          "archiveId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactArchiveId"
+              }
+            ],
+            "description": "Content address assigned to the archive bytes."
+          },
+          "sizeBytes": {
+            "description": "Compressed bytes accepted by the archive store.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "archiveId",
+          "sizeBytes"
+        ],
+        "type": "object"
+      },
       "ArtifactTemplate": {
         "description": "Runtime artifact selected for a service deployment.",
         "oneOf": [

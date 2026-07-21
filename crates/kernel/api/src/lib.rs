@@ -22,11 +22,11 @@ pub use automation::{
     WebhookNodeAvailability, WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
 };
 pub use command::{
-    CommandRequest, DeploymentCommandResponse, ServiceCommandResponse, ServiceDiffChange,
-    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
-    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
-    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
-    ServiceWriteResponse,
+    ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,
+    ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse,
+    ServiceDiffStatus, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
+    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
+    ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest, ServiceWriteResponse,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{

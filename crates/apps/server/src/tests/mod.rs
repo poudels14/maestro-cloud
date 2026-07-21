@@ -21,6 +21,7 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
+mod artifact_archives;
 mod automation;
 mod deployment_commands;
 mod deployments;
@@ -193,6 +194,11 @@ async fn bound_https_server_serves_and_shuts_down_cleanly() -> Result<(), Box<dy
 #[test]
 fn server_openapi_contains_domain_paths_and_bearer_policy() {
     let document = openapi_document();
+    assert!(
+        document
+            .pointer("/paths/~1api~1artifact-archives~1{archiveId}/put")
+            .is_some()
+    );
     assert!(document.pointer("/paths/~1api~1services/get").is_some());
     assert!(
         document

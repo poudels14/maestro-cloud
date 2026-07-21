@@ -95,6 +95,13 @@ pub(crate) async fn validate_git_directory(workspace: &Path) -> Result<(), Build
 }
 
 pub(crate) async fn hash_file(path: &Path) -> Result<String, BuildSourceError> {
+    Ok(format!(
+        "sha256:{}",
+        hex::encode(hash_file_digest(path).await?)
+    ))
+}
+
+pub(crate) async fn hash_file_digest(path: &Path) -> Result<[u8; 32], BuildSourceError> {
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|error| io_unavailable("open build archive", path, error))?;
@@ -112,7 +119,7 @@ pub(crate) async fn hash_file(path: &Path) -> Result<String, BuildSourceError> {
             BuildSourceError::rejected("archive reader returned an invalid byte count")
         })?);
     }
-    Ok(format!("sha256:{}", hex::encode(hash.finalize())))
+    Ok(hash.finalize().into())
 }
 
 pub(crate) fn path_text(path: &Path) -> Result<&str, BuildSourceError> {

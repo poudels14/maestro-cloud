@@ -14,6 +14,10 @@ pub fn openapi_document() -> Value {
             list_operation("listNodes", "Node"),
         ),
         (
+            "/api/artifact-archives/{archiveId}".to_string(),
+            artifact_archive_operation(),
+        ),
+        (
             "/api/cluster/nodes/{nodeId}".to_string(),
             get_operation("getNode", "nodeId", "Node"),
         ),
@@ -261,6 +265,46 @@ pub fn openapi_document() -> Value {
         }
     }
     document
+}
+
+fn artifact_archive_operation() -> Value {
+    json!({
+        "put": {
+            "operationId": "uploadArtifactArchive",
+            "security": [{"bearerAuth": []}],
+            "parameters": [{
+                "name": "archiveId",
+                "in": "path",
+                "required": true,
+                "schema": {"$ref": "#/components/schemas/ArtifactArchiveId"}
+            }],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/gzip": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Identical archive already stored",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/ArtifactArchiveUploadResponse"
+                    }}}
+                },
+                "201": {
+                    "description": "Archive stored",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/ArtifactArchiveUploadResponse"
+                    }}}
+                },
+                "400": {"description": "Invalid archive content or content address"},
+                "413": {"description": "Archive exceeds the upload limit"},
+                "503": {"description": "Archive storage is unavailable on this node"}
+            }
+        }
+    })
 }
 
 fn upgrade_collection_operation() -> Value {

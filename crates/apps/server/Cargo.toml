@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
+build = { version = "0.1.0", path = "../../operators/build" }
 firewall = { version = "0.1.0", path = "../../operators/firewall" }
 ingress = { version = "0.1.0", path = "../../operators/ingress" }
 ipnet.workspace = true
@@ -28,6 +29,7 @@ async-trait.workspace = true
 http-body-util = "=0.1.4"
 rcgen = { version = "=0.14.8", features = ["pem"] }
 reqwest.workspace = true
+tempfile = "=3.27.0"
 tower = { version = "=0.5.3", features = ["util"] }
 
 [lints]

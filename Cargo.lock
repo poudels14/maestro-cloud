@@ -1240,6 +1240,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3233,6 +3234,7 @@ dependencies = [
 name = "kernel-api"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "insta",
  "schemars",
  "serde",
@@ -5356,6 +5358,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-server",
+ "build",
  "firewall",
  "http-body-util",
  "ingress",
@@ -5371,6 +5374,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower",

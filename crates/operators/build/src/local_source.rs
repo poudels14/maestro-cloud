@@ -20,7 +20,7 @@ use crate::{BuildRevisionResolver, BuildSourceError, BuildSourceProvider, Prepar
 /// Filesystem-backed Git checkout and uploaded-archive source provider.
 pub struct LocalBuildSourceProvider {
     workspace_root: PathBuf,
-    archive_root: PathBuf,
+    pub(crate) archive_root: PathBuf,
     runner: Arc<dyn GitRunner>,
 }
 

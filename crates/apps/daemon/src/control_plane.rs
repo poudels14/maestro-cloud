@@ -214,6 +214,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Native backend used for workload lifecycle, adoption, and events.
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
+    /// Node-local durable store for content-addressed build context uploads.
+    pub artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
     /// Owned normalized-log storage runtime for this node.
     pub log_store_runtime: Box<dyn LogStoreRuntime>,
     /// Independently checkpointed normalized-log destinations owned by this node.
@@ -264,6 +266,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
+    pub(crate) artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) sink_runtime: SinkRuntimeRegistry,
@@ -311,6 +314,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
+            artifact_archives: dependencies.artifact_archives,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,
             sink_runtime: SinkRuntimeRegistry::default(),

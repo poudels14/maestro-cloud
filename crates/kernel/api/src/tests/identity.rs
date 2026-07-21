@@ -29,3 +29,12 @@ fn deserialization_validates_identifiers() {
 
     assert!(error.to_string().contains("unsupported character"));
 }
+
+#[test]
+fn artifact_archive_ids_are_sha256_content_addresses() {
+    let id = crate::ArtifactArchiveId::from_sha256([0xab; 32]);
+    assert_eq!(
+        id.as_str(),
+        "sha256-abababababababababababababababababababababababababababababababab"
+    );
+}

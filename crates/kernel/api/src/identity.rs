@@ -113,6 +113,13 @@ identifier!(
     ArtifactArchiveId,
     "Stable identity of one uploaded artifact source archive."
 );
+
+impl ArtifactArchiveId {
+    /// Derives the stable content address for one SHA-256 digest.
+    pub fn from_sha256(digest: [u8; 32]) -> Self {
+        Self(format!("sha256-{}", hex::encode(digest)))
+    }
+}
 identifier!(
     ReplicaStateId,
     "Stable identity of a deployment replica's observed state."

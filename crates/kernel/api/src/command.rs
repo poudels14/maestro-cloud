@@ -4,8 +4,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation, IngressRouteSpec,
-    ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
+    ArtifactArchiveId, DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation,
+    IngressRouteSpec, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
 };
 
 /// Optimistic lifecycle command targeting one exact resource revision.
@@ -26,6 +26,16 @@ pub struct ServiceReplicaOverrideRequest {
     #[serde(deserialize_with = "required_nullable_replicas")]
     #[schemars(with = "RequiredNullableU32")]
     pub replicas: Option<u32>,
+}
+
+/// Result of accepting one content-addressed build context archive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactArchiveUploadResponse {
+    /// Content address assigned to the archive bytes.
+    pub archive_id: ArtifactArchiveId,
+    /// Compressed bytes accepted by the archive store.
+    pub size_bytes: u64,
 }
 
 struct RequiredNullableU32;

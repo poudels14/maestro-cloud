@@ -41,6 +41,7 @@ pub(crate) struct AppState {
     pub(crate) cluster_id: ClusterId,
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
+    pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
 }
@@ -65,6 +66,7 @@ impl ApiServer {
             timestamp_clock: Arc::new(SystemTimestampClock),
             store,
             cluster_id,
+            artifact_archives: None,
             firewall_settings: None,
             webhook_backend: None,
         };
@@ -77,6 +79,19 @@ impl ApiServer {
             state,
             router,
         })
+    }
+
+    /// Enables content-addressed build-context uploads through the configured archive store.
+    pub fn with_artifact_archive_store(
+        mut self,
+        store: Arc<dyn build::ArtifactArchiveStore>,
+    ) -> Self {
+        self.state.artifact_archives = Some(store);
+        self.router = routes::router(
+            self.state.clone(),
+            AuthPolicy::new(self.settings.jwt_secret_key.clone()),
+        );
+        self
     }
 
     /// Enables firewall dry-runs with the same static settings as the leader operator.
