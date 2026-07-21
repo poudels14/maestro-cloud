@@ -3593,6 +3593,42 @@ expression: openapi_document()
           }
         ]
       },
+      "PreviewPolicy": {
+        "description": "Declarative pull-request preview policy for a base service.",
+        "properties": {
+          "closeGracePeriodSecs": {
+            "description": "Grace period retained after a pull request closes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "environment": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Runtime environment overlaid on the derived service.",
+            "type": "object"
+          },
+          "lifetimeSecs": {
+            "description": "Maximum lifetime measured from pull-request creation.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replicas": {
+            "description": "Replica count assigned to each derived preview service.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "closeGracePeriodSecs",
+          "lifetimeSecs",
+          "replicas"
+        ],
+        "type": "object"
+      },
       "PreviewSpec": {
         "description": "Desired pull-request preview derivation and teardown policy.",
         "properties": {
@@ -4008,6 +4044,20 @@ expression: openapi_document()
             ],
             "default": {},
             "description": "Hard scheduling constraints."
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewPolicy"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Pull-request preview policy; absence disables preview discovery."
           },
           "replicas": {
             "description": "Configured replica floor before a temporary override.",

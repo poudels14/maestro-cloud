@@ -239,6 +239,7 @@ fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             artifact: ArtifactTemplate::Image {
                 reference: "registry.test/api:latest".to_string(),
             },
+            preview: None,
             command: None,
             replicas: 1,
             exposed_ports: vec![8080],

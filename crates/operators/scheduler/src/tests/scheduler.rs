@@ -386,6 +386,7 @@ fn service(replicas: u32) -> Service {
             artifact: ArtifactTemplate::Image {
                 reference: "registry.test/api:latest".to_owned(),
             },
+            preview: None,
             command: None,
             replicas,
             exposed_ports: vec![8080],

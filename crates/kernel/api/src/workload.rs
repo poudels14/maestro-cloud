@@ -227,6 +227,21 @@ pub struct PlacementConstraint {
     pub labels: BTreeMap<String, String>,
 }
 
+/// Declarative pull-request preview policy for a base service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPolicy {
+    /// Grace period retained after a pull request closes.
+    pub close_grace_period_secs: u64,
+    /// Maximum lifetime measured from pull-request creation.
+    pub lifetime_secs: u64,
+    /// Replica count assigned to each derived preview service.
+    pub replicas: u32,
+    /// Runtime environment overlaid on the derived service.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
+}
+
 /// Desired service configuration used to create immutable deployments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -237,6 +252,9 @@ pub struct ServiceSpec {
     pub version: String,
     /// Artifact selection or build template.
     pub artifact: ArtifactTemplate,
+    /// Pull-request preview policy; absence disables preview discovery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<PreviewPolicy>,
     /// Optional command override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<CommandSpec>,

@@ -228,6 +228,7 @@ fn service_spec(revision: &str) -> ServiceSpec {
                 )]),
             },
         },
+        preview: None,
         command: None,
         replicas: 1,
         exposed_ports: vec![8080],

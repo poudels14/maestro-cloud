@@ -462,6 +462,7 @@ pub(crate) fn deployment() -> Deployment {
                 artifact: ArtifactTemplate::Image {
                     reference: "registry.test/api:latest".to_owned(),
                 },
+                preview: None,
                 command: None,
                 replicas: 1,
                 exposed_ports: vec![8080],

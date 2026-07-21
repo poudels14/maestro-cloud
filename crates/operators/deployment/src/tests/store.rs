@@ -401,6 +401,7 @@ fn service(artifact: ArtifactTemplate) -> Service {
             name: "API".to_string(),
             version: "1.0.0".to_string(),
             artifact,
+            preview: None,
             command: None,
             replicas: 1,
             exposed_ports: vec![8080],

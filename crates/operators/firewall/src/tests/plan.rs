@@ -338,6 +338,7 @@ fn service(id: &str) -> Service {
             artifact: ArtifactTemplate::Image {
                 reference: format!("registry.test/{id}:latest"),
             },
+            preview: None,
             command: None,
             replicas: 1,
             exposed_ports: vec![8080],

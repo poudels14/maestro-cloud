@@ -109,6 +109,7 @@ pub(super) fn service(replicas: u32) -> Result<Service, kernel_api::InvalidIdent
             artifact: ArtifactTemplate::Image {
                 reference: "registry.test/api:latest".to_string(),
             },
+            preview: None,
             command: None,
             replicas,
             exposed_ports: vec![8080],

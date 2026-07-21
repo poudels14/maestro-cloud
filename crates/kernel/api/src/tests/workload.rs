@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
-    DeploymentPhase, NodeId, ServiceId, VolumeSource, workload_hostname,
+    DeploymentPhase, NodeId, PreviewPolicy, ServiceId, VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -28,6 +28,26 @@ fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
         serde_json::json!("remove")
     );
     assert_eq!(DeploymentGoal::default(), DeploymentGoal::Run);
+}
+
+#[test]
+fn preview_policy_uses_explicit_lifecycle_units() {
+    let policy = PreviewPolicy {
+        close_grace_period_secs: 86_400,
+        lifetime_secs: 604_800,
+        replicas: 1,
+        environment: BTreeMap::from([("PREVIEW".to_string(), "true".to_string())]),
+    };
+
+    assert_eq!(
+        serde_json::to_value(policy).expect("serialize preview policy"),
+        serde_json::json!({
+            "closeGracePeriodSecs": 86_400,
+            "lifetimeSecs": 604_800,
+            "replicas": 1,
+            "environment": {"PREVIEW": "true"}
+        })
+    );
 }
 
 #[test]
