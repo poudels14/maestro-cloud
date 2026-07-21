@@ -23,6 +23,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use server::{ServerSettings, TlsIdentity};
 use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
+use webhook::HttpWebhookBackend;
 
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::launch_error::{DaemonLaunchError, invalid};
@@ -290,6 +291,10 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             .map_err(|error| invalid(error.to_string()))
         })
         .transpose()?;
+    let webhook_backend = Arc::new(
+        HttpWebhookBackend::new(Duration::from_secs(10))
+            .map_err(|error| invalid(error.to_string()))?,
+    );
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
@@ -302,6 +307,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             pull_requests: configured_preview.map(|preview| preview.pull_requests),
             upgrades: None,
             store_upgrades,
+            webhooks: webhook_backend,
         },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;

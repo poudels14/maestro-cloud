@@ -1889,6 +1889,7 @@ dependencies = [
  "time",
  "tokio",
  "upgrade",
+ "webhook",
 ]
 
 [[package]]
@@ -6506,6 +6507,24 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webhook"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "hmac 0.12.1",
+ "kernel-api",
+ "kernel-controller",
+ "kernel-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

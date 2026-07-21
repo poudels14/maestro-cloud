@@ -49,4 +49,7 @@ pub enum OperatorSuiteError {
     /// Upgrade settings or resource identifiers were invalid.
     #[error(transparent)]
     Upgrade(#[from] upgrade::UpgradeError),
+    /// Webhook retry settings or resource identifiers were invalid.
+    #[error(transparent)]
+    Webhook(#[from] webhook::WebhookError),
 }

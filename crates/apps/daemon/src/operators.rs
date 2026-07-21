@@ -1,132 +1,23 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
-use build::{
-    BuildReconciler, BuildRevisionResolver, BuildSourceProvider, BuildWatchReconciler,
-    BuildWatchSettings,
-};
-use cluster::ClusterConfig;
-use deployment::{DeploymentReconciler, LifecycleSettings};
-use dns::{DnsReconciler, DnsSettings};
-use firewall::{
-    FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler, FirewallSettings,
-};
-use ingress::{
-    IngressBackend, IngressReconciler, IngressSettings, StoreTraefikProvider, TraefikBackend,
-};
+use build::{BuildReconciler, BuildRevisionResolver, BuildSourceProvider, BuildWatchReconciler};
+use deployment::DeploymentReconciler;
+use dns::DnsReconciler;
+use firewall::{FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler};
+use ingress::{IngressBackend, IngressReconciler, StoreTraefikProvider, TraefikBackend};
 use kernel_api::ClusterId;
-use kernel_controller::{
-    Backoff, ControllerError, ControllerRuntime, FencedStore, RuntimeConfig, TimestampClock,
-};
+use kernel_controller::{ControllerError, ControllerRuntime, FencedStore, TimestampClock};
 use kernel_store::Clock;
-use node_agent::{AUTHORITATIVE_DNS_PORT, WORKLOAD_BRIDGE_NAME};
-use preview::{
-    PreviewReconciler, PreviewSettings, PreviewSourceReconciler, PreviewSourceSettings,
-    PullRequestApi,
-};
+use preview::{PreviewReconciler, PreviewSourceReconciler, PullRequestApi};
 use runtime::ArtifactStore;
-use scheduler::{SchedulerReconciler, SchedulerSettings};
+use scheduler::SchedulerReconciler;
 use tokio::sync::watch;
 use upgrade::{
-    NodeUpgradeBackend, StoreNodeUpgradeBackend, StoreNodeUpgradeBackendSettings,
-    UpgradeReconciler, UpgradeSettings,
+    NodeUpgradeBackend, StoreNodeUpgradeBackend, StoreNodeUpgradeBackendSettings, UpgradeReconciler,
 };
+use webhook::{WebhookDeliveryBackend, WebhookReconciler};
 
-use crate::{LeaderWorkload, OperatorSuiteError, RoleError};
-
-/// Pure settings used to construct every leader-owned operator runtime.
-#[derive(Debug, Clone)]
-pub struct OperatorSettings {
-    /// Shared watch resync and retry policy.
-    pub runtime: RuntimeConfig,
-    /// Placement replacement and drain grace periods.
-    pub scheduler: SchedulerSettings,
-    /// Deployment lifecycle drain grace period.
-    pub deployment: LifecycleSettings,
-    /// Retired ingress generation grace period.
-    pub ingress: IngressSettings,
-    /// Authoritative service-record TTL.
-    pub dns: DnsSettings,
-    /// Static host, DNS, and egress firewall settings.
-    pub firewall: FirewallSettings,
-    /// Git revision polling cadence for watched build-backed services.
-    pub build_watch: BuildWatchSettings,
-    /// Pull-request preview discovery and derivation, when configured.
-    pub preview: Option<PreviewOperatorSettings>,
-    /// Coordinated node upgrades, when a host-maintenance backend is configured.
-    pub upgrade: Option<UpgradeSettings>,
-}
-
-/// Leader-owned settings for both halves of pull-request preview reconciliation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreviewOperatorSettings {
-    /// GitHub polling, retry, and global quota policy.
-    pub source: PreviewSourceSettings,
-    /// Stable preview hostname derivation policy.
-    pub derivation: PreviewSettings,
-}
-
-impl OperatorSettings {
-    /// Derives bounded operator views from the validated cluster configuration.
-    pub fn production(cluster: &ClusterConfig) -> Result<Self, OperatorSuiteError> {
-        let mut protected_host_ports = vec![
-            cluster.ports.gateway,
-            cluster.ports.store_client,
-            cluster.ports.store_peer,
-        ];
-        protected_host_ports.extend(cluster.nodes.values().map(|node| node.endpoint.api_port));
-        protected_host_ports.sort_unstable();
-        protected_host_ports.dedup();
-        let mut control_allow_cidrs = cluster
-            .control_allow_cidrs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<BTreeSet<_>>();
-        control_allow_cidrs.extend(
-            cluster
-                .nodes
-                .values()
-                .filter(|node| {
-                    cluster
-                        .control_allow_cidrs
-                        .iter()
-                        .all(|network| !network.contains(node.endpoint.host_address))
-                })
-                .map(|node| format!("{}/32", node.endpoint.host_address)),
-        );
-        Ok(Self {
-            runtime: RuntimeConfig::new(
-                Duration::from_secs(30),
-                Backoff::new(Duration::from_millis(100), Duration::from_secs(5))?,
-            )?,
-            scheduler: SchedulerSettings {
-                replacement_grace: Duration::from_secs(30),
-                deployment_drain_grace: Duration::from_secs(30),
-            },
-            deployment: LifecycleSettings {
-                drain_grace: Duration::from_secs(30),
-            },
-            ingress: IngressSettings {
-                retirement_grace: Duration::from_secs(30),
-            },
-            dns: DnsSettings { ttl_secs: 5 },
-            firewall: FirewallSettings {
-                table_name: "maestro_firewall".to_string(),
-                workload_interface: WORKLOAD_BRIDGE_NAME.to_string(),
-                dns_port: AUTHORITATIVE_DNS_PORT,
-                protected_host_ports,
-                control_allow_cidrs: control_allow_cidrs.into_iter().collect(),
-                system_services: BTreeSet::new(),
-            },
-            build_watch: BuildWatchSettings {
-                poll_interval: Duration::from_secs(60),
-            },
-            preview: None,
-            upgrade: None,
-        })
-    }
-}
+use crate::{LeaderWorkload, OperatorSettings, OperatorSuiteError, RoleError};
 
 /// Side-effect integrations shared by leader-owned operators.
 #[derive(Clone)]
@@ -143,6 +34,8 @@ pub struct OperatorBackends {
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
     /// Applies idempotent rolling or all-node host upgrade batches.
     pub upgrades: Option<Arc<dyn NodeUpgradeBackend>>,
+    /// Delivers signed transition payloads to configured endpoints.
+    pub webhooks: Arc<dyn WebhookDeliveryBackend>,
 }
 
 /// Fence-independent build integrations retained across leadership terms.
@@ -160,6 +53,8 @@ pub struct BuildOperatorBackends {
     pub upgrades: Option<Arc<dyn NodeUpgradeBackend>>,
     /// Production store-command policy rebuilt against each exact leadership fence.
     pub store_upgrades: Option<StoreNodeUpgradeBackendSettings>,
+    /// Fence-independent outbound webhook transport.
+    pub webhooks: Arc<dyn WebhookDeliveryBackend>,
 }
 
 /// Rebuilds and runs the complete operator suite for each leadership fence.
@@ -230,6 +125,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 artifacts: self.builds.artifacts.clone(),
                 pull_requests: self.builds.pull_requests.clone(),
                 upgrades,
+                webhooks: self.builds.webhooks.clone(),
             },
         )
         .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
@@ -265,6 +161,8 @@ pub struct OperatorInvocationReport {
     pub firewall_policies: usize,
     /// NodeNetwork resources passed to baseline firewall reconciliation.
     pub firewall_baselines: usize,
+    /// Webhook resources passed to transition delivery.
+    pub webhooks: usize,
 }
 
 /// All leader-owned reconciliation loops sharing one fencing token.
@@ -280,6 +178,7 @@ pub struct OperatorSuite {
     dns: ControllerRuntime<DnsReconciler>,
     firewall_policies: ControllerRuntime<FirewallPolicyReconciler>,
     firewall_baselines: ControllerRuntime<FirewallBaselineReconciler>,
+    webhooks: ControllerRuntime<WebhookReconciler>,
 }
 
 impl OperatorSuite {
@@ -355,6 +254,17 @@ impl OperatorSuite {
             (Some(_), None) => return Err(OperatorSuiteError::UpgradeBackendMissing),
             (None, Some(_)) => return Err(OperatorSuiteError::UpgradeBackendUnexpected),
         };
+        let webhooks = Arc::new(WebhookReconciler::new(
+            cluster_id.clone(),
+            backends.webhooks,
+            timestamp_clock.clone(),
+            settings.webhook,
+        )?)
+        .runtime(
+            store.clone(),
+            monotonic_clock.clone(),
+            settings.runtime.clone(),
+        );
         let deployment = Arc::new(DeploymentReconciler::new(
             cluster_id.clone(),
             settings.deployment,
@@ -414,6 +324,7 @@ impl OperatorSuite {
             dns,
             firewall_policies,
             firewall_baselines,
+            webhooks,
         })
     }
 
@@ -431,6 +342,7 @@ impl OperatorSuite {
             dns: self.dns.reconcile_snapshot().await?,
             firewall_policies: self.firewall_policies.reconcile_snapshot().await?,
             firewall_baselines: self.firewall_baselines.reconcile_snapshot().await?,
+            webhooks: self.webhooks.reconcile_snapshot().await?,
             build_watch: self.build_watch.reconcile_snapshot().await?,
             preview_sources: match &self.preview_sources {
                 Some(runtime) => runtime.reconcile_snapshot().await?,
@@ -455,6 +367,7 @@ impl OperatorSuite {
         let ingress = self.ingress.run(shutdown.clone());
         let dns = self.dns.run(shutdown.clone());
         let policies = self.firewall_policies.run(shutdown.clone());
+        let webhooks = self.webhooks.run(shutdown.clone());
         let baselines = self.firewall_baselines.run(shutdown);
         tokio::try_join!(
             deployment,
@@ -467,7 +380,8 @@ impl OperatorSuite {
             ingress,
             dns,
             policies,
-            baselines
+            baselines,
+            webhooks
         )?;
         Ok(())
     }

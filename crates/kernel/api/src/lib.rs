@@ -17,8 +17,8 @@ mod workload;
 
 pub use automation::{
     NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, UpgradeMode,
-    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookEvent, WebhookSpec,
-    WebhookStatus,
+    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookEvent,
+    WebhookNodeAvailability, WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{

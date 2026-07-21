@@ -276,6 +276,9 @@ fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
         },
         preview: None,
         upgrade: None,
+        webhook: webhook::WebhookSettings {
+            retry_delay: Duration::from_secs(30),
+        },
     })
 }
 

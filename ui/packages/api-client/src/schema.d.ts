@@ -2084,6 +2084,35 @@ export interface components {
         WebhookEvent: "deploymentTransition" | "nodeAvailability" | "previewTransition" | "upgradeTransition";
         /** @description Stable identity of a webhook configuration. */
         WebhookId: string;
+        /** @description Availability state derived from a node's session-bound liveness key. */
+        WebhookNodeAvailability: "available" | "unavailable";
+        /** @description Last state durably acknowledged for one subscribed resource. */
+        WebhookObservation: {
+            /** @description Built-in resource identity within its event class. */
+            resourceId: components["schemas"]["ResourceName"];
+            /** @description Source store revision used to derive the delivery identity. */
+            resourceRevision: components["schemas"]["ResourceRevision"];
+            /** @description Exact typed state acknowledged by the endpoint. */
+            state: components["schemas"]["WebhookObservedState"];
+        };
+        /** @description Typed state carried by one webhook transition. */
+        WebhookObservedState: {
+            /** @enum {string} */
+            event: "deploymentTransition";
+            state: components["schemas"]["DeploymentPhase"];
+        } | {
+            /** @enum {string} */
+            event: "nodeAvailability";
+            state: components["schemas"]["WebhookNodeAvailability"];
+        } | {
+            /** @enum {string} */
+            event: "previewTransition";
+            state: components["schemas"]["PreviewPhase"];
+        } | {
+            /** @enum {string} */
+            event: "upgradeTransition";
+            state: components["schemas"]["UpgradePhase"];
+        };
         /** @description Desired endpoint, event selection, and signing material for a webhook. */
         WebhookSpec: {
             /** @description HTTPS endpoint receiving event deliveries. */
@@ -2104,6 +2133,12 @@ export interface components {
             consecutiveFailures: number;
             /** @description Time of the most recent successful delivery. */
             lastSuccessAt?: components["schemas"]["Timestamp"] | (null);
+            /** @description Last successfully acknowledged state for each subscribed resource. */
+            observations?: components["schemas"]["WebhookObservation"][];
+            /** @description Webhook generation whose subscribed resources were last baselined. */
+            observedGeneration?: components["schemas"]["Generation"] | (null);
+            /** @description Earliest wall-clock time a failed transition may be retried. */
+            retryAt?: components["schemas"]["Timestamp"] | (null);
         };
         WebhookWriteRequest: {
             /** Format: uri */

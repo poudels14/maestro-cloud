@@ -1,5 +1,6 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
+assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -4748,6 +4749,141 @@ expression: openapi_document()
         "description": "Stable identity of a webhook configuration.",
         "type": "string"
       },
+      "WebhookNodeAvailability": {
+        "description": "Availability state derived from a node's session-bound liveness key.",
+        "oneOf": [
+          {
+            "description": "The node owns an active liveness session.",
+            "enum": [
+              "available"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The node's liveness session is absent or expired.",
+            "enum": [
+              "unavailable"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "WebhookObservation": {
+        "description": "Last state durably acknowledged for one subscribed resource.",
+        "properties": {
+          "resourceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceName"
+              }
+            ],
+            "description": "Built-in resource identity within its event class."
+          },
+          "resourceRevision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Source store revision used to derive the delivery identity."
+          },
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookObservedState"
+              }
+            ],
+            "description": "Exact typed state acknowledged by the endpoint."
+          }
+        },
+        "required": [
+          "resourceId",
+          "state",
+          "resourceRevision"
+        ],
+        "type": "object"
+      },
+      "WebhookObservedState": {
+        "description": "Typed state carried by one webhook transition.",
+        "oneOf": [
+          {
+            "description": "Deployment lifecycle phase.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "deploymentTransition"
+                ],
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/components/schemas/DeploymentPhase"
+              }
+            },
+            "required": [
+              "event",
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Node session availability.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "nodeAvailability"
+                ],
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/components/schemas/WebhookNodeAvailability"
+              }
+            },
+            "required": [
+              "event",
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Pull-request preview lifecycle phase.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "previewTransition"
+                ],
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/components/schemas/PreviewPhase"
+              }
+            },
+            "required": [
+              "event",
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Cluster upgrade lifecycle phase.",
+            "properties": {
+              "event": {
+                "enum": [
+                  "upgradeTransition"
+                ],
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/components/schemas/UpgradePhase"
+              }
+            },
+            "required": [
+              "event",
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "WebhookSpec": {
         "description": "Desired endpoint, event selection, and signing material for a webhook.",
         "properties": {
@@ -4807,6 +4943,41 @@ expression: openapi_document()
               }
             ],
             "description": "Time of the most recent successful delivery."
+          },
+          "observations": {
+            "description": "Last successfully acknowledged state for each subscribed resource.",
+            "items": {
+              "$ref": "#/components/schemas/WebhookObservation"
+            },
+            "type": "array"
+          },
+          "observedGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Webhook generation whose subscribed resources were last baselined."
+          },
+          "retryAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Earliest wall-clock time a failed transition may be retried."
           }
         },
         "required": [

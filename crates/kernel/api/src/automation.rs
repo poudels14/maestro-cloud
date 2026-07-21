@@ -2,8 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Condition, NodeId, NodeInstanceId, Object, PreviewId, SecretValue, ServiceId, Timestamp,
-    UpgradeRunId, WebhookId,
+    Condition, DeploymentPhase, Generation, NodeId, NodeInstanceId, Object, PreviewId,
+    ResourceName, ResourceRevision, SecretValue, ServiceId, Timestamp, UpgradeRunId, WebhookId,
 };
 
 /// Desired pull-request preview derivation and teardown policy.
@@ -223,9 +223,66 @@ pub struct WebhookStatus {
     pub last_success_at: Option<Timestamp>,
     /// Consecutive delivery failures since the last success.
     pub consecutive_failures: u32,
+    /// Earliest wall-clock time a failed transition may be retried.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<Timestamp>,
+    /// Webhook generation whose subscribed resources were last baselined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<Generation>,
+    /// Last successfully acknowledged state for each subscribed resource.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observations: Vec<WebhookObservation>,
     /// Generic validation and delivery evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+}
+
+/// Availability state derived from a node's session-bound liveness key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WebhookNodeAvailability {
+    /// The node owns an active liveness session.
+    Available,
+    /// The node's liveness session is absent or expired.
+    Unavailable,
+}
+
+/// Typed state carried by one webhook transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", content = "state", rename_all = "camelCase")]
+pub enum WebhookObservedState {
+    /// Deployment lifecycle phase.
+    DeploymentTransition(DeploymentPhase),
+    /// Node session availability.
+    NodeAvailability(WebhookNodeAvailability),
+    /// Pull-request preview lifecycle phase.
+    PreviewTransition(PreviewPhase),
+    /// Cluster upgrade lifecycle phase.
+    UpgradeTransition(UpgradePhase),
+}
+
+impl WebhookObservedState {
+    /// Returns the subscription class represented by this state.
+    pub const fn event(self) -> WebhookEvent {
+        match self {
+            Self::DeploymentTransition(_) => WebhookEvent::DeploymentTransition,
+            Self::NodeAvailability(_) => WebhookEvent::NodeAvailability,
+            Self::PreviewTransition(_) => WebhookEvent::PreviewTransition,
+            Self::UpgradeTransition(_) => WebhookEvent::UpgradeTransition,
+        }
+    }
+}
+
+/// Last state durably acknowledged for one subscribed resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookObservation {
+    /// Built-in resource identity within its event class.
+    pub resource_id: ResourceName,
+    /// Exact typed state acknowledged by the endpoint.
+    pub state: WebhookObservedState,
+    /// Source store revision used to derive the delivery identity.
+    pub resource_revision: ResourceRevision,
 }
 
 /// An outbound webhook resource.

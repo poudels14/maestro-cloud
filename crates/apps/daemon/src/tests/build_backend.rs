@@ -9,6 +9,7 @@ use runtime::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
 };
+use webhook::{WebhookDelivery, WebhookDeliveryBackend, WebhookDeliveryError};
 
 use crate::OperatorBackends;
 
@@ -45,6 +46,7 @@ impl FakeBuildBackend {
                 artifacts: build.clone(),
                 pull_requests: None,
                 upgrades: None,
+                webhooks: Arc::new(AcceptingWebhookBackend),
             },
             build,
         )
@@ -60,6 +62,20 @@ impl FakeBuildBackend {
 
     pub(super) fn set_revision(&self, revision: impl Into<String>) {
         *lock(&self.revision) = revision.into();
+    }
+}
+
+struct AcceptingWebhookBackend;
+
+#[async_trait]
+impl WebhookDeliveryBackend for AcceptingWebhookBackend {
+    async fn deliver(
+        &self,
+        _endpoint: &str,
+        _signing_secret: &SecretValue,
+        _delivery: &WebhookDelivery,
+    ) -> Result<(), WebhookDeliveryError> {
+        Ok(())
     }
 }
 

@@ -18,6 +18,7 @@ mod log_delivery;
 mod log_maintenance;
 mod metric_delivery;
 mod operator_error;
+mod operator_settings;
 mod operators;
 mod plan;
 mod preview_config;
@@ -42,9 +43,10 @@ pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
 pub use operator_error::OperatorSuiteError;
+pub use operator_settings::{OperatorSettings, PreviewOperatorSettings};
 pub use operators::{
     BuildOperatorBackends, OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload,
-    OperatorSettings, OperatorSuite, PreviewOperatorSettings,
+    OperatorSuite,
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use preview_config::{PreviewLaunchConfig, PreviewLaunchError};

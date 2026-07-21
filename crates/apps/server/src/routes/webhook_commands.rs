@@ -255,6 +255,9 @@ fn new_webhook(webhook_id: WebhookId, spec: WebhookSpec) -> Webhook {
         status: WebhookStatus {
             last_success_at: None,
             consecutive_failures: 0,
+            retry_at: None,
+            observed_generation: None,
+            observations: Vec::new(),
             conditions: Vec::new(),
         },
     }
