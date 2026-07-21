@@ -14,10 +14,10 @@ node-agent = { version = "0.1.0", path = "../../node/agent" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 serde.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true

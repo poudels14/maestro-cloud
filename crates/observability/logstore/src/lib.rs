@@ -6,6 +6,7 @@
 mod delivery_schema;
 mod duck;
 mod error;
+mod metric_delivery_schema;
 mod metric_duck;
 mod metric_schema;
 mod schema;

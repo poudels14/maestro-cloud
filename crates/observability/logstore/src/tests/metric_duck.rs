@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
-use metrics::{MetricRecordId, MetricStore, WorkloadMetricPoint};
+use metrics::{
+    MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId, MetricStore,
+    WorkloadMetricPoint,
+};
 use runtime::WorkloadMetadata;
 
 use crate::{DuckMetricStoreRuntime, DuckStoreError, DuckStoreSettings};
@@ -17,6 +20,18 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     .await?;
     metrics::conformance::check_metric_store(runtime.store().as_ref()).await?;
     runtime.shutdown().await?;
+
+    let delivery = DuckMetricStoreRuntime::open(DuckStoreSettings::new(
+        temporary.path().join("metric-delivery.duckdb"),
+        8,
+    )?)
+    .await?;
+    metrics::conformance::check_metric_delivery_store(
+        delivery.store().as_ref(),
+        delivery.store().as_ref(),
+    )
+    .await?;
+    delivery.shutdown().await?;
     Ok(())
 }
 
@@ -26,27 +41,102 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
     let temporary = tempfile::tempdir()?;
     let settings = DuckStoreSettings::new(temporary.path().join("metrics.duckdb"), 8)?;
     let point = point()?;
+    let mut next = point.clone();
+    next.id.collected_at = Timestamp(2);
+    next.cpu_usage_usec = 20;
+    next.network_receive_bytes = Some(150);
+    next.network_transmit_bytes = Some(275);
     let runtime = DuckMetricStoreRuntime::open(settings.clone()).await?;
     assert_eq!(
         runtime
             .store()
-            .append(std::slice::from_ref(&point))
+            .append(&[point.clone(), next.clone()])
             .await?
             .committed,
-        1
+        2
     );
+    runtime
+        .store()
+        .commit_sink_cursor(&MetricSinkId::new("datadog")?, MetricSequence(1))
+        .await?;
     runtime.shutdown().await?;
 
     let restarted = DuckMetricStoreRuntime::open(settings).await?;
     assert_eq!(
         restarted
             .store()
-            .append(std::slice::from_ref(&point))
+            .append(std::slice::from_ref(&next))
             .await?
             .deduplicated,
         1
     );
+    assert_eq!(
+        restarted
+            .store()
+            .load_sink_cursor(&MetricSinkId::new("datadog")?)
+            .await?,
+        Some(MetricSequence(1))
+    );
+    let pending = restarted
+        .store()
+        .read_after(Some(MetricSequence(1)), 8)
+        .await?;
+    let pending = pending
+        .first()
+        .ok_or("persisted metric delivery point missing")?;
+    assert_eq!(pending.sequence, MetricSequence(2));
+    assert_eq!(pending.previous.as_ref(), Some(&point));
+    assert_eq!(&pending.point, &next);
     restarted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_metric_store_migrates_v1_points_into_stable_delivery_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("metrics.duckdb");
+    let first = point()?;
+    let connection = duckdb::Connection::open(&path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version BIGINT NOT NULL);
+         INSERT INTO schema_version VALUES (1);
+         CREATE TABLE normalized_metrics (
+             node_id VARCHAR NOT NULL,
+             workload_id VARCHAR NOT NULL,
+             collected_at_ms BIGINT NOT NULL,
+             service_id VARCHAR NOT NULL,
+             deployment_id VARCHAR NOT NULL,
+             point_json VARCHAR NOT NULL,
+             PRIMARY KEY (node_id, workload_id, collected_at_ms)
+         );
+         CREATE INDEX normalized_metrics_service_time
+             ON normalized_metrics (service_id, collected_at_ms);
+         CREATE INDEX normalized_metrics_deployment_time
+             ON normalized_metrics (deployment_id, collected_at_ms);",
+    )?;
+    connection.execute(
+        "INSERT INTO normalized_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        duckdb::params![
+            first.id.node_id.as_str(),
+            first.id.workload_id.as_str(),
+            first.id.collected_at.0,
+            first.metadata.service_id.as_str(),
+            first.metadata.deployment_id.as_str(),
+            serde_json::to_string(&first)?,
+        ],
+    )?;
+    drop(connection);
+
+    let runtime = DuckMetricStoreRuntime::open(DuckStoreSettings::new(path, 8)?).await?;
+    let migrated = runtime.store().read_after(None, 8).await?;
+
+    assert_eq!(migrated.len(), 1);
+    let migrated = migrated.first().ok_or("migrated metric point missing")?;
+    assert_eq!(migrated.sequence, MetricSequence(1));
+    assert_eq!(migrated.previous, None);
+    assert_eq!(migrated.point, first);
+    runtime.shutdown().await?;
     Ok(())
 }
 

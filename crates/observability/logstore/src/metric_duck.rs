@@ -3,8 +3,9 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use metrics::{
-    MetricAppendReport, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
-    WorkloadMetricPoint,
+    MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError, MetricSequence,
+    MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
+    SequencedMetricPoint, WorkloadMetricPoint,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -15,6 +16,20 @@ enum Command {
     Append {
         points: Vec<WorkloadMetricPoint>,
         response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
+    },
+    ReadAfter {
+        cursor: Option<MetricSequence>,
+        limit: usize,
+        response: oneshot::Sender<Result<Vec<SequencedMetricPoint>, MetricDeliveryStoreError>>,
+    },
+    LoadCursor {
+        sink_id: MetricSinkId,
+        response: oneshot::Sender<Result<Option<MetricSequence>, MetricDeliveryStoreError>>,
+    },
+    CommitCursor {
+        sink_id: MetricSinkId,
+        sequence: MetricSequence,
+        response: oneshot::Sender<Result<(), MetricDeliveryStoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -124,8 +139,70 @@ impl MetricStore for DuckMetricStore {
 }
 
 #[async_trait]
+impl MetricDeliveryStore for DuckMetricStore {
+    async fn read_after(
+        &self,
+        cursor: Option<MetricSequence>,
+        limit: usize,
+    ) -> Result<Vec<SequencedMetricPoint>, MetricDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::ReadAfter {
+                cursor,
+                limit,
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting ordered metric read"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing ordered metric read"))?
+    }
+
+    async fn load_sink_cursor(
+        &self,
+        sink_id: &MetricSinkId,
+    ) -> Result<Option<MetricSequence>, MetricDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::LoadCursor {
+                sink_id: sink_id.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting metric cursor read"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing metric cursor read"))?
+    }
+
+    async fn commit_sink_cursor(
+        &self,
+        sink_id: &MetricSinkId,
+        sequence: MetricSequence,
+    ) -> Result<(), MetricDeliveryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::CommitCursor {
+                sink_id: sink_id.clone(),
+                sequence,
+                response,
+            })
+            .await
+            .map_err(|_| delivery_worker_stopped("accepting metric cursor commit"))?;
+        result
+            .await
+            .map_err(|_| delivery_worker_stopped("completing metric cursor commit"))?
+    }
+}
+
+#[async_trait]
 impl MetricStoreRuntime for DuckMetricStoreRuntime {
     fn store(&self) -> Arc<dyn MetricStore> {
+        self.store.clone()
+    }
+
+    fn delivery_store(&self) -> Arc<dyn MetricDeliveryStore> {
         self.store.clone()
     }
 
@@ -160,12 +237,46 @@ fn run_worker(
             Command::Append { points, response } => {
                 let _ignored = response.send(metric_schema::append(&mut connection, &points));
             }
+            Command::ReadAfter {
+                cursor,
+                limit,
+                response,
+            } => {
+                let _ignored = response.send(crate::metric_delivery_schema::read_after(
+                    &connection,
+                    cursor,
+                    limit,
+                ));
+            }
+            Command::LoadCursor { sink_id, response } => {
+                let _ignored = response.send(crate::metric_delivery_schema::load_cursor(
+                    &connection,
+                    &sink_id,
+                ));
+            }
+            Command::CommitCursor {
+                sink_id,
+                sequence,
+                response,
+            } => {
+                let _ignored = response.send(crate::metric_delivery_schema::commit_cursor(
+                    &mut connection,
+                    &sink_id,
+                    sequence,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
                 return;
             }
         }
+    }
+}
+
+fn delivery_worker_stopped(action: &'static str) -> MetricDeliveryStoreError {
+    MetricDeliveryStoreError::Unavailable {
+        message: format!("DuckDB metric writer stopped before {action}"),
     }
 }
 

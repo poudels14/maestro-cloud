@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use metrics::{MetricAppendReport, MetricStoreError, WorkloadMetricPoint};
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,7 +22,8 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v1(&mut connection)?,
+        (0, _) => initialize_v2(&mut connection)?,
+        (1, 1) => migrate_v1_to_v2(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, version) => {
             return Err(format!(
@@ -41,6 +42,13 @@ pub(crate) fn append(
     let transaction = connection
         .transaction()
         .map_err(unavailable("begin append transaction"))?;
+    let mut sequence = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM normalized_metrics",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(unavailable("read latest metric sequence"))?;
     let mut report = MetricAppendReport::default();
     for point in points {
         let encoded = serde_json::to_string(point).map_err(|error| MetricStoreError::Rejected {
@@ -72,12 +80,30 @@ pub(crate) fn append(
                 });
             }
             None => {
+                let previous_sequence = transaction
+                    .query_row(
+                        "SELECT sequence FROM normalized_metrics
+                         WHERE node_id = ?1 AND workload_id = ?2
+                         ORDER BY sequence DESC LIMIT 1",
+                        params![point.id.node_id.as_str(), point.id.workload_id.as_str()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map_err(unavailable("read metric rate baseline"))?;
+                sequence = sequence
+                    .checked_add(1)
+                    .ok_or_else(|| MetricStoreError::Rejected {
+                        message: "metric delivery sequence space is exhausted".to_owned(),
+                    })?;
                 transaction
                     .execute(
                         "INSERT INTO normalized_metrics
-                         (node_id, workload_id, collected_at_ms, service_id, deployment_id, point_json)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         (sequence, previous_sequence, node_id, workload_id, collected_at_ms,
+                          service_id, deployment_id, point_json)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                         params![
+                            sequence,
+                            previous_sequence,
                             point.id.node_id.as_str(),
                             point.id.workload_id.as_str(),
                             point.id.collected_at.0,
@@ -97,13 +123,15 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v1(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v2(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
     transaction
         .execute_batch(
             "CREATE TABLE normalized_metrics (
+                 sequence BIGINT NOT NULL UNIQUE,
+                 previous_sequence BIGINT,
                  node_id VARCHAR NOT NULL,
                  workload_id VARCHAR NOT NULL,
                  collected_at_ms BIGINT NOT NULL,
@@ -116,7 +144,61 @@ fn initialize_v1(connection: &mut Connection) -> Result<(), String> {
                  ON normalized_metrics (service_id, collected_at_ms);
              CREATE INDEX normalized_metrics_deployment_time
                  ON normalized_metrics (deployment_id, collected_at_ms);
-             INSERT INTO schema_version (version) VALUES (1);",
+             CREATE TABLE metric_sink_cursors (
+                 sink_id VARCHAR PRIMARY KEY,
+                 last_sequence BIGINT NOT NULL
+             );
+             INSERT INTO schema_version (version) VALUES (2);",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v1_to_v2(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE normalized_metrics_v2 (
+                 sequence BIGINT NOT NULL UNIQUE,
+                 previous_sequence BIGINT,
+                 node_id VARCHAR NOT NULL,
+                 workload_id VARCHAR NOT NULL,
+                 collected_at_ms BIGINT NOT NULL,
+                 service_id VARCHAR NOT NULL,
+                 deployment_id VARCHAR NOT NULL,
+                 point_json VARCHAR NOT NULL,
+                 PRIMARY KEY (node_id, workload_id, collected_at_ms)
+             );
+             WITH ordered AS (
+                 SELECT *, ROW_NUMBER() OVER (
+                     ORDER BY collected_at_ms, node_id, workload_id
+                 ) AS sequence
+                 FROM normalized_metrics
+             ), linked AS (
+                 SELECT *, LAG(sequence) OVER (
+                     PARTITION BY node_id, workload_id ORDER BY sequence
+                 ) AS previous_sequence
+                 FROM ordered
+             )
+             INSERT INTO normalized_metrics_v2
+                 (sequence, previous_sequence, node_id, workload_id, collected_at_ms,
+                  service_id, deployment_id, point_json)
+             SELECT sequence, previous_sequence, node_id, workload_id, collected_at_ms,
+                    service_id, deployment_id, point_json
+             FROM linked;
+             DROP TABLE normalized_metrics;
+             ALTER TABLE normalized_metrics_v2 RENAME TO normalized_metrics;
+             CREATE INDEX normalized_metrics_service_time
+                 ON normalized_metrics (service_id, collected_at_ms);
+             CREATE INDEX normalized_metrics_deployment_time
+                 ON normalized_metrics (deployment_id, collected_at_ms);
+             CREATE TABLE metric_sink_cursors (
+                 sink_id VARCHAR PRIMARY KEY,
+                 last_sequence BIGINT NOT NULL
+             );
+             UPDATE schema_version SET version = 2;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
