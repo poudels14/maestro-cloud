@@ -68,6 +68,7 @@ pub(super) fn node(id: &NodeId, index: u8) -> Result<Node, kernel_api::InvalidId
         },
         status: NodeStatus {
             instance_id: NodeInstanceId::new(format!("instance-{id}"))?,
+            version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
             conditions: Vec::new(),
         },

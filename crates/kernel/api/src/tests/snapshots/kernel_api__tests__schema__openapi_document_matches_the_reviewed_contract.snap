@@ -1688,6 +1688,11 @@ expression: openapi_document()
               }
             ],
             "description": "Last time the node renewed its liveness session."
+          },
+          "version": {
+            "default": "",
+            "description": "Semantic version reported by the currently running daemon.",
+            "type": "string"
           }
         },
         "required": [
@@ -1739,6 +1744,20 @@ expression: openapi_document()
               }
             ],
             "description": "Process identity observed before restart."
+          },
+          "retryAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Earliest time another idempotent upgrade dispatch may be attempted."
           }
         },
         "required": [

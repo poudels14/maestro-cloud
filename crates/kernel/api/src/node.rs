@@ -53,6 +53,9 @@ pub struct NodeSpec {
 pub struct NodeStatus {
     /// Identity of the currently running daemon instance.
     pub instance_id: NodeInstanceId,
+    /// Semantic version reported by the currently running daemon.
+    #[serde(default)]
+    pub version: String,
     /// Last time the node renewed its liveness session.
     pub last_seen: Timestamp,
     /// Generic readiness, availability, drain, and maintenance evidence.

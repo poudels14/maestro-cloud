@@ -452,6 +452,7 @@ fn node() -> Node {
         },
         status: NodeStatus {
             instance_id: NodeInstanceId::new("node-instance-1").unwrap(),
+            version: "1.0.0".to_string(),
             last_seen: Timestamp(0),
             conditions: Vec::new(),
         },

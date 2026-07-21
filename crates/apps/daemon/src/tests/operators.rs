@@ -280,6 +280,7 @@ fn node() -> Result<Node, kernel_api::InvalidIdentifier> {
         },
         status: NodeStatus {
             instance_id: NodeInstanceId::new("node-instance-1")?,
+            version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
             conditions: Vec::new(),
         },

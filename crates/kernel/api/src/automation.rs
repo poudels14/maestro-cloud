@@ -166,6 +166,9 @@ pub struct NodeUpgradeStatus {
     pub observed_version: Option<String>,
     /// Attempts consumed by retryable upgrade failures.
     pub attempts: u32,
+    /// Earliest time another idempotent upgrade dispatch may be attempted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<Timestamp>,
 }
 
 /// Observed aggregate and per-node progress of an upgrade run.
