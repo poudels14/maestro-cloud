@@ -11,7 +11,10 @@ mod dns_server;
 mod exec;
 mod fake_mesh;
 mod fake_network;
+mod firewall;
 mod health;
+#[cfg(target_os = "linux")]
+mod linux_firewall;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
 #[cfg(unix)]

@@ -7,14 +7,16 @@ use firewall::{FirewallBundle, FirewallRuleset};
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
-    DeploymentPhase, DnsRecord, FirewallPolicy, Generation, NodeFirewall, NodeId, NodeInstanceId,
-    Object, ResourceKind, ResourceName, Service, TrafficGeneration, TrafficGenerationPhase,
+    DeploymentPhase, DnsRecord, FirewallPolicy, Generation, NodeFirewall, NodeFirewallSpec, NodeId,
+    NodeInstanceId, Object, ResourceKind, ResourceName, Service, Timestamp, TrafficGeneration,
+    TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Session,
     SessionBinding, Store,
 };
+use node_agent::{FirewallBackend, FirewallBackendError, NodeFirewallAgent, StatusClock};
 
 use super::orchestration_fixture::{
     ManualTimestampClock, NoopClock, network, node, ready_replica, route, service, settings,
@@ -99,6 +101,7 @@ pub(super) struct RolloutWorld {
     pub(super) keys: Keyspace,
     pub(super) store: Arc<InMemoryStore>,
     suite: OperatorSuite,
+    firewall_agents: Vec<NodeFirewallAgent<RecordingNodeFirewallBackend>>,
     ingress: Arc<RecordingIngress>,
     timestamp: Arc<ManualTimestampClock>,
     _session: Box<dyn Session>,
@@ -150,6 +153,19 @@ impl RolloutWorld {
             put(&store, &keys, "NodeNetwork", &network(&node_id, index)?).await?;
             put_key(&store, keys.node_liveness(&node_id), b"live".to_vec()).await?;
         }
+        let firewall_agents = (1..=node_count)
+            .map(|index| -> HarnessResult<_> {
+                Ok(NodeFirewallAgent::new(
+                    store.clone(),
+                    &cluster_id,
+                    NodeId::new(format!("node-{index}"))?,
+                    RecordingNodeFirewallBackend,
+                    monotonic.clone(),
+                    Arc::new(FixedFirewallStatusClock),
+                    Duration::from_secs(30),
+                )?)
+            })
+            .collect::<HarnessResult<Vec<_>>>()?;
         if seed_service {
             put(&store, &keys, "Service", &service(u32::from(node_count))?).await?;
             put(&store, &keys, "IngressRoute", &route()?).await?;
@@ -178,6 +194,7 @@ impl RolloutWorld {
             keys,
             store,
             suite,
+            firewall_agents,
             ingress,
             timestamp,
             _session: session,
@@ -204,45 +221,19 @@ impl RolloutWorld {
 
     pub(super) async fn reconcile_pass(&self) -> HarnessResult<()> {
         self.suite.reconcile_snapshot().await?;
-        self.ack_firewalls().await?;
+        self.reconcile_firewalls().await?;
         self.publish_ready_replicas().await
     }
 
     pub(super) async fn reconcile_operators(&self) -> HarnessResult<()> {
         self.suite.reconcile_snapshot().await?;
-        self.ack_firewalls().await?;
+        self.reconcile_firewalls().await?;
         Ok(())
     }
 
-    async fn ack_firewalls(&self) -> HarnessResult<()> {
-        let kind = ResourceKind::new("NodeFirewall")?;
-        for stored in self
-            .store
-            .list(&self.keys.resource_kind(&kind))
-            .await?
-            .values
-        {
-            let mut resource: NodeFirewall = serde_json::from_slice(&stored.value)?;
-            if resource.status.applied_generation == resource.meta.generation
-                && resource.status.applied_digest.as_deref() == Some(resource.spec.digest.as_str())
-            {
-                continue;
-            }
-            resource.meta.revision = stored.version.resource_revision();
-            resource.status.applied_generation = resource.meta.generation;
-            resource.status.applied_digest = Some(resource.spec.digest.clone());
-            let outcome = self
-                .store
-                .put_cas(PutRequest {
-                    key: stored.key,
-                    value: serde_json::to_vec(&resource)?,
-                    expected: ExpectedVersion::Exact(stored.version),
-                    session: None,
-                })
-                .await?;
-            if !matches!(outcome, CasOutcome::Applied(_)) {
-                return Err("NodeFirewall acknowledgement conflicted".into());
-            }
+    async fn reconcile_firewalls(&self) -> HarnessResult<()> {
+        for agent in &self.firewall_agents {
+            agent.reconcile_once().await?;
         }
         Ok(())
     }
@@ -439,6 +430,23 @@ impl IngressBackend for RecordingIngress {
             .map_err(|_| IngressBackendError::new("ingress change lock poisoned"))?
             .push(change.clone());
         Ok(())
+    }
+}
+
+struct RecordingNodeFirewallBackend;
+
+#[async_trait]
+impl FirewallBackend for RecordingNodeFirewallBackend {
+    async fn apply(&self, _desired: &NodeFirewallSpec) -> Result<(), FirewallBackendError> {
+        Ok(())
+    }
+}
+
+struct FixedFirewallStatusClock;
+
+impl StatusClock for FixedFirewallStatusClock {
+    fn now(&self) -> Timestamp {
+        Timestamp(10_000)
     }
 }
 
