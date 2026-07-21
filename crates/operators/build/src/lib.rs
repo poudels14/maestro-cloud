@@ -9,11 +9,16 @@ mod local_fs;
 mod local_source;
 mod reconciler;
 mod source;
+mod watch;
+mod watch_writer;
 mod writer;
 
 pub use local_source::LocalBuildSourceProvider;
 pub use reconciler::BuildReconciler;
-pub use source::{BuildSourceError, BuildSourceProvider, PreparedBuildSource};
+pub use source::{
+    BuildRevisionResolver, BuildSourceError, BuildSourceProvider, PreparedBuildSource,
+};
+pub use watch::{BuildWatchError, BuildWatchReconciler, BuildWatchSettings};
 
 #[cfg(test)]
 mod tests;

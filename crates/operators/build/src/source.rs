@@ -62,3 +62,13 @@ pub trait BuildSourceProvider: Send + Sync {
     /// Removes source material owned only by one Build resource.
     async fn cleanup(&self, build_id: &BuildId) -> Result<(), BuildSourceError>;
 }
+
+/// Remote immutable-revision lookup used by the service build watcher.
+#[async_trait]
+pub trait BuildRevisionResolver: Send + Sync {
+    /// Resolves a watched Git source to its current immutable revision.
+    async fn resolve_revision(
+        &self,
+        source: &BuildSource,
+    ) -> Result<Option<String>, BuildSourceError>;
+}

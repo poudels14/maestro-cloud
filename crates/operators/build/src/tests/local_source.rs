@@ -71,6 +71,33 @@ async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestRes
 }
 
 #[tokio::test]
+async fn remote_revision_resolves_only_the_exact_branch_head() -> TestResult {
+    let paths = TestPaths::new()?;
+    let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
+    let provider = LocalBuildSourceProvider::with_runner(
+        paths.workspaces,
+        paths.archives,
+        Some(SecretValue::new("github-secret")),
+        runner.clone(),
+    )?;
+
+    let revision = provider
+        .resolve_revision(&git_source("https://github.com/acme/api.git", "main"))
+        .await?;
+
+    assert_eq!(revision.as_deref(), Some(TEST_REVISION));
+    let calls = runner.calls();
+    let invocation = calls.first().ok_or("ls-remote call missing")?;
+    assert_eq!(command(invocation), Some("ls-remote"));
+    assert_eq!(
+        invocation.arguments.last().and_then(|value| value.to_str()),
+        Some("refs/heads/main")
+    );
+    assert_environment(invocation)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn archive_source_hashes_content_and_rejects_mutation() -> TestResult {
     let paths = TestPaths::new()?;
     tokio::fs::create_dir_all(&paths.archives).await?;
@@ -323,6 +350,8 @@ impl GitRunner for FakeGitRunner {
         }
         let stdout = if command(&invocation) == Some("rev-parse") {
             format!("{TEST_REVISION}\n")
+        } else if command(&invocation) == Some("ls-remote") {
+            format!("{TEST_REVISION}\trefs/heads/main\n")
         } else {
             String::new()
         };

@@ -15,7 +15,7 @@ use crate::local_fs::{
     WorkspaceState, ensure_root, hash_file, io_unavailable, path_text, validate_git_directory,
     validate_root, validate_workspace,
 };
-use crate::{BuildSourceError, BuildSourceProvider, PreparedBuildSource};
+use crate::{BuildRevisionResolver, BuildSourceError, BuildSourceProvider, PreparedBuildSource};
 
 /// Filesystem-backed Git checkout and uploaded-archive source provider.
 pub struct LocalBuildSourceProvider {
@@ -270,6 +270,40 @@ impl BuildSourceProvider for LocalBuildSourceProvider {
     }
 }
 
+#[async_trait]
+impl BuildRevisionResolver for LocalBuildSourceProvider {
+    async fn resolve_revision(
+        &self,
+        source: &BuildSource,
+    ) -> Result<Option<String>, BuildSourceError> {
+        let BuildSource::Git {
+            repository,
+            revision,
+        } = source
+        else {
+            return Ok(None);
+        };
+        validate_requested_revision(revision)?;
+        let repository = normalize_repository(repository)?;
+        let reference = format!("refs/heads/{revision}");
+        let environment = git_environment(&repository, self.github_token.as_ref())?;
+        let output = self
+            .run_network(
+                GitInvocation::new([
+                    "ls-remote",
+                    "--exit-code",
+                    "--refs",
+                    "--",
+                    repository.as_str(),
+                    reference.as_str(),
+                ])
+                .with_environment(environment),
+            )
+            .await?;
+        parse_remote_revision(&output.stdout, &reference).map(Some)
+    }
+}
+
 fn validate_requested_revision(revision: &str) -> Result<(), BuildSourceError> {
     if revision.trim().is_empty()
         || revision.starts_with('-')
@@ -297,6 +331,31 @@ fn parse_revision(stdout: &str) -> Result<String, BuildSourceError> {
     let revision = stdout.trim();
     validate_resolved_revision(revision)?;
     Ok(revision.to_ascii_lowercase())
+}
+
+fn parse_remote_revision(stdout: &str, reference: &str) -> Result<String, BuildSourceError> {
+    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+    let line = lines.next().ok_or_else(|| {
+        BuildSourceError::rejected(format!("remote branch `{reference}` is missing"))
+    })?;
+    if lines.next().is_some() {
+        return Err(BuildSourceError::rejected(format!(
+            "remote branch `{reference}` resolved ambiguously"
+        )));
+    }
+    let mut fields = line.split_whitespace();
+    let revision = fields.next().ok_or_else(|| {
+        BuildSourceError::rejected(format!("remote branch `{reference}` omitted its revision"))
+    })?;
+    let actual_reference = fields.next().ok_or_else(|| {
+        BuildSourceError::rejected(format!("remote branch `{reference}` omitted its ref name"))
+    })?;
+    if fields.next().is_some() || actual_reference != reference {
+        return Err(BuildSourceError::rejected(format!(
+            "remote branch response did not match `{reference}`"
+        )));
+    }
+    parse_revision(revision)
 }
 
 #[cfg(test)]
