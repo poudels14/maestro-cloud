@@ -10,7 +10,8 @@ use crate::{
     DeadLetterStore, InMemoryDeadLetterStore, InMemoryLogDeliveryStore, IngestLogEntry, LogBody,
     LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSequence, LogSink, LogSinkError,
     LogSinkId, LogSinkOutcome, LogStream, OriginCursor, RecordingLogSink, SequencedLogEntry,
-    SinkDeadLetter, SinkSleeper, SinkWorker, SinkWorkerError, SinkWorkerSettings,
+    SinkDeadLetter, SinkRuntimeRegistry, SinkSleeper, SinkWorker, SinkWorkerError,
+    SinkWorkerSettings,
 };
 
 #[test]
@@ -172,6 +173,39 @@ async fn cursor_commit_failure_deliberately_replays_the_accepted_batch()
     assert_eq!(store.cursor(sink.id())?, None);
     worker.drain_once().await?;
     assert_eq!(sink.attempts()?, vec![vec![LogSequence(1)]; 2]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_health_claims_progress_only_after_cursor_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryLogDeliveryStore::new(entries(1)?)?);
+    store.fail_next_commit();
+    let outcome = LogSinkOutcome {
+        filtered_entries: 1,
+        quarantined_entries: 0,
+    };
+    let sink = Arc::new(RecordingLogSink::new(
+        sink_id()?,
+        [Ok(outcome), Ok(outcome)],
+    ));
+    let runtime = SinkRuntimeRegistry::default();
+    let worker = worker(store, sink.clone(), Arc::new(RecordingSleeper::default()))?
+        .with_runtime_registry(runtime.clone());
+
+    assert!(worker.drain_once().await.is_err());
+    let failed = runtime.snapshot(sink.id());
+    assert_eq!(failed.consecutive_failures, 1);
+    assert_eq!(failed.last_success_at_ms, None);
+    assert_eq!(failed.last_cursor_advance_at_ms, None);
+    assert_eq!(failed.filtered_entries, 0);
+
+    worker.drain_once().await?;
+    let recovered = runtime.snapshot(sink.id());
+    assert_eq!(recovered.consecutive_failures, 0);
+    assert!(recovered.last_success_at_ms.is_some());
+    assert!(recovered.last_cursor_advance_at_ms.is_some());
+    assert_eq!(recovered.filtered_entries, 1);
     Ok(())
 }
 

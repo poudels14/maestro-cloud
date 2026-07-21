@@ -87,6 +87,7 @@ where
         &factory.log_sinks,
         runtimes.log_delivery_store(),
         factory.settings.sink_worker_settings,
+        factory.sink_runtime.clone(),
     ) {
         Ok(workers) => workers,
         Err(error) => return runtimes.fail(error).await,

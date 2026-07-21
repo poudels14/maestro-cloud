@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use logs::{LogDeliveryStore, LogSink, SinkWorker, SinkWorkerSettings, TokioSinkSleeper};
+use logs::{
+    LogDeliveryStore, LogSink, SinkRuntimeRegistry, SinkWorker, SinkWorkerSettings,
+    TokioSinkSleeper,
+};
 
 use crate::RoleError;
 
@@ -9,6 +12,7 @@ pub(crate) fn build_sink_workers(
     sinks: &[Arc<dyn LogSink>],
     store: Arc<dyn LogDeliveryStore>,
     settings: SinkWorkerSettings,
+    runtime: SinkRuntimeRegistry,
 ) -> Result<Vec<SinkWorker>, RoleError> {
     let mut sink_ids = BTreeSet::new();
     let mut workers = Vec::with_capacity(sinks.len());
@@ -26,6 +30,7 @@ pub(crate) fn build_sink_workers(
                 Arc::new(TokioSinkSleeper),
                 settings,
             )
+            .map(|worker| worker.with_runtime_registry(runtime.clone()))
             .map_err(|error| RoleError::new(error.to_string()))?,
         );
     }
@@ -43,7 +48,12 @@ mod tests {
         let sinks: Vec<Arc<dyn LogSink>> = vec![sink.clone(), sink];
         let store = Arc::new(InMemoryLogDeliveryStore::new(Vec::new())?);
 
-        let error = match build_sink_workers(&sinks, store, SinkWorkerSettings::default()) {
+        let error = match build_sink_workers(
+            &sinks,
+            store,
+            SinkWorkerSettings::default(),
+            SinkRuntimeRegistry::default(),
+        ) {
             Ok(_) => return Err("duplicate sink identifiers were accepted".into()),
             Err(error) => error,
         };

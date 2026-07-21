@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{
     LogDeliveryStore, LogDeliveryStoreError, LogSequence, LogSink, LogSinkError, LogSinkOutcome,
-    SequencedLogEntry,
+    SequencedLogEntry, SinkRuntimeRegistry,
 };
 
 /// Explicit fairness and retry bounds for one sink drain.
@@ -84,6 +84,7 @@ pub struct SinkWorker {
     sink: Arc<dyn LogSink>,
     sleeper: Arc<dyn SinkSleeper>,
     settings: SinkWorkerSettings,
+    runtime: Option<SinkRuntimeRegistry>,
 }
 
 impl SinkWorker {
@@ -99,11 +100,31 @@ impl SinkWorker {
             sink,
             sleeper,
             settings: settings.validate()?,
+            runtime: None,
         })
+    }
+
+    /// Publishes bounded delivery health to the shared operational stats registry.
+    pub fn with_runtime_registry(mut self, runtime: SinkRuntimeRegistry) -> Self {
+        runtime.register(self.sink.id());
+        self.runtime = Some(runtime);
+        self
     }
 
     /// Delivers at most the configured number of batches and durably advances progress.
     pub async fn drain_once(&self) -> Result<SinkWorkerReport, SinkWorkerError> {
+        let result = self.drain_once_inner().await;
+        if let Some(runtime) = &self.runtime {
+            match &result {
+                Ok(report) if report.batches == 0 => runtime.record_recovered(self.sink.id()),
+                Ok(_) => {}
+                Err(error) => runtime.record_failure(self.sink.id(), &error.to_string()),
+            }
+        }
+        result
+    }
+
+    async fn drain_once_inner(&self) -> Result<SinkWorkerReport, SinkWorkerError> {
         let mut cursor = self
             .store
             .load_sink_cursor(self.sink.id())
@@ -154,6 +175,9 @@ impl SinkWorker {
             report.retries = report.retries.saturating_add(retries);
             cursor = Some(last_sequence);
             report.cursor = cursor;
+            if let Some(runtime) = &self.runtime {
+                runtime.record_success(self.sink.id(), outcome.filtered_entries);
+            }
             if entries.len() < self.settings.batch_size {
                 break;
             }

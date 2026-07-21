@@ -7,7 +7,7 @@ use cluster::{StoreProvider, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
-use logs::{LogSink, LogStoreRuntime, SinkWorkerSettings};
+use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry, SinkWorkerSettings};
 use metrics::{MetricSink, MetricSinkWorkerSettings, MetricStoreRuntime};
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, HostDiskReader,
@@ -234,6 +234,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
+    pub(crate) sink_runtime: SinkRuntimeRegistry,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
@@ -273,6 +274,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             workload_runtime: dependencies.workload_runtime,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,
+            sink_runtime: SinkRuntimeRegistry::default(),
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             metric_sinks: dependencies.metric_sinks,
             stats_reader: dependencies.stats_reader,
@@ -296,6 +298,11 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
     pub fn with_leader_workload(mut self, workload: Arc<dyn LeaderWorkload>) -> Self {
         self.leader_workload = Some(workload);
         self
+    }
+
+    /// Returns the shared node-local log-delivery health registry for stats APIs.
+    pub fn sink_runtime_registry(&self) -> SinkRuntimeRegistry {
+        self.sink_runtime.clone()
     }
 }
 

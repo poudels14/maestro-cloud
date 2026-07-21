@@ -20,6 +20,7 @@ mod otlp;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
+mod sink_runtime;
 mod sink_worker;
 mod store;
 
@@ -55,6 +56,9 @@ pub use parser::{
 };
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
+pub use sink_runtime::{
+    SinkRuntimeClock, SinkRuntimeRegistry, SinkRuntimeSnapshot, SystemSinkRuntimeClock,
+};
 pub use sink_worker::{
     SinkSleeper, SinkWorker, SinkWorkerError, SinkWorkerReport, SinkWorkerSettings,
     SinkWorkerSettingsError, TokioSinkSleeper,
