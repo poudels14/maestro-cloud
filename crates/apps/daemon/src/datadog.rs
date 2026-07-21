@@ -6,6 +6,10 @@ use logs::{
     DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError, HttpTransport,
     LogFilterKind, LogSink, LogStoreRuntime, ReqwestHttpTransport,
 };
+use metrics::{
+    DatadogMetricSink, DatadogMetricSinkSettings, MetricHttpTransport, MetricSink,
+    ReqwestMetricHttpTransport,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::DaemonLaunchError;
@@ -27,14 +31,21 @@ pub struct DatadogLaunchConfig {
     /// Sink-local log filtering choices.
     #[serde(default)]
     pub logs: DatadogLogsLaunchConfig,
+    /// Opt-in Datadog workload metric delivery and its global tags.
+    #[serde(default)]
+    pub metrics: DatadogMetricsLaunchConfig,
 }
 
 impl DatadogLaunchConfig {
-    pub(crate) fn validate(&self) -> Result<(), DatadogLogSinkSettingsError> {
-        self.sink_settings().map(|_settings| ())
+    pub(crate) fn validate(&self) -> Result<(), DaemonLaunchError> {
+        self.log_sink_settings()?;
+        if self.metrics.enabled {
+            self.metric_sink_settings("validation-cluster", "validation-host")?;
+        }
+        Ok(())
     }
 
-    fn sink_settings(&self) -> Result<DatadogLogSinkSettings, DatadogLogSinkSettingsError> {
+    fn log_sink_settings(&self) -> Result<DatadogLogSinkSettings, DatadogLogSinkSettingsError> {
         let filters = if self.logs.include_healthcheck {
             Vec::new()
         } else {
@@ -46,6 +57,20 @@ impl DatadogLaunchConfig {
                 .include_tailscale_logs(self.include_tailscale_logs)
                 .filters(filters)
         })
+    }
+
+    fn metric_sink_settings(
+        &self,
+        cluster_name: &str,
+        hostname: &str,
+    ) -> Result<DatadogMetricSinkSettings, metrics::DatadogMetricSinkSettingsError> {
+        DatadogMetricSinkSettings::new(
+            self.api_key.expose(),
+            &self.site,
+            cluster_name,
+            hostname,
+            self.metrics.tags.clone(),
+        )
     }
 }
 
@@ -66,38 +91,140 @@ impl Default for DatadogLogsLaunchConfig {
     }
 }
 
+/// Datadog metric-specific enablement and global series tags.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatadogMetricsLaunchConfig {
+    /// Enables durable node-local delivery of normalized workload metrics.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Additional tags appended after cluster and host identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
 pub(crate) struct ConfiguredDatadog {
-    settings: DatadogLogSinkSettings,
-    transport: Arc<dyn HttpTransport>,
+    log_settings: DatadogLogSinkSettings,
+    log_transport: Arc<dyn HttpTransport>,
+    metrics: Option<ConfiguredDatadogMetrics>,
+}
+
+struct ConfiguredDatadogMetrics {
+    settings: DatadogMetricSinkSettings,
+    metric_transport: Arc<dyn MetricHttpTransport>,
+}
+
+pub(crate) struct DatadogSinks {
+    pub(crate) logs: Vec<Arc<dyn LogSink>>,
+    pub(crate) metrics: Vec<Arc<dyn MetricSink>>,
 }
 
 pub(crate) fn configure_datadog(
     config: Option<&DatadogLaunchConfig>,
+    cluster_name: &str,
+    hostname: &str,
 ) -> Result<Option<ConfiguredDatadog>, DaemonLaunchError> {
     config
         .map(|config| {
             Ok(ConfiguredDatadog {
-                settings: config.sink_settings()?,
-                transport: Arc::new(ReqwestHttpTransport::new(Duration::from_secs(30))?),
+                log_settings: config.log_sink_settings()?,
+                log_transport: Arc::new(ReqwestHttpTransport::new(Duration::from_secs(30))?),
+                metrics: config
+                    .metrics
+                    .enabled
+                    .then(|| {
+                        Ok::<_, DaemonLaunchError>(ConfiguredDatadogMetrics {
+                            settings: config.metric_sink_settings(cluster_name, hostname)?,
+                            metric_transport: Arc::new(ReqwestMetricHttpTransport::new(
+                                Duration::from_secs(15),
+                            )?),
+                        })
+                    })
+                    .transpose()?,
             })
         })
         .transpose()
 }
 
-pub(crate) fn build_log_sinks(
+pub(crate) fn build_datadog_sinks(
     datadog: Option<ConfiguredDatadog>,
     log_store_runtime: &dyn LogStoreRuntime,
-) -> Vec<Arc<dyn LogSink>> {
+) -> DatadogSinks {
     let Some(configured) = datadog else {
-        return Vec::new();
+        return DatadogSinks {
+            logs: Vec::new(),
+            metrics: Vec::new(),
+        };
     };
-    vec![Arc::new(DatadogLogSink::new(
-        configured.settings,
-        configured.transport,
+    let log_sinks: Vec<Arc<dyn LogSink>> = vec![Arc::new(DatadogLogSink::new(
+        configured.log_settings,
+        configured.log_transport,
         log_store_runtime.dead_letter_store(),
-    ))]
+    ))];
+    let metric_sinks = configured
+        .metrics
+        .map(|metrics| {
+            vec![Arc::new(DatadogMetricSink::new(
+                metrics.settings,
+                metrics.metric_transport,
+            )) as Arc<dyn MetricSink>]
+        })
+        .unwrap_or_default();
+    DatadogSinks {
+        logs: log_sinks,
+        metrics: metric_sinks,
+    }
 }
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use kernel_api::SecretValue;
+    use logs::InMemoryLogStoreRuntime;
+
+    use super::*;
+
+    #[test]
+    fn metric_sink_is_opt_in_and_uses_an_independent_cursor_namespace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let log_store = InMemoryLogStoreRuntime::new();
+        let disabled = configure_datadog(Some(&config(false)), "prod", "node-one")?
+            .ok_or("configured Datadog missing")?;
+        let disabled = build_datadog_sinks(Some(disabled), &log_store);
+        assert_eq!(disabled.logs.len(), 1);
+        assert!(disabled.metrics.is_empty());
+
+        let enabled = configure_datadog(Some(&config(true)), "prod", "node-one")?
+            .ok_or("configured Datadog missing")?;
+        let enabled = build_datadog_sinks(Some(enabled), &log_store);
+        assert_eq!(enabled.logs.len(), 1);
+        assert_eq!(enabled.metrics.len(), 1);
+        assert_eq!(
+            enabled
+                .metrics
+                .first()
+                .ok_or("Datadog metric sink missing")?
+                .id()
+                .as_str(),
+            "datadog"
+        );
+        Ok(())
+    }
+
+    fn config(enabled: bool) -> DatadogLaunchConfig {
+        DatadogLaunchConfig {
+            api_key: SecretValue::new("secret"),
+            site: "datadoghq.com".to_owned(),
+            include_ingress_logs: true,
+            include_tailscale_logs: true,
+            logs: DatadogLogsLaunchConfig::default(),
+            metrics: DatadogMetricsLaunchConfig {
+                enabled,
+                tags: vec!["env:test".to_owned()],
+            },
+        }
+    }
 }

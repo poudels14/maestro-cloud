@@ -13,6 +13,7 @@ use tokio::sync::watch;
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::log_delivery::build_sink_workers;
+use crate::metric_delivery::build_metric_sink_workers;
 use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_log_agent, build_stats_agent,
 };
@@ -85,6 +86,14 @@ where
         &factory.log_sinks,
         runtimes.log_delivery_store(),
         factory.settings.sink_worker_settings,
+    ) {
+        Ok(workers) => workers,
+        Err(error) => return runtimes.fail(error).await,
+    };
+    let metric_sink_workers = match build_metric_sink_workers(
+        &factory.metric_sinks,
+        runtimes.metric_delivery_store(),
+        factory.settings.metric_sink_worker_settings,
     ) {
         Ok(workers) => workers,
         Err(error) => return runtimes.fail(error).await,
@@ -323,6 +332,13 @@ where
         }));
     }
     for worker in sink_workers {
+        let sink_shutdown = shutdown.subscribe();
+        tasks.push(tokio::spawn(async move {
+            worker.run(sink_shutdown).await;
+            Ok(())
+        }));
+    }
+    for worker in metric_sink_workers {
         let sink_shutdown = shutdown.subscribe();
         tasks.push(tokio::spawn(async move {
             worker.run(sink_shutdown).await;

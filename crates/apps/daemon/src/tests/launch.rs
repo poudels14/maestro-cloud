@@ -4,8 +4,8 @@ use cluster::{CertificateKeyPair, NodeCertificateBundle, StoreJoinTicket};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
-    DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, StoreLaunchMode,
-    load_launch_config,
+    DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
+    StoreLaunchMode, load_launch_config,
 };
 
 use super::cluster_with_nodes;
@@ -94,13 +94,24 @@ fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn
         logs: DatadogLogsLaunchConfig {
             include_healthcheck: false,
         },
+        metrics: DatadogMetricsLaunchConfig {
+            enabled: true,
+            tags: vec!["env:test".to_owned()],
+        },
     });
     launch.validate()?;
     assert!(!format!("{launch:?}").contains("test-super-secret"));
 
     let mut invalid = launch;
+    invalid
+        .datadog
+        .as_mut()
+        .ok_or("Datadog config missing")?
+        .site = "https://example.invalid".to_owned();
+    assert!(invalid.validate().is_err());
     let datadog = invalid.datadog.as_mut().ok_or("Datadog config missing")?;
-    datadog.site = "https://example.invalid".to_owned();
+    datadog.site = "datadoghq.com".to_owned();
+    datadog.metrics.tags = vec!["bad\ntag".to_owned()];
     assert!(invalid.validate().is_err());
     Ok(())
 }

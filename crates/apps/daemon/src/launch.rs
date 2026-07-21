@@ -19,7 +19,7 @@ use node_agent::{
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
-use crate::datadog::{build_log_sinks, configure_datadog};
+use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::{
     AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
     DatadogLaunchConfig, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
@@ -159,13 +159,14 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         instance_id,
         datadog,
     } = config;
-    let configured_datadog = configure_datadog(datadog.as_ref())?;
     let known_members = control_plane_members(&cluster);
     let clock = Arc::new(TokioClock::new());
     let local_node = cluster
         .nodes
         .get(&node_id)
         .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
+    let configured_datadog =
+        configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
     let agent_store = if local_node.role.is_control_plane() {
         let local_member = known_members
             .get(&node_id)
@@ -224,7 +225,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
-    let log_sinks = build_log_sinks(configured_datadog, &log_store_runtime);
+    let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     let network_stats_reader = Arc::new(HostNetworkStatsReader::production(containerd.clone()));
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
@@ -235,7 +236,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: containerd.clone(),
             log_store_runtime: Box::new(log_store_runtime),
-            log_sinks,
+            log_sinks: datadog_sinks.logs,
+            metric_sinks: datadog_sinks.metrics,
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(CgroupV2StatsReader),
             network_stats_reader,
@@ -392,9 +394,15 @@ pub enum DaemonLaunchError {
     /// Datadog log delivery configuration was unsafe or incomplete.
     #[error(transparent)]
     DatadogSettings(#[from] logs::DatadogLogSinkSettingsError),
+    /// Datadog metric delivery configuration was unsafe or incomplete.
+    #[error(transparent)]
+    DatadogMetricSettings(#[from] metrics::DatadogMetricSinkSettingsError),
     /// The bounded production sink HTTP adapter could not be constructed.
     #[error(transparent)]
     HttpTransport(#[from] logs::ReqwestHttpTransportError),
+    /// The bounded production metric sink HTTP adapter could not be constructed.
+    #[error(transparent)]
+    MetricHttpTransport(#[from] metrics::ReqwestMetricHttpTransportError),
     /// Provider configuration or store lifecycle failed.
     #[error(transparent)]
     StoreProvider(#[from] cluster::StoreProviderError),

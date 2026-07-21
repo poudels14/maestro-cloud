@@ -5,20 +5,27 @@
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod conformance;
+mod datadog;
 mod delivery;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
+mod http;
 mod model;
 mod pipeline;
 mod sink_worker;
 mod store;
 
+pub use datadog::{DatadogMetricSink, DatadogMetricSinkSettings, DatadogMetricSinkSettingsError};
 pub use delivery::{
     MetricDeliveryStore, MetricDeliveryStoreError, MetricSequence, MetricSink, MetricSinkError,
     MetricSinkId, MetricSinkIdError, SequencedMetricPoint,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{InMemoryMetricStore, InMemoryMetricStoreRuntime, RecordingMetricSink};
+pub use http::{
+    MetricHttpRequest, MetricHttpResponse, MetricHttpTransport, MetricHttpTransportError,
+    ReqwestMetricHttpTransport, ReqwestMetricHttpTransportError,
+};
 pub use model::{MetricRecordId, WorkloadMetricPoint};
 pub use pipeline::WorkloadMetricPipeline;
 pub use sink_worker::{

@@ -100,6 +100,29 @@ async fn metric_worker_exhaustion_never_advances_the_cursor()
     Ok(())
 }
 
+#[tokio::test]
+async fn metric_worker_does_not_retry_a_permanently_rejected_batch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryMetricStore::new());
+    store.append(&points()?).await?;
+    let sink = Arc::new(RecordingMetricSink::new(
+        MetricSinkId::new("datadog")?,
+        [Err(MetricSinkError::Rejected {
+            message: "invalid series".to_owned(),
+        })],
+    ));
+    let sleeper = Arc::new(RecordingSleeper::default());
+    let worker = MetricSinkWorker::new(store, sink.clone(), sleeper.clone(), settings())?;
+
+    assert!(matches!(
+        worker.drain_once().await,
+        Err(MetricSinkWorkerError::Sink { attempts: 1, .. })
+    ));
+    assert_eq!(sink.attempts()?.len(), 1);
+    assert!(sleeper.delays()?.is_empty());
+    Ok(())
+}
+
 #[test]
 fn metric_worker_rejects_zero_or_inverted_bounds() {
     let invalid = MetricSinkWorkerSettings {

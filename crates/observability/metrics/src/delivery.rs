@@ -44,6 +44,10 @@ impl MetricSinkId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn built_in(value: &'static str) -> Self {
+        Self(value.to_owned())
+    }
 }
 
 /// A metric sink identifier was empty, oversized, or contained unsafe characters.

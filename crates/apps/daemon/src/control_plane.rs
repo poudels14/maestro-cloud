@@ -8,7 +8,7 @@ use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkWorkerSettings};
-use metrics::MetricStoreRuntime;
+use metrics::{MetricSink, MetricSinkWorkerSettings, MetricStoreRuntime};
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity,
     StatusClock, WorkloadBridgeBackend, WorkloadNetworkStatsReader,
@@ -58,6 +58,7 @@ pub struct DaemonRoleSettings {
     pub(crate) log_poll_interval: Duration,
     pub(crate) max_log_frames_per_workload: usize,
     pub(crate) sink_worker_settings: SinkWorkerSettings,
+    pub(crate) metric_sink_worker_settings: MetricSinkWorkerSettings,
     pub(crate) workload_stop_timeout: Duration,
     pub(crate) restart_backoff_base: Duration,
     pub(crate) restart_backoff_max: Duration,
@@ -112,6 +113,7 @@ impl DaemonRoleSettings {
             log_poll_interval,
             max_log_frames_per_workload,
             sink_worker_settings: SinkWorkerSettings::default(),
+            metric_sink_worker_settings: MetricSinkWorkerSettings::default(),
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -136,6 +138,7 @@ impl Default for DaemonRoleSettings {
             log_poll_interval: Duration::from_secs(1),
             max_log_frames_per_workload: 1_000,
             sink_worker_settings: SinkWorkerSettings::default(),
+            metric_sink_worker_settings: MetricSinkWorkerSettings::default(),
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -154,6 +157,17 @@ impl DaemonRoleSettings {
         settings: SinkWorkerSettings,
     ) -> Result<Self, RoleError> {
         self.sink_worker_settings = settings
+            .validate()
+            .map_err(|error| RoleError::new(error.to_string()))?;
+        Ok(self)
+    }
+
+    /// Overrides bounded metric sink drain, retry, and poll settings.
+    pub fn with_metric_sink_worker_settings(
+        mut self,
+        settings: MetricSinkWorkerSettings,
+    ) -> Result<Self, RoleError> {
+        self.metric_sink_worker_settings = settings
             .validate()
             .map_err(|error| RoleError::new(error.to_string()))?;
         Ok(self)
@@ -180,6 +194,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub log_sinks: Vec<Arc<dyn LogSink>>,
     /// Owned normalized-metric storage runtime for this node.
     pub metric_store_runtime: Box<dyn MetricStoreRuntime>,
+    /// Independently checkpointed normalized-metric destinations owned by this node.
+    pub metric_sinks: Vec<Arc<dyn MetricSink>>,
     /// Direct cgroup v2 reader used for backend-neutral workload samples.
     pub stats_reader: Arc<dyn CgroupStatsReader>,
     /// Runtime-aware reader for optional cumulative workload network counters.
@@ -211,6 +227,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
+    pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
     pub(crate) network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
@@ -247,6 +264,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
+            metric_sinks: dependencies.metric_sinks,
             stats_reader: dependencies.stats_reader,
             network_stats_reader: dependencies.network_stats_reader,
             network_provider: dependencies.network_provider,

@@ -177,6 +177,12 @@ impl MetricSinkWorker {
         for attempt in 1..=self.settings.max_attempts {
             match self.sink.send(points).await {
                 Ok(()) => return Ok(attempt.saturating_sub(1)),
+                Err(source @ MetricSinkError::Rejected { .. }) => {
+                    return Err(MetricSinkWorkerError::Sink {
+                        attempts: attempt,
+                        source,
+                    });
+                }
                 Err(source) if attempt == self.settings.max_attempts => {
                     return Err(MetricSinkWorkerError::Sink {
                         attempts: attempt,

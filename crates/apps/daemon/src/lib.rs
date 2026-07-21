@@ -13,6 +13,7 @@ mod error;
 mod launch;
 mod leadership;
 mod log_delivery;
+mod metric_delivery;
 mod operators;
 mod plan;
 mod runtime;
@@ -21,7 +22,7 @@ mod workload_agents;
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
 };
-pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig};
+pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig};
 pub use dead_letter_admin::{
     DeadLetterAdminCommand, DeadLetterAdminError, DeadLetterAdminOutput, administer_dead_letters,
 };
