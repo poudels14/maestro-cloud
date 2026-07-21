@@ -2,8 +2,8 @@ use std::io::Write;
 
 use kernel_api::{
     ArtifactTemplate, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId,
-    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceId, ServiceWriteRequest, ServiceWriteResponse,
+    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId, ServiceRolloutDiffRequest,
+    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
 };
 
 use crate::CliError;
@@ -96,18 +96,18 @@ pub(crate) trait ServiceApi {
         request: CommandRequest,
     ) -> Result<DeploymentCommandResponse, CliError>;
 
-    async fn diff_service(
+    async fn diff_rollout(
         &self,
         service_id: &ServiceId,
-        request: ServiceDiffRequest,
-    ) -> Result<ServiceDiffResponse, CliError>;
+        request: ServiceRolloutDiffRequest,
+    ) -> Result<ServiceRolloutDiffResponse, CliError>;
 
-    async fn put_service(
+    async fn apply_rollout(
         &self,
         service_id: &ServiceId,
         request_id: &RequestId,
-        request: ServiceWriteRequest,
-    ) -> Result<ServiceWriteResponse, CliError>;
+        request: ServiceRolloutRequest,
+    ) -> Result<ServiceRolloutResponse, CliError>;
 }
 
 impl ServiceApi for ApiClient {
@@ -159,23 +159,30 @@ impl ServiceApi for ApiClient {
         .await
     }
 
-    async fn diff_service(
+    async fn diff_rollout(
         &self,
         service_id: &ServiceId,
-        request: ServiceDiffRequest,
-    ) -> Result<ServiceDiffResponse, CliError> {
-        self.post_query(&format!("/api/services/{service_id}/diff"), &request)
-            .await
+        request: ServiceRolloutDiffRequest,
+    ) -> Result<ServiceRolloutDiffResponse, CliError> {
+        self.post_query(
+            &format!("/api/services/{service_id}/rollout/diff"),
+            &request,
+        )
+        .await
     }
 
-    async fn put_service(
+    async fn apply_rollout(
         &self,
         service_id: &ServiceId,
         request_id: &RequestId,
-        request: ServiceWriteRequest,
-    ) -> Result<ServiceWriteResponse, CliError> {
-        self.put(&format!("/api/services/{service_id}"), request_id, &request)
-            .await
+        request: ServiceRolloutRequest,
+    ) -> Result<ServiceRolloutResponse, CliError> {
+        self.post(
+            &format!("/api/services/{service_id}/rollout"),
+            request_id,
+            &request,
+        )
+        .await
     }
 }
 

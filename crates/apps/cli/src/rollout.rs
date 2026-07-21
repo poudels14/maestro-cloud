@@ -1,7 +1,8 @@
 use std::io::{BufRead, Write};
 
 use kernel_api::{
-    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceId, ServiceWriteRequest,
+    ServiceDiffStatus, ServiceId, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest,
 };
 
 use crate::CliError;
@@ -33,17 +34,17 @@ pub(crate) async fn run(
 
     let mut plans = Vec::with_capacity(selected.len());
     for (service_id, desired) in selected {
-        reject_pending_auxiliary(service_id, desired)?;
+        let desired = desired.rollout_spec(service_id)?;
         let diff = client
-            .diff_service(
+            .diff_rollout(
                 service_id,
-                ServiceDiffRequest {
-                    spec: desired.spec.clone(),
+                ServiceRolloutDiffRequest {
+                    desired: desired.clone(),
                 },
             )
             .await?;
         write_diff(&diff, output)?;
-        plans.push((service_id.clone(), desired.spec.clone(), diff));
+        plans.push((service_id.clone(), desired, diff));
     }
     let change_count = plans
         .iter()
@@ -70,19 +71,19 @@ pub(crate) async fn run(
             continue;
         }
         let response = client
-            .put_service(
+            .apply_rollout(
                 &service_id,
                 &request_id(explicit_key.take())?,
-                ServiceWriteRequest {
-                    expected_revision: diff.expected_revision,
-                    spec,
+                ServiceRolloutRequest {
+                    expected_revisions: diff.expected_revisions,
+                    desired: spec,
                 },
             )
             .await?;
         writeln!(
             output,
             "[maestro]: rollout accepted for `{}` at generation {}",
-            response.service_id, response.generation.0
+            response.service_id, response.service_generation.0
         )
         .map_err(output_error)?;
     }
@@ -114,23 +115,6 @@ fn select<'a>(
     Ok(selected)
 }
 
-fn reject_pending_auxiliary(
-    service_id: &ServiceId,
-    desired: &DesiredService,
-) -> Result<(), CliError> {
-    if desired.ingress.is_some() {
-        return Err(CliError::invalid_input(format!(
-            "services.{service_id}.ingress: ingress desired-state writes are not available yet"
-        )));
-    }
-    if !desired.egress.is_empty() {
-        return Err(CliError::invalid_input(format!(
-            "services.{service_id}.deploy.egress: egress desired-state writes are not available yet"
-        )));
-    }
-    Ok(())
-}
-
 fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {
     for field in fields {
         writeln!(output, "[maestro]: warning: ignored field `{field}`").map_err(output_error)?;
@@ -138,7 +122,7 @@ fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliErr
     Ok(())
 }
 
-fn write_diff(diff: &ServiceDiffResponse, output: &mut dyn Write) -> Result<(), CliError> {
+fn write_diff(diff: &ServiceRolloutDiffResponse, output: &mut dyn Write) -> Result<(), CliError> {
     match diff.status {
         ServiceDiffStatus::New => {
             writeln!(output, "\n  + {} (new service)", diff.service_id).map_err(output_error)?;

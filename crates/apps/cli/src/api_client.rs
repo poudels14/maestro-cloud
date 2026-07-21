@@ -75,20 +75,6 @@ impl ApiClient {
             .await
     }
 
-    pub(crate) async fn put<Request, Response>(
-        &self,
-        path: &str,
-        request_id: &RequestId,
-        body: &Request,
-    ) -> Result<Response, CliError>
-    where
-        Request: Serialize,
-        Response: DeserializeOwned,
-    {
-        self.mutate(reqwest::Method::PUT, path, request_id, body)
-            .await
-    }
-
     pub(crate) async fn post_query<Request, Response>(
         &self,
         path: &str,

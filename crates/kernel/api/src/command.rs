@@ -2,8 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeploymentGoal, DeploymentId, Generation, ResourceRevision, RolloutState, ServiceId,
-    ServiceSpec, Timestamp,
+    DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation, IngressRouteSpec,
+    ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
 };
 
 /// Optimistic lifecycle command targeting one exact resource revision.
@@ -83,6 +83,84 @@ pub struct ServiceDiffResponse {
     /// Ordered masked field changes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ServiceDiffChange>,
+}
+
+/// Complete resource set managed by one declarative service document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceRolloutSpec {
+    /// Service workload and artifact desired state.
+    pub service: ServiceSpec,
+    /// Stable ingress route, or absence to remove the managed route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<IngressRouteSpec>,
+    /// Stable service egress policy, or absence to remove the managed policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress: Option<FirewallPolicySpec>,
+}
+
+/// Exact revisions observed for every managed rollout resource.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRolloutRevisions {
+    /// Current service revision, or absence when missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<ResourceRevision>,
+    /// Current managed ingress route revision, or absence when missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<ResourceRevision>,
+    /// Current managed egress policy revision, or absence when missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress: Option<ResourceRevision>,
+}
+
+/// Read-only comparison of a complete declarative service resource set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceRolloutDiffRequest {
+    /// Desired resource set to compare.
+    pub desired: ServiceRolloutSpec,
+}
+
+/// Masked complete-resource comparison safe to submit on apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRolloutDiffResponse {
+    /// Compared service identity.
+    pub service_id: ServiceId,
+    /// Exact revisions observed during the comparison.
+    pub expected_revisions: ServiceRolloutRevisions,
+    /// Overall comparison classification.
+    pub status: ServiceDiffStatus,
+    /// Ordered masked field changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ServiceDiffChange>,
+}
+
+/// Optimistic atomic apply of a declarative service resource set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceRolloutRequest {
+    /// Revisions returned by the immediately preceding diff.
+    pub expected_revisions: ServiceRolloutRevisions,
+    /// Complete desired resource set.
+    pub desired: ServiceRolloutSpec,
+}
+
+/// Accepted generations for an atomic declarative service apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRolloutResponse {
+    /// Service whose resource set was accepted.
+    pub service_id: ServiceId,
+    /// Service generation after the apply.
+    pub service_generation: Generation,
+    /// Managed ingress generation, absent when the route was removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_generation: Option<Generation>,
+    /// Managed egress generation, absent when the policy was removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress_generation: Option<Generation>,
 }
 
 /// Result of an accepted service lifecycle command.

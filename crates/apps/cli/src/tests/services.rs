@@ -2,8 +2,9 @@ use std::sync::Mutex;
 
 use kernel_api::{
     CommandRequest, Deployment, DeploymentCommandResponse, DeploymentGoal, DeploymentId,
-    Generation, RequestId, RolloutState, Service, ServiceCommandResponse, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceId, ServiceWriteRequest, ServiceWriteResponse,
+    Generation, RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse,
 };
 use serde_json::json;
 
@@ -148,21 +149,21 @@ impl ServiceApi for RecordingServiceApi {
         })
     }
 
-    async fn diff_service(
+    async fn diff_rollout(
         &self,
         _service_id: &ServiceId,
-        _request: ServiceDiffRequest,
-    ) -> Result<ServiceDiffResponse, CliError> {
-        Err(CliError::invalid_input("unexpected diff request"))
+        _request: ServiceRolloutDiffRequest,
+    ) -> Result<ServiceRolloutDiffResponse, CliError> {
+        Err(CliError::invalid_input("unexpected rollout diff"))
     }
 
-    async fn put_service(
+    async fn apply_rollout(
         &self,
         _service_id: &ServiceId,
         _request_id: &RequestId,
-        _request: ServiceWriteRequest,
-    ) -> Result<ServiceWriteResponse, CliError> {
-        Err(CliError::invalid_input("unexpected service write"))
+        _request: ServiceRolloutRequest,
+    ) -> Result<ServiceRolloutResponse, CliError> {
+        Err(CliError::invalid_input("unexpected rollout apply"))
     }
 }
 

@@ -2,8 +2,9 @@ use std::sync::Mutex;
 
 use kernel_api::{
     CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId, Generation, RequestId,
-    Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse,
-    ServiceDiffStatus, ServiceId, ServiceWriteRequest, ServiceWriteResponse,
+    Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffStatus, ServiceId,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse,
 };
 
 use crate::CliError;
@@ -23,7 +24,7 @@ impl ConfigSourceReader for MemoryReader {
 
 #[derive(Default)]
 struct RecordingApi {
-    writes: Mutex<Vec<(RequestId, ServiceWriteRequest)>>,
+    writes: Mutex<Vec<(RequestId, ServiceRolloutRequest)>>,
 }
 
 impl ServiceApi for RecordingApi {
@@ -62,14 +63,18 @@ impl ServiceApi for RecordingApi {
         Err(unexpected())
     }
 
-    async fn diff_service(
+    async fn diff_rollout(
         &self,
         service_id: &ServiceId,
-        _request: ServiceDiffRequest,
-    ) -> Result<ServiceDiffResponse, CliError> {
-        Ok(ServiceDiffResponse {
+        _request: ServiceRolloutDiffRequest,
+    ) -> Result<ServiceRolloutDiffResponse, CliError> {
+        Ok(ServiceRolloutDiffResponse {
             service_id: service_id.clone(),
-            expected_revision: Some(kernel_api::ResourceRevision(7)),
+            expected_revisions: kernel_api::ServiceRolloutRevisions {
+                service: Some(kernel_api::ResourceRevision(7)),
+                ingress: None,
+                egress: None,
+            },
             status: ServiceDiffStatus::Changed,
             changes: vec![ServiceDiffChange {
                 field: "environment.TOKEN".to_string(),
@@ -79,19 +84,21 @@ impl ServiceApi for RecordingApi {
         })
     }
 
-    async fn put_service(
+    async fn apply_rollout(
         &self,
         service_id: &ServiceId,
         request_id: &RequestId,
-        request: ServiceWriteRequest,
-    ) -> Result<ServiceWriteResponse, CliError> {
+        request: ServiceRolloutRequest,
+    ) -> Result<ServiceRolloutResponse, CliError> {
         self.writes
             .lock()
             .map_err(|_| CliError::invalid_input("write lock was poisoned"))?
             .push((request_id.clone(), request));
-        Ok(ServiceWriteResponse {
+        Ok(ServiceRolloutResponse {
             service_id: service_id.clone(),
-            generation: Generation(8),
+            service_generation: Generation(8),
+            ingress_generation: None,
+            egress_generation: None,
         })
     }
 }
@@ -138,11 +145,16 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
     let (request_id, request) = writes.first().ok_or("missing service write")?;
     assert_eq!(request_id, &RequestId::new("rollout-1")?);
     assert_eq!(
-        request.expected_revision,
-        Some(kernel_api::ResourceRevision(7))
+        request.expected_revisions.service,
+        Some(kernel_api::ResourceRevision(7)),
     );
     assert_eq!(
-        request.spec.environment.get("TOKEN").map(String::as_str),
+        request
+            .desired
+            .service
+            .environment
+            .get("TOKEN")
+            .map(String::as_str),
         Some("private-new")
     );
     Ok(())

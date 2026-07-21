@@ -5356,6 +5356,7 @@ dependencies = [
  "axum-server",
  "firewall",
  "http-body-util",
+ "ingress",
  "ipnet",
  "jsonwebtoken",
  "kernel-api",

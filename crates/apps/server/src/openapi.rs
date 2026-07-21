@@ -108,6 +108,14 @@ pub fn openapi_document() -> Value {
             service_diff_operation(),
         ),
         (
+            "/api/services/{serviceId}/rollout".to_string(),
+            service_rollout_operation(),
+        ),
+        (
+            "/api/services/{serviceId}/rollout/diff".to_string(),
+            service_rollout_diff_operation(),
+        ),
+        (
             "/api/services/{serviceId}/redeploy".to_string(),
             command_path(
                 "post",
@@ -375,6 +383,86 @@ fn service_diff_operation() -> Value {
                     }
                 },
                 "400": {"description": "Invalid service request"},
+                "413": {"description": "Request body exceeds the service limit"}
+            }
+        }
+    })
+}
+
+fn service_rollout_operation() -> Value {
+    json!({
+        "post": {
+            "operationId": "applyServiceRollout",
+            "security": [{"bearerAuth": []}],
+            "parameters": [
+                {
+                    "name": "serviceId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {"type": "string"}
+                },
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": true,
+                    "schema": {"type": "string"}
+                }
+            ],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ServiceRolloutRequest"}
+                    }
+                }
+            },
+            "responses": {
+                "202": {
+                    "description": "Atomic desired resource set accepted",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ServiceRolloutResponse"}
+                        }
+                    }
+                },
+                "400": {"description": "Invalid rollout request"},
+                "409": {"description": "Revision, route, policy, or idempotency conflict"},
+                "413": {"description": "Request body exceeds the service limit"}
+            }
+        }
+    })
+}
+
+fn service_rollout_diff_operation() -> Value {
+    json!({
+        "post": {
+            "operationId": "diffServiceRollout",
+            "security": [{"bearerAuth": []}],
+            "parameters": [{
+                "name": "serviceId",
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            }],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ServiceRolloutDiffRequest"}
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Masked atomic rollout comparison",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ServiceRolloutDiffResponse"}
+                        }
+                    }
+                },
+                "400": {"description": "Invalid rollout request"},
+                "409": {"description": "Route or policy ownership conflict"},
                 "413": {"description": "Request body exceeds the service limit"}
             }
         }

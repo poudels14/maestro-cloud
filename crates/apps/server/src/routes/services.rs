@@ -99,7 +99,7 @@ async fn put_service(
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
-fn plan_service_write(
+pub(super) fn plan_service_write(
     current: Option<&kernel_store::StoredValue>,
     keys: &Keyspace,
     kind: &ResourceKind,

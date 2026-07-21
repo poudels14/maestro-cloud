@@ -8,6 +8,7 @@ rust-version.workspace = true
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
 firewall = { version = "0.1.0", path = "../../operators/firewall" }
+ingress = { version = "0.1.0", path = "../../operators/ingress" }
 ipnet.workspace = true
 jsonwebtoken.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }

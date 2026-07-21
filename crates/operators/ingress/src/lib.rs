@@ -27,6 +27,7 @@ pub use plan::{IngressPlanError, plan};
 pub use reconciler::IngressReconciler;
 pub use traefik::{TraefikBackend, TraefikCutover, TraefikProvider, TraefikStage};
 pub use traefik_store::StoreTraefikProvider;
+pub use validation::validate_route_spec;
 
 #[cfg(test)]
 mod tests;

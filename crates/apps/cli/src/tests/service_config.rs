@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{ArtifactTemplate, ExecPolicy, SecretValue};
+use kernel_api::{
+    ArtifactTemplate, ExecPolicy, FirewallDirection, FirewallSubject, FirewallVerdict, SecretValue,
+    ServiceId, TransportProtocol,
+};
 
 use crate::CliError;
 use crate::config_source::ConfigSourceReader;
@@ -44,6 +47,9 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
                             secrets: {
                                 mountPath: "/run/secrets/api.env",
                                 items: { TOKEN: "super-secret-token" }
+                            },
+                            egress: {
+                                allow: [{ cidr: "10.0.0.0/24", ports: [443, 443] }]
                             }
                         }
                     }
@@ -81,7 +87,28 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
         Some(&SecretValue::new("super-secret-token"))
     );
     assert!(desired.spec.version.starts_with("cfg-"));
-    assert!(desired.ingress.is_some());
+    let rollout = desired.rollout_spec(&ServiceId::new("api")?)?;
+    assert_eq!(rollout.service.exposed_ports, [8080]);
+    let ingress = rollout.ingress.ok_or("missing ingress rollout")?;
+    assert_eq!(ingress.service_id, ServiceId::new("api")?);
+    assert_eq!(ingress.hosts, ["api.example.com"]);
+    assert_eq!(ingress.target_port, 8080);
+    let egress = rollout.egress.ok_or("missing egress rollout")?;
+    assert_eq!(egress.direction, FirewallDirection::Egress);
+    assert_eq!(
+        egress.subject,
+        FirewallSubject::Service(ServiceId::new("api")?)
+    );
+    assert_eq!(egress.default_verdict, FirewallVerdict::Deny);
+    assert_eq!(egress.rules.len(), 1);
+    let rule = egress.rules.first().ok_or("missing egress rule")?;
+    assert_eq!(rule.cidr, "10.0.0.0/24");
+    assert_eq!(rule.protocol, TransportProtocol::Any);
+    assert_eq!(rule.ports.len(), 1);
+    let port = rule.ports.first().ok_or("missing egress port")?;
+    assert_eq!(port.start, 443);
+    assert_eq!(port.end, 443);
+    assert_eq!(rule.verdict, FirewallVerdict::Allow);
     Ok(())
 }
 

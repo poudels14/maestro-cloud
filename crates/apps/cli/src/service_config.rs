@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{ServiceId, ServiceSpec};
+use kernel_api::{
+    FirewallDirection, FirewallPolicySpec, FirewallRule, FirewallSubject, FirewallVerdict,
+    IngressRouteSpec, PortRange, ServiceId, ServiceRolloutSpec, ServiceSpec, SessionAffinity,
+    TransportProtocol,
+};
 use serde::Deserialize;
 
 use crate::CliError;
@@ -18,6 +22,69 @@ pub(crate) struct DesiredService {
     pub(crate) spec: ServiceSpec,
     pub(crate) ingress: Option<IngressConfig>,
     pub(crate) egress: Vec<EgressRule>,
+}
+
+impl DesiredService {
+    pub(crate) fn rollout_spec(
+        &self,
+        service_id: &ServiceId,
+    ) -> Result<ServiceRolloutSpec, CliError> {
+        let ingress = self
+            .ingress
+            .as_ref()
+            .map(|ingress| {
+                let mut hosts = ingress.hosts.clone();
+                if let Some(host) = &ingress.host {
+                    hosts.push(host.clone());
+                }
+                hosts.sort();
+                hosts.dedup();
+                let target_port = ingress.port.ok_or_else(|| {
+                    CliError::invalid_input(format!(
+                        "services.{service_id}.ingress.port: is required"
+                    ))
+                })?;
+                Ok(IngressRouteSpec {
+                    service_id: service_id.clone(),
+                    hosts,
+                    path_prefix: None,
+                    target_port,
+                    session_affinity: ingress.session_affinity.as_ref().map(|affinity| {
+                        SessionAffinity {
+                            header: affinity.header.clone(),
+                        }
+                    }),
+                })
+            })
+            .transpose()?;
+        let egress = (!self.egress.is_empty()).then(|| FirewallPolicySpec {
+            direction: FirewallDirection::Egress,
+            subject: FirewallSubject::Service(service_id.clone()),
+            rules: self
+                .egress
+                .iter()
+                .map(|rule| FirewallRule {
+                    cidr: rule.cidr.clone(),
+                    protocol: TransportProtocol::Any,
+                    ports: rule
+                        .ports
+                        .iter()
+                        .map(|port| PortRange {
+                            start: *port,
+                            end: *port,
+                        })
+                        .collect(),
+                    verdict: FirewallVerdict::Allow,
+                })
+                .collect(),
+            default_verdict: FirewallVerdict::Deny,
+        });
+        Ok(ServiceRolloutSpec {
+            service: self.spec.clone(),
+            ingress,
+            egress,
+        })
+    }
 }
 
 pub(crate) async fn load_services(

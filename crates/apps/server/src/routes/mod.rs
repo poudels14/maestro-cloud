@@ -9,6 +9,8 @@ mod network_observations;
 mod observations;
 mod service_commands;
 mod service_diff;
+mod service_rollout_validation;
+mod service_rollouts;
 mod services;
 mod system;
 mod upgrades;
@@ -32,6 +34,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(network_observations::router())
         .merge(observations::router())
         .merge(service_commands::router())
+        .merge(service_rollouts::router())
         .merge(services::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())

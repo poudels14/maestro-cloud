@@ -4203,6 +4203,241 @@ expression: openapi_document()
         "description": "Stable identity of a deployable service.",
         "type": "string"
       },
+      "ServiceRolloutDiffRequest": {
+        "additionalProperties": false,
+        "description": "Read-only comparison of a complete declarative service resource set.",
+        "properties": {
+          "desired": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutSpec"
+              }
+            ],
+            "description": "Desired resource set to compare."
+          }
+        },
+        "required": [
+          "desired"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutDiffResponse": {
+        "description": "Masked complete-resource comparison safe to submit on apply.",
+        "properties": {
+          "changes": {
+            "description": "Ordered masked field changes.",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDiffChange"
+            },
+            "type": "array"
+          },
+          "expectedRevisions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutRevisions"
+              }
+            ],
+            "description": "Exact revisions observed during the comparison."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Compared service identity."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceDiffStatus"
+              }
+            ],
+            "description": "Overall comparison classification."
+          }
+        },
+        "required": [
+          "serviceId",
+          "expectedRevisions",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutRequest": {
+        "additionalProperties": false,
+        "description": "Optimistic atomic apply of a declarative service resource set.",
+        "properties": {
+          "desired": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutSpec"
+              }
+            ],
+            "description": "Complete desired resource set."
+          },
+          "expectedRevisions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutRevisions"
+              }
+            ],
+            "description": "Revisions returned by the immediately preceding diff."
+          }
+        },
+        "required": [
+          "expectedRevisions",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutResponse": {
+        "description": "Accepted generations for an atomic declarative service apply.",
+        "properties": {
+          "egressGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Managed egress generation, absent when the policy was removed."
+          },
+          "ingressGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Managed ingress generation, absent when the route was removed."
+          },
+          "serviceGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Service generation after the apply."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service whose resource set was accepted."
+          }
+        },
+        "required": [
+          "serviceId",
+          "serviceGeneration"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutRevisions": {
+        "description": "Exact revisions observed for every managed rollout resource.",
+        "properties": {
+          "egress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current managed egress policy revision, or absence when missing."
+          },
+          "ingress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current managed ingress route revision, or absence when missing."
+          },
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current service revision, or absence when missing."
+          }
+        },
+        "type": "object"
+      },
+      "ServiceRolloutSpec": {
+        "additionalProperties": false,
+        "description": "Complete resource set managed by one declarative service document.",
+        "properties": {
+          "egress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicySpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Stable service egress policy, or absence to remove the managed policy."
+          },
+          "ingress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Stable ingress route, or absence to remove the managed route."
+          },
+          "service": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Service workload and artifact desired state."
+          }
+        },
+        "required": [
+          "service"
+        ],
+        "type": "object"
+      },
       "ServiceSpec": {
         "description": "Desired service configuration used to create immutable deployments.",
         "properties": {

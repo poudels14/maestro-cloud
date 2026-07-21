@@ -143,6 +143,12 @@ pub(super) async fn convert_service(
         })
         .transpose()?;
     let preview = convert_preview(config_source, &path, template.preview, reader).await?;
+    let mut exposed_ports = template.deploy.expose_ports;
+    if let Some(port) = template.ingress.as_ref().and_then(|ingress| ingress.port) {
+        exposed_ports.push(port);
+    }
+    exposed_ports.sort_unstable();
+    exposed_ports.dedup();
     let mut spec = ServiceSpec {
         name,
         version: "pending".to_string(),
@@ -153,7 +159,7 @@ pub(super) async fn convert_service(
             arguments: command.args,
         }),
         replicas: template.deploy.replicas,
-        exposed_ports: template.deploy.expose_ports,
+        exposed_ports,
         health_check,
         max_restarts: template.deploy.max_restarts,
         environment,
@@ -341,6 +347,12 @@ fn validate_ingress(
         return Err(invalid(
             &format!("{service_path}.ingress.port"),
             "port must be non-zero",
+        ));
+    }
+    if ingress.port.is_none() {
+        return Err(invalid(
+            &format!("{service_path}.ingress.port"),
+            "is required",
         ));
     }
     let host_count = usize::from(ingress.host.is_some()) + ingress.hosts.len();

@@ -30,6 +30,7 @@ mod network_observations;
 mod node_commands;
 mod observations;
 mod service_commands;
+mod service_rollouts;
 mod services;
 mod upgrades;
 

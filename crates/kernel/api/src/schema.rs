@@ -8,8 +8,9 @@ use crate::{
     Assignment, Build, CommandRequest, Deployment, DeploymentCommandResponse, DnsRecord,
     FirewallPolicy, IngressRoute, Node, NodeFirewall, NodeNetwork, Preview, ReplicaState,
     ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceDiffStatus, ServiceWriteRequest, ServiceWriteResponse,
-    TrafficGeneration, UpgradeRun, Webhook,
+    ServiceDiffResponse, ServiceDiffStatus, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec,
+    ServiceWriteRequest, ServiceWriteResponse, TrafficGeneration, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -278,6 +279,15 @@ pub fn openapi_document() -> Value {
     register_named_schema::<ServiceDiffResponse>(&mut generator, "ServiceDiffResponse");
     register_named_schema::<ServiceDiffStatus>(&mut generator, "ServiceDiffStatus");
     register_named_schema::<ServiceDiffChange>(&mut generator, "ServiceDiffChange");
+    register_named_schema::<ServiceRolloutSpec>(&mut generator, "ServiceRolloutSpec");
+    register_named_schema::<ServiceRolloutRevisions>(&mut generator, "ServiceRolloutRevisions");
+    register_named_schema::<ServiceRolloutDiffRequest>(&mut generator, "ServiceRolloutDiffRequest");
+    register_named_schema::<ServiceRolloutDiffResponse>(
+        &mut generator,
+        "ServiceRolloutDiffResponse",
+    );
+    register_named_schema::<ServiceRolloutRequest>(&mut generator, "ServiceRolloutRequest");
+    register_named_schema::<ServiceRolloutResponse>(&mut generator, "ServiceRolloutResponse");
 
     let schemas = generator.take_definitions(true);
     json!({
