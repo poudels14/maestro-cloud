@@ -2,4 +2,5 @@
 
 mod assignment;
 mod plan;
+mod reconciler;
 mod scheduler;

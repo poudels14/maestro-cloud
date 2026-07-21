@@ -8,7 +8,8 @@ use kernel_api::{
     ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service, ServiceId,
     ServiceSpec, ServiceStatus,
 };
-use kernel_store::{Compare, ExpectedVersion, Keyspace, Store, StoredValue};
+use kernel_controller::FencedStore;
+use kernel_store::{Compare, ExpectedVersion, Keyspace, StoredValue};
 use serde::de::DeserializeOwned;
 
 use crate::SchedulerError;
@@ -26,10 +27,10 @@ pub(crate) struct ResourceSnapshot {
 
 impl ResourceSnapshot {
     pub(crate) async fn load(
-        store: &dyn Store,
+        fenced_store: &FencedStore,
         keyspace: &Keyspace,
     ) -> Result<Self, SchedulerError> {
-        let snapshot = store.list(&keyspace.resources()).await?;
+        let snapshot = fenced_store.list(&keyspace.resources()).await?;
         let services = decode_kind::<ServiceId, ServiceSpec, ServiceStatus>(
             &snapshot.values,
             keyspace,

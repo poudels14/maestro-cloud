@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
@@ -17,5 +18,4 @@ thiserror = "=2.0.18"
 workspace = true
 
 [dev-dependencies]
-async-trait = "=0.1.89"
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }

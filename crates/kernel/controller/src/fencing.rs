@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use kernel_store::{
-    Compare, ExpectedVersion, Mutation, Store, StoreKey, Transaction, TransactionOutcome,
+    Compare, ExpectedVersion, ListResult, Mutation, Store, StoreKey, StorePrefix, StoredValue,
+    Transaction, TransactionOutcome,
 };
 
 use crate::{ControllerError, LeadershipToken};
@@ -27,6 +28,16 @@ impl FencedStore {
     /// Returns the leadership token enforced by every mutation.
     pub fn token(&self) -> &LeadershipToken {
         &self.token
+    }
+
+    /// Reads one value from the same backend protected by this mutation fence.
+    pub async fn get(&self, key: &StoreKey) -> Result<Option<StoredValue>, ControllerError> {
+        Ok(self.store.get(key).await?)
+    }
+
+    /// Lists one prefix from the same backend protected by this mutation fence.
+    pub async fn list(&self, prefix: &StorePrefix) -> Result<ListResult, ControllerError> {
+        Ok(self.store.list(prefix).await?)
     }
 
     pub(crate) fn raw_store(&self) -> &dyn Store {

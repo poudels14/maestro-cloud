@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use kernel_api::{ClusterId, InvalidIdentifier, NodeId, Timestamp};
 use kernel_controller::{ControllerError, FencedStore};
-use kernel_store::{Compare, ExpectedVersion, Keyspace, Store, StoreError};
+use kernel_store::{Compare, ExpectedVersion, Keyspace};
 
 use crate::assignment::{AssignmentWriteError, AssignmentWriter};
 use crate::model::UnschedulableReplica;
@@ -46,7 +45,6 @@ pub struct SchedulerReport {
 
 /// Store-backed scheduler that projects resources, plans placements, and commits one generation.
 pub struct Scheduler {
-    store: Arc<dyn Store>,
     cluster_id: ClusterId,
     keyspace: Keyspace,
     settings: SchedulerSettings,
@@ -55,15 +53,10 @@ pub struct Scheduler {
 
 impl Scheduler {
     /// Constructs a scheduler without reading or mutating cluster state.
-    pub fn new(
-        store: Arc<dyn Store>,
-        cluster_id: ClusterId,
-        settings: SchedulerSettings,
-    ) -> Result<Self, SchedulerError> {
+    pub fn new(cluster_id: ClusterId, settings: SchedulerSettings) -> Result<Self, SchedulerError> {
         Ok(Self {
             writer: AssignmentWriter::new(&cluster_id)?,
             keyspace: Keyspace::new(&cluster_id),
-            store,
             cluster_id,
             settings: settings.validate()?,
         })
@@ -79,10 +72,10 @@ impl Scheduler {
         fenced_store: &FencedStore,
         now: Timestamp,
     ) -> Result<SchedulerReport, SchedulerError> {
-        let generation_before = self.scheduler_generation().await?;
-        let mut snapshot = ResourceSnapshot::load(self.store.as_ref(), &self.keyspace).await?;
-        let (live_nodes, liveness_compares) = self.live_nodes(&snapshot).await?;
-        let generation_after = self.scheduler_generation().await?;
+        let generation_before = self.scheduler_generation(fenced_store).await?;
+        let mut snapshot = ResourceSnapshot::load(fenced_store, &self.keyspace).await?;
+        let (live_nodes, liveness_compares) = self.live_nodes(fenced_store, &snapshot).await?;
+        let generation_after = self.scheduler_generation(fenced_store).await?;
         if generation_before != generation_after {
             return Ok(SchedulerReport {
                 conflict: true,
@@ -126,10 +119,12 @@ impl Scheduler {
         })
     }
 
-    async fn scheduler_generation(&self) -> Result<ExpectedVersion, StoreError> {
+    async fn scheduler_generation(
+        &self,
+        fenced_store: &FencedStore,
+    ) -> Result<ExpectedVersion, ControllerError> {
         Ok(
-            match self
-                .store
+            match fenced_store
                 .get(&self.keyspace.scheduler_generation())
                 .await?
             {
@@ -141,13 +136,14 @@ impl Scheduler {
 
     async fn live_nodes(
         &self,
+        fenced_store: &FencedStore,
         snapshot: &ResourceSnapshot,
-    ) -> Result<(BTreeSet<NodeId>, Vec<Compare>), StoreError> {
+    ) -> Result<(BTreeSet<NodeId>, Vec<Compare>), ControllerError> {
         let mut live = BTreeSet::new();
         let mut compares = Vec::new();
         for node_id in snapshot.nodes.keys() {
             let key = self.keyspace.node_liveness(node_id);
-            match self.store.get(&key).await? {
+            match fenced_store.get(&key).await? {
                 Some(stored) => {
                     live.insert(node_id.clone());
                     compares.push(Compare {
@@ -174,9 +170,6 @@ pub enum SchedulerError {
     /// A static or stored resource identifier was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] InvalidIdentifier),
-    /// Linearizable resource or liveness access failed.
-    #[error(transparent)]
-    Store(#[from] StoreError),
     /// The leadership fence was lost or rejected a transaction.
     #[error(transparent)]
     Controller(#[from] ControllerError),

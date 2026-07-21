@@ -118,16 +118,16 @@ async fn host_volumes_pin_placement_and_invalid_changes_preserve_running_work()
     Ok(())
 }
 
-struct World {
-    store: Arc<InMemoryStore>,
-    keys: Keyspace,
+pub(super) struct World {
+    pub(super) store: Arc<InMemoryStore>,
+    pub(super) keys: Keyspace,
     scheduler: Scheduler,
-    fenced: FencedStore,
+    pub(super) fenced: FencedStore,
     _leader_session: Box<dyn Session>,
 }
 
 impl World {
-    async fn new(replicas: u32) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(super) async fn new(replicas: u32) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new("cluster-1")?;
         let keys = Keyspace::new(&cluster_id);
         let store = Arc::new(InMemoryStore::new(Arc::new(NoopClock)));
@@ -154,9 +154,7 @@ impl World {
             leader.version,
         );
         let fenced = FencedStore::new(store.clone(), keys.leader(), token);
-        let store_boundary: Arc<dyn Store> = store.clone();
         let scheduler = Scheduler::new(
-            store_boundary,
             cluster_id,
             SchedulerSettings {
                 replacement_grace: Duration::from_secs(30),
@@ -222,7 +220,7 @@ impl World {
         Ok(())
     }
 
-    async fn assignments(&self) -> Result<Vec<Assignment>, Box<dyn std::error::Error>> {
+    pub(super) async fn assignments(&self) -> Result<Vec<Assignment>, Box<dyn std::error::Error>> {
         self.store
             .list(&self.keys.resource_kind(&ResourceKind::new("Assignment")?))
             .await?
@@ -282,7 +280,10 @@ impl World {
         Ok(())
     }
 
-    async fn remove_liveness(&self, node_id: &NodeId) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn remove_liveness(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let key = self.keys.node_liveness(node_id);
         let stored = self.store.get(&key).await?.ok_or("liveness missing")?;
         self.store
