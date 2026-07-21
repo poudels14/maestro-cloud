@@ -97,6 +97,9 @@ pub enum DaemonLaunchError {
     /// NixOS staging and reboot launch settings were invalid.
     #[error(transparent)]
     NixosUpgrade(#[from] crate::NixosUpgradeLaunchError),
+    /// API listener or authentication policy was unsafe.
+    #[error(transparent)]
+    ApiSettings(#[from] server::ServerSettingsError),
     /// Role planning, startup, or rollback failed.
     #[error(transparent)]
     Daemon(#[from] crate::DaemonError),

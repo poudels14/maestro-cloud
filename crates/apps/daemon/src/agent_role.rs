@@ -88,6 +88,23 @@ where
     };
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
+    let api_server = match server::ApiServer::new(
+        store.clone(),
+        plan.cluster().cluster_id.clone(),
+        factory.api_settings.clone(),
+    ) {
+        Ok(server) => match server.bind().await {
+            Ok(server) => server,
+            Err(error) => {
+                return runtimes.fail(role_error("bind operator API", error)).await;
+            }
+        },
+        Err(error) => {
+            return runtimes
+                .fail(role_error("construct operator API", error))
+                .await;
+        }
+    };
     let sink_workers = match build_sink_workers(
         &factory.log_sinks,
         runtimes.log_delivery_store(),
@@ -307,6 +324,13 @@ where
     let host_telemetry_shutdown = bridge_shutdown.clone();
     let node_upgrade_shutdown = bridge_shutdown.clone();
     let node_registry_shutdown = bridge_shutdown.clone();
+    let api_shutdown = bridge_shutdown.clone();
+    let api_task = tokio::spawn(async move {
+        api_server
+            .serve(api_shutdown)
+            .await
+            .map_err(|error| role_error("serve operator API", error))
+    });
     let node_registry_task = tokio::spawn(async move {
         node_registry_agent
             .run_registered(node_registration, node_registry_shutdown)
@@ -350,6 +374,7 @@ where
         firewall_task,
         dns_server_task,
         node_registry_task,
+        api_task,
     ];
     if let Some(agent) = assignment_agent {
         tasks.push(tokio::spawn(async move {

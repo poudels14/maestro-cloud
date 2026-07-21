@@ -16,6 +16,7 @@ use node_agent::{
 };
 use runtime::{NetworkProvider, WorkloadRuntime};
 use semver::Version;
+use server::ServerSettings;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use upgrade::{NixosUpgradeStager, NodeRebooter};
@@ -249,6 +250,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub status_clock: Arc<dyn StatusClock>,
     /// Optional paired node-local NixOS staging and reboot seams.
     pub node_upgrade: Option<NodeUpgradeDependencies>,
+    /// Validated node-local operator API transport and authentication policy.
+    pub api_settings: ServerSettings,
 }
 
 /// Concrete daemon factory composing node agents and control-plane leader work when declared.
@@ -279,6 +282,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) monotonic_clock: Arc<dyn Clock>,
     pub(crate) status_clock: Arc<dyn StatusClock>,
     pub(crate) node_upgrade: Option<NodeUpgradeDependencies>,
+    pub(crate) api_settings: ServerSettings,
     pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
@@ -323,6 +327,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             monotonic_clock: dependencies.monotonic_clock,
             status_clock: dependencies.status_clock,
             node_upgrade: dependencies.node_upgrade,
+            api_settings: dependencies.api_settings,
             settings,
             store: Mutex::new(None),
             leader_workload: None,

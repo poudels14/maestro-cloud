@@ -84,6 +84,20 @@ fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn launch_validation_requires_a_strong_redacted_operator_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    let secret = "operator-production-secret-with-32-characters";
+    launch.operator_jwt_secret = SecretValue::new(secret);
+    launch.validate()?;
+    assert!(!format!("{launch:?}").contains(secret));
+
+    launch.operator_jwt_secret = SecretValue::new("too-short");
+    assert!(launch.validate().is_err());
+    Ok(())
+}
+
+#[test]
 fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
@@ -232,6 +246,7 @@ fn config(
                 private_key_pem: SecretValue::new("test-private-key"),
             },
         },
+        operator_jwt_secret: SecretValue::new("operator-test-secret-with-32-characters"),
         instance_id: Some(NodeInstanceId::new("instance-1")?),
         datadog: None,
         log_backup: None,

@@ -275,6 +275,9 @@ impl RealProcessCluster {
             etcd_binary: Some(self.etcd_binary.clone()),
             store_mode,
             security,
+            operator_jwt_secret: kernel_api::SecretValue::new(
+                "real-cluster-operator-secret-with-32-characters",
+            ),
             instance_id: Some(
                 NodeInstanceId::new(format!("{}-process-{launch_sequence}", node.node_id))
                     .map_err(RealClusterError::from_display)?,

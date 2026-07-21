@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,7 +9,7 @@ use cluster::{
     ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle,
     StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
 };
-use kernel_api::{NodeId, NodeInstanceId, NodeRole};
+use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
@@ -20,6 +21,7 @@ use node_agent::{
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use server::{ServerSettings, TlsIdentity};
 use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
 
 use crate::datadog::{build_datadog_sinks, configure_datadog};
@@ -73,6 +75,8 @@ pub struct DaemonLaunchConfig {
     pub store_mode: StoreLaunchMode,
     /// Node-specific mutual TLS identity granted during bootstrap or join.
     pub security: NodeCertificateBundle,
+    /// Cluster-wide HS256 key used to authenticate operator API requests.
+    pub operator_jwt_secret: SecretValue,
     /// Optional deterministic process identity, primarily for cluster tests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<NodeInstanceId>,
@@ -115,6 +119,7 @@ impl DaemonLaunchConfig {
                 self.node_id
             ))
         })?;
+        api_settings(node, &self.security, self.operator_jwt_secret.clone()).validate()?;
         match (&self.etcd_binary, node.role.is_control_plane()) {
             (Some(path), true) if path.is_absolute() => {}
             (Some(_), true) => {
@@ -180,6 +185,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         etcd_binary,
         store_mode,
         security,
+        operator_jwt_secret,
         instance_id,
         datadog,
         log_backup,
@@ -194,6 +200,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
+    let api_settings = api_settings(local_node, &security, operator_jwt_secret);
     let agent_store = if local_node.role.is_control_plane() {
         let local_member = known_members
             .get(&node_id)
@@ -340,12 +347,31 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 stager: upgrade.stager,
                 rebooter: upgrade.rebooter,
             }),
+            api_settings,
         },
         DaemonRoleSettings::default(),
     )
     .with_log_maintenance(log_maintenance)
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
+}
+
+fn api_settings(
+    node: &cluster::NodeDefinition,
+    security: &NodeCertificateBundle,
+    operator_jwt_secret: SecretValue,
+) -> ServerSettings {
+    ServerSettings::new(
+        SocketAddr::new(
+            IpAddr::V4(node.endpoint.host_address),
+            node.endpoint.api_port,
+        ),
+        Some(operator_jwt_secret),
+    )
+    .with_tls_identity(TlsIdentity::new(
+        security.identity.certificate_pem.clone(),
+        security.identity.private_key_pem.clone(),
+    ))
 }
 
 async fn open_observability_stores(

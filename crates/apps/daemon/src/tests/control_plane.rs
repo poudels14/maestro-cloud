@@ -32,6 +32,7 @@ use node_agent::{
 };
 use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
 use semver::Version;
+use server::ServerSettings;
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -76,6 +77,9 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         [],
     ));
     let directory = tempfile::tempdir()?;
+    let api_probe = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let api_address = api_probe.local_addr()?;
+    drop(api_probe);
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
         cluster.clone(),
@@ -134,6 +138,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
+            api_settings: ServerSettings::new(api_address, None),
         },
         DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {
             poll_interval: Duration::from_millis(1),
@@ -143,6 +148,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     .with_leader_workload(workload.clone());
 
     let running = Daemon::new(plan, factory).start().await?;
+    let api_health = reqwest::get(format!("http://{api_address}/healthz")).await?;
+    assert_eq!(api_health.status(), reqwest::StatusCode::OK);
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if host_metric_store
@@ -432,6 +439,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
+            api_settings: ServerSettings::new("127.0.0.1:0".parse()?, None),
         },
         DaemonRoleSettings::default(),
     );
