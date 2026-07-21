@@ -16,13 +16,18 @@ pub fn plan_upgrade(
     settings: UpgradeSettings,
 ) -> Result<UpgradePlan, UpgradePlanError> {
     let nodes = index_nodes(&input.nodes)?;
-    let target = parse_target(&input.run.spec.target_version)?;
     match input.run.status.phase {
-        UpgradePhase::Pending => initialize(input, nodes, &target),
+        UpgradePhase::Pending => {
+            let target = parse_target(&input.run.spec.target_version)?;
+            initialize(input, nodes, &target)
+        }
         UpgradePhase::Draining => plan_draining(input, nodes, settings),
         UpgradePhase::Applying => plan_dispatch(input, nodes),
         UpgradePhase::Restarting => plan_restart(input, nodes, settings),
-        UpgradePhase::Verifying => plan_verification(input, nodes, &target, settings),
+        UpgradePhase::Verifying => {
+            let target = parse_target(&input.run.spec.target_version)?;
+            plan_verification(input, nodes, &target, settings)
+        }
         UpgradePhase::Completed | UpgradePhase::Failed | UpgradePhase::Canceled => {
             plan_terminal(input, nodes)
         }
@@ -117,6 +122,9 @@ fn initialize(
     nodes: BTreeMap<NodeId, Node>,
     target: &Version,
 ) -> Result<UpgradePlan, UpgradePlanError> {
+    if nodes.is_empty() {
+        return Err(UpgradePlanError::NoNodes);
+    }
     if !input.run.status.nodes.is_empty() {
         return Err(UpgradePlanError::UnexpectedPendingProgress);
     }
@@ -632,9 +640,6 @@ fn index_nodes(nodes: &[Node]) -> Result<BTreeMap<NodeId, Node>, UpgradePlanErro
                 node_id: node.meta.id.clone(),
             });
         }
-    }
-    if indexed.is_empty() {
-        return Err(UpgradePlanError::NoNodes);
     }
     Ok(indexed)
 }

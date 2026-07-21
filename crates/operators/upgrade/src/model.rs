@@ -21,17 +21,23 @@ impl UpgradeSettings {
         observation_interval: Duration,
         max_attempts: u32,
     ) -> Result<Self, UpgradeSettingsError> {
-        if retry_delay.is_zero() || observation_interval.is_zero() {
-            return Err(UpgradeSettingsError::ZeroDelay);
-        }
-        if max_attempts == 0 {
-            return Err(UpgradeSettingsError::ZeroAttempts);
-        }
-        Ok(Self {
+        Self {
             retry_delay,
             observation_interval,
             max_attempts,
-        })
+        }
+        .validate()
+    }
+
+    /// Revalidates settings assembled by a caller or configuration adapter.
+    pub fn validate(self) -> Result<Self, UpgradeSettingsError> {
+        if self.retry_delay.is_zero() || self.observation_interval.is_zero() {
+            return Err(UpgradeSettingsError::ZeroDelay);
+        }
+        if self.max_attempts == 0 {
+            return Err(UpgradeSettingsError::ZeroAttempts);
+        }
+        Ok(self)
     }
 }
 
