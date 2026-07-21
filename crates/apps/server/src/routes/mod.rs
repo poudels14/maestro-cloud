@@ -1,3 +1,4 @@
+mod automation;
 mod cluster;
 mod cluster_commands;
 mod deployment_commands;
@@ -10,6 +11,7 @@ mod service_commands;
 mod services;
 mod system;
 mod upgrades;
+mod webhook_commands;
 
 use axum::Router;
 use axum::middleware;
@@ -19,6 +21,7 @@ use crate::auth::{AuthPolicy, require_operator};
 
 pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
     let protected = Router::new()
+        .merge(automation::router())
         .merge(cluster::router())
         .merge(cluster_commands::router())
         .merge(deployment_commands::router())
@@ -30,6 +33,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(service_commands::router())
         .merge(services::router())
         .merge(upgrades::router())
+        .merge(webhook_commands::router())
         .route_layer(middleware::from_fn_with_state(auth, require_operator));
     Router::new()
         .merge(system::router())

@@ -2,7 +2,7 @@ use serde_json::{Map, Value, json};
 
 use crate::openapi_commands::{
     command_operation, command_path, deployment_command_path, firewall_dry_run_path,
-    firewall_policy_operation, insert_command_schemas,
+    firewall_policy_operation, insert_command_schemas, webhook_operation,
 };
 
 /// Composes server path operations over the canonical kernel component schemas.
@@ -81,6 +81,19 @@ pub fn openapi_document() -> Value {
             "/api/firewall/policies/{policyId}/dry-run".to_string(),
             firewall_dry_run_path(),
         ),
+        (
+            "/api/previews".to_string(),
+            list_operation("listPreviews", "Preview"),
+        ),
+        (
+            "/api/previews/{previewId}".to_string(),
+            get_operation("getPreview", "previewId", "Preview"),
+        ),
+        (
+            "/api/webhooks".to_string(),
+            list_operation("listWebhooks", "Webhook"),
+        ),
+        ("/api/webhooks/{webhookId}".to_string(), webhook_operation()),
         (
             "/api/services".to_string(),
             list_operation("listServices", "Service"),

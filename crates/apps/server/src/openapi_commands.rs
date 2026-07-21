@@ -164,6 +164,67 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "WebhookWriteRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["endpoint", "events"],
+            "properties": {
+                "expectedRevision": {
+                    "$ref": "#/components/schemas/ResourceRevision",
+                    "description": "Required current revision; omit only when creating"
+                },
+                "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
+                "events": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {"$ref": "#/components/schemas/WebhookEvent"}
+                },
+                "signingSecret": {
+                    "$ref": "#/components/schemas/SecretValue",
+                    "description": "Required when creating; omit on update to preserve the current secret"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "WebhookCommandResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["webhookId", "generation"],
+            "properties": {
+                "webhookId": {"$ref": "#/components/schemas/WebhookId"},
+                "generation": {"$ref": "#/components/schemas/Generation"}
+            }
+        }),
+    );
+}
+
+pub(crate) fn webhook_operation() -> Value {
+    let mut operation = get_operation("getWebhook", "webhookId", "Webhook");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert(
+            "put".to_string(),
+            command_operation(
+                "putWebhook",
+                &["webhookId"],
+                "WebhookWriteRequest",
+                "WebhookCommandResponse",
+            ),
+        );
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "deleteWebhook",
+                &["webhookId"],
+                "CommandRequest",
+                "WebhookCommandResponse",
+            ),
+        );
+    }
+    operation
 }
 
 pub(crate) fn firewall_policy_operation() -> Value {

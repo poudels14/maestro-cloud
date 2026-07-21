@@ -1,0 +1,254 @@
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use kernel_api::{
+    Preview, PreviewId, PreviewPhase, PreviewSpec, PreviewStatus, ResourceKind, ResourceName,
+    ResourceRevision, ServiceId, Timestamp, Webhook,
+};
+use kernel_store::{Keyspace, Store};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+use crate::{ApiServer, ServerSettings};
+
+use super::{decode, metadata, put, request, seeded_store};
+
+const SIGNING_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+#[tokio::test]
+async fn preview_routes_expose_revisioned_source_status() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (store, cluster_id) = seeded_store().await?;
+    let preview = Preview {
+        meta: metadata(PreviewId::new("owner-repo-42")?),
+        spec: PreviewSpec {
+            base_service_id: ServiceId::new("api")?,
+            repository: "owner/repo".to_string(),
+            pull_request_number: 42,
+            head_revision: "abc123".to_string(),
+            service_id: ServiceId::new("preview-api-42")?,
+            close_grace_period_secs: 300,
+            expires_at: Timestamp(10_000),
+        },
+        status: PreviewStatus {
+            phase: PreviewPhase::Active,
+            teardown_at: None,
+            conditions: Vec::new(),
+        },
+    };
+    put(
+        &store,
+        &cluster_id,
+        "Preview",
+        preview.meta.id.as_str(),
+        &preview,
+    )
+    .await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let listed: Vec<Preview> = decode(request(&server, "/api/previews", None).await?).await?;
+    assert_eq!(listed.len(), 1);
+    let listed_preview = listed.first().ok_or("preview is missing")?;
+    assert_eq!(listed_preview.meta.id, preview.meta.id);
+    assert!(listed_preview.meta.revision.0 > 0);
+    let fetched: Preview =
+        decode(request(&server, "/api/previews/owner-repo-42", None).await?).await?;
+    assert_eq!(fetched.status.phase, PreviewPhase::Active);
+    assert_eq!(fetched.meta.revision, listed_preview.meta.revision);
+    Ok(())
+}
+
+#[tokio::test]
+async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store.clone(),
+        cluster_id.clone(),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let invalid_endpoint = webhook_request(None, "http://hooks.example.test", Some(SIGNING_SECRET));
+    assert_eq!(
+        mutate(&server, Method::PUT, "invalid-endpoint", invalid_endpoint)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut duplicate_events =
+        webhook_request(None, "https://hooks.example.test", Some(SIGNING_SECRET));
+    duplicate_events
+        .as_object_mut()
+        .ok_or("webhook request is not an object")?
+        .insert(
+            "events".to_string(),
+            json!(["deploymentTransition", "deploymentTransition"]),
+        );
+    assert_eq!(
+        mutate(&server, Method::PUT, "duplicate-events", duplicate_events)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let weak_secret = webhook_request(None, "https://hooks.example.test", Some("short"));
+    assert_eq!(
+        mutate(&server, Method::PUT, "weak-secret", weak_secret)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let create = webhook_request(
+        None,
+        "https://hooks.example.test/events",
+        Some(SIGNING_SECRET),
+    );
+    let created = mutate(&server, Method::PUT, "create-webhook", create.clone()).await?;
+    assert_eq!(created.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        decode::<Value>(created).await?,
+        json!({"webhookId": "deployments", "generation": 1})
+    );
+    assert_eq!(
+        mutate(&server, Method::PUT, "create-webhook", create)
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let response = request(&server, "/api/webhooks/deployments", None).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let fetched: Webhook = decode(response).await?;
+    assert_eq!(fetched.spec.signing_secret.expose(), "••••cdef");
+    let listed: Vec<Webhook> = decode(request(&server, "/api/webhooks", None).await?).await?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed
+            .first()
+            .ok_or("webhook is missing")?
+            .spec
+            .signing_secret
+            .expose(),
+        "••••cdef"
+    );
+
+    let update = webhook_request(
+        Some(fetched.meta.revision),
+        "https://hooks.example.test/v2/events",
+        None,
+    );
+    let updated = mutate(&server, Method::PUT, "update-webhook", update).await?;
+    assert_eq!(updated.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        decode::<Value>(updated)
+            .await?
+            .get("generation")
+            .ok_or("generation is missing")?,
+        &json!(2)
+    );
+    let current: Webhook =
+        decode(request(&server, "/api/webhooks/deployments", None).await?).await?;
+    assert_eq!(current.spec.signing_secret.expose(), "••••cdef");
+    let stored = store
+        .get(&Keyspace::new(&cluster_id).resource(
+            &ResourceKind::new("Webhook")?,
+            &ResourceName::new("deployments")?,
+        ))
+        .await?
+        .ok_or("stored Webhook is missing")?;
+    let stored: Webhook = serde_json::from_slice(&stored.value)?;
+    assert_eq!(stored.spec.signing_secret.expose(), SIGNING_SECRET);
+
+    let no_op = webhook_request(
+        Some(current.meta.revision),
+        "https://hooks.example.test/v2/events",
+        None,
+    );
+    assert_eq!(
+        mutate(&server, Method::PUT, "no-op-webhook", no_op)
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    let unchanged: Webhook =
+        decode(request(&server, "/api/webhooks/deployments", None).await?).await?;
+    assert_eq!(unchanged.meta.revision, current.meta.revision);
+
+    let stale = ResourceRevision(unchanged.meta.revision.0.saturating_sub(1));
+    assert_eq!(
+        delete(&server, "stale-delete", stale).await?.status(),
+        StatusCode::CONFLICT
+    );
+    let deleted = delete(&server, "delete-webhook", unchanged.meta.revision).await?;
+    assert_eq!(deleted.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        request(&server, "/api/webhooks/deployments", None)
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        delete(&server, "delete-webhook", unchanged.meta.revision)
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    Ok(())
+}
+
+fn webhook_request(
+    expected_revision: Option<ResourceRevision>,
+    endpoint: &str,
+    signing_secret: Option<&str>,
+) -> Value {
+    let mut payload = serde_json::Map::from_iter([
+        ("endpoint".to_string(), json!(endpoint)),
+        (
+            "events".to_string(),
+            json!(["deploymentTransition", "nodeAvailability"]),
+        ),
+    ]);
+    if let Some(revision) = expected_revision {
+        payload.insert("expectedRevision".to_string(), json!(revision));
+    }
+    if let Some(signing_secret) = signing_secret {
+        payload.insert("signingSecret".to_string(), json!(signing_secret));
+    }
+    Value::Object(payload)
+}
+
+async fn delete(
+    server: &ApiServer,
+    idempotency_key: &str,
+    expected_revision: ResourceRevision,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    mutate(
+        server,
+        Method::DELETE,
+        idempotency_key,
+        json!({"expectedRevision": expected_revision}),
+    )
+    .await
+}
+
+async fn mutate(
+    server: &ApiServer,
+    method: Method,
+    idempotency_key: &str,
+    payload: Value,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    Ok(server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri("/api/webhooks/deployments")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", idempotency_key)
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?)
+}

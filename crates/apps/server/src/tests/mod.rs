@@ -21,6 +21,7 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
+mod automation;
 mod deployment_commands;
 mod deployments;
 mod firewall_dry_run;
@@ -269,6 +270,17 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1services~1{serviceId}~1traffic-generations/get")
+            .is_some()
+    );
+    assert!(document.pointer("/paths/~1api~1previews/get").is_some());
+    assert!(
+        document
+            .pointer("/paths/~1api~1webhooks~1{webhookId}/put")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1webhooks~1{webhookId}/delete")
             .is_some()
     );
     assert_eq!(

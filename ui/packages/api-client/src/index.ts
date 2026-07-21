@@ -1,32 +1,16 @@
 export type { components, paths, webhooks } from "./schema";
+export type {
+  ApiSchemas,
+  BuiltinResource,
+  BuiltinResourceKind,
+  BuiltinResources
+} from "./resources";
 export { ApiHttpError, createFetchTransport, decodeJson } from "./transport";
 export type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
 
-import type { components } from "./schema";
+import type { ApiSchemas } from "./resources";
 import { decodeJson } from "./transport";
 import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
-
-export type ApiSchemas = components["schemas"];
-
-export interface BuiltinResources {
-  Node: ApiSchemas["Node"];
-  NodeNetwork: ApiSchemas["NodeNetwork"];
-  Service: ApiSchemas["Service"];
-  Deployment: ApiSchemas["Deployment"];
-  Assignment: ApiSchemas["Assignment"];
-  ReplicaState: ApiSchemas["ReplicaState"];
-  IngressRoute: ApiSchemas["IngressRoute"];
-  TrafficGeneration: ApiSchemas["TrafficGeneration"];
-  FirewallPolicy: ApiSchemas["FirewallPolicy"];
-  DnsRecord: ApiSchemas["DnsRecord"];
-  Build: ApiSchemas["Build"];
-  Preview: ApiSchemas["Preview"];
-  UpgradeRun: ApiSchemas["UpgradeRun"];
-  Webhook: ApiSchemas["Webhook"];
-}
-
-export type BuiltinResourceKind = keyof BuiltinResources;
-export type BuiltinResource<Kind extends BuiltinResourceKind> = BuiltinResources[Kind];
 
 export interface MaestroApiClient {
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
@@ -96,6 +80,22 @@ export interface MaestroApiClient {
     request: ApiSchemas["FirewallDryRunRequest"],
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["FirewallDryRunResponse"]>;
+  listPreviews(options?: ApiRequestOptions): Promise<ApiSchemas["Preview"][]>;
+  getPreview(previewId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Preview"]>;
+  listWebhooks(options?: ApiRequestOptions): Promise<ApiSchemas["Webhook"][]>;
+  getWebhook(webhookId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Webhook"]>;
+  putWebhook(
+    webhookId: string,
+    request: ApiSchemas["WebhookWriteRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["WebhookCommandResponse"]>;
+  deleteWebhook(
+    webhookId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["WebhookCommandResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -339,6 +339,28 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       submit(
         `/api/firewall/policies/${encodeURIComponent(policyId)}/dry-run`,
         request,
+        options
+      ),
+    listPreviews: (options) => get("/api/previews", options),
+    getPreview: (previewId, options) =>
+      get(`/api/previews/${encodeURIComponent(previewId)}`, options),
+    listWebhooks: (options) => get("/api/webhooks", options),
+    getWebhook: (webhookId, options) =>
+      get(`/api/webhooks/${encodeURIComponent(webhookId)}`, options),
+    putWebhook: (webhookId, request, idempotencyKey, options) =>
+      mutate(
+        "PUT",
+        `/api/webhooks/${encodeURIComponent(webhookId)}`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    deleteWebhook: (webhookId, request, idempotencyKey, options) =>
+      mutate(
+        "DELETE",
+        `/api/webhooks/${encodeURIComponent(webhookId)}`,
+        request,
+        idempotencyKey,
         options
       ),
     listServices: (options) => get("/api/services", options),

@@ -1,4 +1,4 @@
-use kernel_api::{ArtifactTemplate, Build, SecretValue, Service, ServiceSpec};
+use kernel_api::{ArtifactTemplate, Build, SecretValue, Service, ServiceSpec, Webhook};
 
 pub(crate) fn build(mut build: Build) -> Build {
     values(build.spec.template.secrets.values_mut());
@@ -8,6 +8,11 @@ pub(crate) fn build(mut build: Build) -> Build {
 pub(crate) fn service(mut service: Service) -> Service {
     service_spec(&mut service.spec);
     service
+}
+
+pub(crate) fn webhook(mut webhook: Webhook) -> Webhook {
+    webhook.spec.signing_secret = SecretValue::new(webhook.spec.signing_secret.masked().as_str());
+    webhook
 }
 
 pub(crate) fn service_spec(spec: &mut ServiceSpec) {
