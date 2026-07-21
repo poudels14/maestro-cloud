@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,9 +22,13 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v2(&mut connection)?,
+        (0, _) => initialize_v3(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
-        (1, 1) => migrate_v1_to_v2(&mut connection)?,
+        (1, 1) => {
+            migrate_v1_to_v2(&mut connection)?;
+            migrate_v2_to_v3(&mut connection)?;
+        }
+        (1, 2) => migrate_v2_to_v3(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -100,10 +104,17 @@ pub(crate) fn append(
                             producer_id,
                             entry.id.cursor.as_str(),
                             entry.event_at.0,
-                            encoded
+                            encoded.as_str()
                         ],
                     )
                     .map_err(unavailable("insert normalized log"))?;
+                transaction
+                    .execute(
+                        "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
+                         VALUES (?1, ?2, ?3)",
+                        params![sequence, entry.event_at.0, encoded.as_str()],
+                    )
+                    .map_err(unavailable("insert hot query log"))?;
                 report.committed = report.committed.saturating_add(1);
                 last_sequence = sequence;
             }
@@ -115,7 +126,7 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v2(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v3(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -144,7 +155,25 @@ fn initialize_v2(connection: &mut Connection) -> Result<(), String> {
                  recorded_at_ms BIGINT NOT NULL,
                  PRIMARY KEY (sink_id, source_sequence)
              );
-             INSERT INTO schema_version (version) VALUES (2);",
+             CREATE TABLE query_logs (
+                 sequence BIGINT PRIMARY KEY,
+                 event_at_ms BIGINT NOT NULL,
+                 entry_json VARCHAR NOT NULL
+             );
+             CREATE INDEX query_logs_event_sequence
+                 ON query_logs(event_at_ms, sequence);
+             CREATE TABLE log_partitions (
+                 partition_key VARCHAR NOT NULL,
+                 state VARCHAR NOT NULL,
+                 row_count BIGINT NOT NULL,
+                 sequence_low BIGINT NOT NULL,
+                 sequence_high BIGINT NOT NULL,
+                 sha256 VARCHAR NOT NULL,
+                 size_bytes BIGINT NOT NULL,
+                 updated_at_ms BIGINT NOT NULL,
+                 PRIMARY KEY (partition_key, sequence_low)
+             );
+             INSERT INTO schema_version (version) VALUES (3);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
@@ -188,6 +217,38 @@ fn migrate_v1_to_v2(connection: &mut Connection) -> Result<(), String> {
                  PRIMARY KEY (sink_id, source_sequence)
              );
              UPDATE schema_version SET version = 2;",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v2_to_v3(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE query_logs (
+                 sequence BIGINT PRIMARY KEY,
+                 event_at_ms BIGINT NOT NULL,
+                 entry_json VARCHAR NOT NULL
+             );
+             INSERT INTO query_logs
+             SELECT sequence, event_at_ms, entry_json FROM normalized_logs;
+             CREATE INDEX query_logs_event_sequence
+                 ON query_logs(event_at_ms, sequence);
+             CREATE TABLE log_partitions (
+                 partition_key VARCHAR NOT NULL,
+                 state VARCHAR NOT NULL,
+                 row_count BIGINT NOT NULL,
+                 sequence_low BIGINT NOT NULL,
+                 sequence_high BIGINT NOT NULL,
+                 sha256 VARCHAR NOT NULL,
+                 size_bytes BIGINT NOT NULL,
+                 updated_at_ms BIGINT NOT NULL,
+                 PRIMARY KEY (partition_key, sequence_low)
+             );
+             UPDATE schema_version SET version = 3;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

@@ -5,6 +5,7 @@
 
 mod delivery_schema;
 mod duck;
+mod duck_worker;
 mod error;
 mod host_metric_delivery_schema;
 mod host_metric_duck;

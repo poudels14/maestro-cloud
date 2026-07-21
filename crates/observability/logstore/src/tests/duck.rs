@@ -250,7 +250,86 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
+        3
+    );
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
         2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("logs.duckdb");
+    let connection = duckdb::Connection::open(&path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version BIGINT NOT NULL);
+         INSERT INTO schema_version VALUES (2);
+         CREATE TABLE normalized_logs (
+             sequence BIGINT PRIMARY KEY,
+             node_id VARCHAR NOT NULL,
+             producer_type VARCHAR NOT NULL,
+             producer_id VARCHAR NOT NULL,
+             cursor VARCHAR NOT NULL,
+             event_at_ms BIGINT NOT NULL,
+             entry_json VARCHAR NOT NULL,
+             UNIQUE (node_id, producer_type, producer_id, cursor)
+         );
+         CREATE TABLE sink_cursors (
+             sink_id VARCHAR PRIMARY KEY,
+             last_sequence BIGINT NOT NULL
+         );
+         CREATE TABLE sink_dead_letters (
+             sink_id VARCHAR NOT NULL,
+             source_sequence BIGINT NOT NULL,
+             status_code INTEGER,
+             reason VARCHAR NOT NULL,
+             payload BLOB NOT NULL,
+             recorded_at_ms BIGINT NOT NULL,
+             PRIMARY KEY (sink_id, source_sequence)
+         );",
+    )?;
+    let existing = entry_at(1)?;
+    connection.execute(
+        "INSERT INTO normalized_logs VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        duckdb::params![
+            1_i64,
+            existing.id.node_id.as_str(),
+            "system",
+            "daemon",
+            existing.id.cursor.as_str(),
+            existing.event_at.0,
+            serde_json::to_string(&existing)?
+        ],
+    )?;
+    drop(connection);
+
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(path.clone(), 8)?).await?;
+    runtime.shutdown().await?;
+
+    let connection = duckdb::Connection::open(path)?;
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM normalized_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
+    assert_eq!(
+        connection.query_row("SELECT version FROM schema_version", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        3
     );
     Ok(())
 }
