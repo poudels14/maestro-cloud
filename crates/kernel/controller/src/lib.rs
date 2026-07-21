@@ -15,6 +15,7 @@ mod leadership;
 mod queue;
 mod reconciler;
 mod runtime;
+mod timestamp;
 
 pub use backoff::{Backoff, BackoffError};
 pub use dedup::{DedupOutcome, RequestFingerprint};
@@ -28,6 +29,7 @@ pub use leadership::{
 };
 pub use reconciler::{Action, ReconcileContext, ReconcileError, Reconciler};
 pub use runtime::{ControllerRuntime, RuntimeConfig, RuntimeConfigError};
+pub use timestamp::{SystemTimestampClock, TimestampClock};
 
 #[cfg(test)]
 mod tests;

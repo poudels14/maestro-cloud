@@ -5,7 +5,6 @@
 
 mod address;
 mod assignment;
-mod clock;
 mod model;
 mod plan;
 mod projection;
@@ -14,7 +13,7 @@ mod resource;
 mod scheduler;
 
 pub use assignment::AssignmentWriteError;
-pub use clock::{SystemTimestampClock, TimestampClock};
+pub use kernel_controller::{SystemTimestampClock, TimestampClock};
 pub use model::{
     DeploymentGroup, NodeSchedulingState, ScheduleInput, ScheduleNode, SchedulePlan,
     ServiceSchedule, UnhealthySlot, UnschedulableReason, UnschedulableReplica,
