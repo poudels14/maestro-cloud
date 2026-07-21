@@ -11,8 +11,8 @@ use clustertest::{
 };
 use kernel_api::{
     Assignment, AssignmentPhase, Deployment, DeploymentGoal,
-    DeploymentPhase as ResourceDeploymentPhase, IngressRouteId, NodeId, ReplicaState, ResourceKind,
-    ResourceName, RolloutState, Service, ServiceId, Timestamp,
+    DeploymentPhase as ResourceDeploymentPhase, IngressRouteId, NodeId, PlacementConstraint,
+    ReplicaState, ResourceKind, ResourceName, RolloutState, Service, ServiceId, Timestamp,
 };
 use kernel_store::Store;
 
@@ -204,6 +204,27 @@ impl ServiceLifecycleCluster for AcceptanceWorld {
         self.inner
             .set_node_draining(&node_id, draining)
             .await
+            .map_err(AcceptanceError::from_driver)
+    }
+
+    async fn set_service_node_affinity(
+        &mut self,
+        name: &FixtureName,
+        node: &clustertest::FixtureNodeName,
+    ) -> Result<(), Self::Error> {
+        let service_id = service_id(name)?;
+        let node_id = NodeId::new(node.as_str()).map_err(AcceptanceError::from_driver)?;
+        self.inner
+            .update_service_by_id(&service_id, |service| {
+                service.meta.generation =
+                    kernel_api::Generation(service.meta.generation.0.saturating_add(1));
+                service.spec.placement = PlacementConstraint {
+                    node_id: Some(node_id),
+                    labels: BTreeMap::new(),
+                };
+            })
+            .await
+            .map(|_service| ())
             .map_err(AcceptanceError::from_driver)
     }
 }
@@ -441,6 +462,8 @@ async fn shared_lifecycle_scenarios_drive_composed_operators()
         scenarios::freeze_and_unfreeze_gate_rollout(&mut AcceptanceWorld::new(node_count).await?)
             .await?;
         scenarios::drain_and_restore_move_placement(&mut AcceptanceWorld::new(node_count).await?)
+            .await?;
+        scenarios::hard_node_affinity_pins_placement(&mut AcceptanceWorld::new(node_count).await?)
             .await?;
     }
     Ok(())

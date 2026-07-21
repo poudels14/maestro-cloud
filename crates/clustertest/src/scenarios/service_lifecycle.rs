@@ -227,6 +227,52 @@ where
     }
 }
 
+/// Proves a hard node affinity constraint pins every replica in the new generation.
+pub async fn hard_node_affinity_pins_placement<Cluster>(
+    cluster: &mut Cluster,
+) -> Result<(), ScenarioError>
+where
+    Cluster: ServiceLifecycleCluster,
+{
+    let nodes = cluster.topology_nodes();
+    let target = nodes
+        .last()
+        .cloned()
+        .ok_or_else(|| ScenarioError::Assertion("topology has no nodes".to_string()))?;
+    let replicas = u32::try_from(nodes.len())
+        .map_err(|_error| ScenarioError::Assertion("topology is too large".to_string()))?;
+    let name = FixtureName::new("acceptance-hard-affinity");
+    rollout(cluster, name.clone(), replicas).await?;
+    converge(cluster, "await affinity baseline").await?;
+    cluster
+        .set_service_node_affinity(&name, &target)
+        .await
+        .map_err(|error| driver_error("set hard node affinity", error))?;
+    let snapshot = converge(cluster, "await affinity deployment").await?;
+    let service = require_service(&snapshot, &name)?;
+    let active_id = service.active_deployment_id.as_ref().ok_or_else(|| {
+        ScenarioError::Assertion("affinity service has no active deployment".to_string())
+    })?;
+    let active = service.deployment(active_id).ok_or_else(|| {
+        ScenarioError::Assertion(format!(
+            "active affinity deployment {active_id:?} is absent"
+        ))
+    })?;
+    let placements = active
+        .replicas
+        .iter()
+        .map(|replica| replica.node.as_ref())
+        .collect::<Vec<_>>();
+    if active.replicas.len() == nodes.len() && placements.iter().all(|node| *node == Some(&target))
+    {
+        Ok(())
+    } else {
+        Err(ScenarioError::Assertion(format!(
+            "hard affinity did not pin every replica to {target:?}: {placements:?}"
+        )))
+    }
+}
+
 async fn rollout<Cluster>(
     cluster: &mut Cluster,
     name: FixtureName,

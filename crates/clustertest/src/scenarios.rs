@@ -2,6 +2,7 @@
 
 mod affinity;
 mod cluster_setup;
+mod egress;
 mod election;
 mod formation;
 mod lifecycle;
@@ -20,6 +21,7 @@ mod upgrade;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
 pub use cluster_setup::cluster_bootstraps_joins_meshes_and_recovers;
+pub use egress::egress_policy_applies_and_deletes_atomically;
 pub use election::leader_failover_fences_stale_writes;
 pub use formation::designated_seed_and_learners_form_registered_cluster;
 pub use lifecycle::{
@@ -57,8 +59,8 @@ pub use routing::routing_survives_workload_and_gateway_failures;
 pub use scheduling::scheduler_scales_replicas_across_nodes;
 pub use service_lifecycle::{
     delete_service_collects_owned_state, drain_and_restore_move_placement,
-    freeze_and_unfreeze_gate_rollout, remove_deployment_retains_history,
-    restart_recycles_workloads_in_place,
+    freeze_and_unfreeze_gate_rollout, hard_node_affinity_pins_placement,
+    remove_deployment_retains_history, restart_recycles_workloads_in_place,
 };
 pub use smoke::{
     isolated_seed_security_restart_is_idempotent,

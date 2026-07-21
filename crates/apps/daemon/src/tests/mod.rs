@@ -9,6 +9,7 @@ mod orchestration_delete;
 mod orchestration_deployment;
 mod orchestration_drain;
 mod orchestration_egress;
+mod orchestration_egress_acceptance;
 mod orchestration_fixture;
 mod orchestration_freeze;
 mod orchestration_node;

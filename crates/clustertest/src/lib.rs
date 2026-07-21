@@ -7,6 +7,7 @@
 mod affinity;
 mod cluster;
 mod cluster_setup;
+mod egress;
 mod election;
 mod error;
 mod formation;
@@ -25,6 +26,7 @@ mod upgrade;
 pub use affinity::AffinityCluster;
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster, LifecycleFaultCluster};
 pub use cluster_setup::ClusterSetupCluster;
+pub use egress::{EgressCluster, EgressPolicyFixture, EgressRulesetSnapshot, EgressSnapshot};
 pub use election::ElectionCluster;
 pub use error::ScenarioError;
 pub use formation::{

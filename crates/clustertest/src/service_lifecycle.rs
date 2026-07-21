@@ -36,4 +36,11 @@ pub trait ServiceLifecycleCluster: AcceptanceCluster {
         node: &FixtureNodeName,
         draining: bool,
     ) -> Result<(), Self::Error>;
+
+    /// Pins a service's next deployment to one logical node.
+    async fn set_service_node_affinity(
+        &mut self,
+        service: &FixtureName,
+        node: &FixtureNodeName,
+    ) -> Result<(), Self::Error>;
 }
