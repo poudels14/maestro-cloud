@@ -56,6 +56,12 @@ impl LifecycleWorld {
                     name: name.clone(),
                     configured_replicas: service.fixture.replicas,
                     replica_override: service.replica_override,
+                    active_deployment_id: service
+                        .deployments
+                        .iter()
+                        .rev()
+                        .find(|deployment| deployment.phase == DeploymentPhase::Ready)
+                        .map(|deployment| deployment.id),
                     deployments: service
                         .deployments
                         .iter()
@@ -164,6 +170,8 @@ impl LifecycleWorld {
                         restart_attempts: 0,
                         healthcheck_failures: 0,
                         workload: ResourceAvailability::Available,
+                        node: None,
+                        workload_instance: Some(format!("workload-{}-{index}", active.id)),
                     });
                 }
             }

@@ -378,6 +378,12 @@ pub struct ReplicaSnapshot {
     pub healthcheck_failures: u32,
     /// Whether the runtime workload currently exists.
     pub workload: ResourceAvailability,
+    /// Logical node currently hosting this replica, when assigned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<FixtureNodeName>,
+    /// Opaque runtime workload identity used to prove instance replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_instance: Option<String>,
 }
 
 /// One deployment in a normalized cluster snapshot.
@@ -406,6 +412,9 @@ pub struct ServiceSnapshot<DeploymentId> {
     pub configured_replicas: ReplicaCount,
     /// The active override, if one is set.
     pub replica_override: Option<ReplicaCount>,
+    /// Deployment currently selected for service traffic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_deployment_id: Option<DeploymentId>,
     /// Deployment history ordered from oldest to newest.
     pub deployments: Vec<DeploymentSnapshot<DeploymentId>>,
 }

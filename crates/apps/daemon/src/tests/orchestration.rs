@@ -218,9 +218,14 @@ impl RolloutWorld {
 
     async fn publish_ready_replicas(&self) -> HarnessResult<()> {
         for assignment in self.list::<Assignment>("Assignment").await? {
-            if assignment.status.phase != AssignmentPhase::Running {
+            let workload_id =
+                kernel_api::WorkloadId::new(format!("workload-{}", assignment.meta.id))?;
+            if assignment.status.phase != AssignmentPhase::Running
+                || assignment.status.workload_id.as_ref() != Some(&workload_id)
+            {
                 self.update::<Assignment>("Assignment", &assignment.meta.id, |current| {
                     current.status.phase = AssignmentPhase::Running;
+                    current.status.workload_id = Some(workload_id);
                 })
                 .await?;
             }

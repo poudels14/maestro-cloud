@@ -6,13 +6,13 @@ use async_trait::async_trait;
 use clustertest::{
     AcceptanceCluster, ClusterSnapshot, DeploymentPhase as SnapshotDeploymentPhase,
     DeploymentSnapshot, FixtureArtifact, FixtureName, FixtureVersion, IngressFixture, ReplicaCount,
-    ReplicaOverride, ReplicaSnapshot, ResourceAvailability, ServiceFixture, ServiceSnapshot,
-    scenarios,
+    ReplicaOverride, ReplicaSnapshot, ResourceAvailability, ServiceFixture,
+    ServiceLifecycleCluster, ServiceSnapshot, scenarios,
 };
 use kernel_api::{
     Assignment, AssignmentPhase, Deployment, DeploymentGoal,
-    DeploymentPhase as ResourceDeploymentPhase, IngressRouteId, ReplicaState, ResourceKind,
-    ResourceName, Service, ServiceId,
+    DeploymentPhase as ResourceDeploymentPhase, IngressRouteId, NodeId, ReplicaState, ResourceKind,
+    ResourceName, RolloutState, Service, ServiceId, Timestamp,
 };
 use kernel_store::Store;
 
@@ -23,6 +23,7 @@ const INITIAL_TIME_MILLIS: i64 = 10_000;
 
 struct AcceptanceWorld {
     inner: RolloutWorld,
+    node_count: u8,
     now_millis: i64,
 }
 
@@ -32,6 +33,7 @@ impl AcceptanceWorld {
             inner: RolloutWorld::new_empty(node_count)
                 .await
                 .map_err(AcceptanceError::from_driver)?,
+            node_count,
             now_millis: INITIAL_TIME_MILLIS,
         })
     }
@@ -132,6 +134,77 @@ impl AcceptanceWorld {
             .map(|service| project_service(&service, &deployments, &assignments, &replicas))
             .collect::<Vec<_>>();
         Ok(ClusterSnapshot { services })
+    }
+}
+
+#[async_trait]
+impl ServiceLifecycleCluster for AcceptanceWorld {
+    fn topology_nodes(&self) -> Vec<clustertest::FixtureNodeName> {
+        (1..=self.node_count)
+            .map(|index| clustertest::FixtureNodeName::new(format!("node-{index}")))
+            .collect()
+    }
+
+    async fn restart_deployment(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+    ) -> Result<(), Self::Error> {
+        self.inner
+            .restart_deployment(deployment_id)
+            .await
+            .map_err(AcceptanceError::from_driver)
+    }
+
+    async fn remove_deployment(
+        &mut self,
+        deployment_id: &Self::DeploymentId,
+    ) -> Result<(), Self::Error> {
+        self.inner
+            .request_deployment_goal(deployment_id, DeploymentGoal::Remove)
+            .await
+            .map_err(AcceptanceError::from_driver)
+    }
+
+    async fn delete_service(&mut self, name: &FixtureName) -> Result<(), Self::Error> {
+        let service_id = service_id(name)?;
+        self.inner
+            .update_service_by_id(&service_id, |service| {
+                service.meta.deletion_timestamp = Some(Timestamp(self.now_millis));
+            })
+            .await
+            .map(|_service| ())
+            .map_err(AcceptanceError::from_driver)
+    }
+
+    async fn set_service_frozen(
+        &mut self,
+        name: &FixtureName,
+        frozen: bool,
+    ) -> Result<(), Self::Error> {
+        let service_id = service_id(name)?;
+        self.inner
+            .update_service_by_id(&service_id, |service| {
+                service.status.rollout = if frozen {
+                    RolloutState::Frozen
+                } else {
+                    RolloutState::Active
+                };
+            })
+            .await
+            .map(|_service| ())
+            .map_err(AcceptanceError::from_driver)
+    }
+
+    async fn set_node_draining(
+        &mut self,
+        node: &clustertest::FixtureNodeName,
+        draining: bool,
+    ) -> Result<(), Self::Error> {
+        let node_id = NodeId::new(node.as_str()).map_err(AcceptanceError::from_driver)?;
+        self.inner
+            .set_node_draining(&node_id, draining)
+            .await
+            .map_err(AcceptanceError::from_driver)
     }
 }
 
@@ -250,6 +323,7 @@ fn project_service(
         name: FixtureName::new(service.spec.name.clone()),
         configured_replicas: ReplicaCount::new(service.spec.replicas),
         replica_override: service.status.replica_override.map(ReplicaCount::new),
+        active_deployment_id: service.status.active_deployment_id.clone(),
         deployments,
     }
 }
@@ -279,6 +353,12 @@ fn project_deployment(
                 restart_attempts: replica.status.restart_attempts,
                 healthcheck_failures: replica.status.healthcheck_failures,
                 workload,
+                node: replica
+                    .status
+                    .node_id
+                    .as_ref()
+                    .map(|node| clustertest::FixtureNodeName::new(node.as_str())),
+                workload_instance: replica.status.workload_id.as_ref().map(ToString::to_string),
             }
         })
         .collect::<Vec<_>>();
@@ -347,6 +427,20 @@ async fn shared_lifecycle_scenarios_drive_composed_operators()
         scenarios::replica_override_round_trips(&mut AcceptanceWorld::new(node_count).await?)
             .await?;
         scenarios::drained_deployment_finalizes(&mut AcceptanceWorld::new(node_count).await?)
+            .await?;
+        scenarios::restart_recycles_workloads_in_place(
+            &mut AcceptanceWorld::new(node_count).await?,
+        )
+        .await?;
+        scenarios::remove_deployment_retains_history(&mut AcceptanceWorld::new(node_count).await?)
+            .await?;
+        scenarios::delete_service_collects_owned_state(
+            &mut AcceptanceWorld::new(node_count).await?,
+        )
+        .await?;
+        scenarios::freeze_and_unfreeze_gate_rollout(&mut AcceptanceWorld::new(node_count).await?)
+            .await?;
+        scenarios::drain_and_restore_move_placement(&mut AcceptanceWorld::new(node_count).await?)
             .await?;
     }
     Ok(())

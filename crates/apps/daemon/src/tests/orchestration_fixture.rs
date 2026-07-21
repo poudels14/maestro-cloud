@@ -14,7 +14,7 @@ use kernel_api::{
     NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, PlacementConstraint,
     PortRange, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
     ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
-    TransportProtocol,
+    TransportProtocol, WorkloadId,
 };
 use kernel_controller::{Backoff, RuntimeConfig, TimestampClock};
 use kernel_store::{Clock, MonotonicTime};
@@ -187,7 +187,7 @@ pub(super) fn ready_replica(
         status: ReplicaStateStatus {
             phase: DeploymentPhase::Ready,
             node_id: Some(assignment.spec.node_id.clone()),
-            workload_id: None,
+            workload_id: Some(WorkloadId::new(format!("workload-{}", assignment.meta.id))?),
             healthcheck_failures: 0,
             restart_attempts: 0,
             restart_pending_attempt: None,

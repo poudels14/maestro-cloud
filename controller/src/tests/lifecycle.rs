@@ -2472,7 +2472,7 @@ impl OldSystemAcceptanceCluster {
             .configs
             .iter()
             .map(|(service_id, config)| {
-                let deployments = state
+                let deployments: Vec<DeploymentSnapshot<String>> = state
                     .history
                     .get(service_id)
                     .into_iter()
@@ -2501,6 +2501,10 @@ impl OldSystemAcceptanceCluster {
                                     } else {
                                         ResourceAvailability::Unavailable
                                     },
+                                    node: replica.node_id.as_ref().map(|node| {
+                                        clustertest::FixtureNodeName::new(node.clone())
+                                    }),
+                                    workload_instance: Some(hostname),
                                 }
                             })
                             .collect::<Vec<_>>();
@@ -2539,6 +2543,11 @@ impl OldSystemAcceptanceCluster {
                         .copied()
                         .flatten()
                         .map(clustertest::ReplicaCount::new),
+                    active_deployment_id: deployments
+                        .iter()
+                        .rev()
+                        .find(|deployment| deployment.phase == clustertest::DeploymentPhase::Ready)
+                        .map(|deployment| deployment.id.clone()),
                     deployments,
                 }
             })

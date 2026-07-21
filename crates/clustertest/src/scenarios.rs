@@ -14,6 +14,7 @@ mod restart;
 mod rollout;
 mod routing;
 mod scheduling;
+mod service_lifecycle;
 mod smoke;
 mod upgrade;
 
@@ -54,6 +55,11 @@ pub use restart::serial_node_restarts_preserve_quorum_and_routing;
 pub use rollout::readiness_gated_cutover_preserves_traffic_and_inflight_requests;
 pub use routing::routing_survives_workload_and_gateway_failures;
 pub use scheduling::scheduler_scales_replicas_across_nodes;
+pub use service_lifecycle::{
+    delete_service_collects_owned_state, drain_and_restore_move_placement,
+    freeze_and_unfreeze_gate_rollout, remove_deployment_retains_history,
+    restart_recycles_workloads_in_place,
+};
 pub use smoke::{
     isolated_seed_security_restart_is_idempotent,
     production_ingress_access_log_configuration_starts,
