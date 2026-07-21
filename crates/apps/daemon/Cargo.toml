@@ -16,6 +16,7 @@ kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 logs = { version = "0.1.0", path = "../../observability/logs" }
 logstore = { version = "0.1.0", path = "../../observability/logstore" }
+metrics = { version = "0.1.0", path = "../../observability/metrics" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
 scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
@@ -30,6 +31,7 @@ workspace = true
 [dev-dependencies]
 clustertest = { path = "../../clustertest" }
 logs = { path = "../../observability/logs", features = ["test-util"] }
+metrics = { path = "../../observability/metrics", features = ["test-util"] }
 runtime = { path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 time = "=0.3.53"

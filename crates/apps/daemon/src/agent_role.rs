@@ -1,21 +1,20 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
 
-use async_trait::async_trait;
-use cluster::{StoreRuntime, StoreShutdown, WIREGUARD_MTU_BYTES};
-use kernel_store::{Clock, Store};
-use logs::LogStoreRuntime;
+use cluster::WIREGUARD_MTU_BYTES;
+use kernel_store::Store;
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
     WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
 };
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 
+use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::control_plane::{DaemonRoleFactory, role_error};
-use crate::workload_agents::{build_assignment_agent, build_health_agent, build_log_agent};
+use crate::workload_agents::{
+    build_assignment_agent, build_health_agent, build_log_agent, build_stats_agent,
+};
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
 pub(crate) async fn start_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -52,6 +51,12 @@ where
         .map_err(|_| RoleError::new("log-store runtime lock was poisoned"))?
         .take()
         .ok_or_else(|| RoleError::new("agent role was already started"))?;
+    let metric_store_runtime = factory
+        .metric_store_runtime
+        .lock()
+        .map_err(|_| RoleError::new("metric-store runtime lock was poisoned"))?
+        .take()
+        .ok_or_else(|| RoleError::new("agent role was already started"))?;
     let (store, store_runtime) = match &factory.agent_store {
         AgentStore::Managed {
             provider,
@@ -60,16 +65,21 @@ where
             let runtime = match provider.start(start_mode.clone()).await {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    return AgentStartupRuntimes::new(None, log_store_runtime)
-                        .fail(role_error("start local store provider", error))
-                        .await;
+                    return AgentStartupRuntimes::new(
+                        None,
+                        log_store_runtime,
+                        metric_store_runtime,
+                    )
+                    .fail(role_error("start local store provider", error))
+                    .await;
                 }
             };
             (runtime.store(), Some(runtime))
         }
         AgentStore::Remote(store) => (store.clone(), None),
     };
-    let runtimes = AgentStartupRuntimes::new(store_runtime, log_store_runtime);
+    let runtimes =
+        AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
 
     let bridge_agent = match build_bridge_agent(factory, plan, spec, bridge_backend) {
         Ok(agent) => agent,
@@ -125,6 +135,14 @@ where
     };
     let log_agent = if spec.workload_enabled {
         match build_log_agent(factory, plan, spec, runtimes.log_store()) {
+            Ok(agent) => Some(agent),
+            Err(error) => return runtimes.fail(error).await,
+        }
+    } else {
+        None
+    };
+    let stats_agent = if spec.workload_enabled {
+        match build_stats_agent(factory, plan, spec, runtimes.metric_store()) {
             Ok(agent) => Some(agent),
             Err(error) => return runtimes.fail(error).await,
         }
@@ -194,6 +212,16 @@ where
             ))
             .await;
     }
+    if let Some(agent) = stats_agent.as_ref()
+        && let Err(error) = agent.collect().await
+    {
+        return runtimes
+            .fail(role_error(
+                "establish initial workload stats collection",
+                error,
+            ))
+            .await;
+    }
 
     let publish_store_error = {
         match factory.store.lock() {
@@ -215,6 +243,7 @@ where
     let assignment_shutdown = bridge_shutdown.clone();
     let health_shutdown = bridge_shutdown.clone();
     let log_shutdown = bridge_shutdown.clone();
+    let stats_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -276,15 +305,22 @@ where
                 .map_err(|error| role_error("run runtime log agent", error))
         }));
     }
-    let (store_runtime, log_store_runtime) = runtimes.into_parts();
-    Ok(Box::new(AgentRoleRuntime {
+    if let Some(agent) = stats_agent {
+        tasks.push(tokio::spawn(async move {
+            agent
+                .run(stats_shutdown)
+                .await
+                .map_err(|error| role_error("run workload stats agent", error))
+        }));
+    }
+    let owned_runtimes = runtimes.into_owned();
+    Ok(Box::new(AgentRoleRuntime::new(
         shutdown,
         tasks,
-        store_runtime,
-        log_store_runtime: Some(log_store_runtime),
-        clock: factory.monotonic_clock.clone(),
-        shutdown_grace: factory.settings.store_shutdown_grace,
-    }))
+        owned_runtimes,
+        factory.monotonic_clock.clone(),
+        factory.settings.store_shutdown_grace,
+    )))
 }
 
 fn build_bridge_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -378,92 +414,4 @@ where
         factory.settings.firewall_resync_interval,
     )
     .map_err(|error| role_error("construct firewall resource agent", error))
-}
-
-struct AgentStartupRuntimes {
-    store: Option<Box<dyn StoreRuntime>>,
-    logs: Box<dyn LogStoreRuntime>,
-}
-
-impl AgentStartupRuntimes {
-    fn new(store: Option<Box<dyn StoreRuntime>>, logs: Box<dyn LogStoreRuntime>) -> Self {
-        Self { store, logs }
-    }
-
-    fn log_store(&self) -> Arc<dyn logs::LogStore> {
-        self.logs.store()
-    }
-
-    fn into_parts(self) -> (Option<Box<dyn StoreRuntime>>, Box<dyn LogStoreRuntime>) {
-        (self.store, self.logs)
-    }
-
-    async fn fail<T>(self, error: RoleError) -> Result<T, RoleError> {
-        let Self { store, logs } = self;
-        let mut failures = vec![error.detail().to_owned()];
-        if let Err(shutdown_error) = logs.shutdown().await {
-            failures.push(format!(
-                "failed to roll back log-store runtime: {shutdown_error}"
-            ));
-        }
-        if let Some(runtime) = store
-            && let Err(shutdown_error) = runtime.shutdown(StoreShutdown::Immediate).await
-        {
-            failures.push(format!("failed to roll back local store: {shutdown_error}"));
-        }
-        Err(RoleError::new(failures.join("; ")))
-    }
-}
-
-struct AgentRoleRuntime {
-    shutdown: watch::Sender<bool>,
-    tasks: Vec<JoinHandle<Result<(), RoleError>>>,
-    store_runtime: Option<Box<dyn StoreRuntime>>,
-    log_store_runtime: Option<Box<dyn LogStoreRuntime>>,
-    clock: Arc<dyn Clock>,
-    shutdown_grace: Duration,
-}
-
-#[async_trait]
-impl RoleRuntime for AgentRoleRuntime {
-    async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
-        let _ = self.shutdown.send(true);
-        let mut failures = Vec::new();
-        for task in self.tasks.drain(..) {
-            match task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(error.to_string()),
-                Err(error) => failures.push(format!("node agent task failed: {error}")),
-            }
-        }
-        if let Some(runtime) = self.log_store_runtime.take()
-            && let Err(error) = runtime.shutdown().await
-        {
-            failures.push(format!("log-store shutdown failed: {error}"));
-        }
-        if let Some(runtime) = self.store_runtime.take() {
-            let deadline = self.clock.now().saturating_add(self.shutdown_grace);
-            if let Err(error) = runtime.shutdown(StoreShutdown::Graceful { deadline }).await {
-                failures.push(format!("store shutdown failed: {error}"));
-            }
-        }
-        finish_shutdown(failures)
-    }
-}
-
-impl Drop for AgentRoleRuntime {
-    fn drop(&mut self) {
-        let _ = self.shutdown.send(true);
-        for task in &self.tasks {
-            task.abort();
-        }
-    }
-}
-
-fn finish_shutdown(failures: Vec<String>) -> Result<(), RoleError> {
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(RoleError::new(failures.join("; ")))
-    }
 }

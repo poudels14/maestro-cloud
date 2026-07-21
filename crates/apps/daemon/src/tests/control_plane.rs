@@ -10,13 +10,16 @@ use kernel_api::{
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
 use logs::{InMemoryLogStoreRuntime, LogBody, LogOrigin};
+use metrics::InMemoryMetricStoreRuntime;
 use node_agent::{
-    AuthoritativeDnsResolver, DnsQueryType, DnsServerBinder, DnsServerError, DnsServerRuntime,
-    DnsServerSettings, FirewallBackend, FirewallBackendError, HealthProbeError, HealthProbeTarget,
-    HealthProber, MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock,
-    WorkloadBridge, WorkloadBridgeBackend, WorkloadBridgeBackendError,
+    AuthoritativeDnsResolver, CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats,
+    CgroupProcessStats, CgroupStats, CgroupStatsError, CgroupStatsReader, DnsQueryType,
+    DnsServerBinder, DnsServerError, DnsServerRuntime, DnsServerSettings, FirewallBackend,
+    FirewallBackendError, HealthProbeError, HealthProbeTarget, HealthProber, MeshBackend,
+    MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge,
+    WorkloadBridgeBackend, WorkloadBridgeBackendError,
 };
-use runtime::{FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
+use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -48,6 +51,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let health_targets = Arc::new(Mutex::new(Vec::new()));
     let log_store_runtime = InMemoryLogStoreRuntime::new();
     let log_store = log_store_runtime.store_handle();
+    let metric_store_runtime = InMemoryMetricStoreRuntime::new();
+    let metric_store = metric_store_runtime.store_handle();
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -84,6 +89,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             }),
             workload_runtime: workload_runtime.clone(),
             log_store_runtime: Box::new(log_store_runtime),
+            metric_store_runtime: Box::new(metric_store_runtime),
+            stats_reader: Arc::new(FixedStatsReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: health_targets.clone(),
@@ -155,6 +162,15 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     );
     assert_eq!(network_provider.lease_count(), 1);
     assert_eq!(network_provider.attachment_count(), 1);
+    let metric_points = metric_store.points()?;
+    assert_eq!(metric_points.len(), 1);
+    let metric_point = metric_points
+        .first()
+        .ok_or("normalized workload metric is missing")?;
+    assert_eq!(metric_point.metadata.service_id.as_str(), "api");
+    assert_eq!(metric_point.metadata.deployment_id.as_str(), "deployment-1");
+    assert_eq!(metric_point.cpu_usage_usec, 10);
+    assert_eq!(metric_point.memory_current_bytes, 1_024);
     let workload_id = load_assignment(&store, &cluster.cluster_id)
         .await?
         .status
@@ -284,6 +300,8 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             }),
             workload_runtime: workload_runtime.clone(),
             log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
+            metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),
+            stats_reader: Arc::new(FixedStatsReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),
@@ -331,6 +349,7 @@ fn settings_reject_keepalive_at_or_after_leadership_ttl() {
             Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(30),
+            Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_secs(1),
             1_000,
@@ -391,6 +410,41 @@ struct FixedStatusClock;
 impl StatusClock for FixedStatusClock {
     fn now(&self) -> Timestamp {
         Timestamp(1_750_000_000_000)
+    }
+}
+
+struct FixedStatsReader;
+
+#[async_trait]
+impl CgroupStatsReader for FixedStatsReader {
+    async fn read(&self, _path: &CgroupPath) -> Result<CgroupStats, CgroupStatsError> {
+        Ok(CgroupStats {
+            cpu: CgroupCpuStats {
+                usage_usec: 10,
+                user_usec: 7,
+                system_usec: 3,
+                periods: 2,
+                throttled_periods: 1,
+                throttled_usec: 4,
+            },
+            memory: CgroupMemoryStats {
+                current_bytes: 1_024,
+                maximum_bytes: Some(2_048),
+                events: CgroupMemoryEvents {
+                    low: 0,
+                    high: 0,
+                    maximum: 0,
+                    out_of_memory: 0,
+                    out_of_memory_kills: 0,
+                    out_of_memory_group_kills: 0,
+                },
+            },
+            io: CgroupIoStats::default(),
+            processes: CgroupProcessStats {
+                current: 1,
+                maximum: Some(32),
+            },
+        })
     }
 }
 

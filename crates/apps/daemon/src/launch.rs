@@ -10,10 +10,10 @@ use cluster::{
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
-use logstore::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
+use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreError, DuckStoreSettings};
 use node_agent::{
-    HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
-    NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
+    CgroupV2StatsReader, HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend,
+    MeshIdentity, NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
@@ -212,11 +212,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
-    let log_store_runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
-        plan.data_directory().join("agent").join("logs.duckdb"),
-        1_024,
-    )?)
-    .await?;
+    let (log_store_runtime, metric_store_runtime) =
+        open_observability_stores(plan.data_directory()).await?;
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
@@ -226,6 +223,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: containerd.clone(),
             log_store_runtime: Box::new(log_store_runtime),
+            metric_store_runtime: Box::new(metric_store_runtime),
+            stats_reader: Arc::new(CgroupV2StatsReader),
             network_provider: containerd,
             health_prober,
             volatile_root,
@@ -238,6 +237,25 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     )
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
+}
+
+async fn open_observability_stores(
+    data_directory: &Path,
+) -> Result<(DuckLogStoreRuntime, DuckMetricStoreRuntime), DaemonLaunchError> {
+    let agent_directory = data_directory.join("agent");
+    let log_settings = DuckStoreSettings::new(agent_directory.join("logs.duckdb"), 1_024)?;
+    let metric_settings = DuckStoreSettings::new(agent_directory.join("metrics.duckdb"), 1_024)?;
+    let logs = DuckLogStoreRuntime::open(log_settings).await?;
+    match DuckMetricStoreRuntime::open(metric_settings).await {
+        Ok(metrics) => Ok((logs, metrics)),
+        Err(error) => match logs.shutdown().await {
+            Ok(()) => Err(error.into()),
+            Err(rollback_error) => Err(DaemonLaunchError::ObservabilityStoreRollback {
+                startup: error.to_string(),
+                rollback: rollback_error.to_string(),
+            }),
+        },
+    }
 }
 
 async fn connect_worker_store(
@@ -375,6 +393,16 @@ pub enum DaemonLaunchError {
     /// The node-local normalized log store could not be opened or initialized.
     #[error(transparent)]
     LogStore(#[from] DuckStoreError),
+    /// A second observability store failed and the first could not be rolled back cleanly.
+    #[error(
+        "observability store startup failed: {startup}; prior store rollback failed: {rollback}"
+    )]
+    ObservabilityStoreRollback {
+        /// Metric-store initialization failure.
+        startup: String,
+        /// Log-store shutdown failure observed during rollback.
+        rollback: String,
+    },
     /// A generated process identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),

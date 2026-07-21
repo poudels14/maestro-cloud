@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use kernel_store::Store;
 use logs::{LogStore, RuntimeLogPipeline};
+use metrics::{MetricStore, WorkloadMetricPipeline};
 use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
     HealthAgentSettings, RuntimeLogAgent, RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME,
+    WorkloadStatsAgent, WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 
@@ -101,4 +103,25 @@ pub(crate) fn build_log_agent<MeshBackendType, FirewallBackendType, BridgeBacken
         factory.monotonic_clock.clone(),
     )
     .map_err(|error| role_error("construct runtime log agent", error))
+}
+
+pub(crate) fn build_stats_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn MetricStore>,
+) -> Result<WorkloadStatsAgent, RoleError> {
+    WorkloadStatsAgent::new(
+        factory.workload_runtime.clone(),
+        factory.stats_reader.clone(),
+        Arc::new(WorkloadMetricPipeline::new(store)),
+        WorkloadStatsSettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            poll_interval: factory.settings.stats_poll_interval,
+        },
+        factory.status_clock.clone(),
+        factory.monotonic_clock.clone(),
+    )
+    .map_err(|error| role_error("construct workload stats agent", error))
 }
