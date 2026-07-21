@@ -76,6 +76,12 @@ pub enum ServerError {
     /// The operating system did not report the bound address.
     #[error("failed to inspect bound API listener: {0}")]
     LocalAddress(std::io::Error),
+    /// PEM certificate or private-key material could not configure HTTPS.
+    #[error("failed to configure API TLS identity: {0}")]
+    TlsConfiguration(std::io::Error),
+    /// A bound listener could not be transferred to the HTTP runtime.
+    #[error("failed to configure bound API listener: {0}")]
+    ListenerConfiguration(std::io::Error),
     /// The HTTP server stopped unexpectedly.
     #[error("API server failed: {0}")]
     Serve(std::io::Error),

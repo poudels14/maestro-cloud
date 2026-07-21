@@ -19,7 +19,7 @@ use kernel_store::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::{ApiServer, ServerSettings, openapi_document};
+use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 #[test]
 fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
@@ -31,6 +31,17 @@ fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
             store.clone(),
             cluster_id.clone(),
             ServerSettings::new("0.0.0.0:3000".parse()?, None),
+        )
+        .is_err()
+    );
+    assert!(
+        ApiServer::new(
+            store.clone(),
+            cluster_id.clone(),
+            ServerSettings::new(
+                "0.0.0.0:3000".parse()?,
+                Some(SecretValue::new("s".repeat(32))),
+            ),
         )
         .is_err()
     );
@@ -80,7 +91,7 @@ async fn protected_routes_require_a_valid_operator_scope() -> Result<(), Box<dyn
     let server = ApiServer::new(
         store,
         cluster_id,
-        ServerSettings::new("10.20.0.1:3000".parse()?, Some(SecretValue::new(&secret))),
+        ServerSettings::new("127.0.0.1:3000".parse()?, Some(SecretValue::new(&secret))),
     )?;
 
     assert_eq!(
@@ -105,6 +116,64 @@ async fn protected_routes_require_a_valid_operator_scope() -> Result<(), Box<dyn
         request(&server, "/healthz", None).await?.status(),
         StatusCode::OK
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bind_rejects_malformed_tls_identity_before_claiming_the_port()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new(
+            "127.0.0.1:0".parse()?,
+            Some(SecretValue::new("s".repeat(32))),
+        )
+        .with_tls_identity(TlsIdentity::new(
+            "not-a-certificate",
+            SecretValue::new("not-a-private-key"),
+        )),
+    )?;
+    assert!(server.bind().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_https_server_serves_and_shuts_down_cleanly() -> Result<(), Box<dyn std::error::Error>>
+{
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    let certificate_pem = certified.cert.pem();
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new(
+            "127.0.0.1:0".parse()?,
+            Some(SecretValue::new("s".repeat(32))),
+        )
+        .with_tls_identity(TlsIdentity::new(
+            certificate_pem.clone(),
+            SecretValue::new(certified.signing_key.serialize_pem()),
+        )),
+    )?
+    .bind()
+    .await?;
+    let port = server.local_address().port();
+    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(server.serve(shutdown_receiver));
+    let client = reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(certificate_pem.as_bytes())?)
+        .https_only(true)
+        .build()?;
+
+    let response = client
+        .get(format!("https://localhost:{port}/healthz"))
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    shutdown.send(true)?;
+    task.await??;
     Ok(())
 }
 

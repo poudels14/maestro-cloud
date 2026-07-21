@@ -13,8 +13,11 @@ mod settings;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
+use axum_server::Handle;
+use axum_server::tls_rustls::{RustlsConfig, from_tcp_rustls};
 use kernel_api::ClusterId;
 use kernel_store::Store;
 use tokio::net::TcpListener;
@@ -24,7 +27,9 @@ use auth::AuthPolicy;
 pub use auth::OperatorIdentity;
 pub use error::{ApiError, ApiErrorBody, ServerError};
 pub use openapi::openapi_document;
-pub use settings::{ServerSettings, ServerSettingsError};
+pub use settings::{ServerSettings, ServerSettingsError, TlsIdentity};
+
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -58,6 +63,20 @@ impl ApiServer {
 
     /// Claims the configured listener before transferring runtime ownership.
     pub async fn bind(self) -> Result<BoundApiServer, ServerError> {
+        let tls = match self.settings.tls_identity {
+            Some(identity) => {
+                let _ = rustls::crypto::ring::default_provider().install_default();
+                Some(
+                    RustlsConfig::from_pem(
+                        identity.certificate_pem.into_bytes(),
+                        identity.private_key_pem.expose().as_bytes().to_vec(),
+                    )
+                    .await
+                    .map_err(ServerError::TlsConfiguration)?,
+                )
+            }
+            None => None,
+        };
         let listener = TcpListener::bind(self.settings.bind_address)
             .await
             .map_err(|source| ServerError::Bind {
@@ -69,6 +88,7 @@ impl ApiServer {
             listener,
             local_address,
             router: self.router,
+            tls,
         })
     }
 }
@@ -78,6 +98,7 @@ pub struct BoundApiServer {
     listener: TcpListener,
     local_address: SocketAddr,
     router: Router,
+    tls: Option<RustlsConfig>,
 }
 
 impl BoundApiServer {
@@ -87,20 +108,51 @@ impl BoundApiServer {
     }
 
     /// Serves requests until graceful shutdown is requested.
-    pub async fn serve(self, mut shutdown: watch::Receiver<bool>) -> Result<(), ServerError> {
-        axum::serve(self.listener, self.router)
-            .with_graceful_shutdown(async move {
+    pub async fn serve(self, shutdown: watch::Receiver<bool>) -> Result<(), ServerError> {
+        let listener = self
+            .listener
+            .into_std()
+            .map_err(ServerError::ListenerConfiguration)?;
+        let handle = Handle::new();
+        if let Some(tls) = self.tls {
+            let server = from_tcp_rustls(listener, tls)
+                .map_err(ServerError::ListenerConfiguration)?
+                .handle(handle.clone());
+            let serving = server.serve(self.router.into_make_service());
+            tokio::pin!(serving);
+            wait_for_server(&mut serving, handle, shutdown).await
+        } else {
+            let server = axum_server::from_tcp(listener)
+                .map_err(ServerError::ListenerConfiguration)?
+                .handle(handle.clone());
+            let serving = server.serve(self.router.into_make_service());
+            tokio::pin!(serving);
+            wait_for_server(&mut serving, handle, shutdown).await
+        }
+    }
+}
+
+async fn wait_for_server(
+    serving: &mut std::pin::Pin<&mut impl Future<Output = std::io::Result<()>>>,
+    handle: Handle<SocketAddr>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), ServerError> {
+    if *shutdown.borrow() {
+        handle.graceful_shutdown(Some(SHUTDOWN_GRACE));
+        return serving.await.map_err(ServerError::Serve);
+    }
+    tokio::select! {
+        result = serving.as_mut() => result.map_err(ServerError::Serve),
+        _ = async {
+            while shutdown.changed().await.is_ok() {
                 if *shutdown.borrow() {
                     return;
                 }
-                while shutdown.changed().await.is_ok() {
-                    if *shutdown.borrow() {
-                        return;
-                    }
-                }
-            })
-            .await
-            .map_err(ServerError::Serve)
+            }
+        } => {
+            handle.graceful_shutdown(Some(SHUTDOWN_GRACE));
+            serving.await.map_err(ServerError::Serve)
+        }
     }
 }
 
