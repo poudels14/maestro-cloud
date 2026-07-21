@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,16 +9,19 @@ use cluster::{
     StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 use kernel_api::{
-    Generation, NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId,
-    NodeInstanceId, NodeRole, Object, ObjectMeta, ResourceRevision, Timestamp,
+    DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, Generation,
+    NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId, NodeInstanceId,
+    NodeRole, Object, ObjectMeta, ResourceRevision, Timestamp,
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
 };
 use node_agent::{
-    FirewallBackend, FirewallBackendError, MeshBackend, MeshBackendError, MeshConfiguration,
-    MeshIdentity, StatusClock,
+    AuthoritativeDnsResolver, DnsQueryType, DnsServerBinder, DnsServerError, DnsServerRuntime,
+    DnsServerSettings, FirewallBackend, FirewallBackendError, MeshBackend, MeshBackendError,
+    MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge, WorkloadBridgeBackend,
+    WorkloadBridgeBackendError,
 };
 use tokio::sync::{Notify, watch};
 
@@ -44,6 +48,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     };
     let workload = Arc::new(RecordingLeaderWorkload::default());
     let firewall_applications = Arc::new(Mutex::new(Vec::new()));
+    let bridge_applications = Arc::new(Mutex::new(Vec::new()));
+    let dns_bindings = Arc::new(Mutex::new(Vec::new()));
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -52,6 +58,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         directory.path().to_path_buf(),
     )?;
     put_firewall(&store, &cluster.cluster_id, "master").await?;
+    put_dns_record(&store, &cluster.cluster_id).await?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
             provider,
@@ -60,6 +67,12 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             firewall_backend: RecordingFirewallBackend {
                 applications: firewall_applications.clone(),
             },
+            bridge_backend: RecordingBridgeBackend {
+                applications: bridge_applications.clone(),
+            },
+            dns_server_binder: Arc::new(RecordingDnsBinder {
+                bindings: dns_bindings.clone(),
+            }),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
             monotonic_clock: clock,
@@ -84,6 +97,31 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .map_err(|_| "firewall application lock poisoned")?
             .len(),
         2
+    );
+    let bridge = bridge_applications
+        .lock()
+        .map_err(|_| "bridge application lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("workload bridge was not applied")?;
+    assert_eq!(bridge.name, "maestro0");
+    assert_eq!(bridge.gateway, Ipv4Addr::new(172, 22, 0, 1));
+    assert_eq!(bridge.prefix_length, 24);
+    assert_eq!(bridge.mtu_bytes, cluster::WIREGUARD_MTU_BYTES);
+    let (dns_settings, resolver) = dns_bindings
+        .lock()
+        .map_err(|_| "DNS binding lock poisoned")?
+        .first()
+        .map(|(settings, resolver)| (*settings, resolver.clone()))
+        .ok_or("authoritative DNS server was not bound")?;
+    assert_eq!(dns_settings.bind_address(), "172.22.0.1:53".parse()?);
+    assert_eq!(
+        resolver
+            .lookup("api.maestro.internal.", DnsQueryType::A)
+            .await?
+            .answers
+            .len(),
+        1
     );
 
     let leader_key = Keyspace::new(&cluster.cluster_id).leader();
@@ -122,6 +160,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
 fn settings_reject_keepalive_at_or_after_leadership_ttl() {
     assert!(
         ControlPlaneRoleSettings::new(
+            Duration::from_secs(30),
+            Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(5),
@@ -214,6 +254,102 @@ impl FirewallBackend for RecordingFirewallBackend {
             .map_err(|_| FirewallBackendError::new("firewall application lock poisoned"))?
             .push(desired.clone());
         Ok(())
+    }
+}
+
+struct RecordingBridgeBackend {
+    applications: Arc<Mutex<Vec<WorkloadBridge>>>,
+}
+
+#[async_trait]
+impl WorkloadBridgeBackend for RecordingBridgeBackend {
+    async fn apply(&self, desired: &WorkloadBridge) -> Result<(), WorkloadBridgeBackendError> {
+        self.applications
+            .lock()
+            .map_err(|_| WorkloadBridgeBackendError::new("bridge application lock poisoned"))?
+            .push(desired.clone());
+        Ok(())
+    }
+}
+
+struct RecordingDnsBinder {
+    bindings: Arc<Mutex<Vec<(DnsServerSettings, AuthoritativeDnsResolver)>>>,
+}
+
+#[async_trait]
+impl DnsServerBinder for RecordingDnsBinder {
+    async fn bind(
+        &self,
+        settings: DnsServerSettings,
+        resolver: AuthoritativeDnsResolver,
+    ) -> Result<Box<dyn DnsServerRuntime>, DnsServerError> {
+        let mut bindings = match self.bindings.lock() {
+            Ok(bindings) => bindings,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        bindings.push((settings, resolver));
+        Ok(Box::new(WaitingDnsServer))
+    }
+}
+
+struct WaitingDnsServer;
+
+#[async_trait]
+impl DnsServerRuntime for WaitingDnsServer {
+    async fn serve(
+        self: Box<Self>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), DnsServerError> {
+        while !*shutdown.borrow() {
+            if shutdown.changed().await.is_err() {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn put_dns_record(
+    store: &InMemoryStore,
+    cluster_id: &kernel_api::ClusterId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resource: DnsRecord = Object {
+        meta: ObjectMeta {
+            id: DnsRecordId::new("api")?,
+            labels: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            revision: ResourceRevision::default(),
+            generation: Generation(1),
+            owner_refs: Vec::new(),
+            finalizers: BTreeSet::new(),
+            deletion_timestamp: None,
+        },
+        spec: DnsRecordSpec {
+            name: "api.maestro.internal.".to_owned(),
+            values: vec![DnsRecordValue::A(Ipv4Addr::new(172, 22, 0, 11))],
+            ttl_secs: 30,
+        },
+        status: DnsRecordStatus {
+            applied_generation: Generation::default(),
+            published_nodes: Vec::new(),
+            conditions: Vec::new(),
+        },
+    };
+    let outcome = store
+        .put_cas(PutRequest {
+            key: Keyspace::new(cluster_id).resource(
+                &kernel_api::ResourceKind::new("DnsRecord")?,
+                &kernel_api::ResourceName::new("api")?,
+            ),
+            value: serde_json::to_vec(&resource)?,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    if matches!(outcome, CasOutcome::Applied(_)) {
+        Ok(())
+    } else {
+        Err("DnsRecord create conflicted".into())
     }
 }
 

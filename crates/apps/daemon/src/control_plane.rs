@@ -6,7 +6,9 @@ use cluster::{StoreProvider, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
-use node_agent::{FirewallBackend, MeshBackend, MeshIdentity, StatusClock};
+use node_agent::{
+    DnsServerBinder, FirewallBackend, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
+};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -28,7 +30,9 @@ pub trait LeaderWorkload: Send + Sync {
 /// Time bounds for node resync, leadership, and graceful store shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlPlaneRoleSettings {
+    pub(crate) bridge_resync_interval: Duration,
     pub(crate) mesh_resync_interval: Duration,
+    pub(crate) dns_resync_interval: Duration,
     pub(crate) firewall_resync_interval: Duration,
     pub(crate) leadership_ttl: Duration,
     pub(crate) leadership_keepalive_interval: Duration,
@@ -39,14 +43,18 @@ pub struct ControlPlaneRoleSettings {
 impl ControlPlaneRoleSettings {
     /// Creates bounded settings and rejects hot loops or expired leadership.
     pub fn new(
+        bridge_resync_interval: Duration,
         mesh_resync_interval: Duration,
+        dns_resync_interval: Duration,
         firewall_resync_interval: Duration,
         leadership_ttl: Duration,
         leadership_keepalive_interval: Duration,
         campaign_retry_interval: Duration,
         store_shutdown_grace: Duration,
     ) -> Result<Self, RoleError> {
-        if mesh_resync_interval.is_zero()
+        if bridge_resync_interval.is_zero()
+            || mesh_resync_interval.is_zero()
+            || dns_resync_interval.is_zero()
             || firewall_resync_interval.is_zero()
             || leadership_ttl.is_zero()
             || leadership_keepalive_interval.is_zero()
@@ -59,7 +67,9 @@ impl ControlPlaneRoleSettings {
             ));
         }
         Ok(Self {
+            bridge_resync_interval,
             mesh_resync_interval,
+            dns_resync_interval,
             firewall_resync_interval,
             leadership_ttl,
             leadership_keepalive_interval,
@@ -72,7 +82,9 @@ impl ControlPlaneRoleSettings {
 impl Default for ControlPlaneRoleSettings {
     fn default() -> Self {
         Self {
+            bridge_resync_interval: Duration::from_secs(30),
             mesh_resync_interval: Duration::from_secs(30),
+            dns_resync_interval: Duration::from_secs(30),
             firewall_resync_interval: Duration::from_secs(30),
             leadership_ttl: Duration::from_secs(15),
             leadership_keepalive_interval: Duration::from_secs(5),
@@ -83,7 +95,7 @@ impl Default for ControlPlaneRoleSettings {
 }
 
 /// Production adapters and identities required by the concrete role factory.
-pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType> {
+pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     /// Provisioning boundary for the node-local cluster store member.
     pub provider: Arc<dyn StoreProvider>,
     /// Explicit bootstrap, join, or restart decision for the local member.
@@ -92,6 +104,10 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType> {
     pub mesh_backend: MeshBackendType,
     /// Host-network adapter that applies complete node-local nftables state.
     pub firewall_backend: FirewallBackendType,
+    /// Host-network adapter that owns the node-local workload bridge.
+    pub bridge_backend: BridgeBackendType,
+    /// UDP/TCP listener binder for the node-local authoritative DNS server.
+    pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Persisted node-local WireGuard identity.
     pub mesh_identity: MeshIdentity,
     /// Unique identity of this daemon process for leader election.
@@ -103,11 +119,13 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType> {
 }
 
 /// Concrete control-plane factory composing a store provider, mesh agent, and leader lease.
-pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType> {
+pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     pub(crate) provider: Arc<dyn StoreProvider>,
     pub(crate) store_start_mode: StoreStartMode,
     pub(crate) mesh_backend: Mutex<Option<MeshBackendType>>,
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
+    pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
+    pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
     pub(crate) monotonic_clock: Arc<dyn Clock>,
@@ -117,12 +135,16 @@ pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType> {
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
 }
 
-impl<MeshBackendType, FirewallBackendType>
-    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
+impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
+    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 {
     /// Binds all production adapters without starting tasks or processes.
     pub fn new(
-        dependencies: ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType>,
+        dependencies: ControlPlaneRoleDependencies<
+            MeshBackendType,
+            FirewallBackendType,
+            BridgeBackendType,
+        >,
         settings: ControlPlaneRoleSettings,
     ) -> Self {
         Self {
@@ -130,6 +152,8 @@ impl<MeshBackendType, FirewallBackendType>
             store_start_mode: dependencies.store_start_mode,
             mesh_backend: Mutex::new(Some(dependencies.mesh_backend)),
             firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
+            bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
+            dns_server_binder: dependencies.dns_server_binder,
             mesh_identity: dependencies.mesh_identity,
             instance_id: dependencies.instance_id,
             monotonic_clock: dependencies.monotonic_clock,
@@ -148,11 +172,12 @@ impl<MeshBackendType, FirewallBackendType>
 }
 
 #[async_trait]
-impl<MeshBackendType, FirewallBackendType> RoleFactory
-    for ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
+impl<MeshBackendType, FirewallBackendType, BridgeBackendType> RoleFactory
+    for ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 where
     MeshBackendType: MeshBackend + 'static,
     FirewallBackendType: FirewallBackend + 'static,
+    BridgeBackendType: WorkloadBridgeBackend + 'static,
 {
     async fn start(
         &self,
@@ -171,11 +196,12 @@ where
     }
 }
 
-impl<MeshBackendType, FirewallBackendType>
-    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType>
+impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
+    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 where
     MeshBackendType: MeshBackend + 'static,
     FirewallBackendType: FirewallBackend + 'static,
+    BridgeBackendType: WorkloadBridgeBackend + 'static,
 {
     async fn start_controller(&self, spec: &RoleSpec) -> Result<Box<dyn RoleRuntime>, RoleError> {
         let store = self

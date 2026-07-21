@@ -16,6 +16,7 @@ use kernel_controller::{
     Backoff, ControllerError, ControllerRuntime, FencedStore, RuntimeConfig, TimestampClock,
 };
 use kernel_store::Clock;
+use node_agent::{AUTHORITATIVE_DNS_PORT, WORKLOAD_BRIDGE_NAME};
 use scheduler::{SchedulerReconciler, SchedulerSettings};
 use tokio::sync::watch;
 
@@ -84,8 +85,8 @@ impl OperatorSettings {
             dns: DnsSettings { ttl_secs: 5 },
             firewall: FirewallSettings {
                 table_name: "maestro_firewall".to_string(),
-                workload_interface: "maestro0".to_string(),
-                dns_port: 53,
+                workload_interface: WORKLOAD_BRIDGE_NAME.to_string(),
+                dns_port: AUTHORITATIVE_DNS_PORT,
                 protected_host_ports,
                 control_allow_cidrs: control_allow_cidrs.into_iter().collect(),
                 system_services: BTreeSet::new(),

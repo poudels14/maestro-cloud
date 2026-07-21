@@ -76,7 +76,10 @@ pub use dns::{
     DnsResponseCode, DnsZoneSummary, MAESTRO_DNS_ZONE,
 };
 pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
-pub use dns_server::{BoundDnsServer, DnsServerError, DnsServerSettings};
+pub use dns_server::{
+    AUTHORITATIVE_DNS_PORT, BoundDnsServer, DnsServerBinder, DnsServerError, DnsServerRuntime,
+    DnsServerSettings, HickoryDnsServerBinder,
+};
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use firewall::{
     FirewallAgentError, FirewallBackend, FirewallBackendError, FirewallReconcileReport,

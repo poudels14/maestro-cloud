@@ -22,6 +22,9 @@ const TCP_TIMEOUT: Duration = Duration::from_secs(10);
 const TCP_RESPONSE_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_EDNS_PAYLOAD_BYTES: u16 = 4096;
 
+/// Stable port exposed only on each node's workload bridge.
+pub const AUTHORITATIVE_DNS_PORT: u16 = 53;
+
 /// Validated bridge-only DNS listener configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DnsServerSettings {
@@ -55,6 +58,46 @@ impl DnsServerSettings {
 pub struct BoundDnsServer {
     server: Server<HickoryDnsHandler>,
     local_address: SocketAddr,
+}
+
+/// Owned DNS serving task returned by a listener binder.
+#[async_trait]
+pub trait DnsServerRuntime: Send {
+    /// Serves until shutdown is requested or a listener fails.
+    async fn serve(self: Box<Self>, shutdown: watch::Receiver<bool>) -> Result<(), DnsServerError>;
+}
+
+/// Socket-binding boundary used by the daemon composition root.
+#[async_trait]
+pub trait DnsServerBinder: Send + Sync {
+    /// Binds UDP and TCP listeners for one authoritative resolver.
+    async fn bind(
+        &self,
+        settings: DnsServerSettings,
+        resolver: AuthoritativeDnsResolver,
+    ) -> Result<Box<dyn DnsServerRuntime>, DnsServerError>;
+}
+
+/// Production binder backed by Hickory UDP and TCP listeners.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HickoryDnsServerBinder;
+
+#[async_trait]
+impl DnsServerBinder for HickoryDnsServerBinder {
+    async fn bind(
+        &self,
+        settings: DnsServerSettings,
+        resolver: AuthoritativeDnsResolver,
+    ) -> Result<Box<dyn DnsServerRuntime>, DnsServerError> {
+        Ok(Box::new(BoundDnsServer::bind(settings, resolver).await?))
+    }
+}
+
+#[async_trait]
+impl DnsServerRuntime for BoundDnsServer {
+    async fn serve(self: Box<Self>, shutdown: watch::Receiver<bool>) -> Result<(), DnsServerError> {
+        BoundDnsServer::serve(*self, shutdown).await
+    }
 }
 
 impl BoundDnsServer {
