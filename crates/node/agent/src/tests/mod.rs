@@ -6,6 +6,7 @@ mod assignment_restart;
 #[cfg(target_os = "linux")]
 mod cgroup_stats;
 mod dns;
+mod dns_resource;
 mod exec;
 mod fake_mesh;
 mod fake_network;

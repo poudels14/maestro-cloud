@@ -16,6 +16,7 @@ mod assignment_types;
 #[cfg(target_os = "linux")]
 mod cgroup_stats;
 mod dns;
+mod dns_resource;
 mod exec;
 mod health;
 mod health_probe;
@@ -62,6 +63,7 @@ pub use dns::{
     AuthoritativeDnsResolver, DnsAnswer, DnsLookup, DnsQueryType, DnsResolverError,
     DnsResponseCode, DnsZoneSummary, MAESTRO_DNS_ZONE,
 };
+pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
