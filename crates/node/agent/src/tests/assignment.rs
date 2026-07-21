@@ -437,6 +437,8 @@ pub(crate) fn deployment() -> Deployment {
                 health_check: None,
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
+                user: None,
+                node_api: kernel_api::NodeApiAccess::Disabled,
                 secrets: None,
                 volumes: vec![VolumeMountSpec {
                     source: VolumeSource::HostPath {

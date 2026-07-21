@@ -6,7 +6,7 @@ use kernel_api::{
 };
 use runtime::{
     ArtifactReference, ContainerWorkload, MountAccess, MountSource, WorkloadConfiguration,
-    WorkloadMetadata, WorkloadMount, WorkloadSpec,
+    WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
 };
 
 pub(crate) fn workload_spec(
@@ -61,7 +61,10 @@ pub(crate) fn workload_spec(
             environment: deployment.spec.service.environment.clone(),
             mounts,
             workload_address: Some(assignment.spec.workload_address),
-            user: None,
+            user: deployment.spec.service.user.map(|user| WorkloadUser {
+                user_id: user.user_id,
+                group_id: user.group_id,
+            }),
         },
         image,
         command: deployment.spec.service.command.clone(),

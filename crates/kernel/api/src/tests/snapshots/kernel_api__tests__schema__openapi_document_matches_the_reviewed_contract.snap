@@ -1338,6 +1338,32 @@ expression: openapi_document()
       "Node": {
         "$ref": "#/components/schemas/Object"
       },
+      "NodeApiAccess": {
+        "description": "Workload access to the private node API mounted at `/run/maestro`.",
+        "oneOf": [
+          {
+            "description": "No node API credentials or socket are mounted.",
+            "enum": [
+              "disabled"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Downward identity and authenticated OTLP ingest are available.",
+            "enum": [
+              "identityAndTelemetry"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Identity, telemetry, and privileged Control mutations are available.",
+            "enum": [
+              "privileged"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "NodeId": {
         "description": "Stable identity of a cluster node.",
         "type": "string"
@@ -3700,6 +3726,15 @@ expression: openapi_document()
             "description": "Operator-facing service name.",
             "type": "string"
           },
+          "nodeApi": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeApiAccess"
+              }
+            ],
+            "default": "disabled",
+            "description": "Private downward API, OTLP ingest, and optional privileged Control access."
+          },
           "placement": {
             "allOf": [
               {
@@ -3728,6 +3763,20 @@ expression: openapi_document()
               }
             ],
             "description": "Secret values delivered through a private read-only file mount."
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadUserSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Explicit numeric process identity, required when the node API is enabled."
           },
           "version": {
             "description": "Operator-supplied version used in rollout history.",
@@ -4320,6 +4369,28 @@ expression: openapi_document()
       "WorkloadId": {
         "description": "Stable identity of one runtime-managed workload instance.",
         "type": "string"
+      },
+      "WorkloadUserSpec": {
+        "description": "Numeric runtime identity used for process launch and Unix peer authorization.",
+        "properties": {
+          "groupId": {
+            "description": "Primary group identity inside the workload.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "userId": {
+            "description": "User identity inside the workload and on the node when user namespaces are absent.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "userId",
+          "groupId"
+        ],
+        "type": "object"
       }
     }
   },

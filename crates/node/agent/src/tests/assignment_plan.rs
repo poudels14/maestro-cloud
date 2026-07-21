@@ -1,5 +1,5 @@
-use kernel_api::VolumeSource;
-use runtime::{MountAccess, MountSource, WorkloadSpec};
+use kernel_api::{VolumeSource, WorkloadUserSpec};
+use runtime::{MountAccess, MountSource, WorkloadSpec, WorkloadUser};
 
 use crate::assignment_plan::{WorkloadPlanError, workload_spec};
 
@@ -46,6 +46,32 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         workload.configuration.mounts.first().unwrap().source,
         MountSource::HostPath(_)
     ));
+    assert_eq!(workload.configuration.user, None);
+    Ok(())
+}
+
+#[test]
+fn assignment_plan_preserves_an_explicit_numeric_workload_user()
+-> Result<(), Box<dyn std::error::Error>> {
+    let assignment = assignment();
+    let mut deployment = deployment();
+    deployment.spec.service.user = Some(WorkloadUserSpec {
+        user_id: 1_000,
+        group_id: 1_001,
+    });
+
+    let WorkloadSpec::Container(workload) =
+        workload_spec(&cluster_id(), &assignment, &deployment, None)?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+    assert_eq!(
+        workload.configuration.user,
+        Some(WorkloadUser {
+            user_id: 1_000,
+            group_id: 1_001,
+        })
+    );
     Ok(())
 }
 

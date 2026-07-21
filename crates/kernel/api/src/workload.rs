@@ -122,6 +122,41 @@ pub enum ExecPolicy {
     Denied,
 }
 
+/// Workload access to the private node API mounted at `/run/maestro`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NodeApiAccess {
+    /// No node API credentials or socket are mounted.
+    #[default]
+    Disabled,
+    /// Downward identity and authenticated OTLP ingest are available.
+    IdentityAndTelemetry,
+    /// Identity, telemetry, and privileged Control mutations are available.
+    Privileged,
+}
+
+impl NodeApiAccess {
+    /// Returns whether the workload receives a node API mount.
+    pub fn is_enabled(self) -> bool {
+        self != Self::Disabled
+    }
+
+    /// Returns whether privileged Control mutations are allowed.
+    pub fn allows_control(self) -> bool {
+        self == Self::Privileged
+    }
+}
+
+/// Numeric runtime identity used for process launch and Unix peer authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadUserSpec {
+    /// User identity inside the workload and on the node when user namespaces are absent.
+    pub user_id: u32,
+    /// Primary group identity inside the workload.
+    pub group_id: u32,
+}
+
 /// Read/write policy for a mounted volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -205,6 +240,12 @@ pub struct ServiceSpec {
     /// Non-secret runtime environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
+    /// Explicit numeric process identity, required when the node API is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<WorkloadUserSpec>,
+    /// Private downward API, OTLP ingest, and optional privileged Control access.
+    #[serde(default)]
+    pub node_api: NodeApiAccess,
     /// Secret values delivered through a private read-only file mount.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretMountSpec>,
