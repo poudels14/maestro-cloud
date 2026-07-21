@@ -8,13 +8,14 @@ use cluster::{
     StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
+use kernel_controller::SystemTimestampClock;
 use kernel_store::TokioClock;
 use node_agent::{LinuxMeshBackend, MeshIdentity, NftablesFirewallBackend, SystemStatusClock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, Daemon,
-    DaemonPlan, RunningDaemon,
+    DaemonPlan, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -155,6 +156,12 @@ pub async fn launch_control_plane(
         None => generate_instance_id()?,
     };
     let start_mode = store_mode.provider_mode();
+    let operator_workload = Arc::new(OperatorLeaderWorkload::new(
+        cluster.cluster_id.clone(),
+        clock.clone(),
+        Arc::new(SystemTimestampClock),
+        OperatorSettings::production(&cluster)?,
+    ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
@@ -168,7 +175,8 @@ pub async fn launch_control_plane(
             status_clock: Arc::new(SystemStatusClock),
         },
         ControlPlaneRoleSettings::default(),
-    );
+    )
+    .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
 }
 
@@ -261,6 +269,9 @@ pub enum DaemonLaunchError {
     /// A generated process identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
+    /// Static operator views could not be constructed from cluster settings.
+    #[error(transparent)]
+    OperatorSettings(#[from] crate::OperatorSuiteError),
     /// Role planning, startup, or rollback failed.
     #[error(transparent)]
     Daemon(#[from] crate::DaemonError),

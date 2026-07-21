@@ -1,14 +1,19 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
+use cluster::ClusterConfig;
 use deployment::{DeploymentReconciler, LifecycleSettings};
 use dns::{DnsReconciler, DnsSettings};
 use firewall::{
     FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler, FirewallSettings,
 };
-use ingress::{IngressBackend, IngressReconciler, IngressSettings};
+use ingress::{
+    IngressBackend, IngressReconciler, IngressSettings, StoreTraefikProvider, TraefikBackend,
+};
 use kernel_api::ClusterId;
 use kernel_controller::{
-    ControllerError, ControllerRuntime, FencedStore, RuntimeConfig, TimestampClock,
+    Backoff, ControllerError, ControllerRuntime, FencedStore, RuntimeConfig, TimestampClock,
 };
 use kernel_store::Clock;
 use scheduler::{SchedulerReconciler, SchedulerSettings};
@@ -33,6 +38,62 @@ pub struct OperatorSettings {
     pub firewall: FirewallSettings,
 }
 
+impl OperatorSettings {
+    /// Derives bounded operator views from the validated cluster configuration.
+    pub fn production(cluster: &ClusterConfig) -> Result<Self, OperatorSuiteError> {
+        let mut protected_host_ports = vec![
+            cluster.ports.gateway,
+            cluster.ports.store_client,
+            cluster.ports.store_peer,
+        ];
+        protected_host_ports.extend(cluster.nodes.values().map(|node| node.endpoint.api_port));
+        protected_host_ports.sort_unstable();
+        protected_host_ports.dedup();
+        let mut control_allow_cidrs = cluster
+            .control_allow_cidrs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<BTreeSet<_>>();
+        control_allow_cidrs.extend(
+            cluster
+                .nodes
+                .values()
+                .filter(|node| {
+                    cluster
+                        .control_allow_cidrs
+                        .iter()
+                        .all(|network| !network.contains(node.endpoint.host_address))
+                })
+                .map(|node| format!("{}/32", node.endpoint.host_address)),
+        );
+        Ok(Self {
+            runtime: RuntimeConfig::new(
+                Duration::from_secs(30),
+                Backoff::new(Duration::from_millis(100), Duration::from_secs(5))?,
+            )?,
+            scheduler: SchedulerSettings {
+                replacement_grace: Duration::from_secs(30),
+                deployment_drain_grace: Duration::from_secs(30),
+            },
+            deployment: LifecycleSettings {
+                drain_grace: Duration::from_secs(30),
+            },
+            ingress: IngressSettings {
+                retirement_grace: Duration::from_secs(30),
+            },
+            dns: DnsSettings { ttl_secs: 5 },
+            firewall: FirewallSettings {
+                table_name: "maestro_firewall".to_string(),
+                workload_interface: "maestro0".to_string(),
+                dns_port: 53,
+                protected_host_ports,
+                control_allow_cidrs: control_allow_cidrs.into_iter().collect(),
+                system_services: BTreeSet::new(),
+            },
+        })
+    }
+}
+
 /// Side-effect integrations shared by leader-owned operators.
 #[derive(Clone)]
 pub struct OperatorBackends {
@@ -46,7 +107,6 @@ pub struct OperatorLeaderWorkload {
     monotonic_clock: Arc<dyn Clock>,
     timestamp_clock: Arc<dyn TimestampClock>,
     settings: OperatorSettings,
-    backends: OperatorBackends,
 }
 
 impl OperatorLeaderWorkload {
@@ -56,14 +116,12 @@ impl OperatorLeaderWorkload {
         monotonic_clock: Arc<dyn Clock>,
         timestamp_clock: Arc<dyn TimestampClock>,
         settings: OperatorSettings,
-        backends: OperatorBackends,
     ) -> Self {
         Self {
             cluster_id,
             monotonic_clock,
             timestamp_clock,
             settings,
-            backends,
         }
     }
 }
@@ -75,13 +133,19 @@ impl LeaderWorkload for OperatorLeaderWorkload {
         store: Arc<FencedStore>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), RoleError> {
+        let provider = Arc::new(StoreTraefikProvider::new(
+            self.cluster_id.clone(),
+            store.clone(),
+        ));
         let suite = OperatorSuite::new(
             self.cluster_id.clone(),
             store,
             self.monotonic_clock.clone(),
             self.timestamp_clock.clone(),
             self.settings.clone(),
-            self.backends.clone(),
+            OperatorBackends {
+                ingress: Arc::new(TraefikBackend::new(self.cluster_id.clone(), provider)),
+            },
         )
         .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
         suite
@@ -213,6 +277,12 @@ impl OperatorSuite {
 /// Construction failure from one concrete operator contract.
 #[derive(Debug, thiserror::Error)]
 pub enum OperatorSuiteError {
+    /// The shared retry policy was invalid.
+    #[error(transparent)]
+    Backoff(#[from] kernel_controller::BackoffError),
+    /// The shared watch resync policy was invalid.
+    #[error(transparent)]
+    RuntimeConfig(#[from] kernel_controller::RuntimeConfigError),
     /// Deployment lifecycle settings or identifiers were invalid.
     #[error(transparent)]
     Deployment(#[from] deployment::DeploymentError),

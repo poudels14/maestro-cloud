@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     ArtifactTemplate, ClusterId, Deployment, ExecPolicy, Generation, NodeApiAccess, NodeFirewall,
-    NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, Object,
-    ObjectMeta, PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState,
-    Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
+    NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus,
+    NodeRole, Object, ObjectMeta, PlacementConstraint, ResourceKind, ResourceName,
+    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -20,6 +20,8 @@ use kernel_store::{
 };
 
 use crate::{OperatorBackends, OperatorSettings, OperatorSuite};
+
+use super::cluster_with_nodes;
 
 #[tokio::test]
 async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
@@ -100,6 +102,59 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
         ingress_changes
             .first()
             .is_some_and(|change| change.active.is_none())
+    );
+    Ok(())
+}
+
+#[test]
+fn production_settings_derive_host_firewall_boundaries_from_the_cluster()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
+    let settings = OperatorSettings::production(&cluster)?;
+    let mut expected_ports = vec![
+        cluster.ports.gateway,
+        cluster.ports.store_client,
+        cluster.ports.store_peer,
+    ];
+    expected_ports.extend(cluster.nodes.values().map(|node| node.endpoint.api_port));
+    expected_ports.sort_unstable();
+    expected_ports.dedup();
+    let mut expected_cidrs = cluster
+        .control_allow_cidrs
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    expected_cidrs.extend(
+        cluster
+            .nodes
+            .values()
+            .filter(|node| {
+                cluster
+                    .control_allow_cidrs
+                    .iter()
+                    .all(|network| !network.contains(node.endpoint.host_address))
+            })
+            .map(|node| format!("{}/32", node.endpoint.host_address)),
+    );
+
+    assert_eq!(settings.firewall.protected_host_ports, expected_ports);
+    assert_eq!(
+        settings.firewall.control_allow_cidrs,
+        expected_cidrs.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(settings.firewall.workload_interface, "maestro0");
+    assert_eq!(settings.firewall.dns_port, 53);
+
+    let mut cluster_without_allowlist = cluster;
+    cluster_without_allowlist.control_allow_cidrs.clear();
+    let fallback = OperatorSettings::production(&cluster_without_allowlist)?;
+    assert_eq!(
+        fallback.firewall.control_allow_cidrs,
+        cluster_without_allowlist
+            .nodes
+            .values()
+            .map(|node| format!("{}/32", node.endpoint.host_address))
+            .collect::<Vec<_>>()
     );
     Ok(())
 }
