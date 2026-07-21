@@ -5,7 +5,8 @@ use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    LogBackupLaunchConfig, PreviewLaunchConfig, StoreLaunchMode, load_launch_config,
+    LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig, StoreLaunchMode,
+    load_launch_config,
 };
 
 use super::cluster_with_nodes;
@@ -169,6 +170,50 @@ fn log_backup_launch_config_validates_s3_kms_prefix_and_retention()
     Ok(())
 }
 
+#[test]
+fn nixos_upgrade_launch_config_requires_hermetic_binary_pairs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.nixos_upgrade = Some(NixosUpgradeLaunchConfig::new("/etc/maestro"));
+    launch.validate()?;
+    let encoded = serde_json::to_value(&launch)?;
+    let upgrade = encoded
+        .get("nixosUpgrade")
+        .ok_or("NixOS upgrade config missing")?;
+    assert_eq!(upgrade.get("configuration"), Some(&"default".into()));
+    assert_eq!(
+        upgrade.get("manifestRelativePath"),
+        Some(&"crates/apps/daemon/Cargo.toml".into())
+    );
+
+    let upgrade = launch
+        .nixos_upgrade
+        .as_mut()
+        .ok_or("NixOS upgrade config missing")?;
+    upgrade.nix_binary = Some(PathBuf::from("nix"));
+    assert!(launch.validate().is_err());
+    let upgrade = launch
+        .nixos_upgrade
+        .as_mut()
+        .ok_or("NixOS upgrade config missing")?;
+    upgrade.nix_binary = Some(PathBuf::from("/nix/store/test/bin/nix"));
+    assert!(launch.validate().is_err());
+    let upgrade = launch
+        .nixos_upgrade
+        .as_mut()
+        .ok_or("NixOS upgrade config missing")?;
+    upgrade.nixos_rebuild_binary = Some(PathBuf::from("/run/current-system/sw/bin/nixos-rebuild"));
+    upgrade.systemctl_binary = Some(PathBuf::from("systemctl"));
+    assert!(launch.validate().is_err());
+    let upgrade = launch
+        .nixos_upgrade
+        .as_mut()
+        .ok_or("NixOS upgrade config missing")?;
+    upgrade.systemctl_binary = Some(PathBuf::from("/run/current-system/sw/bin/systemctl"));
+    launch.validate()?;
+    Ok(())
+}
+
 fn config(
     node_id: &str,
     role: NodeRole,
@@ -191,5 +236,6 @@ fn config(
         datadog: None,
         log_backup: None,
         preview: None,
+        nixos_upgrade: None,
     })
 }

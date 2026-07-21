@@ -11,9 +11,36 @@ use node_agent::{
     WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
+use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::{DaemonPlan, RoleError, RoleSpec};
+
+pub(crate) fn build_node_upgrade_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+) -> Result<Option<NodeUpgradeAgent>, RoleError> {
+    let Some(dependencies) = factory.node_upgrade.as_ref() else {
+        return Ok(None);
+    };
+    NodeUpgradeAgent::new(
+        store,
+        NodeUpgradeAgentSettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            instance_id: factory.instance_id().clone(),
+            running_version: dependencies.running_version.clone(),
+            resync_interval: factory.settings.upgrade_resync_interval,
+        },
+        dependencies.stager.clone(),
+        dependencies.rebooter.clone(),
+        factory.monotonic_clock.clone(),
+    )
+    .map(Some)
+    .map_err(|error| role_error("construct node upgrade agent", error))
+}
 
 pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
     factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,

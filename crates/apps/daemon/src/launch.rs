@@ -11,7 +11,7 @@ use cluster::{
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
-use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreError, DuckStoreSettings};
+use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use node_agent::{
     CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxHostDiskReader,
     LinuxHostStatsReader, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
@@ -19,13 +19,15 @@ use node_agent::{
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
+use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
 
 use crate::datadog::{build_datadog_sinks, configure_datadog};
+use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 use crate::{
     AgentStore, BuildOperatorBackends, Daemon, DaemonPlan, DaemonRoleDependencies,
     DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig, LogBackupLaunchConfig,
-    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    NodeUpgradeDependencies, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -82,6 +84,9 @@ pub struct DaemonLaunchConfig {
     /// Optional cluster-wide GitHub pull-request previews.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<crate::PreviewLaunchConfig>,
+    /// Optional NixOS staging and reboot policy; absence disables cluster upgrades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nixos_upgrade: Option<crate::NixosUpgradeLaunchConfig>,
 }
 
 impl DaemonLaunchConfig {
@@ -96,6 +101,9 @@ impl DaemonLaunchConfig {
         }
         if let Some(preview) = &self.preview {
             preview.validate()?;
+        }
+        if let Some(upgrade) = &self.nixos_upgrade {
+            upgrade.validate()?;
         }
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));
@@ -175,6 +183,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         datadog,
         log_backup,
         preview,
+        nixos_upgrade,
     } = config;
     let known_members = control_plane_members(&cluster);
     let clock = Arc::new(TokioClock::new());
@@ -242,10 +251,31 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .as_ref()
         .map(|preview| preview.configure())
         .transpose()?;
+    let configured_upgrade = nixos_upgrade
+        .as_ref()
+        .map(crate::NixosUpgradeLaunchConfig::configure)
+        .transpose()?;
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
         .map(|preview| preview.settings.clone());
+    operator_settings.upgrade = configured_upgrade
+        .as_ref()
+        .map(|_| {
+            UpgradeSettings::new(Duration::from_secs(30), Duration::from_secs(5), 3)
+                .map_err(|error| invalid(error.to_string()))
+        })
+        .transpose()?;
+    let store_upgrades = configured_upgrade
+        .as_ref()
+        .map(|_| {
+            StoreNodeUpgradeBackendSettings::new(
+                Duration::from_secs(60 * 60),
+                Duration::from_secs(2),
+            )
+            .map_err(|error| invalid(error.to_string()))
+        })
+        .transpose()?;
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
@@ -257,6 +287,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             artifacts: containerd.clone(),
             pull_requests: configured_preview.map(|preview| preview.pull_requests),
             upgrades: None,
+            store_upgrades,
         },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
@@ -298,6 +329,11 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             instance_id,
             monotonic_clock: clock,
             status_clock: Arc::new(SystemStatusClock),
+            node_upgrade: configured_upgrade.map(|upgrade| NodeUpgradeDependencies {
+                stager: upgrade.stager,
+                rebooter: upgrade.rebooter,
+                running_version: upgrade.running_version,
+            }),
         },
         DaemonRoleSettings::default(),
     )
@@ -407,103 +443,4 @@ fn validate_private_permissions(path: &Path) -> Result<(), DaemonLaunchError> {
         }
     }
     Ok(())
-}
-
-fn invalid(detail: impl Into<String>) -> DaemonLaunchError {
-    DaemonLaunchError::InvalidConfiguration {
-        detail: detail.into(),
-    }
-}
-
-/// Why a protected launch document or production daemon start failed.
-#[derive(Debug, thiserror::Error)]
-pub enum DaemonLaunchError {
-    /// Topology preflight rejected authoritative cluster settings.
-    #[error(transparent)]
-    InvalidTopology(#[from] cluster::ClusterPreflightError),
-    /// Launch-specific mode, node, or path selection was invalid.
-    #[error("invalid daemon launch configuration: {detail}")]
-    InvalidConfiguration { detail: String },
-    /// A secret-bearing launch document was accessible by other users.
-    #[error("daemon launch document `{}` has insecure permissions {mode:#o}", path.display())]
-    InsecurePermissions { path: PathBuf, mode: u32 },
-    /// Launch document filesystem access failed.
-    #[error("failed to {action} daemon launch document `{}`: {source}", path.display())]
-    Io {
-        action: &'static str,
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    /// A launch document did not match its strict JSON schema.
-    #[error("invalid daemon launch document `{}`: {source}", path.display())]
-    InvalidDocument {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
-    /// Datadog log delivery configuration was unsafe or incomplete.
-    #[error(transparent)]
-    DatadogSettings(#[from] logs::DatadogLogSinkSettingsError),
-    /// Datadog metric delivery configuration was unsafe or incomplete.
-    #[error(transparent)]
-    DatadogMetricSettings(#[from] metrics::DatadogMetricSinkSettingsError),
-    /// Log backup namespace or KMS settings were invalid.
-    #[error(transparent)]
-    LogBackupSettings(#[from] logstore::LogBackupError),
-    /// Production S3 backup adapter settings were invalid.
-    #[error(transparent)]
-    S3Backup(#[from] crate::S3BackupObjectStoreError),
-    /// Scheduled log rollover, backup, or retention could not be initialized.
-    #[error(transparent)]
-    LogMaintenance(#[from] crate::LogMaintenanceError),
-    /// The bounded production sink HTTP adapter could not be constructed.
-    #[error(transparent)]
-    HttpTransport(#[from] logs::ReqwestHttpTransportError),
-    /// The bounded production metric sink HTTP adapter could not be constructed.
-    #[error(transparent)]
-    MetricHttpTransport(#[from] metrics::ReqwestMetricHttpTransportError),
-    /// Provider configuration or store lifecycle failed.
-    #[error(transparent)]
-    StoreProvider(#[from] cluster::StoreProviderError),
-    /// A worker could not connect to any declared control-plane store endpoint.
-    #[error("worker store connection failed: {detail}")]
-    RemoteStore { detail: String },
-    /// The node-local WireGuard identity could not be loaded safely.
-    #[error(transparent)]
-    MeshIdentity(#[from] node_agent::MeshIdentityError),
-    /// The production workload health probe adapter could not be constructed.
-    #[error(transparent)]
-    HealthProbe(#[from] node_agent::HealthProbeError),
-    /// The native workload runtime could not be configured or reached.
-    #[error(transparent)]
-    Runtime(#[from] runtime::RuntimeError),
-    /// The node-local normalized log store could not be opened or initialized.
-    #[error(transparent)]
-    LogStore(#[from] DuckStoreError),
-    /// A second observability store failed and the first could not be rolled back cleanly.
-    #[error(
-        "observability store startup failed: {startup}; prior store rollback failed: {rollback}"
-    )]
-    ObservabilityStoreRollback {
-        /// Metric-store initialization failure.
-        startup: String,
-        /// Log-store shutdown failure observed during rollback.
-        rollback: String,
-    },
-    /// A generated process identity was invalid.
-    #[error(transparent)]
-    InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
-    /// Static operator views could not be constructed from cluster settings.
-    #[error(transparent)]
-    OperatorSettings(#[from] crate::OperatorSuiteError),
-    /// Build source roots or Git integration settings were invalid.
-    #[error(transparent)]
-    BuildSource(#[from] build::BuildSourceError),
-    /// Pull-request preview launch settings were invalid.
-    #[error(transparent)]
-    Preview(#[from] crate::PreviewLaunchError),
-    /// Role planning, startup, or rollback failed.
-    #[error(transparent)]
-    Daemon(#[from] crate::DaemonError),
 }

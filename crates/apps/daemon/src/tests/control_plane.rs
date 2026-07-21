@@ -131,6 +131,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             instance_id: NodeInstanceId::new("instance-1")?,
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
+            node_upgrade: None,
         },
         DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {
             poll_interval: Duration::from_millis(1),
@@ -405,6 +406,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             instance_id: NodeInstanceId::new("worker-instance")?,
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
+            node_upgrade: None,
         },
         DaemonRoleSettings::default(),
     );

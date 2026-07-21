@@ -16,7 +16,7 @@ use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
 use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_host_telemetry_agent, build_log_agent,
-    build_stats_agent,
+    build_node_upgrade_agent, build_stats_agent,
 };
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
@@ -187,6 +187,10 @@ where
             Ok(agent) => agent,
             Err(error) => return runtimes.fail(error).await,
         };
+    let node_upgrade_agent = match build_node_upgrade_agent(factory, plan, spec, store.clone()) {
+        Ok(agent) => agent,
+        Err(error) => return runtimes.fail(error).await,
+    };
     if let Err(error) = bridge_agent.reconcile_once().await {
         return runtimes
             .fail(role_error("establish workload bridge", error))
@@ -282,6 +286,7 @@ where
     let log_shutdown = bridge_shutdown.clone();
     let stats_shutdown = bridge_shutdown.clone();
     let host_telemetry_shutdown = bridge_shutdown.clone();
+    let node_upgrade_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -357,6 +362,14 @@ where
             .await
             .map_err(|error| role_error("run host telemetry agent", error))
     }));
+    if let Some(agent) = node_upgrade_agent {
+        tasks.push(tokio::spawn(async move {
+            agent
+                .run(node_upgrade_shutdown)
+                .await
+                .map_err(|error| role_error("run node upgrade agent", error))
+        }));
+    }
     for worker in sink_workers {
         let sink_shutdown = shutdown.subscribe();
         tasks.push(tokio::spawn(async move {

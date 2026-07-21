@@ -282,6 +282,7 @@ impl RealProcessCluster {
             datadog: None,
             log_backup: None,
             preview: None,
+            nixos_upgrade: None,
         };
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;

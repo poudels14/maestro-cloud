@@ -15,8 +15,10 @@ use node_agent::{
     WorkloadNetworkStatsReader,
 };
 use runtime::{NetworkProvider, WorkloadRuntime};
+use semver::Version;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use upgrade::{NixosUpgradeStager, NodeRebooter};
 
 use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
@@ -35,6 +37,16 @@ pub enum AgentStore {
     },
     /// Worker node that connects to an already-running cluster store.
     Remote(Arc<dyn Store>),
+}
+
+/// Node-local seams required when NixOS host upgrades are explicitly enabled.
+pub struct NodeUpgradeDependencies {
+    /// Prepares a validated NixOS boot generation without activating it.
+    pub stager: Arc<dyn NixosUpgradeStager>,
+    /// Requests host reboot only after collective leader release.
+    pub rebooter: Arc<dyn NodeRebooter>,
+    /// Semantic version reported by this daemon process.
+    pub running_version: Version,
 }
 
 /// One leader-owned workload bound to the exact fence for an election term.
@@ -59,6 +71,7 @@ pub struct DaemonRoleSettings {
     pub(crate) health_poll_interval: Duration,
     pub(crate) stats_poll_interval: Duration,
     pub(crate) host_telemetry_poll_interval: Duration,
+    pub(crate) upgrade_resync_interval: Duration,
     pub(crate) log_poll_interval: Duration,
     pub(crate) max_log_frames_per_workload: usize,
     pub(crate) sink_worker_settings: SinkWorkerSettings,
@@ -115,6 +128,7 @@ impl DaemonRoleSettings {
             health_poll_interval,
             stats_poll_interval,
             host_telemetry_poll_interval: Duration::from_secs(15),
+            upgrade_resync_interval: Duration::from_secs(2),
             log_poll_interval,
             max_log_frames_per_workload,
             sink_worker_settings: SinkWorkerSettings::default(),
@@ -141,6 +155,7 @@ impl Default for DaemonRoleSettings {
             health_poll_interval: Duration::from_secs(5),
             stats_poll_interval: Duration::from_secs(5),
             host_telemetry_poll_interval: Duration::from_secs(15),
+            upgrade_resync_interval: Duration::from_secs(2),
             log_poll_interval: Duration::from_secs(1),
             max_log_frames_per_workload: 1_000,
             sink_worker_settings: SinkWorkerSettings::default(),
@@ -226,6 +241,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub monotonic_clock: Arc<dyn Clock>,
     /// Wall clock used only for status condition transition timestamps.
     pub status_clock: Arc<dyn StatusClock>,
+    /// Optional paired node-local NixOS staging and reboot seams.
+    pub node_upgrade: Option<NodeUpgradeDependencies>,
 }
 
 /// Concrete daemon factory composing node agents and control-plane leader work when declared.
@@ -254,6 +271,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     instance_id: NodeInstanceId,
     pub(crate) monotonic_clock: Arc<dyn Clock>,
     pub(crate) status_clock: Arc<dyn StatusClock>,
+    pub(crate) node_upgrade: Option<NodeUpgradeDependencies>,
     pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
@@ -296,6 +314,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             instance_id: dependencies.instance_id,
             monotonic_clock: dependencies.monotonic_clock,
             status_clock: dependencies.status_clock,
+            node_upgrade: dependencies.node_upgrade,
             settings,
             store: Mutex::new(None),
             leader_workload: None,
@@ -317,6 +336,10 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
     /// Returns the shared node-local log-delivery health registry for stats APIs.
     pub fn sink_runtime_registry(&self) -> SinkRuntimeRegistry {
         self.sink_runtime.clone()
+    }
+
+    pub(crate) fn instance_id(&self) -> &NodeInstanceId {
+        &self.instance_id
     }
 }
 
