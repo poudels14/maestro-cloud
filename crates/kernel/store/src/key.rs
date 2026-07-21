@@ -97,6 +97,11 @@ impl Keyspace {
         self.key(&format!("liveness/nodes/{node_id}"))
     }
 
+    /// Exact internal command used to coordinate one node's staged upgrade.
+    pub fn node_upgrade_command(&self, node_id: &NodeId) -> StoreKey {
+        self.key(&format!("control/node-upgrades/{node_id}"))
+    }
+
     /// Deduplication claim for one externally supplied request identity.
     pub fn request_claim(&self, request_id: &RequestId) -> StoreKey {
         self.key(&format!("control/requests/{request_id}"))
