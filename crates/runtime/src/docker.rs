@@ -67,9 +67,12 @@ impl DockerRuntime {
 impl WorkloadRuntime for DockerRuntime {
     fn capabilities(&self) -> Capabilities {
         Capabilities::new([
+            RuntimeCapability::BuildArtifact,
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
             RuntimeCapability::DynamicNetwork,
+            RuntimeCapability::PushArtifact,
+            RuntimeCapability::TransferArtifact,
         ])
     }
 

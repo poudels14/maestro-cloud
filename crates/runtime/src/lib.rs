@@ -38,6 +38,12 @@ mod containerd_task;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker;
 #[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_artifact;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_artifact_context;
+#[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_artifact_support;
+#[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_config;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_network;

@@ -6,10 +6,12 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "=0.1.89"
+bytes = { workspace = true, optional = true }
 containerd = { version = "=0.9.0", package = "containerd-client", optional = true }
 docker = { version = "=0.21.0", package = "bollard", optional = true }
 futures-util = "=0.3.33"
 hex = "=0.4.3"
+ignore = { workspace = true, optional = true }
 kernel-api = { version = "0.1.0", path = "../kernel/api" }
 libc.workspace = true
 prost = "=0.14.4"
@@ -18,10 +20,12 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 supervisor = { version = "0.1.0", path = "../kernel/supervisor" }
+tar = { workspace = true, optional = true }
 test-util = { version = "=0.12.5", package = "parking_lot", optional = true }
 thiserror = "=2.0.18"
 time = { version = "=0.3.53", features = ["parsing"] }
 tokio = { version = "=1.52.3", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, optional = true }
 
 [lints]
 workspace = true
@@ -29,7 +33,7 @@ workspace = true
 [features]
 default = ["docker", "containerd"]
 test-util = ["dep:test-util"]
-docker = ["dep:docker"]
+docker = ["dep:bytes", "dep:docker", "dep:ignore", "dep:tar", "dep:tokio-util"]
 containerd = ["dep:containerd"]
 
 [dev-dependencies]

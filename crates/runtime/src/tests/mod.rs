@@ -20,6 +20,8 @@ mod containerd_settings;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_support;
 #[cfg(all(feature = "docker", target_os = "linux"))]
+mod docker_artifact;
+#[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_config;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_fixture;

@@ -4891,9 +4891,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bollard",
+ "bytes",
  "containerd-client",
  "futures-util",
  "hex",
+ "ignore",
  "kernel-api",
  "libc",
  "netlink-packet-route 0.30.0",
@@ -4906,10 +4908,12 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "supervisor",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
