@@ -13,7 +13,10 @@ use logs::{
     InMemoryLogStoreRuntime, LogBody, LogOrigin, LogSequence, LogSinkId, RecordingLogSink,
     SinkWorkerSettings,
 };
-use metrics::{InMemoryMetricStoreRuntime, MetricSequence, MetricSinkId, RecordingMetricSink};
+use metrics::{
+    HostMetricSequence, InMemoryMetricStoreRuntime, MetricSequence, MetricSinkId,
+    RecordingHostMetricSink, RecordingMetricSink,
+};
 use node_agent::{
     AuthoritativeDnsResolver, CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats,
     CgroupProcessStats, CgroupStats, CgroupStatsError, CgroupStatsReader, DnsQueryType,
@@ -65,6 +68,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         MetricSinkId::new("test-metrics")?,
         [],
     ));
+    let host_metric_delivery_sink = Arc::new(RecordingHostMetricSink::new(
+        MetricSinkId::new("test-host-metrics")?,
+        [],
+    ));
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -104,6 +111,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             log_sinks: vec![delivery_sink.clone()],
             metric_store_runtime: Box::new(metric_store_runtime),
             metric_sinks: vec![metric_delivery_sink.clone()],
+            host_metric_sinks: vec![host_metric_delivery_sink.clone()],
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
             host_stats_reader: Arc::new(FixedHostStatsReader),
@@ -216,6 +224,17 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     })
     .await??;
     assert_eq!(metric_attempts, vec![vec![MetricSequence(1)]]);
+    let host_metric_attempts = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let attempts = host_metric_delivery_sink.attempts()?;
+            if !attempts.is_empty() {
+                return Ok::<_, metrics::MetricSinkError>(attempts);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(host_metric_attempts, vec![vec![HostMetricSequence(1)]]);
     let workload_id = load_assignment(&store, &cluster.cluster_id)
         .await?
         .status
@@ -359,6 +378,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             log_sinks: Vec::new(),
             metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),
             metric_sinks: Vec::new(),
+            host_metric_sinks: Vec::new(),
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
             host_stats_reader: Arc::new(FixedHostStatsReader),

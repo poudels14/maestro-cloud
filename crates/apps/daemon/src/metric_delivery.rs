@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use metrics::{
-    MetricDeliveryStore, MetricSink, MetricSinkWorker, MetricSinkWorkerSettings,
-    TokioMetricSinkSleeper,
+    HostMetricDeliveryStore, HostMetricSink, HostMetricSinkWorker, MetricDeliveryStore, MetricSink,
+    MetricSinkWorker, MetricSinkWorkerSettings, TokioMetricSinkSleeper,
 };
 
 use crate::RoleError;
@@ -35,10 +35,40 @@ pub(crate) fn build_metric_sink_workers(
     Ok(workers)
 }
 
+pub(crate) fn build_host_metric_sink_workers(
+    sinks: &[Arc<dyn HostMetricSink>],
+    store: Arc<dyn HostMetricDeliveryStore>,
+    settings: MetricSinkWorkerSettings,
+) -> Result<Vec<HostMetricSinkWorker>, RoleError> {
+    let mut sink_ids = BTreeSet::new();
+    let mut workers = Vec::with_capacity(sinks.len());
+    for sink in sinks {
+        if !sink_ids.insert(sink.id().clone()) {
+            return Err(RoleError::new(format!(
+                "duplicate host metric sink identifier `{}`",
+                sink.id().as_str()
+            )));
+        }
+        workers.push(
+            HostMetricSinkWorker::new(
+                store.clone(),
+                sink.clone(),
+                Arc::new(TokioMetricSinkSleeper),
+                settings,
+            )
+            .map_err(|error| RoleError::new(error.to_string()))?,
+        );
+    }
+    Ok(workers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use metrics::{InMemoryMetricStore, MetricSinkId, RecordingMetricSink};
+    use metrics::{
+        InMemoryHostMetricStore, InMemoryMetricStore, MetricSinkId, RecordingHostMetricSink,
+        RecordingMetricSink,
+    };
 
     #[test]
     fn duplicate_metric_sink_cursor_namespaces_fail_closed()
@@ -55,6 +85,28 @@ mod tests {
                 Ok(_) => return Err("duplicate metric sink identifiers were accepted".into()),
                 Err(error) => error,
             };
+        assert!(error.detail().contains("duplicate"));
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_host_metric_sink_cursor_namespaces_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let sink = Arc::new(RecordingHostMetricSink::new(
+            MetricSinkId::new("duplicate")?,
+            [],
+        ));
+        let sinks: Vec<Arc<dyn HostMetricSink>> = vec![sink.clone(), sink];
+        let store = Arc::new(InMemoryHostMetricStore::new());
+
+        let error = match build_host_metric_sink_workers(
+            &sinks,
+            store,
+            MetricSinkWorkerSettings::default(),
+        ) {
+            Ok(_) => return Err("duplicate host metric sink identifiers were accepted".into()),
+            Err(error) => error,
+        };
         assert!(error.detail().contains("duplicate"));
         Ok(())
     }

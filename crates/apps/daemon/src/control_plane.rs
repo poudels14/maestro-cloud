@@ -8,7 +8,7 @@ use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry, SinkWorkerSettings};
-use metrics::{MetricSink, MetricSinkWorkerSettings, MetricStoreRuntime};
+use metrics::{HostMetricSink, MetricSink, MetricSinkWorkerSettings, MetricStoreRuntime};
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, HostDiskReader,
     HostStatsReader, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
@@ -200,6 +200,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub metric_store_runtime: Box<dyn MetricStoreRuntime>,
     /// Independently checkpointed normalized-metric destinations owned by this node.
     pub metric_sinks: Vec<Arc<dyn MetricSink>>,
+    /// Independently checkpointed host-metric destinations owned by this node.
+    pub host_metric_sinks: Vec<Arc<dyn HostMetricSink>>,
     /// Direct cgroup v2 reader used for backend-neutral workload samples.
     pub stats_reader: Arc<dyn CgroupStatsReader>,
     /// Runtime-aware reader for optional cumulative workload network counters.
@@ -237,6 +239,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) sink_runtime: SinkRuntimeRegistry,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
+    pub(crate) host_metric_sinks: Vec<Arc<dyn HostMetricSink>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
     pub(crate) network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
     pub(crate) host_stats_reader: Arc<dyn HostStatsReader>,
@@ -277,6 +280,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             sink_runtime: SinkRuntimeRegistry::default(),
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             metric_sinks: dependencies.metric_sinks,
+            host_metric_sinks: dependencies.host_metric_sinks,
             stats_reader: dependencies.stats_reader,
             network_stats_reader: dependencies.network_stats_reader,
             host_stats_reader: dependencies.host_stats_reader,

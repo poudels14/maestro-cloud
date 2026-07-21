@@ -7,7 +7,7 @@ use logs::{
     LogFilterKind, LogSink, LogStoreRuntime, ReqwestHttpTransport,
 };
 use metrics::{
-    DatadogMetricSink, DatadogMetricSinkSettings, MetricHttpTransport, MetricSink,
+    DatadogMetricSink, DatadogMetricSinkSettings, HostMetricSink, MetricHttpTransport, MetricSink,
     ReqwestMetricHttpTransport,
 };
 use serde::{Deserialize, Serialize};
@@ -117,6 +117,7 @@ struct ConfiguredDatadogMetrics {
 pub(crate) struct DatadogSinks {
     pub(crate) logs: Vec<Arc<dyn LogSink>>,
     pub(crate) metrics: Vec<Arc<dyn MetricSink>>,
+    pub(crate) host_metrics: Vec<Arc<dyn HostMetricSink>>,
 }
 
 pub(crate) fn configure_datadog(
@@ -154,6 +155,7 @@ pub(crate) fn build_datadog_sinks(
         return DatadogSinks {
             logs: Vec::new(),
             metrics: Vec::new(),
+            host_metrics: Vec::new(),
         };
     };
     let log_sinks: Vec<Arc<dyn LogSink>> = vec![Arc::new(DatadogLogSink::new(
@@ -161,18 +163,23 @@ pub(crate) fn build_datadog_sinks(
         configured.log_transport,
         log_store_runtime.dead_letter_store(),
     ))];
-    let metric_sinks = configured
-        .metrics
-        .map(|metrics| {
-            vec![Arc::new(DatadogMetricSink::new(
+    let (metric_sinks, host_metric_sinks) = configured.metrics.map_or_else(
+        || (Vec::new(), Vec::new()),
+        |metrics| {
+            let sink = Arc::new(DatadogMetricSink::new(
                 metrics.settings,
                 metrics.metric_transport,
-            )) as Arc<dyn MetricSink>]
-        })
-        .unwrap_or_default();
+            ));
+            (
+                vec![sink.clone() as Arc<dyn MetricSink>],
+                vec![sink as Arc<dyn HostMetricSink>],
+            )
+        },
+    );
     DatadogSinks {
         logs: log_sinks,
         metrics: metric_sinks,
+        host_metrics: host_metric_sinks,
     }
 }
 
@@ -196,17 +203,28 @@ mod tests {
         let disabled = build_datadog_sinks(Some(disabled), &log_store);
         assert_eq!(disabled.logs.len(), 1);
         assert!(disabled.metrics.is_empty());
+        assert!(disabled.host_metrics.is_empty());
 
         let enabled = configure_datadog(Some(&config(true)), "prod", "node-one")?
             .ok_or("configured Datadog missing")?;
         let enabled = build_datadog_sinks(Some(enabled), &log_store);
         assert_eq!(enabled.logs.len(), 1);
         assert_eq!(enabled.metrics.len(), 1);
+        assert_eq!(enabled.host_metrics.len(), 1);
         assert_eq!(
             enabled
                 .metrics
                 .first()
                 .ok_or("Datadog metric sink missing")?
+                .id()
+                .as_str(),
+            "datadog"
+        );
+        assert_eq!(
+            enabled
+                .host_metrics
+                .first()
+                .ok_or("Datadog host metric sink missing")?
                 .id()
                 .as_str(),
             "datadog"
