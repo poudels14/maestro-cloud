@@ -1,6 +1,8 @@
 mod control_plane;
 mod launch;
 mod operators;
+mod orchestration;
+mod orchestration_fixture;
 mod plan;
 mod runtime;
 
