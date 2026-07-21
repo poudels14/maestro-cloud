@@ -7,6 +7,7 @@
 mod control_plane;
 mod error;
 mod launch;
+mod operators;
 mod plan;
 mod runtime;
 
@@ -17,6 +18,9 @@ pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_control_plane,
     load_launch_config,
+};
+pub use operators::{
+    OperatorBackends, OperatorInvocationReport, OperatorSettings, OperatorSuite, OperatorSuiteError,
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};

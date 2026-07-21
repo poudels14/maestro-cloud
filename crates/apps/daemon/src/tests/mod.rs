@@ -1,5 +1,6 @@
 mod control_plane;
 mod launch;
+mod operators;
 mod plan;
 mod runtime;
 
