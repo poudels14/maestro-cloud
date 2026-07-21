@@ -19,6 +19,10 @@ pub struct NixosUpgradeSource {
 }
 
 impl NixosUpgradeSource {
+    pub(crate) fn new(path: PathBuf, version: Version) -> Self {
+        Self { path, version }
+    }
+
     /// Returns the immutable source path evaluated from the updated flake.
     pub fn path(&self) -> &Path {
         &self.path
@@ -215,10 +219,7 @@ impl NixosUpgradeStager for ProcessNixosUpgradeStager {
             ))
             .await
             .map_err(|error| unavailable("build NixOS boot generation", error))?;
-        Ok(NixosUpgradeSource {
-            path: source,
-            version: source_version,
-        })
+        Ok(NixosUpgradeSource::new(source, source_version))
     }
 }
 
@@ -229,7 +230,7 @@ pub(crate) struct NixosCommand {
 }
 
 impl NixosCommand {
-    fn new(executable: PathBuf, arguments: impl IntoIterator<Item = OsString>) -> Self {
+    pub(crate) fn new(executable: PathBuf, arguments: impl IntoIterator<Item = OsString>) -> Self {
         Self {
             executable,
             arguments: arguments.into_iter().collect(),
@@ -246,7 +247,7 @@ pub(crate) trait NixosCommandRunner: Send + Sync {
     async fn run(&self, command: NixosCommand) -> Result<NixosCommandOutput, NixosCommandError>;
 }
 
-struct ProcessNixosCommandRunner;
+pub(crate) struct ProcessNixosCommandRunner;
 
 #[async_trait]
 impl NixosCommandRunner for ProcessNixosCommandRunner {

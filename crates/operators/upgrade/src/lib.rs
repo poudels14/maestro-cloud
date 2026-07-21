@@ -1,5 +1,6 @@
 //! Leader-owned planning and execution of cluster upgrade runs.
 
+mod agent;
 mod backend;
 mod conditions;
 mod dispatch;
@@ -7,10 +8,15 @@ mod error;
 mod model;
 mod nixos;
 mod plan;
+mod reboot;
 mod reconciler;
 mod snapshot;
 mod writer;
 
+pub use agent::{
+    NodeUpgradeAgent, NodeUpgradeAgentAction, NodeUpgradeAgentError, NodeUpgradeAgentSettings,
+    NodeUpgradeAgentSettingsError,
+};
 pub use backend::{NodeUpgradeBackend, NodeUpgradeBackendError};
 pub use dispatch::{
     NodeUpgradeCommand, NodeUpgradeCommandFailure, NodeUpgradeCommandState,
@@ -26,6 +32,7 @@ pub use nixos::{
     ProcessNixosUpgradeStager,
 };
 pub use plan::{plan_upgrade, record_dispatch_outcome};
+pub use reboot::{NodeRebootError, NodeRebooter, ProcessNodeRebooter};
 pub use reconciler::{UpgradeError, UpgradeReconciler};
 
 #[cfg(test)]

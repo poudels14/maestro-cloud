@@ -175,6 +175,14 @@ impl StoreNodeUpgradeBackend {
                 self.clear(&snapshot).await?;
                 return Err(command_failure(failure));
             }
+            if snapshot.iter().all(|entry| {
+                entry
+                    .command
+                    .as_ref()
+                    .is_some_and(|command| command.state == NodeUpgradeCommandState::Restarting)
+            }) {
+                return Ok(());
+            }
             let released = snapshot
                 .iter()
                 .filter(|entry| {
@@ -187,14 +195,13 @@ impl StoreNodeUpgradeBackend {
                 })
                 .count();
             if released > 0 {
-                if released == snapshot.len() {
-                    return Ok(());
+                if released != snapshot.len() {
+                    return Err(NodeUpgradeBackendError::Rejected {
+                        message: "node upgrade batch contains a partial collective release"
+                            .to_string(),
+                    });
                 }
-                return Err(NodeUpgradeBackendError::Rejected {
-                    message: "node upgrade batch contains a partial collective release".to_string(),
-                });
-            }
-            if snapshot.iter().all(|entry| {
+            } else if snapshot.iter().all(|entry| {
                 entry
                     .command
                     .as_ref()
