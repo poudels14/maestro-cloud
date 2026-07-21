@@ -12,6 +12,7 @@ use containerd::tonic::transport::Channel;
 use kernel_api::{ClusterId, NodeId, WorkloadId};
 
 use crate::cgroup;
+use crate::containerd_build::{BuildctlRunner, ProcessBuildctlRunner};
 use crate::containerd_config::{container_record, fingerprint};
 use crate::containerd_event::ContainerdEventStream;
 use crate::containerd_exec::start_exec;
@@ -37,6 +38,7 @@ pub struct ContainerdRuntime {
     pub(crate) channel: Channel,
     pub(crate) settings: Arc<ContainerdRuntimeSettings>,
     pub(crate) clock: Arc<dyn RuntimeClock>,
+    pub(crate) build_runner: Arc<dyn BuildctlRunner>,
     next_exec: Arc<AtomicU64>,
     pub(crate) network_state: Arc<tokio::sync::Mutex<ContainerdNetworkState>>,
 }
@@ -66,10 +68,12 @@ impl ContainerdRuntime {
         clock: Arc<dyn RuntimeClock>,
     ) -> Result<Self, RuntimeError> {
         settings.validate()?;
+        let build_runner = Arc::new(ProcessBuildctlRunner);
         Ok(Self {
             channel,
             settings: Arc::new(settings),
             clock,
+            build_runner,
             next_exec: Arc::new(AtomicU64::new(1)),
             network_state: Arc::new(tokio::sync::Mutex::new(ContainerdNetworkState::default())),
         })
@@ -107,6 +111,7 @@ impl WorkloadRuntime for ContainerdRuntime {
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
             RuntimeCapability::DynamicNetwork,
+            RuntimeCapability::BuildArtifact,
             RuntimeCapability::PushArtifact,
             RuntimeCapability::TransferArtifact,
         ])

@@ -16,6 +16,18 @@ pub struct ContainerdRuntimeSettings {
     pub runtime_name: String,
     /// Owner-only directory for task IO and exec FIFOs.
     pub state_root: PathBuf,
+    /// BuildKit client executable or command name.
+    pub buildctl: PathBuf,
+    /// BuildKit daemon address passed to the client without shell interpretation.
+    pub buildkit_address: String,
+    /// Maximum wall-clock duration of one BuildKit build.
+    pub build_timeout: Duration,
+    /// Maximum expanded bytes accepted from an uploaded build archive.
+    pub max_build_context_bytes: u64,
+    /// Maximum entries accepted from an uploaded build archive.
+    pub max_build_context_entries: usize,
+    /// Maximum OCI archive bytes accepted back from BuildKit.
+    pub max_build_output_bytes: u64,
     /// File-follow polling interval when no new log bytes are available.
     pub log_poll_interval: Duration,
     /// Deadline for a forced task shutdown to become observable.
@@ -29,9 +41,10 @@ impl ContainerdRuntimeSettings {
                 message: "containerd socket and state root must be absolute paths".to_owned(),
             });
         }
-        if self.state_root.to_str().is_none() {
+        if self.state_root.to_str().is_none() || self.buildctl.as_os_str().is_empty() {
             return Err(RuntimeError::InvalidSpec {
-                message: "containerd state root must be valid UTF-8".to_owned(),
+                message: "containerd state root must be valid UTF-8 and buildctl cannot be empty"
+                    .to_owned(),
             });
         }
         if self.namespace.is_empty() || self.snapshotter.is_empty() || self.runtime_name.is_empty()
@@ -52,9 +65,27 @@ impl ContainerdRuntimeSettings {
                         .to_owned(),
             });
         }
-        if self.log_poll_interval.is_zero() || self.kill_timeout.is_zero() {
+        if self.buildkit_address.is_empty() || self.buildkit_address.chars().any(char::is_control) {
             return Err(RuntimeError::InvalidSpec {
-                message: "containerd polling and kill deadlines must be positive".to_owned(),
+                message: "BuildKit address cannot be empty or contain control characters"
+                    .to_owned(),
+            });
+        }
+        if self.log_poll_interval.is_zero()
+            || self.kill_timeout.is_zero()
+            || self.build_timeout.is_zero()
+        {
+            return Err(RuntimeError::InvalidSpec {
+                message: "containerd polling, kill, and build deadlines must be positive"
+                    .to_owned(),
+            });
+        }
+        if self.max_build_context_bytes == 0
+            || self.max_build_context_entries == 0
+            || self.max_build_output_bytes == 0
+        {
+            return Err(RuntimeError::InvalidSpec {
+                message: "containerd build limits must be positive".to_owned(),
             });
         }
         Ok(())
@@ -69,6 +100,12 @@ impl Default for ContainerdRuntimeSettings {
             snapshotter: "overlayfs".to_owned(),
             runtime_name: "io.containerd.runc.v2".to_owned(),
             state_root: PathBuf::from("/var/lib/maestro/runtime/containerd"),
+            buildctl: PathBuf::from("buildctl"),
+            buildkit_address: "unix:///run/buildkit/buildkitd.sock".to_owned(),
+            build_timeout: Duration::from_secs(30 * 60),
+            max_build_context_bytes: 4 * 1_024 * 1_024 * 1_024,
+            max_build_context_entries: 100_000,
+            max_build_output_bytes: 20 * 1_024 * 1_024 * 1_024,
             log_poll_interval: Duration::from_millis(100),
             kill_timeout: Duration::from_secs(5),
         }

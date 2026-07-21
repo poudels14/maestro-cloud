@@ -10,6 +10,11 @@ fn containerd_defaults_are_valid_and_explicit() {
     assert_eq!(settings.namespace, "maestro");
     assert_eq!(settings.snapshotter, "overlayfs");
     assert_eq!(settings.runtime_name, "io.containerd.runc.v2");
+    assert_eq!(
+        settings.buildkit_address,
+        "unix:///run/buildkit/buildkitd.sock"
+    );
+    assert!(settings.max_build_output_bytes > settings.max_build_context_bytes);
 }
 
 #[test]
@@ -43,6 +48,15 @@ fn containerd_settings_reject_relative_empty_and_zero_values() {
 
     let settings = ContainerdRuntimeSettings {
         kill_timeout: std::time::Duration::ZERO,
+        ..ContainerdRuntimeSettings::default()
+    };
+    assert!(matches!(
+        settings.validate(),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let settings = ContainerdRuntimeSettings {
+        buildkit_address: "bad\naddress".to_owned(),
         ..ContainerdRuntimeSettings::default()
     };
     assert!(matches!(

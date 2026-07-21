@@ -4893,6 +4893,7 @@ dependencies = [
  "bollard",
  "bytes",
  "containerd-client",
+ "flate2",
  "futures-util",
  "hex",
  "ignore",

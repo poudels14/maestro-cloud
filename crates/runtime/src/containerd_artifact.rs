@@ -7,7 +7,7 @@ use containerd::services::v1::transfer_client::TransferClient;
 use containerd::services::v1::{
     CreateImageRequest, CreateRequest as CreateLeaseRequest, DeleteImageRequest,
     DeleteRequest as DeleteLeaseRequest, GetImageRequest, Image, ListImagesRequest,
-    TransferOptions, TransferRequest,
+    TransferOptions, TransferRequest, UpdateImageRequest,
 };
 use containerd::tonic::Code;
 use containerd::tonic::transport::Channel;
@@ -27,6 +27,7 @@ use crate::containerd_artifact_support::{
     is_not_found, namespaced_artifact, operation_error, prune_candidates, removed_digests,
     select_image,
 };
+use crate::containerd_build::run_build;
 use crate::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
@@ -39,11 +40,14 @@ const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
 impl ArtifactStore for ContainerdRuntime {
     async fn build(
         &self,
-        _request: &ArtifactBuildRequest,
+        request: &ArtifactBuildRequest,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
-        Err(ArtifactStoreError::Rejected {
-            message: "native containerd builds require the BuildKit adapter".to_owned(),
-        })
+        let output = run_build(request, &self.settings, self.build_runner.clone()).await?;
+        let digest = self.import(output.into_stream().await?).await?;
+        for tag in &request.tags {
+            self.tag_digest(&digest, tag).await?;
+        }
+        Ok(digest)
     }
 
     async fn pull(
@@ -318,6 +322,57 @@ impl ContainerdRuntime {
             Err(error) => Err(operation_error(
                 "create immutable image reference",
                 Some(digest.as_str()),
+                error,
+            )),
+        }
+    }
+
+    async fn tag_digest(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+    ) -> Result<(), ArtifactStoreError> {
+        let source = select_image(&self.images().await?, digest)?;
+        let image = Image {
+            name: destination.as_str().to_owned(),
+            labels: managed_labels(),
+            target: source.target,
+            created_at: None,
+            updated_at: None,
+        };
+        let mut client =
+            containerd::services::v1::images_client::ImagesClient::new(self.channel.clone());
+        let result = client
+            .clone()
+            .create(namespaced_artifact(
+                CreateImageRequest {
+                    image: Some(image.clone()),
+                    source_date_epoch: None,
+                },
+                &self.settings.namespace,
+            )?)
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if error.code() == Code::AlreadyExists => client
+                .update(namespaced_artifact(
+                    UpdateImageRequest {
+                        image: Some(image),
+                        update_mask: Some(prost_types::FieldMask {
+                            paths: vec!["target".to_owned(), "labels".to_owned()],
+                        }),
+                        source_date_epoch: None,
+                    },
+                    &self.settings.namespace,
+                )?)
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    operation_error("update image tag", Some(destination.as_str()), error)
+                }),
+            Err(error) => Err(operation_error(
+                "create image tag",
+                Some(destination.as_str()),
                 error,
             )),
         }

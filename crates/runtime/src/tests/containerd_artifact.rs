@@ -130,7 +130,7 @@ fn containerd_transfer_requests_carry_namespace_and_lease_ownership() {
 }
 
 #[tokio::test]
-async fn containerd_advertises_native_transport_but_not_buildkit_yet() {
+async fn containerd_advertises_native_transport_and_buildkit() {
     let channel = Endpoint::from_static("http://[::]:50051").connect_lazy();
     let runtime = ContainerdRuntime::new(
         channel,
@@ -142,7 +142,7 @@ async fn containerd_advertises_native_transport_but_not_buildkit_yet() {
 
     assert!(capabilities.supports(RuntimeCapability::PushArtifact));
     assert!(capabilities.supports(RuntimeCapability::TransferArtifact));
-    assert!(!capabilities.supports(RuntimeCapability::BuildArtifact));
+    assert!(capabilities.supports(RuntimeCapability::BuildArtifact));
 }
 
 fn image(name: &str, digest: &str, managed: bool) -> Image {

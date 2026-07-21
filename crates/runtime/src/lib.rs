@@ -18,6 +18,10 @@ mod containerd_artifact_stream;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_artifact_support;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_build;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_build_context;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_config;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_event;
