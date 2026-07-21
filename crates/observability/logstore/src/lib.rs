@@ -11,6 +11,8 @@ mod host_metric_delivery_schema;
 mod host_metric_duck;
 mod host_metric_schema;
 mod log_archive;
+mod log_backup;
+mod log_backup_schema;
 mod metric_delivery_schema;
 mod metric_duck;
 mod metric_schema;
@@ -21,6 +23,11 @@ mod workload_metric_schema;
 pub use duck::{DuckLogStore, DuckLogStoreRuntime};
 pub use error::{DuckStoreError, LogArchiveError};
 pub use log_archive::{ColdPartitionManifest, ColdPartitionManifestPart, LogRolloverReport};
+pub use log_backup::{
+    BackupObjectBody, BackupObjectReceipt, BackupObjectStore, BackupObjectStoreError,
+    BackupObjectUpload, LogBackupError, LogBackupRunReport, LogBackupSettings,
+    backup_log_partitions,
+};
 pub use metric_duck::{DuckMetricStore, DuckMetricStoreRuntime};
 pub use settings::DuckStoreSettings;
 

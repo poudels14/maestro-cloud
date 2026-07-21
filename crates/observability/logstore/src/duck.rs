@@ -13,10 +13,13 @@ use logs::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::duck_worker::{
-    archive_worker_stopped, dead_worker_stopped, delivery_worker_stopped, run_worker,
-    stats_worker_stopped,
+    archive_worker_stopped, backup_worker_stopped, dead_worker_stopped, delivery_worker_stopped,
+    run_worker, stats_worker_stopped,
 };
-use crate::{DuckStoreError, DuckStoreSettings, LogArchiveError, LogRolloverReport};
+use crate::log_backup_schema::PendingLogBackupPartition;
+use crate::{
+    DuckStoreError, DuckStoreSettings, LogArchiveError, LogBackupError, LogRolloverReport,
+};
 
 pub(crate) enum Command {
     Append {
@@ -63,6 +66,14 @@ pub(crate) enum Command {
     Rollover {
         before: Timestamp,
         response: oneshot::Sender<Result<LogRolloverReport, LogArchiveError>>,
+    },
+    PendingBackups {
+        response: oneshot::Sender<Result<Vec<PendingLogBackupPartition>, LogBackupError>>,
+    },
+    MarkBackedUp {
+        partition: PendingLogBackupPartition,
+        updated_at: Timestamp,
+        response: oneshot::Sender<Result<(), LogBackupError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -167,6 +178,38 @@ impl DuckLogStore {
         result
             .await
             .map_err(|_| archive_worker_stopped("completing rollover"))?
+    }
+
+    pub(crate) async fn pending_backup_partitions(
+        &self,
+    ) -> Result<Vec<PendingLogBackupPartition>, LogBackupError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::PendingBackups { response })
+            .await
+            .map_err(|_| backup_worker_stopped("accepting pending-partition read"))?;
+        result
+            .await
+            .map_err(|_| backup_worker_stopped("completing pending-partition read"))?
+    }
+
+    pub(crate) async fn mark_partition_backed_up(
+        &self,
+        partition: &PendingLogBackupPartition,
+        updated_at: Timestamp,
+    ) -> Result<(), LogBackupError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::MarkBackedUp {
+                partition: partition.clone(),
+                updated_at,
+                response,
+            })
+            .await
+            .map_err(|_| backup_worker_stopped("accepting backup commit"))?;
+        result
+            .await
+            .map_err(|_| backup_worker_stopped("completing backup commit"))?
     }
 }
 

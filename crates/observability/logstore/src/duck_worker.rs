@@ -4,7 +4,9 @@ use logs::{DeadLetterStoreError, LogDeliveryStoreError, LogStatsStoreError};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::duck::Command;
-use crate::{LogArchiveError, delivery_schema, log_archive, schema};
+use crate::{
+    LogArchiveError, LogBackupError, delivery_schema, log_archive, log_backup_schema, schema,
+};
 
 pub(crate) fn run_worker(
     path: &Path,
@@ -106,6 +108,23 @@ pub(crate) fn run_worker(
                     before,
                 ));
             }
+            Command::PendingBackups { response } => {
+                let _ignored = response.send(log_backup_schema::pending_partitions(
+                    &connection,
+                    cold_root,
+                ));
+            }
+            Command::MarkBackedUp {
+                partition,
+                updated_at,
+                response,
+            } => {
+                let _ignored = response.send(log_backup_schema::mark_backed_up(
+                    &mut connection,
+                    &partition,
+                    updated_at.0,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
@@ -117,6 +136,12 @@ pub(crate) fn run_worker(
 
 pub(crate) fn archive_worker_stopped(action: &'static str) -> LogArchiveError {
     LogArchiveError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+pub(crate) fn backup_worker_stopped(action: &'static str) -> LogBackupError {
+    LogBackupError::Unavailable {
         message: format!("DuckDB worker stopped before {action}"),
     }
 }
