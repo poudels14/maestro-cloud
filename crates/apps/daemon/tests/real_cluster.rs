@@ -272,7 +272,7 @@ impl RealProcessCluster {
             cluster: self.cluster.clone(),
             node_id: node.node_id.clone(),
             data_directory: node.data_directory.clone(),
-            etcd_binary: self.etcd_binary.clone(),
+            etcd_binary: Some(self.etcd_binary.clone()),
             store_mode,
             security,
             instance_id: Some(

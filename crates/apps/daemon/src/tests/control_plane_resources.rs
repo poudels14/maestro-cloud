@@ -15,15 +15,24 @@ pub(super) async fn seed_agent_resources(
     store: &InMemoryStore,
     cluster_id: &ClusterId,
     node_id: &NodeId,
+    workload_subnet: cluster::Ipv4Cidr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let assignment = workload_assignment(node_id)?;
+    let workload_address = workload_subnet
+        .workload_addresses()
+        .next()
+        .ok_or("workload subnet has no assignable address")?;
+    let assignment = workload_assignment(node_id, workload_address)?;
     let resources = [
         (
             "NodeFirewall",
             node_id.as_str(),
             serde_json::to_vec(&firewall(node_id)?)?,
         ),
-        ("DnsRecord", "api", serde_json::to_vec(&dns_record()?)?),
+        (
+            "DnsRecord",
+            "api",
+            serde_json::to_vec(&dns_record(workload_address)?)?,
+        ),
         (
             "Deployment",
             "deployment-1",
@@ -93,12 +102,12 @@ fn firewall(node_id: &NodeId) -> Result<NodeFirewall, kernel_api::InvalidIdentif
     })
 }
 
-fn dns_record() -> Result<DnsRecord, kernel_api::InvalidIdentifier> {
+fn dns_record(address: Ipv4Addr) -> Result<DnsRecord, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(DnsRecordId::new("api")?),
         spec: DnsRecordSpec {
             name: "api.maestro.internal.".to_owned(),
-            values: vec![DnsRecordValue::A(Ipv4Addr::new(172, 22, 0, 11))],
+            values: vec![DnsRecordValue::A(address)],
             ttl_secs: 30,
         },
         status: DnsRecordStatus {
@@ -109,7 +118,10 @@ fn dns_record() -> Result<DnsRecord, kernel_api::InvalidIdentifier> {
     })
 }
 
-fn workload_assignment(node_id: &NodeId) -> Result<Assignment, kernel_api::InvalidIdentifier> {
+fn workload_assignment(
+    node_id: &NodeId,
+    workload_address: Ipv4Addr,
+) -> Result<Assignment, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(AssignmentId::new("assignment-1")?),
         spec: AssignmentSpec {
@@ -119,7 +131,7 @@ fn workload_assignment(node_id: &NodeId) -> Result<Assignment, kernel_api::Inval
             replica_index: 0,
             node_id: node_id.clone(),
             placement_epoch: 1,
-            workload_address: IpAddr::V4(Ipv4Addr::new(172, 22, 0, 8)),
+            workload_address: IpAddr::V4(workload_address),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {

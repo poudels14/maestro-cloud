@@ -18,6 +18,19 @@ use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
 use crate::{DaemonPlan, DaemonRole, RoleError, RoleFactory, RoleRuntime, RoleSpec};
 
+/// Store access owned by an agent role, with local-process lifetime kept explicit.
+pub enum AgentStore {
+    /// Control-plane node that starts and owns one provider member.
+    Managed {
+        /// Provisioning boundary for the node-local cluster store member.
+        provider: Arc<dyn StoreProvider>,
+        /// Explicit bootstrap, join, or restart decision for the local member.
+        start_mode: StoreStartMode,
+    },
+    /// Worker node that connects to an already-running cluster store.
+    Remote(Arc<dyn Store>),
+}
+
 /// One leader-owned workload bound to the exact fence for an election term.
 #[async_trait]
 pub trait LeaderWorkload: Send + Sync {
@@ -110,10 +123,8 @@ impl Default for ControlPlaneRoleSettings {
 
 /// Production adapters and identities required by the concrete role factory.
 pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBackendType> {
-    /// Provisioning boundary for the node-local cluster store member.
-    pub provider: Arc<dyn StoreProvider>,
-    /// Explicit bootstrap, join, or restart decision for the local member.
-    pub store_start_mode: StoreStartMode,
+    /// Local provider ownership or a remote worker store connection.
+    pub agent_store: AgentStore,
     /// Host-network adapter that applies exact WireGuard and route state.
     pub mesh_backend: MeshBackendType,
     /// Host-network adapter that applies complete node-local nftables state.
@@ -138,10 +149,9 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, Br
     pub status_clock: Arc<dyn StatusClock>,
 }
 
-/// Concrete control-plane factory composing a store provider, mesh agent, and leader lease.
+/// Concrete daemon factory composing node agents and control-plane leader work when declared.
 pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType> {
-    pub(crate) provider: Arc<dyn StoreProvider>,
-    pub(crate) store_start_mode: StoreStartMode,
+    pub(crate) agent_store: AgentStore,
     pub(crate) mesh_backend: Mutex<Option<MeshBackendType>>,
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
@@ -171,8 +181,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
         settings: ControlPlaneRoleSettings,
     ) -> Self {
         Self {
-            provider: dependencies.provider,
-            store_start_mode: dependencies.store_start_mode,
+            agent_store: dependencies.agent_store,
             mesh_backend: Mutex::new(Some(dependencies.mesh_backend)),
             firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
@@ -210,14 +219,14 @@ where
         plan: &DaemonPlan,
         spec: &RoleSpec,
     ) -> Result<Box<dyn RoleRuntime>, RoleError> {
-        if !spec.node_role.is_control_plane() {
-            return Err(RoleError::new(
-                "control-plane factory cannot start a worker-only node",
-            ));
-        }
         match spec.role {
             DaemonRole::Agent => start_agent(self, plan, spec).await,
-            DaemonRole::Controller => self.start_controller(spec).await,
+            DaemonRole::Controller if spec.node_role.is_control_plane() => {
+                self.start_controller(spec).await
+            }
+            DaemonRole::Controller => Err(RoleError::new(
+                "controller role requires a control-plane-capable node",
+            )),
         }
     }
 }

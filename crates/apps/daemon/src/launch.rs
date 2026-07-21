@@ -9,7 +9,7 @@ use cluster::{
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_controller::SystemTimestampClock;
-use kernel_store::TokioClock;
+use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
 use node_agent::{
     HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
     NftablesFirewallBackend, SystemStatusClock,
@@ -18,8 +18,8 @@ use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, Daemon,
-    DaemonPlan, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
+    Daemon, DaemonPlan, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -32,14 +32,17 @@ pub enum StoreLaunchMode {
     Join { ticket: StoreJoinTicket },
     /// Reopen the member already persisted in this node's data directory.
     Restart,
+    /// Connect a worker agent without starting a local store member.
+    Client,
 }
 
 impl StoreLaunchMode {
-    fn provider_mode(&self) -> StoreStartMode {
+    fn provider_mode(&self) -> Option<StoreStartMode> {
         match self {
-            Self::Bootstrap => StoreStartMode::Bootstrap,
-            Self::Join { ticket } => StoreStartMode::Join(ticket.clone()),
-            Self::Restart => StoreStartMode::Restart,
+            Self::Bootstrap => Some(StoreStartMode::Bootstrap),
+            Self::Join { ticket } => Some(StoreStartMode::Join(ticket.clone())),
+            Self::Restart => Some(StoreStartMode::Restart),
+            Self::Client => None,
         }
     }
 }
@@ -54,8 +57,9 @@ pub struct DaemonLaunchConfig {
     pub node_id: NodeId,
     /// Root of all role and provider persistence.
     pub data_directory: PathBuf,
-    /// Exact etcd executable managed by the embedded provider.
-    pub etcd_binary: PathBuf,
+    /// Exact etcd executable on control-plane nodes; absent on workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etcd_binary: Option<PathBuf>,
     /// Explicit local store initialization decision.
     pub store_mode: StoreLaunchMode,
     /// Node-specific mutual TLS identity granted during bootstrap or join.
@@ -72,21 +76,34 @@ impl DaemonLaunchConfig {
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));
         }
-        if !self.etcd_binary.is_absolute() {
-            return Err(invalid("embedded etcd binary must be an absolute path"));
-        }
         let node = self.cluster.nodes.get(&self.node_id).ok_or_else(|| {
             invalid(format!(
                 "node `{}` is absent from the cluster topology",
                 self.node_id
             ))
         })?;
-        if !node.role.is_control_plane() {
-            return Err(invalid(
-                "this executable currently requires a control-plane-capable node",
-            ));
+        match (&self.etcd_binary, node.role.is_control_plane()) {
+            (Some(path), true) if path.is_absolute() => {}
+            (Some(_), true) => {
+                return Err(invalid("embedded etcd binary must be an absolute path"));
+            }
+            (None, true) => {
+                return Err(invalid(
+                    "control-plane nodes require an embedded etcd binary",
+                ));
+            }
+            (None, false) => {}
+            (Some(_), false) => {
+                return Err(invalid("worker nodes must not configure an etcd binary"));
+            }
         }
         match &self.store_mode {
+            StoreLaunchMode::Client if node.role.is_control_plane() => Err(invalid(
+                "control-plane nodes must start their declared local store member",
+            )),
+            mode if !node.role.is_control_plane() && !matches!(mode, StoreLaunchMode::Client) => {
+                Err(invalid("worker nodes must use client-only store access"))
+            }
             StoreLaunchMode::Bootstrap if node.role != NodeRole::Master => Err(invalid(
                 "only the designated master may bootstrap the cluster store",
             )),
@@ -120,10 +137,8 @@ pub fn load_launch_config(path: &Path) -> Result<DaemonLaunchConfig, DaemonLaunc
     Ok(config)
 }
 
-/// Builds production adapters and starts one control-plane daemon instance.
-pub async fn launch_control_plane(
-    config: DaemonLaunchConfig,
-) -> Result<RunningDaemon, DaemonLaunchError> {
+/// Builds production adapters and starts one daemon instance for its declared node role.
+pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
     config.validate()?;
     let DaemonLaunchConfig {
         cluster,
@@ -135,25 +150,40 @@ pub async fn launch_control_plane(
         instance_id,
     } = config;
     let known_members = control_plane_members(&cluster);
-    let local_member = known_members
-        .get(&node_id)
-        .cloned()
-        .ok_or_else(|| invalid("local node is absent from control-plane membership"))?;
-    let provider_config = StoreProviderConfig::new(
-        cluster.cluster_id.clone(),
-        local_member,
-        known_members,
-        cluster.ports,
-        data_directory.join("store"),
-        security,
-    )?;
     let clock = Arc::new(TokioClock::new());
-    let provider = Arc::new(EmbeddedEtcdProvider::new(
-        provider_config,
-        etcd_binary,
-        clock.clone(),
-        EmbeddedEtcdSettings::default(),
-    )?);
+    let local_node = cluster
+        .nodes
+        .get(&node_id)
+        .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
+    let agent_store = if local_node.role.is_control_plane() {
+        let local_member = known_members
+            .get(&node_id)
+            .cloned()
+            .ok_or_else(|| invalid("local node is absent from control-plane membership"))?;
+        let provider_config = StoreProviderConfig::new(
+            cluster.cluster_id.clone(),
+            local_member,
+            known_members.clone(),
+            cluster.ports,
+            data_directory.join("store"),
+            security,
+        )?;
+        let provider = Arc::new(EmbeddedEtcdProvider::new(
+            provider_config,
+            etcd_binary
+                .ok_or_else(|| invalid("control-plane nodes require an embedded etcd binary"))?,
+            clock.clone(),
+            EmbeddedEtcdSettings::default(),
+        )?);
+        AgentStore::Managed {
+            provider,
+            start_mode: store_mode.provider_mode().ok_or_else(|| {
+                invalid("control-plane nodes cannot use client-only store access")
+            })?,
+        }
+    } else {
+        AgentStore::Remote(connect_worker_store(&cluster, &known_members, &security).await?)
+    };
     let mesh_identity = MeshIdentity::load_or_generate(&data_directory.join("agent").join("mesh"))?;
     let containerd = Arc::new(
         ContainerdRuntime::connect(
@@ -173,7 +203,6 @@ pub async fn launch_control_plane(
         Some(instance_id) => instance_id,
         None => generate_instance_id()?,
     };
-    let start_mode = store_mode.provider_mode();
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
@@ -183,8 +212,7 @@ pub async fn launch_control_plane(
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
-            provider,
-            store_start_mode: start_mode,
+            agent_store,
             mesh_backend: LinuxMeshBackend::new(),
             firewall_backend: NftablesFirewallBackend::new(),
             bridge_backend: LinuxWorkloadBridgeBackend::new(),
@@ -201,6 +229,43 @@ pub async fn launch_control_plane(
     )
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
+}
+
+async fn connect_worker_store(
+    cluster: &ClusterConfig,
+    members: &BTreeMap<NodeId, StoreMember>,
+    security: &NodeCertificateBundle,
+) -> Result<Arc<dyn Store>, DaemonLaunchError> {
+    let endpoints = members
+        .values()
+        .map(|member| {
+            format!(
+                "https://{}:{}",
+                member.host_address, cluster.ports.store_client
+            )
+        })
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Err(DaemonLaunchError::RemoteStore {
+            detail: "topology declares no control-plane store endpoints".to_owned(),
+        });
+    }
+    let tls = EtcdTlsConfig::for_endpoints(
+        security.trust_root_pem.as_bytes().to_vec(),
+        security.identity.certificate_pem.as_bytes().to_vec(),
+        security
+            .identity
+            .private_key_pem
+            .expose()
+            .as_bytes()
+            .to_vec(),
+    );
+    EtcdStore::connect_with_tls(endpoints, tls)
+        .await
+        .map(|store| Arc::new(store) as Arc<dyn Store>)
+        .map_err(|error| DaemonLaunchError::RemoteStore {
+            detail: error.to_string(),
+        })
 }
 
 fn control_plane_members(config: &ClusterConfig) -> BTreeMap<NodeId, StoreMember> {
@@ -286,6 +351,9 @@ pub enum DaemonLaunchError {
     /// Provider configuration or store lifecycle failed.
     #[error(transparent)]
     StoreProvider(#[from] cluster::StoreProviderError),
+    /// A worker could not connect to any declared control-plane store endpoint.
+    #[error("worker store connection failed: {detail}")]
+    RemoteStore { detail: String },
     /// The node-local WireGuard identity could not be loaded safely.
     #[error(transparent)]
     MeshIdentity(#[from] node_agent::MeshIdentityError),

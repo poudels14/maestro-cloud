@@ -29,7 +29,7 @@ pub struct EtcdStore {
 /// Mutual-TLS material used to authenticate one etcd client connection.
 #[derive(Clone)]
 pub struct EtcdTlsConfig {
-    server_name: String,
+    server_name: Option<String>,
     certificate_authority: Vec<u8>,
     client_certificate: Vec<u8>,
     client_private_key: Zeroizing<Vec<u8>>,
@@ -44,7 +44,21 @@ impl EtcdTlsConfig {
         client_private_key: Vec<u8>,
     ) -> Self {
         Self {
-            server_name: server_name.into(),
+            server_name: Some(server_name.into()),
+            certificate_authority,
+            client_certificate,
+            client_private_key: Zeroizing::new(client_private_key),
+        }
+    }
+
+    /// Uses each endpoint host as its own TLS server name for a heterogeneous member set.
+    pub fn for_endpoints(
+        certificate_authority: Vec<u8>,
+        client_certificate: Vec<u8>,
+        client_private_key: Vec<u8>,
+    ) -> Self {
+        Self {
+            server_name: None,
             certificate_authority,
             client_certificate,
             client_private_key: Zeroizing::new(client_private_key),
@@ -88,10 +102,12 @@ impl EtcdStore {
     {
         let identity =
             Identity::from_pem(tls.client_certificate, tls.client_private_key.as_slice());
-        let tls_options = TlsOptions::new()
-            .domain_name(tls.server_name)
+        let mut tls_options = TlsOptions::new()
             .ca_certificate(Certificate::from_pem(tls.certificate_authority))
             .identity(identity);
+        if let Some(server_name) = tls.server_name {
+            tls_options = tls_options.domain_name(server_name);
+        }
         Self::connect_with_options(endpoints, Some(ConnectOptions::new().with_tls(tls_options)))
             .await
     }

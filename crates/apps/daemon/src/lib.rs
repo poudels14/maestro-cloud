@@ -14,12 +14,12 @@ mod plan;
 mod runtime;
 
 pub use control_plane::{
-    ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, LeaderWorkload,
+    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
+    LeaderWorkload,
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
-    DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_control_plane,
-    load_launch_config,
+    DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_daemon, load_launch_config,
 };
 pub use operators::{
     OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload, OperatorSettings,

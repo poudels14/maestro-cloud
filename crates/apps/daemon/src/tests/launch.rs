@@ -20,6 +20,23 @@ fn launch_validation_binds_store_mode_to_local_role_and_ticket()
         ..master
     };
     assert!(joined_master.validate().is_err());
+
+    let worker = DaemonLaunchConfig {
+        cluster: cluster_with_nodes(&[("master", NodeRole::Master), ("worker", NodeRole::Worker)])?,
+        node_id: NodeId::new("worker")?,
+        etcd_binary: None,
+        store_mode: StoreLaunchMode::Client,
+        ..config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?
+    };
+    worker.validate()?;
+    assert!(
+        DaemonLaunchConfig {
+            store_mode: StoreLaunchMode::Restart,
+            ..worker
+        }
+        .validate()
+        .is_err()
+    );
     Ok(())
 }
 
@@ -53,7 +70,7 @@ fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::e
     );
     assert!(
         DaemonLaunchConfig {
-            etcd_binary: PathBuf::from("etcd"),
+            etcd_binary: Some(PathBuf::from("etcd")),
             ..config
         }
         .validate()
@@ -71,7 +88,7 @@ fn config(
         cluster: cluster_with_nodes(&[(node_id, role)])?,
         node_id: NodeId::new(node_id)?,
         data_directory: PathBuf::from("/var/lib/maestro"),
-        etcd_binary: PathBuf::from("/usr/bin/etcd"),
+        etcd_binary: Some(PathBuf::from("/usr/bin/etcd")),
         store_mode,
         security: NodeCertificateBundle {
             trust_root_pem: "test-root".to_owned(),

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use daemon::{launch_control_plane, load_launch_config};
+use daemon::{launch_daemon, load_launch_config};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -23,7 +23,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let path = PathBuf::from(path);
     let config = load_launch_config(&path)?;
-    let running = launch_control_plane(config).await?;
+    let running = launch_daemon(config).await?;
     shutdown_signal().await?;
     running.shutdown().await?;
     Ok(())

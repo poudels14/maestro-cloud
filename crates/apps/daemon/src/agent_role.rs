@@ -16,7 +16,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::control_plane::{ControlPlaneRoleFactory, role_error};
-use crate::{DaemonPlan, RoleError, RoleRuntime, RoleSpec};
+use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
 pub(crate) async fn start_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
     factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
@@ -46,31 +46,38 @@ where
         .map_err(|_| RoleError::new("workload bridge backend lock was poisoned"))?
         .take()
         .ok_or_else(|| RoleError::new("agent role was already started"))?;
-    let runtime = factory
-        .provider
-        .start(factory.store_start_mode.clone())
-        .await
-        .map_err(|error| role_error("start local store provider", error))?;
-    let store = runtime.store();
+    let (store, store_runtime) = match &factory.agent_store {
+        AgentStore::Managed {
+            provider,
+            start_mode,
+        } => {
+            let runtime = provider
+                .start(start_mode.clone())
+                .await
+                .map_err(|error| role_error("start local store provider", error))?;
+            (runtime.store(), Some(runtime))
+        }
+        AgentStore::Remote(store) => (store.clone(), None),
+    };
 
     let bridge_agent = match build_bridge_agent(factory, plan, spec, bridge_backend) {
         Ok(agent) => agent,
-        Err(error) => return fail_after_store_start(runtime, error).await,
+        Err(error) => return fail_after_store_start(store_runtime, error).await,
     };
     let mesh_agent = match build_mesh_agent(factory, plan, spec, store.clone(), mesh_backend) {
         Ok(agent) => agent,
-        Err(error) => return fail_after_store_start(runtime, error).await,
+        Err(error) => return fail_after_store_start(store_runtime, error).await,
     };
     let firewall_agent =
         match build_firewall_agent(factory, plan, spec, store.clone(), firewall_backend) {
             Ok(agent) => agent,
-            Err(error) => return fail_after_store_start(runtime, error).await,
+            Err(error) => return fail_after_store_start(store_runtime, error).await,
         };
     let resolver = match AuthoritativeDnsResolver::new() {
         Ok(resolver) => resolver,
         Err(error) => {
             return fail_after_store_start(
-                runtime,
+                store_runtime,
                 role_error("construct authoritative DNS resolver", error),
             )
             .await;
@@ -87,7 +94,7 @@ where
         Ok(agent) => agent,
         Err(error) => {
             return fail_after_store_start(
-                runtime,
+                store_runtime,
                 role_error("construct DNS resource agent", error),
             )
             .await;
@@ -96,32 +103,35 @@ where
     let assignment_agent = if spec.workload_enabled {
         match build_assignment_agent(factory, plan, spec, store.clone()) {
             Ok(agent) => Some(agent),
-            Err(error) => return fail_after_store_start(runtime, error).await,
+            Err(error) => return fail_after_store_start(store_runtime, error).await,
         }
     } else {
         None
     };
     if let Err(error) = bridge_agent.reconcile_once().await {
-        return fail_after_store_start(runtime, role_error("establish workload bridge", error))
-            .await;
+        return fail_after_store_start(
+            store_runtime,
+            role_error("establish workload bridge", error),
+        )
+        .await;
     }
     if let Err(error) = mesh_agent.reconcile_once().await {
         return fail_after_store_start(
-            runtime,
+            store_runtime,
             role_error("establish initial mesh snapshot", error),
         )
         .await;
     }
     if let Err(error) = dns_agent.reconcile_once().await {
         return fail_after_store_start(
-            runtime,
+            store_runtime,
             role_error("establish initial DNS snapshot", error),
         )
         .await;
     }
     if let Err(error) = firewall_agent.reconcile_once().await {
         return fail_after_store_start(
-            runtime,
+            store_runtime,
             role_error("establish initial firewall snapshot", error),
         )
         .await;
@@ -133,7 +143,7 @@ where
         Ok(settings) => settings,
         Err(error) => {
             return fail_after_store_start(
-                runtime,
+                store_runtime,
                 role_error("validate authoritative DNS listener", error),
             )
             .await;
@@ -143,7 +153,7 @@ where
         Ok(server) => server,
         Err(error) => {
             return fail_after_store_start(
-                runtime,
+                store_runtime,
                 role_error("bind authoritative DNS listener", error),
             )
             .await;
@@ -153,7 +163,7 @@ where
         && let Err(error) = agent.reconcile_once().await
     {
         return fail_after_store_start(
-            runtime,
+            store_runtime,
             role_error("establish initial workload assignments", error),
         )
         .await;
@@ -169,7 +179,7 @@ where
         }
     };
     if let Some(error) = publish_store_error {
-        return fail_after_store_start(runtime, error).await;
+        return fail_after_store_start(store_runtime, error).await;
     }
     let (shutdown, bridge_shutdown) = watch::channel(false);
     let mesh_shutdown = bridge_shutdown.clone();
@@ -225,7 +235,7 @@ where
     Ok(Box::new(AgentRoleRuntime {
         shutdown,
         tasks,
-        store_runtime: Some(runtime),
+        store_runtime,
         clock: factory.monotonic_clock.clone(),
         shutdown_grace: factory.settings.store_shutdown_grace,
     }))
@@ -372,15 +382,18 @@ fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendTyp
 }
 
 async fn fail_after_store_start<T>(
-    runtime: Box<dyn StoreRuntime>,
+    runtime: Option<Box<dyn StoreRuntime>>,
     error: RoleError,
 ) -> Result<T, RoleError> {
-    match runtime.shutdown(StoreShutdown::Immediate).await {
-        Ok(()) => Err(error),
-        Err(shutdown_error) => Err(RoleError::new(format!(
-            "{}; failed to roll back local store: {shutdown_error}",
-            error.detail()
-        ))),
+    match runtime {
+        Some(runtime) => match runtime.shutdown(StoreShutdown::Immediate).await {
+            Ok(()) => Err(error),
+            Err(shutdown_error) => Err(RoleError::new(format!(
+                "{}; failed to roll back local store: {shutdown_error}",
+                error.detail()
+            ))),
+        },
+        None => Err(error),
     }
 }
 

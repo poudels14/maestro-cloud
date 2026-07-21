@@ -20,8 +20,8 @@ use runtime::{FakeNetworkProvider, FakeRuntime, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
-    ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings, Daemon,
-    DaemonPlan, LeaderWorkload, RoleError,
+    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
+    Daemon, DaemonPlan, LeaderWorkload, RoleError,
 };
 
 use super::cluster_with_nodes;
@@ -54,11 +54,23 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         NodeId::new("master")?,
         directory.path().to_path_buf(),
     )?;
-    seed_agent_resources(&store, &cluster.cluster_id, &NodeId::new("master")?).await?;
+    seed_agent_resources(
+        &store,
+        &cluster.cluster_id,
+        &NodeId::new("master")?,
+        cluster
+            .nodes
+            .get(&NodeId::new("master")?)
+            .ok_or("master topology missing")?
+            .workload_subnet,
+    )
+    .await?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
-            provider,
-            store_start_mode: StoreStartMode::Bootstrap,
+            agent_store: AgentStore::Managed {
+                provider,
+                start_mode: StoreStartMode::Bootstrap,
+            },
             mesh_backend: backend,
             firewall_backend: RecordingFirewallBackend {
                 applications: firewall_applications.clone(),
@@ -168,6 +180,85 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .as_slice(),
         &[true]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_agent_uses_remote_store_without_starting_a_controller()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock: Arc<dyn Clock> = Arc::new(PausedClock);
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let cluster =
+        cluster_with_nodes(&[("master", NodeRole::Master), ("worker", NodeRole::Worker)])?;
+    let worker_id = NodeId::new("worker")?;
+    let worker = cluster
+        .nodes
+        .get(&worker_id)
+        .ok_or("worker topology missing")?;
+    seed_agent_resources(
+        &store,
+        &cluster.cluster_id,
+        &worker_id,
+        worker.workload_subnet,
+    )
+    .await?;
+    let directory = tempfile::tempdir()?;
+    let plan = DaemonPlan::new(
+        cluster.clone(),
+        worker_id.clone(),
+        directory.path().to_path_buf(),
+    )?;
+    let workload_runtime = Arc::new(FakeRuntime::new());
+    let network_provider = Arc::new(FakeNetworkProvider::default());
+    let factory = ControlPlaneRoleFactory::new(
+        ControlPlaneRoleDependencies {
+            agent_store: AgentStore::Remote(store.clone()),
+            mesh_backend: RecordingMeshBackend {
+                applications: Arc::new(Mutex::new(Vec::new())),
+            },
+            firewall_backend: RecordingFirewallBackend {
+                applications: Arc::new(Mutex::new(Vec::new())),
+            },
+            bridge_backend: RecordingBridgeBackend {
+                applications: Arc::new(Mutex::new(Vec::new())),
+            },
+            dns_server_binder: Arc::new(RecordingDnsBinder {
+                bindings: Arc::new(Mutex::new(Vec::new())),
+            }),
+            workload_runtime: workload_runtime.clone(),
+            network_provider: network_provider.clone(),
+            volatile_root: directory.path().join("volatile"),
+            mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
+            instance_id: NodeInstanceId::new("worker-instance")?,
+            monotonic_clock: clock,
+            status_clock: Arc::new(FixedStatusClock),
+        },
+        ControlPlaneRoleSettings::default(),
+    );
+
+    let running = Daemon::new(plan, factory).start().await?;
+    assert_eq!(
+        load_assignment(&store, &cluster.cluster_id)
+            .await?
+            .status
+            .phase,
+        AssignmentPhase::Running
+    );
+    assert_eq!(
+        workload_runtime
+            .list(&cluster.cluster_id, &worker_id)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(
+        (
+            network_provider.lease_count(),
+            network_provider.attachment_count()
+        ),
+        (1, 1)
+    );
+    running.shutdown().await?;
     Ok(())
 }
 
