@@ -234,7 +234,10 @@ impl World {
             .collect()
     }
 
-    async fn set_replica_override(&self, replicas: u32) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn set_replica_override(
+        &self,
+        replicas: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let key = self
             .keys
             .resource(&ResourceKind::new("Service")?, &ResourceName::new("api")?);

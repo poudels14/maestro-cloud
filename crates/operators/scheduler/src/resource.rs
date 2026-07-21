@@ -6,7 +6,8 @@ use kernel_api::{
     DeploymentSpec, DeploymentStatus, Node, NodeId, NodeNetwork, NodeNetworkId, NodeNetworkSpec,
     NodeNetworkStatus, NodeSpec, NodeStatus, Object, ReplicaState, ReplicaStateId,
     ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service, ServiceId,
-    ServiceSpec, ServiceStatus,
+    ServiceSpec, ServiceStatus, TrafficGeneration, TrafficGenerationId, TrafficGenerationSpec,
+    TrafficGenerationStatus,
 };
 use kernel_controller::FencedStore;
 use kernel_store::{Compare, ExpectedVersion, Keyspace, StoredValue};
@@ -21,6 +22,7 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) networks: BTreeMap<NodeNetworkId, NodeNetwork>,
     pub(crate) assignments: BTreeMap<AssignmentId, Assignment>,
     pub(crate) replicas: BTreeMap<ReplicaStateId, ReplicaState>,
+    pub(crate) traffic_generations: BTreeMap<TrafficGenerationId, TrafficGeneration>,
     pub(crate) assignment_values: Vec<StoredValue>,
     pub(crate) dependency_compares: Vec<Compare>,
 }
@@ -58,6 +60,11 @@ impl ResourceSnapshot {
             keyspace,
             "ReplicaState",
         )?;
+        let traffic_generations = decode_kind::<
+            TrafficGenerationId,
+            TrafficGenerationSpec,
+            TrafficGenerationStatus,
+        >(&snapshot.values, keyspace, "TrafficGeneration")?;
 
         let dependency_compares = services
             .values
@@ -66,6 +73,7 @@ impl ResourceSnapshot {
             .chain(nodes.values.iter())
             .chain(networks.values.iter())
             .chain(replicas.values.iter())
+            .chain(traffic_generations.values.iter())
             .map(|stored| Compare {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),
@@ -78,6 +86,7 @@ impl ResourceSnapshot {
             networks: networks.resources,
             assignments: assignments.resources,
             replicas: replicas.resources,
+            traffic_generations: traffic_generations.resources,
             assignment_values: assignments.values,
             dependency_compares,
         })

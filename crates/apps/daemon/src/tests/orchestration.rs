@@ -93,7 +93,7 @@ async fn redeploy_cuts_over_before_collecting_drained_generation()
     Ok(())
 }
 
-struct RolloutWorld {
+pub(super) struct RolloutWorld {
     keys: Keyspace,
     store: Arc<InMemoryStore>,
     suite: OperatorSuite,
@@ -104,7 +104,7 @@ struct RolloutWorld {
 }
 
 impl RolloutWorld {
-    async fn new(node_count: u8) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(super) async fn new(node_count: u8) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new(format!("rollout-{node_count}"))?;
         let keys = Keyspace::new(&cluster_id);
         let monotonic: Arc<dyn Clock> = Arc::new(NoopClock);
@@ -169,12 +169,11 @@ impl RolloutWorld {
         })
     }
 
-    async fn converge(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn converge(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut quiet_passes = 0_u8;
         for _pass in 0..32 {
             let before = self.store.list(&self.keys.cluster()).await?.cursor;
-            self.suite.reconcile_snapshot().await?;
-            self.publish_ready_replicas().await?;
+            self.reconcile_pass().await?;
             let after = self.store.list(&self.keys.cluster()).await?.cursor;
             quiet_passes = if before == after {
                 quiet_passes.saturating_add(1)
@@ -186,6 +185,11 @@ impl RolloutWorld {
             }
         }
         Err("operator suite did not reach two quiet passes".into())
+    }
+
+    pub(super) async fn reconcile_pass(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.suite.reconcile_snapshot().await?;
+        self.publish_ready_replicas().await
     }
 
     async fn publish_ready_replicas(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -235,6 +239,33 @@ impl RolloutWorld {
             Ok(old_deployment)
         } else {
             Err("service redeploy conflicted".into())
+        }
+    }
+
+    pub(super) async fn set_replica_override(
+        &self,
+        replicas: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let key = self.keys.resource(
+            &ResourceKind::new("Service")?,
+            &ResourceName::from(ServiceId::new("api")?),
+        );
+        let stored = self.store.get(&key).await?.ok_or("service missing")?;
+        let mut service: Service = serde_json::from_slice(&stored.value)?;
+        service.status.replica_override = Some(replicas);
+        let outcome = self
+            .store
+            .put_cas(PutRequest {
+                key,
+                value: serde_json::to_vec(&service)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?;
+        if matches!(outcome, CasOutcome::Applied(_)) {
+            Ok(())
+        } else {
+            Err("service scale conflicted".into())
         }
     }
 
@@ -340,7 +371,7 @@ impl RolloutWorld {
         }
     }
 
-    async fn list<Resource: serde::de::DeserializeOwned>(
+    pub(super) async fn list<Resource: serde::de::DeserializeOwned>(
         &self,
         kind: &str,
     ) -> Result<Vec<Resource>, Box<dyn std::error::Error>> {

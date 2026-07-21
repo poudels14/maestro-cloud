@@ -3,6 +3,7 @@ mod launch;
 mod operators;
 mod orchestration;
 mod orchestration_fixture;
+mod orchestration_scale;
 mod plan;
 mod runtime;
 

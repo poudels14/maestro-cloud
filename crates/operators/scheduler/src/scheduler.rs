@@ -96,7 +96,17 @@ impl Scheduler {
             self.settings.deployment_drain_grace,
         )?;
         let mut schedule = crate::plan(projection.input);
-        schedule.assignments.extend(projection.retained_on_error);
+        let mut desired_ids = schedule
+            .assignments
+            .iter()
+            .map(|assignment| assignment.meta.id.clone())
+            .collect::<BTreeSet<_>>();
+        schedule.assignments.extend(
+            projection
+                .retained_assignments
+                .into_iter()
+                .filter(|assignment| desired_ids.insert(assignment.meta.id.clone())),
+        );
         schedule.unschedulable.extend(projection.validation_errors);
         schedule.unschedulable.sort_by(|left, right| {
             left.service_id

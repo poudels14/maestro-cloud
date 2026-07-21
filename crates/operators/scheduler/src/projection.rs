@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, ConditionState, Deployment, DeploymentId,
-    DeploymentPhase, NodeId, PlacementConstraint, ReplicaState, ServiceId, Timestamp, VolumeSource,
+    DeploymentPhase, NodeId, PlacementConstraint, ReplicaState, ServiceId, Timestamp,
+    TrafficGenerationPhase, VolumeSource,
 };
 
 use crate::SchedulerError;
@@ -21,7 +22,7 @@ const MAINTENANCE_CONDITION: &str = "Maintenance";
 pub(crate) struct Projection {
     pub(crate) input: ScheduleInput,
     pub(crate) validation_errors: Vec<UnschedulableReplica>,
-    pub(crate) retained_on_error: Vec<Assignment>,
+    pub(crate) retained_assignments: Vec<Assignment>,
 }
 
 pub(crate) fn project(
@@ -33,8 +34,9 @@ pub(crate) fn project(
     deployment_drain_grace: Duration,
 ) -> Result<Projection, SchedulerError> {
     let (nodes, held) = schedule_nodes(snapshot, live_nodes, now, replacement_grace)?;
-    let (services, validation_errors, retained_on_error) =
+    let (services, validation_errors, mut retained_assignments) =
         schedule_services(snapshot, now, deployment_drain_grace);
+    retained_assignments.extend(active_traffic_assignments(snapshot));
     Ok(Projection {
         input: ScheduleInput {
             cluster_id,
@@ -44,8 +46,29 @@ pub(crate) fn project(
             held,
         },
         validation_errors,
-        retained_on_error,
+        retained_assignments,
     })
+}
+
+fn active_traffic_assignments(snapshot: &ResourceSnapshot) -> Vec<Assignment> {
+    let assignment_ids = snapshot
+        .traffic_generations
+        .values()
+        .filter(|generation| generation.status.phase == TrafficGenerationPhase::Active)
+        .flat_map(|generation| {
+            generation
+                .spec
+                .targets
+                .iter()
+                .map(|target| target.assignment_id.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .assignments
+        .values()
+        .filter(|assignment| assignment_ids.contains(&assignment.meta.id))
+        .cloned()
+        .collect()
 }
 
 fn schedule_nodes(

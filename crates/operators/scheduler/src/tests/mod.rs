@@ -4,4 +4,5 @@ mod assignment;
 mod drain;
 mod plan;
 mod reconciler;
+mod scale;
 mod scheduler;
