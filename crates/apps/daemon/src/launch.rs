@@ -12,8 +12,9 @@ use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreError, DuckStoreSettings};
 use node_agent::{
-    CgroupV2StatsReader, HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend,
-    MeshIdentity, NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
+    CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxMeshBackend,
+    LinuxWorkloadBridgeBackend, MeshIdentity, NetworkHealthProber, NftablesFirewallBackend,
+    SystemStatusClock,
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
@@ -224,6 +225,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
     let log_sinks = build_log_sinks(configured_datadog, &log_store_runtime);
+    let network_stats_reader = Arc::new(HostNetworkStatsReader::production(containerd.clone()));
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
@@ -236,6 +238,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             log_sinks,
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(CgroupV2StatsReader),
+            network_stats_reader,
             network_provider: containerd,
             health_prober,
             volatile_root,

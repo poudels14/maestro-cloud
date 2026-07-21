@@ -117,7 +117,7 @@ pub struct NetworkAttachment {
     pub network: NetworkHandle,
     /// Workload address observed by the backend.
     pub address: IpAddr,
-    /// Backend interface name when one is externally meaningful.
+    /// Host interface name when one is externally meaningful.
     pub interface_name: Option<String>,
 }
 

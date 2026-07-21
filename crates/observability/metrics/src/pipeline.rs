@@ -57,6 +57,8 @@ fn normalize(sample: &WorkloadStatsSample) -> WorkloadMetricPoint {
         io_write_operations: sample.stats.io.write_operations,
         io_discarded_bytes: sample.stats.io.discarded_bytes,
         io_discard_operations: sample.stats.io.discard_operations,
+        network_receive_bytes: sample.network.map(|network| network.receive_bytes),
+        network_transmit_bytes: sample.network.map(|network| network.transmit_bytes),
         processes_current: sample.stats.processes.current,
         processes_maximum: sample.stats.processes.maximum,
     }

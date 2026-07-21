@@ -11,7 +11,7 @@ use logs::{LogSink, LogStoreRuntime, SinkWorkerSettings};
 use metrics::MetricStoreRuntime;
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity,
-    StatusClock, WorkloadBridgeBackend,
+    StatusClock, WorkloadBridgeBackend, WorkloadNetworkStatsReader,
 };
 use runtime::{NetworkProvider, WorkloadRuntime};
 use tokio::sync::watch;
@@ -182,6 +182,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub metric_store_runtime: Box<dyn MetricStoreRuntime>,
     /// Direct cgroup v2 reader used for backend-neutral workload samples.
     pub stats_reader: Arc<dyn CgroupStatsReader>,
+    /// Runtime-aware reader for optional cumulative workload network counters.
+    pub network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
     /// Host-owned workload address allocator and attachment backend.
     pub network_provider: Arc<dyn NetworkProvider>,
     /// Bounded HTTP and TCP probe adapter for local workload readiness.
@@ -210,6 +212,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
+    pub(crate) network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
     pub(crate) health_prober: Arc<dyn HealthProber>,
     pub(crate) volatile_root: PathBuf,
@@ -245,6 +248,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             log_sinks: dependencies.log_sinks,
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             stats_reader: dependencies.stats_reader,
+            network_stats_reader: dependencies.network_stats_reader,
             network_provider: dependencies.network_provider,
             health_prober: dependencies.health_prober,
             volatile_root: dependencies.volatile_root,

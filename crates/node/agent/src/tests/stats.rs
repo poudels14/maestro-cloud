@@ -13,7 +13,8 @@ use runtime::{
 
 use crate::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
-    CgroupStats, CgroupStatsError, CgroupStatsReader, StatusClock, WorkloadStatsAgent,
+    CgroupStats, CgroupStatsError, CgroupStatsReader, StatusClock, WorkloadNetworkStats,
+    WorkloadNetworkStatsError, WorkloadNetworkStatsReader, WorkloadStatsAgent,
     WorkloadStatsFailureStage, WorkloadStatsSample, WorkloadStatsSettings, WorkloadStatsSink,
     WorkloadStatsSinkError,
 };
@@ -42,6 +43,7 @@ async fn stats_agent_collects_running_workloads_and_isolates_reader_failures()
     let agent = WorkloadStatsAgent::new(
         runtime_trait,
         reader,
+        Arc::new(FixedNetworkReader::default()),
         sink.clone(),
         settings(),
         Arc::new(FixedClock(Timestamp(1_750_000_000_000))),
@@ -58,6 +60,13 @@ async fn stats_agent_collects_running_workloads_and_isolates_reader_failures()
     assert_eq!(collected.metadata.workload_id, workload_id("workload-1"));
     assert_eq!(collected.collected_at, Timestamp(1_750_000_000_000));
     assert_eq!(collected.stats, sample());
+    assert_eq!(
+        collected.network,
+        Some(WorkloadNetworkStats {
+            receive_bytes: 100,
+            transmit_bytes: 200,
+        })
+    );
     assert_eq!(report.failures.len(), 1);
     let failure = report.failures.first().expect("one failed sample");
     assert_eq!(failure.workload_id, workload_id("workload-2"));
@@ -81,6 +90,7 @@ async fn stats_agent_isolates_handle_failures_but_not_snapshot_failures()
     let agent = WorkloadStatsAgent::new(
         runtime_trait,
         Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(FixedNetworkReader::default()),
         Arc::new(RecordingSink::default()),
         settings(),
         Arc::new(FixedClock(Timestamp(1))),
@@ -113,6 +123,7 @@ async fn stats_agent_isolates_sink_failure_and_retries_on_the_next_snapshot()
     let agent = WorkloadStatsAgent::new(
         runtime,
         Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(FixedNetworkReader::default()),
         sink.clone(),
         settings(),
         Arc::new(FixedClock(Timestamp(1))),
@@ -135,6 +146,46 @@ async fn stats_agent_isolates_sink_failure_and_retries_on_the_next_snapshot()
 }
 
 #[tokio::test]
+async fn stats_agent_retains_cgroup_sample_when_optional_network_reading_fails()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    let sink = Arc::new(RecordingSink::default());
+    let agent = WorkloadStatsAgent::new(
+        runtime,
+        Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(FixedNetworkReader { fail: true }),
+        sink,
+        settings(),
+        Arc::new(FixedClock(Timestamp(1))),
+        Arc::new(ManualClock::default()),
+    )?;
+
+    let report = agent.collect().await?;
+
+    assert_eq!(report.samples.len(), 1);
+    assert_eq!(
+        report
+            .samples
+            .first()
+            .ok_or("collected sample missing")?
+            .network,
+        None
+    );
+    assert_eq!(report.delivered, 1);
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(
+        report
+            .failures
+            .first()
+            .ok_or("network collection failure missing")?
+            .stage,
+        WorkloadStatsFailureStage::ReadNetwork
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn stats_agent_runs_immediately_then_on_each_injected_deadline()
 -> Result<(), Box<dyn std::error::Error>> {
     let runtime = Arc::new(FakeRuntime::new());
@@ -144,6 +195,7 @@ async fn stats_agent_runs_immediately_then_on_each_injected_deadline()
     let agent = WorkloadStatsAgent::new(
         runtime,
         Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(FixedNetworkReader::default()),
         sink.clone(),
         settings(),
         Arc::new(FixedClock(Timestamp(1))),
@@ -173,6 +225,7 @@ fn stats_agent_rejects_a_zero_poll_interval() {
         WorkloadStatsAgent::new(
             Arc::new(FakeRuntime::new()),
             Arc::new(SelectiveReader { rejected: None }),
+            Arc::new(FixedNetworkReader::default()),
             Arc::new(RecordingSink::default()),
             settings,
             Arc::new(FixedClock(Timestamp(1))),
@@ -238,6 +291,30 @@ impl Clock for ManualClock {
 
 struct SelectiveReader {
     rejected: Option<WorkloadId>,
+}
+
+#[derive(Default)]
+struct FixedNetworkReader {
+    fail: bool,
+}
+
+#[async_trait]
+impl WorkloadNetworkStatsReader for FixedNetworkReader {
+    async fn read(
+        &self,
+        _workload: &runtime::WorkloadHandle,
+    ) -> Result<Option<WorkloadNetworkStats>, WorkloadNetworkStatsError> {
+        if self.fail {
+            Err(WorkloadNetworkStatsError::InvalidInterface {
+                name: "injected".to_owned(),
+            })
+        } else {
+            Ok(Some(WorkloadNetworkStats {
+                receive_bytes: 100,
+                transmit_bytes: 200,
+            }))
+        }
+    }
 }
 
 #[async_trait]

@@ -114,6 +114,7 @@ pub(crate) fn build_stats_agent<MeshBackendType, FirewallBackendType, BridgeBack
     WorkloadStatsAgent::new(
         factory.workload_runtime.clone(),
         factory.stats_reader.clone(),
+        factory.network_stats_reader.clone(),
         Arc::new(WorkloadMetricPipeline::new(store)),
         WorkloadStatsSettings {
             cluster_id: plan.cluster().cluster_id.clone(),

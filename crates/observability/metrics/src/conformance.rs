@@ -113,6 +113,8 @@ fn point(
         io_write_operations: 2,
         io_discarded_bytes: 0,
         io_discard_operations: 0,
+        network_receive_bytes: Some(100),
+        network_transmit_bytes: Some(200),
         processes_current: 1,
         processes_maximum: Some(32),
     })

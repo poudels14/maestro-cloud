@@ -37,6 +37,8 @@ mod log_checkpoint;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
+#[cfg(target_os = "linux")]
+mod network_stats;
 #[cfg(unix)]
 mod node_api;
 #[cfg(unix)]
@@ -93,6 +95,11 @@ pub use mesh::{
 };
 pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
 pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
+#[cfg(target_os = "linux")]
+pub use network_stats::{
+    HostNetworkStatsReader, WorkloadNetworkStats, WorkloadNetworkStatsError,
+    WorkloadNetworkStatsReader,
+};
 #[cfg(unix)]
 pub use node_api::{
     BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeApiSocketOwner,

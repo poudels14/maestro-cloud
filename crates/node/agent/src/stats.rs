@@ -9,6 +9,7 @@ use tokio::sync::watch;
 
 use crate::StatusClock;
 use crate::cgroup_stats::{CgroupStats, CgroupStatsReader};
+use crate::network_stats::{WorkloadNetworkStats, WorkloadNetworkStatsReader};
 
 /// Node and cluster scope used to discover owned runtime workloads.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,8 @@ pub struct WorkloadStatsSample {
     pub collected_at: Timestamp,
     /// Backend-neutral cgroup v2 counters.
     pub stats: CgroupStats,
+    /// Cumulative host-interface counters when the runtime exposes an owned interface.
+    pub network: Option<WorkloadNetworkStats>,
 }
 
 /// Point in collection at which one workload could not be sampled.
@@ -39,6 +42,8 @@ pub enum WorkloadStatsFailureStage {
     ResolveCgroup,
     /// The resolved cgroup could not be read safely.
     ReadCgroup,
+    /// Runtime attachment inspection or host-interface counter reading failed.
+    ReadNetwork,
 }
 
 /// Isolated per-workload sampling failure that does not discard healthy samples.
@@ -95,6 +100,7 @@ pub enum WorkloadStatsSinkError {
 pub struct WorkloadStatsAgent {
     runtime: Arc<dyn WorkloadRuntime>,
     reader: Arc<dyn CgroupStatsReader>,
+    network_reader: Arc<dyn WorkloadNetworkStatsReader>,
     settings: WorkloadStatsSettings,
     clock: Arc<dyn StatusClock>,
     monotonic_clock: Arc<dyn Clock>,
@@ -106,6 +112,7 @@ impl WorkloadStatsAgent {
     pub fn new(
         runtime: Arc<dyn WorkloadRuntime>,
         reader: Arc<dyn CgroupStatsReader>,
+        network_reader: Arc<dyn WorkloadNetworkStatsReader>,
         sink: Arc<dyn WorkloadStatsSink>,
         settings: WorkloadStatsSettings,
         clock: Arc<dyn StatusClock>,
@@ -117,6 +124,7 @@ impl WorkloadStatsAgent {
         Ok(Self {
             runtime,
             reader,
+            network_reader,
             sink,
             settings,
             clock,
@@ -181,11 +189,25 @@ impl WorkloadStatsAgent {
                 }
             };
             match self.reader.read(&path).await {
-                Ok(stats) => report.samples.push(WorkloadStatsSample {
-                    metadata: workload.metadata,
-                    collected_at: self.clock.now(),
-                    stats,
-                }),
+                Ok(stats) => {
+                    let network = match self.network_reader.read(&workload.handle).await {
+                        Ok(network) => network,
+                        Err(error) => {
+                            report.failures.push(WorkloadStatsFailure {
+                                workload_id: workload.metadata.workload_id.clone(),
+                                stage: WorkloadStatsFailureStage::ReadNetwork,
+                                message: error.to_string(),
+                            });
+                            None
+                        }
+                    };
+                    report.samples.push(WorkloadStatsSample {
+                        metadata: workload.metadata,
+                        collected_at: self.clock.now(),
+                        stats,
+                        network,
+                    });
+                }
                 Err(error) => report.failures.push(WorkloadStatsFailure {
                     workload_id: workload.metadata.workload_id,
                     stage: WorkloadStatsFailureStage::ReadCgroup,

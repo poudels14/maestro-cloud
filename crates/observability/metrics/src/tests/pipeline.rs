@@ -4,7 +4,7 @@ use std::sync::Arc;
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use node_agent::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
-    CgroupStats, WorkloadStatsSample, WorkloadStatsSink,
+    CgroupStats, WorkloadNetworkStats, WorkloadStatsSample, WorkloadStatsSink,
 };
 use runtime::WorkloadMetadata;
 
@@ -31,6 +31,33 @@ async fn workload_pipeline_normalizes_ownership_counters_and_exact_replays()
     assert_eq!(point.cpu_usage_usec, 10);
     assert_eq!(point.memory_current_bytes, 1_024);
     assert_eq!(point.io_write_bytes, 40);
+    assert_eq!(point.network_receive_bytes, Some(50));
+    assert_eq!(point.network_transmit_bytes, Some(60));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_metric_point_accepts_records_written_before_network_counters()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryMetricStore::new());
+    let pipeline = WorkloadMetricPipeline::new(store.clone());
+    pipeline.ingest(&[sample()?]).await?;
+    let point = store
+        .points()?
+        .into_iter()
+        .next()
+        .ok_or("normalized metric point missing")?;
+    let mut document = serde_json::to_value(point)?;
+    let object = document
+        .as_object_mut()
+        .ok_or("metric point was not an object")?;
+    object.remove("networkReceiveBytes");
+    object.remove("networkTransmitBytes");
+
+    let decoded = serde_json::from_value::<crate::WorkloadMetricPoint>(document)?;
+
+    assert_eq!(decoded.network_receive_bytes, None);
+    assert_eq!(decoded.network_transmit_bytes, None);
     Ok(())
 }
 
@@ -80,5 +107,9 @@ fn sample() -> Result<WorkloadStatsSample, kernel_api::InvalidIdentifier> {
                 maximum: Some(32),
             },
         },
+        network: Some(WorkloadNetworkStats {
+            receive_bytes: 50,
+            transmit_bytes: 60,
+        }),
     })
 }

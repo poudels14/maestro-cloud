@@ -62,6 +62,12 @@ pub struct WorkloadMetricPoint {
     pub io_discarded_bytes: u64,
     /// Block-device discard operations issued.
     pub io_discard_operations: u64,
+    /// Bytes received by the workload since its owned interfaces were created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_receive_bytes: Option<u64>,
+    /// Bytes transmitted by the workload since its owned interfaces were created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_transmit_bytes: Option<u64>,
     /// Current processes and threads charged to the workload.
     pub processes_current: u64,
     /// Maximum allowed processes, absent when unlimited.

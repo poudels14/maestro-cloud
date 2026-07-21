@@ -20,7 +20,8 @@ use node_agent::{
     DnsServerBinder, DnsServerError, DnsServerRuntime, DnsServerSettings, FirewallBackend,
     FirewallBackendError, HealthProbeError, HealthProbeTarget, HealthProber, MeshBackend,
     MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge,
-    WorkloadBridgeBackend, WorkloadBridgeBackendError,
+    WorkloadBridgeBackend, WorkloadBridgeBackendError, WorkloadNetworkStats,
+    WorkloadNetworkStatsError, WorkloadNetworkStatsReader,
 };
 use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
@@ -96,6 +97,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             log_sinks: vec![delivery_sink.clone()],
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(FixedStatsReader),
+            network_stats_reader: Arc::new(FixedNetworkStatsReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: health_targets.clone(),
@@ -179,6 +181,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     assert_eq!(metric_point.metadata.deployment_id.as_str(), "deployment-1");
     assert_eq!(metric_point.cpu_usage_usec, 10);
     assert_eq!(metric_point.memory_current_bytes, 1_024);
+    assert_eq!(metric_point.network_receive_bytes, Some(100));
+    assert_eq!(metric_point.network_transmit_bytes, Some(200));
     let workload_id = load_assignment(&store, &cluster.cluster_id)
         .await?
         .status
@@ -322,6 +326,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             log_sinks: Vec::new(),
             metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),
             stats_reader: Arc::new(FixedStatsReader),
+            network_stats_reader: Arc::new(FixedNetworkStatsReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),
@@ -465,6 +470,21 @@ impl CgroupStatsReader for FixedStatsReader {
                 maximum: Some(32),
             },
         })
+    }
+}
+
+struct FixedNetworkStatsReader;
+
+#[async_trait]
+impl WorkloadNetworkStatsReader for FixedNetworkStatsReader {
+    async fn read(
+        &self,
+        _workload: &runtime::WorkloadHandle,
+    ) -> Result<Option<WorkloadNetworkStats>, WorkloadNetworkStatsError> {
+        Ok(Some(WorkloadNetworkStats {
+            receive_bytes: 100,
+            transmit_bytes: 200,
+        }))
     }
 }
 
