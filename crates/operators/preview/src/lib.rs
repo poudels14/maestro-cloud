@@ -6,9 +6,13 @@
 
 mod github;
 mod reconciler;
+mod repository;
 mod resource;
 mod snapshot;
 mod source_plan;
+mod source_reconciler;
+mod source_snapshot;
+mod source_writer;
 mod writer;
 
 pub use github::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
@@ -17,6 +21,7 @@ pub use source_plan::{
     PreviewFeedback, PreviewFeedbackKind, PreviewSourceDiagnostic, PreviewSourcePlan,
     PreviewSourcePlanError, RepositoryPullRequests, plan_preview_sources,
 };
+pub use source_reconciler::{PreviewSourceError, PreviewSourceReconciler, PreviewSourceSettings};
 
 #[cfg(test)]
 mod tests;

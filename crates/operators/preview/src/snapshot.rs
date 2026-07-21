@@ -66,7 +66,7 @@ pub(crate) struct StoredResource<Resource> {
     pub(crate) stored: StoredValue,
 }
 
-async fn decode_prefix<Id, Spec, Status>(
+pub(crate) async fn decode_prefix<Id, Spec, Status>(
     store: &FencedStore,
     prefix: StorePrefix,
     kind: &'static str,

@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
-    ArtifactTemplate, BuildSource, Generation, Object, ObjectMeta, OwnerReference, Ownership,
-    Preview, PreviewId, PreviewPhase, PreviewPolicy, PreviewSpec, PreviewStatus, ResourceId,
-    ResourceKind, ResourceName, Service, ServiceId, Timestamp,
+    Generation, Object, ObjectMeta, OwnerReference, Ownership, Preview, PreviewId, PreviewPhase,
+    PreviewPolicy, PreviewSpec, PreviewStatus, ResourceId, ResourceKind, ResourceName, Service,
+    ServiceId, Timestamp,
 };
 use sha2::{Digest, Sha256};
 
+use crate::repository::service_repository;
 use crate::{PullRequest, PullRequestReadiness};
 
 /// One successfully fetched repository snapshot.
@@ -25,6 +26,10 @@ pub enum PreviewFeedbackKind {
     Creating,
     /// An existing preview is being updated to its current head.
     Updating,
+    /// The current preview deployment is active.
+    Ready,
+    /// The current preview deployment failed to converge.
+    Failed,
     /// A closing preview was restored after its pull request reopened.
     Reopened,
     /// The pull request closed and grace-period teardown was requested.
@@ -38,6 +43,8 @@ pub enum PreviewFeedbackKind {
 /// Marker-keyed pull-request feedback emitted by the planner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewFeedback {
+    /// Base service whose preview lifecycle owns this feedback.
+    pub base_service_id: ServiceId,
     /// Repository identity in `owner/name` form.
     pub repository: String,
     /// Repository-local pull-request number.
@@ -146,6 +153,7 @@ pub fn plan_preview_sources(
         if index < available_slots {
             let preview = new_preview(&candidate)?;
             plan.feedback.push(feedback(
+                &candidate.base.service.meta.id,
                 &candidate.base.repository,
                 candidate.pull_request.number,
                 PreviewFeedbackKind::Creating,
@@ -153,6 +161,7 @@ pub fn plan_preview_sources(
             plan.creates.push(preview);
         } else {
             plan.feedback.push(feedback(
+                &candidate.base.service.meta.id,
                 &candidate.base.repository,
                 candidate.pull_request.number,
                 PreviewFeedbackKind::QuotaExceeded,
@@ -174,6 +183,9 @@ fn preview_bases(
         let Some(policy) = service.spec.preview.as_ref() else {
             continue;
         };
+        if service.meta.deletion_timestamp.is_some() {
+            continue;
+        };
         match service_repository(service) {
             Ok(repository) => {
                 bases.insert(
@@ -181,7 +193,7 @@ fn preview_bases(
                     PreviewBase {
                         service,
                         policy,
-                        repository,
+                        repository: repository.full_name,
                     },
                 );
             }
@@ -239,6 +251,12 @@ fn reconcile_existing(
             if desired != **preview {
                 plan.updates.push(desired);
             }
+            plan.feedback.push(feedback(
+                &preview.spec.base_service_id,
+                &preview.spec.repository,
+                preview.spec.pull_request_number,
+                PreviewFeedbackKind::Ineligible,
+            ));
             continue;
         };
         let Some(snapshot) = snapshots.get(&base.repository) else {
@@ -251,13 +269,14 @@ fn reconcile_existing(
         let Some(pull_request) = open else {
             let desired = close_preview(preview, now);
             if desired != **preview {
-                plan.feedback.push(feedback(
-                    &base.repository,
-                    key.1,
-                    PreviewFeedbackKind::Closing,
-                ));
                 plan.updates.push(desired);
             }
+            plan.feedback.push(feedback(
+                &base.service.meta.id,
+                &base.repository,
+                key.1,
+                PreviewFeedbackKind::Closing,
+            ));
             continue;
         };
         if !eligible(pull_request, &base.repository) || expires_at(pull_request, base.policy) <= now
@@ -267,6 +286,7 @@ fn reconcile_existing(
                 plan.updates.push(desired);
             }
             plan.feedback.push(feedback(
+                &base.service.meta.id,
                 &base.repository,
                 key.1,
                 PreviewFeedbackKind::Ineligible,
@@ -275,18 +295,27 @@ fn reconcile_existing(
         }
         let was_closing = preview.meta.deletion_timestamp.is_some();
         let desired = update_open_preview(preview, base, pull_request);
+        let kind = if was_closing {
+            PreviewFeedbackKind::Reopened
+        } else {
+            match desired.status.phase {
+                PreviewPhase::Active => PreviewFeedbackKind::Ready,
+                PreviewPhase::Failed => PreviewFeedbackKind::Failed,
+                PreviewPhase::Pending
+                | PreviewPhase::Closing
+                | PreviewPhase::Expired
+                | PreviewPhase::Canceled => PreviewFeedbackKind::Updating,
+            }
+        };
         if desired != **preview {
-            plan.feedback.push(feedback(
-                &base.repository,
-                key.1,
-                if was_closing {
-                    PreviewFeedbackKind::Reopened
-                } else {
-                    PreviewFeedbackKind::Updating
-                },
-            ));
             plan.updates.push(desired);
         }
+        plan.feedback.push(feedback(
+            &base.service.meta.id,
+            &base.repository,
+            key.1,
+            kind,
+        ));
     }
 }
 
@@ -321,6 +350,7 @@ fn new_candidates<'a>(
                 });
             } else {
                 plan.feedback.push(feedback(
+                    &base.service.meta.id,
                     &base.repository,
                     pull_request.number,
                     PreviewFeedbackKind::Ineligible,
@@ -418,42 +448,6 @@ fn expire_preview(current: &Preview, now: Timestamp) -> Preview {
     desired
 }
 
-fn service_repository(service: &Service) -> Result<String, String> {
-    let ArtifactTemplate::Build { template } = &service.spec.artifact else {
-        return Err("preview-enabled services must use a build artifact".to_string());
-    };
-    let BuildSource::Git { repository, .. } = &template.source else {
-        return Err("preview-enabled services must use a Git build source".to_string());
-    };
-    parse_github_repository(repository)
-}
-
-fn parse_github_repository(repository: &str) -> Result<String, String> {
-    let trimmed = repository
-        .trim()
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
-    let path = if let Some(path) = trimmed.strip_prefix("git@github.com:") {
-        path
-    } else {
-        let without_scheme = trimmed
-            .strip_prefix("https://")
-            .or_else(|| trimmed.strip_prefix("http://"))
-            .or_else(|| trimmed.strip_prefix("ssh://git@"))
-            .ok_or_else(|| "GitHub repository must use HTTPS or SSH".to_string())?;
-        without_scheme
-            .strip_prefix("github.com/")
-            .ok_or_else(|| "preview repositories must be hosted on github.com".to_string())?
-    };
-    let mut components = path.split('/');
-    let owner = components.next().unwrap_or_default();
-    let name = components.next().unwrap_or_default();
-    if owner.is_empty() || name.is_empty() || components.next().is_some() {
-        return Err("GitHub repository must identify exactly one owner and repository".to_string());
-    }
-    Ok(format!("{owner}/{name}").to_ascii_lowercase())
-}
-
 fn eligible(pull_request: &PullRequest, repository: &str) -> bool {
     pull_request.readiness == PullRequestReadiness::Ready
         && pull_request
@@ -492,14 +486,16 @@ fn preview_identity(base_service_id: &ServiceId, pull_request_number: u64) -> St
 }
 
 fn feedback(
+    base_service_id: &ServiceId,
     repository: &str,
     pull_request_number: u64,
     kind: PreviewFeedbackKind,
 ) -> PreviewFeedback {
     PreviewFeedback {
+        base_service_id: base_service_id.clone(),
         repository: repository.to_string(),
         pull_request_number,
-        comment_key: "lifecycle".to_string(),
+        comment_key: format!("preview-{base_service_id}"),
         kind,
     }
 }
