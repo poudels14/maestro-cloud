@@ -1,6 +1,10 @@
 export type { components, paths, webhooks } from "./schema";
+export { ApiHttpError, createFetchTransport, decodeJson } from "./transport";
+export type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
 
 import type { components } from "./schema";
+import { decodeJson } from "./transport";
+import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
 
 export type ApiSchemas = components["schemas"];
 
@@ -23,73 +27,6 @@ export interface BuiltinResources {
 
 export type BuiltinResourceKind = keyof BuiltinResources;
 export type BuiltinResource<Kind extends BuiltinResourceKind> = BuiltinResources[Kind];
-
-export interface TransportRequest<Response, Body = never> {
-  method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
-  path: string;
-  body?: Body;
-  headers?: Readonly<Record<string, string>>;
-  signal?: AbortSignal;
-  decode: (response: globalThis.Response) => Promise<Response>;
-}
-
-export interface ApiTransport {
-  request<Response, Body = never>(request: TransportRequest<Response, Body>): Promise<Response>;
-}
-
-export class ApiHttpError extends Error {
-  readonly status: number;
-  readonly body: string;
-
-  constructor(status: number, body: string) {
-    super(`Maestro API request failed with HTTP ${status}`);
-    this.name = "ApiHttpError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-export function createFetchTransport(
-  baseUrl: string | URL,
-  fetcher: typeof globalThis.fetch = globalThis.fetch
-): ApiTransport {
-  const base = new URL(baseUrl);
-  return {
-    async request<Response, Body = never>(
-      request: TransportRequest<Response, Body>
-    ): Promise<Response> {
-      const headers = new Headers(request.headers);
-      const hasBody = request.body !== undefined;
-      if (hasBody && !headers.has("content-type")) {
-        headers.set("content-type", "application/json");
-      }
-      const init: RequestInit = {
-        method: request.method,
-        headers
-      };
-      if (hasBody) {
-        init.body = JSON.stringify(request.body);
-      }
-      if (request.signal !== undefined) {
-        init.signal = request.signal;
-      }
-      const response = await fetcher(new URL(request.path, base), init);
-      if (!response.ok) {
-        throw new ApiHttpError(response.status, await response.text());
-      }
-      return request.decode(response);
-    }
-  };
-}
-
-export async function decodeJson<Response>(response: globalThis.Response): Promise<Response> {
-  return (await response.json()) as Response;
-}
-
-export interface ApiRequestOptions {
-  headers?: Readonly<Record<string, string>>;
-  signal?: AbortSignal;
-}
 
 export interface MaestroApiClient {
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
@@ -142,6 +79,18 @@ export interface MaestroApiClient {
     policyId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["FirewallPolicy"]>;
+  putFirewallPolicy(
+    policyId: string,
+    request: ApiSchemas["FirewallPolicyWriteRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["FirewallPolicyCommandResponse"]>;
+  deleteFirewallPolicy(
+    policyId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["FirewallPolicyCommandResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -345,6 +294,22 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     listFirewallPolicies: (options) => get("/api/firewall/policies", options),
     getFirewallPolicy: (policyId, options) =>
       get(`/api/firewall/policies/${encodeURIComponent(policyId)}`, options),
+    putFirewallPolicy: (policyId, request, idempotencyKey, options) =>
+      mutate(
+        "PUT",
+        `/api/firewall/policies/${encodeURIComponent(policyId)}`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    deleteFirewallPolicy: (policyId, request, idempotencyKey, options) =>
+      mutate(
+        "DELETE",
+        `/api/firewall/policies/${encodeURIComponent(policyId)}`,
+        request,
+        idempotencyKey,
+        options
+      ),
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}`, options),

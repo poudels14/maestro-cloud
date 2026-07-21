@@ -23,6 +23,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 mod deployment_commands;
 mod deployments;
+mod firewall_policies;
 mod network_observations;
 mod node_commands;
 mod observations;

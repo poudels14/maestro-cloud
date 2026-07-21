@@ -97,6 +97,33 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "FirewallPolicyWriteRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["spec"],
+            "properties": {
+                "expectedRevision": {
+                    "$ref": "#/components/schemas/ResourceRevision",
+                    "description": "Required current revision; omit only when creating"
+                },
+                "spec": {"$ref": "#/components/schemas/FirewallPolicySpec"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FirewallPolicyCommandResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["policyId", "generation"],
+            "properties": {
+                "policyId": {"$ref": "#/components/schemas/FirewallPolicyId"},
+                "generation": {"$ref": "#/components/schemas/Generation"},
+                "deletionTimestamp": {"$ref": "#/components/schemas/Timestamp"}
+            }
+        }),
+    );
 }
 
 pub(crate) fn deployment_command_path(operation_id: &str) -> Value {

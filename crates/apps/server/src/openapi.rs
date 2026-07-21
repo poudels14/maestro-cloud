@@ -74,7 +74,7 @@ pub fn openapi_document() -> Value {
         ),
         (
             "/api/firewall/policies/{policyId}".to_string(),
-            get_operation("getFirewallPolicy", "policyId", "FirewallPolicy"),
+            firewall_policy_operation(),
         ),
         (
             "/api/services".to_string(),
@@ -281,6 +281,31 @@ fn upgrade_operation() -> Value {
                 &["upgradeRunId"],
                 "CommandRequest",
                 "UpgradeCommandResponse",
+            ),
+        );
+    }
+    operation
+}
+
+fn firewall_policy_operation() -> Value {
+    let mut operation = get_operation("getFirewallPolicy", "policyId", "FirewallPolicy");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert(
+            "put".to_string(),
+            command_operation(
+                "putFirewallPolicy",
+                &["policyId"],
+                "FirewallPolicyWriteRequest",
+                "FirewallPolicyCommandResponse",
+            ),
+        );
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "deleteFirewallPolicy",
+                &["policyId"],
+                "CommandRequest",
+                "FirewallPolicyCommandResponse",
             ),
         );
     }

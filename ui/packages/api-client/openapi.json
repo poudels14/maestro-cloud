@@ -1084,6 +1084,24 @@
       "FirewallPolicy": {
         "$ref": "#/components/schemas/Object9"
       },
+      "FirewallPolicyCommandResponse": {
+        "properties": {
+          "deletionTimestamp": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/Generation"
+          },
+          "policyId": {
+            "$ref": "#/components/schemas/FirewallPolicyId"
+          }
+        },
+        "required": [
+          "policyId",
+          "generation"
+        ],
+        "type": "object"
+      },
       "FirewallPolicyId": {
         "description": "Stable identity of an effective firewall policy.",
         "type": "string"
@@ -1156,6 +1174,22 @@
         },
         "required": [
           "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "FirewallPolicyWriteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision",
+            "description": "Required current revision; omit only when creating"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/FirewallPolicySpec"
+          }
+        },
+        "required": [
+          "spec"
         ],
         "type": "object"
       },
@@ -5580,6 +5614,66 @@
       }
     },
     "/api/firewall/policies/{policyId}": {
+      "delete": {
+        "operationId": "deleteFirewallPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirewallPolicyCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
       "get": {
         "operationId": "getFirewallPolicy",
         "parameters": [
@@ -5605,6 +5699,66 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "putFirewallPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirewallPolicyWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirewallPolicyCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
           }
         },
         "security": [

@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
+ipnet.workspace = true
 jsonwebtoken = { version = "=10.4.0", default-features = false, features = ["aws_lc_rs"] }
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }

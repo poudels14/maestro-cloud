@@ -220,9 +220,9 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getFirewallPolicy"];
-        put?: never;
+        put: operations["putFirewallPolicy"];
         post?: never;
-        delete?: never;
+        delete: operations["deleteFirewallPolicy"];
         options?: never;
         head?: never;
         patch?: never;
@@ -880,6 +880,11 @@ export interface components {
         /** @description Network direction governed by a firewall policy. */
         FirewallDirection: "egress" | "hostInput";
         FirewallPolicy: components["schemas"]["Object9"];
+        FirewallPolicyCommandResponse: {
+            deletionTimestamp?: components["schemas"]["Timestamp"];
+            generation: components["schemas"]["Generation"];
+            policyId: components["schemas"]["FirewallPolicyId"];
+        };
         /** @description Stable identity of an effective firewall policy. */
         FirewallPolicyId: string;
         /** @description Desired ordered firewall policy. */
@@ -901,6 +906,11 @@ export interface components {
             conditions?: components["schemas"]["Condition"][];
             /** @description Hash of the exact ruleset handed to the firewall backend. */
             rulesetDigest?: string | null;
+        };
+        FirewallPolicyWriteRequest: {
+            /** @description Required current revision; omit only when creating */
+            expectedRevision?: components["schemas"]["ResourceRevision"];
+            spec: components["schemas"]["FirewallPolicySpec"];
         };
         /** @description One ordered firewall match and action. */
         FirewallRule: {
@@ -2531,6 +2541,118 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putFirewallPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                policyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FirewallPolicyWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle command accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FirewallPolicyCommandResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteFirewallPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                policyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle command accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FirewallPolicyCommandResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
