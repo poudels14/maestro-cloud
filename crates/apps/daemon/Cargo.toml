@@ -15,6 +15,7 @@ kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
 scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.151"
@@ -26,6 +27,7 @@ workspace = true
 
 [dev-dependencies]
 clustertest = { path = "../../clustertest" }
+runtime = { path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt", "time"] }

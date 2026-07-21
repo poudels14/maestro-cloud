@@ -1847,6 +1847,7 @@ dependencies = [
  "kernel-controller",
  "kernel-store",
  "node-agent",
+ "runtime",
  "scheduler",
  "serde",
  "serde_json",

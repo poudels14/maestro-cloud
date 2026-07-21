@@ -14,6 +14,7 @@ use node_agent::{
     HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
     NftablesFirewallBackend, SystemStatusClock,
 };
+use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -68,11 +69,11 @@ impl DaemonLaunchConfig {
     /// Validates all launch choices before local state or processes are touched.
     pub fn validate(&self) -> Result<(), DaemonLaunchError> {
         self.cluster.preflight()?;
-        if self.data_directory.as_os_str().is_empty() {
-            return Err(invalid("data directory cannot be empty"));
+        if !self.data_directory.is_absolute() {
+            return Err(invalid("data directory must be an absolute path"));
         }
-        if self.etcd_binary.as_os_str().is_empty() {
-            return Err(invalid("embedded etcd binary path cannot be empty"));
+        if !self.etcd_binary.is_absolute() {
+            return Err(invalid("embedded etcd binary must be an absolute path"));
         }
         let node = self.cluster.nodes.get(&self.node_id).ok_or_else(|| {
             invalid(format!(
@@ -154,6 +155,20 @@ pub async fn launch_control_plane(
         EmbeddedEtcdSettings::default(),
     )?);
     let mesh_identity = MeshIdentity::load_or_generate(&data_directory.join("agent").join("mesh"))?;
+    let containerd = Arc::new(
+        ContainerdRuntime::connect(
+            ContainerdRuntimeSettings {
+                namespace: format!("maestro-{}", cluster.cluster_id),
+                state_root: data_directory.join("runtime").join("containerd"),
+                ..ContainerdRuntimeSettings::default()
+            },
+            Arc::new(TokioRuntimeClock::new()),
+        )
+        .await?,
+    );
+    let volatile_root = PathBuf::from("/run/maestro")
+        .join(cluster.cluster_id.as_str())
+        .join(node_id.as_str());
     let instance_id = match instance_id {
         Some(instance_id) => instance_id,
         None => generate_instance_id()?,
@@ -174,6 +189,9 @@ pub async fn launch_control_plane(
             firewall_backend: NftablesFirewallBackend::new(),
             bridge_backend: LinuxWorkloadBridgeBackend::new(),
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
+            workload_runtime: containerd.clone(),
+            network_provider: containerd,
+            volatile_root,
             mesh_identity,
             instance_id,
             monotonic_clock: clock,
@@ -271,6 +289,9 @@ pub enum DaemonLaunchError {
     /// The node-local WireGuard identity could not be loaded safely.
     #[error(transparent)]
     MeshIdentity(#[from] node_agent::MeshIdentityError),
+    /// The native workload runtime could not be configured or reached.
+    #[error(transparent)]
+    Runtime(#[from] runtime::RuntimeError),
     /// A generated process identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),

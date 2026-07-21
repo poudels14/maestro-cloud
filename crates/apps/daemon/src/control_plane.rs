@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use kernel_store::{Clock, Keyspace, Store};
 use node_agent::{
     DnsServerBinder, FirewallBackend, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
 };
+use runtime::{NetworkProvider, WorkloadRuntime};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -34,6 +36,10 @@ pub struct ControlPlaneRoleSettings {
     pub(crate) mesh_resync_interval: Duration,
     pub(crate) dns_resync_interval: Duration,
     pub(crate) firewall_resync_interval: Duration,
+    pub(crate) assignment_resync_interval: Duration,
+    pub(crate) workload_stop_timeout: Duration,
+    pub(crate) restart_backoff_base: Duration,
+    pub(crate) restart_backoff_max: Duration,
     pub(crate) leadership_ttl: Duration,
     pub(crate) leadership_keepalive_interval: Duration,
     pub(crate) campaign_retry_interval: Duration,
@@ -71,6 +77,10 @@ impl ControlPlaneRoleSettings {
             mesh_resync_interval,
             dns_resync_interval,
             firewall_resync_interval,
+            assignment_resync_interval: Duration::from_secs(30),
+            workload_stop_timeout: Duration::from_secs(10),
+            restart_backoff_base: Duration::from_secs(5),
+            restart_backoff_max: Duration::from_secs(60),
             leadership_ttl,
             leadership_keepalive_interval,
             campaign_retry_interval,
@@ -86,6 +96,10 @@ impl Default for ControlPlaneRoleSettings {
             mesh_resync_interval: Duration::from_secs(30),
             dns_resync_interval: Duration::from_secs(30),
             firewall_resync_interval: Duration::from_secs(30),
+            assignment_resync_interval: Duration::from_secs(30),
+            workload_stop_timeout: Duration::from_secs(10),
+            restart_backoff_base: Duration::from_secs(5),
+            restart_backoff_max: Duration::from_secs(60),
             leadership_ttl: Duration::from_secs(15),
             leadership_keepalive_interval: Duration::from_secs(5),
             campaign_retry_interval: Duration::from_secs(1),
@@ -108,6 +122,12 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, Br
     pub bridge_backend: BridgeBackendType,
     /// UDP/TCP listener binder for the node-local authoritative DNS server.
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
+    /// Native backend used for workload lifecycle, adoption, and events.
+    pub workload_runtime: Arc<dyn WorkloadRuntime>,
+    /// Host-owned workload address allocator and attachment backend.
+    pub network_provider: Arc<dyn NetworkProvider>,
+    /// Volatile tmpfs-backed root for workload secrets and node API sockets.
+    pub volatile_root: PathBuf,
     /// Persisted node-local WireGuard identity.
     pub mesh_identity: MeshIdentity,
     /// Unique identity of this daemon process for leader election.
@@ -126,6 +146,9 @@ pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeB
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
+    pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
+    pub(crate) network_provider: Arc<dyn NetworkProvider>,
+    pub(crate) volatile_root: PathBuf,
     pub(crate) mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
     pub(crate) monotonic_clock: Arc<dyn Clock>,
@@ -154,6 +177,9 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
             dns_server_binder: dependencies.dns_server_binder,
+            workload_runtime: dependencies.workload_runtime,
+            network_provider: dependencies.network_provider,
+            volatile_root: dependencies.volatile_root,
             mesh_identity: dependencies.mesh_identity,
             instance_id: dependencies.instance_id,
             monotonic_clock: dependencies.monotonic_clock,

@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,21 +7,16 @@ use cluster::{
     MemberActivation, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderError,
     StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreShutdown, StoreStartMode,
 };
-use kernel_api::{
-    DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, Generation,
-    NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId, NodeInstanceId,
-    NodeRole, Object, ObjectMeta, ResourceRevision, Timestamp,
-};
+use kernel_api::{AssignmentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole, Timestamp};
 use kernel_controller::{FencedStore, LeaderIdentity};
-use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
-};
+use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
 use node_agent::{
     AuthoritativeDnsResolver, DnsQueryType, DnsServerBinder, DnsServerError, DnsServerRuntime,
     DnsServerSettings, FirewallBackend, FirewallBackendError, MeshBackend, MeshBackendError,
     MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge, WorkloadBridgeBackend,
     WorkloadBridgeBackendError,
 };
+use runtime::{FakeNetworkProvider, FakeRuntime, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -31,6 +25,7 @@ use crate::{
 };
 
 use super::cluster_with_nodes;
+use super::control_plane_resources::{load_assignment, seed_agent_resources};
 
 #[tokio::test]
 async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
@@ -50,6 +45,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let firewall_applications = Arc::new(Mutex::new(Vec::new()));
     let bridge_applications = Arc::new(Mutex::new(Vec::new()));
     let dns_bindings = Arc::new(Mutex::new(Vec::new()));
+    let workload_runtime = Arc::new(FakeRuntime::new());
+    let network_provider = Arc::new(FakeNetworkProvider::default());
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -57,8 +54,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         NodeId::new("master")?,
         directory.path().to_path_buf(),
     )?;
-    put_firewall(&store, &cluster.cluster_id, "master").await?;
-    put_dns_record(&store, &cluster.cluster_id).await?;
+    seed_agent_resources(&store, &cluster.cluster_id, &NodeId::new("master")?).await?;
     let factory = ControlPlaneRoleFactory::new(
         ControlPlaneRoleDependencies {
             provider,
@@ -73,6 +69,9 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: dns_bindings.clone(),
             }),
+            workload_runtime: workload_runtime.clone(),
+            network_provider: network_provider.clone(),
+            volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
             monotonic_clock: clock,
@@ -123,6 +122,22 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .len(),
         1
     );
+    assert_eq!(
+        load_assignment(&store, &cluster.cluster_id)
+            .await?
+            .status
+            .phase,
+        AssignmentPhase::Running
+    );
+    assert_eq!(
+        workload_runtime
+            .list(&cluster.cluster_id, &NodeId::new("master")?)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(network_provider.lease_count(), 1);
+    assert_eq!(network_provider.attachment_count(), 1);
 
     let leader_key = Keyspace::new(&cluster.cluster_id).leader();
     let stored_leader = store.get(&leader_key).await?.ok_or("leader key missing")?;
@@ -306,96 +321,6 @@ impl DnsServerRuntime for WaitingDnsServer {
             }
         }
         Ok(())
-    }
-}
-
-async fn put_dns_record(
-    store: &InMemoryStore,
-    cluster_id: &kernel_api::ClusterId,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let resource: DnsRecord = Object {
-        meta: ObjectMeta {
-            id: DnsRecordId::new("api")?,
-            labels: BTreeMap::new(),
-            annotations: BTreeMap::new(),
-            revision: ResourceRevision::default(),
-            generation: Generation(1),
-            owner_refs: Vec::new(),
-            finalizers: BTreeSet::new(),
-            deletion_timestamp: None,
-        },
-        spec: DnsRecordSpec {
-            name: "api.maestro.internal.".to_owned(),
-            values: vec![DnsRecordValue::A(Ipv4Addr::new(172, 22, 0, 11))],
-            ttl_secs: 30,
-        },
-        status: DnsRecordStatus {
-            applied_generation: Generation::default(),
-            published_nodes: Vec::new(),
-            conditions: Vec::new(),
-        },
-    };
-    let outcome = store
-        .put_cas(PutRequest {
-            key: Keyspace::new(cluster_id).resource(
-                &kernel_api::ResourceKind::new("DnsRecord")?,
-                &kernel_api::ResourceName::new("api")?,
-            ),
-            value: serde_json::to_vec(&resource)?,
-            expected: ExpectedVersion::Missing,
-            session: None,
-        })
-        .await?;
-    if matches!(outcome, CasOutcome::Applied(_)) {
-        Ok(())
-    } else {
-        Err("DnsRecord create conflicted".into())
-    }
-}
-
-async fn put_firewall(
-    store: &InMemoryStore,
-    cluster_id: &kernel_api::ClusterId,
-    node_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let resource: NodeFirewall = Object {
-        meta: ObjectMeta {
-            id: NodeFirewallId::new(node_id)?,
-            labels: BTreeMap::new(),
-            annotations: BTreeMap::new(),
-            revision: ResourceRevision::default(),
-            generation: Generation(1),
-            owner_refs: Vec::new(),
-            finalizers: BTreeSet::new(),
-            deletion_timestamp: None,
-        },
-        spec: NodeFirewallSpec {
-            node_id: NodeId::new(node_id)?,
-            table_name: "maestro_firewall".to_string(),
-            script: String::new(),
-            digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
-        },
-        status: NodeFirewallStatus {
-            applied_generation: Generation::default(),
-            applied_digest: None,
-            conditions: Vec::new(),
-        },
-    };
-    let outcome = store
-        .put_cas(PutRequest {
-            key: Keyspace::new(cluster_id).resource(
-                &kernel_api::ResourceKind::new("NodeFirewall")?,
-                &kernel_api::ResourceName::new(node_id)?,
-            ),
-            value: serde_json::to_vec(&resource)?,
-            expected: ExpectedVersion::Missing,
-            session: None,
-        })
-        .await?;
-    if matches!(outcome, CasOutcome::Applied(_)) {
-        Ok(())
-    } else {
-        Err("NodeFirewall create conflicted".into())
     }
 }
 

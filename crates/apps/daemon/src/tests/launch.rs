@@ -40,6 +40,28 @@ fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+#[test]
+fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::error::Error>> {
+    let config = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    assert!(
+        DaemonLaunchConfig {
+            data_directory: PathBuf::from("maestro-state"),
+            ..config.clone()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        DaemonLaunchConfig {
+            etcd_binary: PathBuf::from("etcd"),
+            ..config
+        }
+        .validate()
+        .is_err()
+    );
+    Ok(())
+}
+
 fn config(
     node_id: &str,
     role: NodeRole,

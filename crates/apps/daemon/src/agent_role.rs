@@ -6,10 +6,12 @@ use async_trait::async_trait;
 use cluster::{StoreRuntime, StoreShutdown, WIREGUARD_MTU_BYTES};
 use kernel_store::{Clock, Store};
 use node_agent::{
-    AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
-    FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
-    WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
+    AUTHORITATIVE_DNS_PORT, AssignmentAgent, AssignmentAgentSettings, AuthoritativeDnsResolver,
+    DnsResourceAgent, DnsServerSettings, FirewallBackend, MeshBackend, MeshPlanner,
+    MeshResourceAgent, NodeFirewallAgent, WORKLOAD_BRIDGE_NAME, WorkloadBridge,
+    WorkloadBridgeAgent, WorkloadBridgeBackend,
 };
+use runtime::{NetworkCidr, NetworkSpec};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -91,6 +93,14 @@ where
             .await;
         }
     };
+    let assignment_agent = if spec.workload_enabled {
+        match build_assignment_agent(factory, plan, spec, store.clone()) {
+            Ok(agent) => Some(agent),
+            Err(error) => return fail_after_store_start(runtime, error).await,
+        }
+    } else {
+        None
+    };
     if let Err(error) = bridge_agent.reconcile_once().await {
         return fail_after_store_start(runtime, role_error("establish workload bridge", error))
             .await;
@@ -116,7 +126,6 @@ where
         )
         .await;
     }
-
     let dns_settings = match DnsServerSettings::new(SocketAddr::new(
         IpAddr::V4(bridge_agent.desired().gateway),
         AUTHORITATIVE_DNS_PORT,
@@ -140,6 +149,15 @@ where
             .await;
         }
     };
+    if let Some(agent) = assignment_agent.as_ref()
+        && let Err(error) = agent.reconcile_once().await
+    {
+        return fail_after_store_start(
+            runtime,
+            role_error("establish initial workload assignments", error),
+        )
+        .await;
+    }
 
     let publish_store_error = {
         match factory.store.lock() {
@@ -158,6 +176,7 @@ where
     let dns_resource_shutdown = bridge_shutdown.clone();
     let firewall_shutdown = bridge_shutdown.clone();
     let dns_server_shutdown = bridge_shutdown.clone();
+    let assignment_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -188,15 +207,24 @@ where
             .await
             .map_err(|error| role_error("serve authoritative DNS", error))
     });
+    let mut tasks = vec![
+        bridge_task,
+        mesh_task,
+        dns_resource_task,
+        firewall_task,
+        dns_server_task,
+    ];
+    if let Some(agent) = assignment_agent {
+        tasks.push(tokio::spawn(async move {
+            agent
+                .run(assignment_shutdown)
+                .await
+                .map_err(|error| role_error("run assignment agent", error))
+        }));
+    }
     Ok(Box::new(AgentRoleRuntime {
         shutdown,
-        tasks: vec![
-            bridge_task,
-            mesh_task,
-            dns_resource_task,
-            firewall_task,
-            dns_server_task,
-        ],
+        tasks,
         store_runtime: Some(runtime),
         clock: factory.monotonic_clock.clone(),
         shutdown_grace: factory.settings.store_shutdown_grace,
@@ -294,6 +322,53 @@ where
         factory.settings.firewall_resync_interval,
     )
     .map_err(|error| role_error("construct firewall resource agent", error))
+}
+
+fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+) -> Result<AssignmentAgent, RoleError> {
+    let node = plan
+        .cluster()
+        .nodes
+        .get(&spec.node_id)
+        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
+    let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
+        RoleError::new("local workload subnet has no usable workload bridge gateway")
+    })?;
+    let network = NetworkSpec {
+        name: WORKLOAD_BRIDGE_NAME.to_owned(),
+        range: NetworkCidr::new(
+            IpAddr::V4(node.workload_subnet.network_address()),
+            node.workload_subnet.prefix(),
+        )
+        .map_err(|error| role_error("build workload network range", error))?,
+        gateway: IpAddr::V4(gateway),
+        mtu_bytes: WIREGUARD_MTU_BYTES,
+    };
+    AssignmentAgent::new(
+        store,
+        factory.workload_runtime.clone(),
+        factory.network_provider.clone(),
+        AssignmentAgentSettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            network,
+            stop_timeout: factory.settings.workload_stop_timeout,
+            resync_interval: factory.settings.assignment_resync_interval,
+            restart_backoff_base: factory.settings.restart_backoff_base,
+            restart_backoff_max: factory.settings.restart_backoff_max,
+            secrets_root: factory.volatile_root.join("secrets"),
+            node_api_root: factory.volatile_root.join("node-api"),
+        },
+        #[cfg(unix)]
+        None,
+        factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
+    )
+    .map_err(|error| role_error("construct assignment agent", error))
 }
 
 async fn fail_after_store_start<T>(
