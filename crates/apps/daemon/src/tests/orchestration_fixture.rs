@@ -7,11 +7,14 @@ use async_trait::async_trait;
 use firewall::FirewallSettings;
 use kernel_api::{
     ArtifactTemplate, Assignment, Condition, ConditionReason, ConditionState, ConditionType,
-    DeploymentPhase, ExecPolicy, Generation, IngressRoute, IngressRouteId, IngressRouteSpec,
-    IngressRouteStatus, Node, NodeApiAccess, NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId,
-    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta,
-    PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
+    DeploymentPhase, ExecPolicy, FirewallDirection, FirewallPolicy, FirewallPolicyId,
+    FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject, FirewallVerdict,
+    Generation, IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus, Node,
+    NodeApiAccess, NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec,
+    NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, PlacementConstraint,
+    PortRange, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
     ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
+    TransportProtocol,
 };
 use kernel_controller::{Backoff, RuntimeConfig, TimestampClock};
 use kernel_store::{Clock, MonotonicTime};
@@ -137,6 +140,31 @@ pub(super) fn route() -> Result<IngressRoute, kernel_api::InvalidIdentifier> {
         },
         status: IngressRouteStatus {
             applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    })
+}
+
+pub(super) fn egress_policy() -> Result<FirewallPolicy, kernel_api::InvalidIdentifier> {
+    Ok(Object {
+        meta: metadata(FirewallPolicyId::new("api-egress")?),
+        spec: FirewallPolicySpec {
+            direction: FirewallDirection::Egress,
+            subject: FirewallSubject::Service(ServiceId::new("api")?),
+            rules: vec![FirewallRule {
+                cidr: "192.0.2.0/24".to_string(),
+                protocol: TransportProtocol::Tcp,
+                ports: vec![PortRange {
+                    start: 5_432,
+                    end: 5_432,
+                }],
+                verdict: FirewallVerdict::Allow,
+            }],
+            default_verdict: FirewallVerdict::Deny,
+        },
+        status: FirewallPolicyStatus {
+            applied_generation: Generation::default(),
+            ruleset_digest: None,
             conditions: Vec::new(),
         },
     })

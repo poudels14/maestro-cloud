@@ -8,8 +8,7 @@ use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
     DeploymentPhase, DnsRecord, Generation, NodeId, NodeInstanceId, Object, ResourceKind,
-    ResourceName, RolloutState, Service, ServiceId, Timestamp, TrafficGeneration,
-    TrafficGenerationPhase,
+    ResourceName, Service, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -95,8 +94,8 @@ async fn redeploy_cuts_over_before_collecting_drained_generation()
 }
 
 pub(super) struct RolloutWorld {
-    keys: Keyspace,
-    store: Arc<InMemoryStore>,
+    pub(super) keys: Keyspace,
+    pub(super) store: Arc<InMemoryStore>,
     suite: OperatorSuite,
     ingress: Arc<RecordingIngress>,
     firewall: Arc<RecordingFirewall>,
@@ -228,62 +227,8 @@ impl RolloutWorld {
         Ok(old_deployment)
     }
 
-    pub(super) async fn set_replica_override(
-        &self,
-        replicas: Option<u32>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.update_service(|service| service.status.replica_override = replicas)
-            .await
-            .map(|_service| ())
-    }
-
-    pub(super) async fn mark_service_deleting(
-        &self,
-        at: Timestamp,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.update_service(|service| service.meta.deletion_timestamp = Some(at))
-            .await
-            .map(|_service| ())
-    }
-
-    pub(super) async fn set_rollout_state(
-        &self,
-        state: RolloutState,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.update_service(|service| service.status.rollout = state)
-            .await
-            .map(|_service| ())
-    }
-
     pub(super) fn set_time(&self, millis: i64) {
         self.timestamp.set(millis);
-    }
-
-    async fn update_service(
-        &self,
-        change: impl FnOnce(&mut Service),
-    ) -> Result<Service, Box<dyn std::error::Error>> {
-        let key = self.keys.resource(
-            &ResourceKind::new("Service")?,
-            &ResourceName::from(ServiceId::new("api")?),
-        );
-        let stored = self.store.get(&key).await?.ok_or("service missing")?;
-        let mut service: Service = serde_json::from_slice(&stored.value)?;
-        change(&mut service);
-        let outcome = self
-            .store
-            .put_cas(PutRequest {
-                key,
-                value: serde_json::to_vec(&service)?,
-                expected: ExpectedVersion::Exact(stored.version),
-                session: None,
-            })
-            .await?;
-        if matches!(outcome, CasOutcome::Applied(_)) {
-            Ok(service)
-        } else {
-            Err("service update conflicted".into())
-        }
     }
 
     fn ingress_len(&self) -> Result<usize, Box<dyn std::error::Error>> {
@@ -307,6 +252,20 @@ impl RolloutWorld {
             .get(start..)
             .ok_or("invalid ingress history cursor")?
             .to_vec())
+    }
+
+    pub(super) fn latest_firewall_bundle(
+        &self,
+    ) -> Result<FirewallBundle, Box<dyn std::error::Error>> {
+        let bundles = self
+            .firewall
+            .bundles
+            .lock()
+            .map_err(|_| "firewall bundle lock poisoned")?;
+        bundles
+            .last()
+            .cloned()
+            .ok_or_else(|| "firewall never applied".into())
     }
 
     async fn assert_ready(&self, node_count: u8) -> Result<(), Box<dyn std::error::Error>> {
@@ -439,7 +398,7 @@ impl FirewallBackend for RecordingFirewall {
     }
 }
 
-async fn put<Id, Spec, Status>(
+pub(super) async fn put<Id, Spec, Status>(
     store: &InMemoryStore,
     keys: &Keyspace,
     kind: &str,

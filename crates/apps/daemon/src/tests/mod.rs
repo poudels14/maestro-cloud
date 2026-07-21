@@ -2,10 +2,13 @@ mod control_plane;
 mod launch;
 mod operators;
 mod orchestration;
+mod orchestration_affinity;
 mod orchestration_delete;
+mod orchestration_egress;
 mod orchestration_fixture;
 mod orchestration_freeze;
 mod orchestration_scale;
+mod orchestration_service;
 mod plan;
 mod runtime;
 
