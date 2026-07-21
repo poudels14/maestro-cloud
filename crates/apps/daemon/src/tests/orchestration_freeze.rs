@@ -4,7 +4,7 @@ use super::orchestration::RolloutWorld;
 
 #[tokio::test]
 async fn frozen_rollout_stays_queued_until_explicit_unfreeze()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.set_rollout_state(RolloutState::Frozen).await?;

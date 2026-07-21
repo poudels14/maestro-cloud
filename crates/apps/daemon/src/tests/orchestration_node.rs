@@ -11,7 +11,7 @@ impl RolloutWorld {
         &self,
         node_id: &NodeId,
         draining: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let key = self.keys.resource(
             &ResourceKind::new("Node")?,
             &ResourceName::from(node_id.clone()),

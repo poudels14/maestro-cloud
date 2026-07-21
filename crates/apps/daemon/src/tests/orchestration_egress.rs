@@ -6,7 +6,7 @@ use super::orchestration_fixture::egress_policy;
 
 #[tokio::test]
 async fn egress_policy_applies_exact_bundle_then_finalizes_without_a_rule_gap()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -57,7 +57,7 @@ async fn mark_policy_deleting(
     world: &RolloutWorld,
     policy: &FirewallPolicy,
     at: Timestamp,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let key = world.keys.resource(
         &ResourceKind::new("FirewallPolicy")?,
         &ResourceName::from(policy.meta.id.clone()),

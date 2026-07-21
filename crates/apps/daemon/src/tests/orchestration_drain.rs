@@ -4,7 +4,7 @@ use super::orchestration::RolloutWorld;
 
 #[tokio::test]
 async fn node_drain_replaces_when_possible_and_restore_accepts_new_work()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -51,7 +51,9 @@ async fn node_drain_replaces_when_possible_and_restore_accepts_new_work()
     Ok(())
 }
 
-async fn active_target_count(world: &RolloutWorld) -> Result<usize, Box<dyn std::error::Error>> {
+async fn active_target_count(
+    world: &RolloutWorld,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     world
         .list::<TrafficGeneration>("TrafficGeneration")
         .await?

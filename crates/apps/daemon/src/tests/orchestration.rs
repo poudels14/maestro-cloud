@@ -21,9 +21,11 @@ use super::orchestration_fixture::{
 };
 use crate::{OperatorBackends, OperatorSuite};
 
+pub(super) type HarnessResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+
 #[tokio::test]
 async fn rollout_converges_across_one_and_three_node_topologies()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -34,7 +36,7 @@ async fn rollout_converges_across_one_and_three_node_topologies()
 
 #[tokio::test]
 async fn redeploy_cuts_over_before_collecting_drained_generation()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -104,7 +106,15 @@ pub(super) struct RolloutWorld {
 }
 
 impl RolloutWorld {
-    pub(super) async fn new(node_count: u8) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(super) async fn new(node_count: u8) -> HarnessResult<Self> {
+        Self::build(node_count, true).await
+    }
+
+    pub(super) async fn new_empty(node_count: u8) -> HarnessResult<Self> {
+        Self::build(node_count, false).await
+    }
+
+    async fn build(node_count: u8, seed_service: bool) -> HarnessResult<Self> {
         let cluster_id = ClusterId::new(format!("rollout-{node_count}"))?;
         let keys = Keyspace::new(&cluster_id);
         let monotonic: Arc<dyn Clock> = Arc::new(NoopClock);
@@ -141,18 +151,27 @@ impl RolloutWorld {
             put(&store, &keys, "NodeNetwork", &network(&node_id, index)?).await?;
             put_key(&store, keys.node_liveness(&node_id), b"live".to_vec()).await?;
         }
-        put(&store, &keys, "Service", &service(u32::from(node_count))?).await?;
-        put(&store, &keys, "IngressRoute", &route()?).await?;
+        if seed_service {
+            put(&store, &keys, "Service", &service(u32::from(node_count))?).await?;
+            put(&store, &keys, "IngressRoute", &route()?).await?;
+        }
 
         let ingress = Arc::new(RecordingIngress::default());
         let firewall = Arc::new(RecordingFirewall::default());
         let timestamp = Arc::new(ManualTimestampClock::new(10_000));
+        let mut operator_settings = settings()?;
+        if !seed_service {
+            operator_settings.scheduler.replacement_grace = Duration::from_secs(1);
+            operator_settings.scheduler.deployment_drain_grace = Duration::from_secs(1);
+            operator_settings.deployment.drain_grace = Duration::from_secs(1);
+            operator_settings.ingress.retirement_grace = Duration::from_secs(1);
+        }
         let suite = OperatorSuite::new(
             cluster_id.clone(),
             fenced.clone(),
             monotonic,
             timestamp.clone(),
-            settings()?,
+            operator_settings,
             OperatorBackends {
                 ingress: ingress.clone(),
                 firewall: firewall.clone(),
@@ -169,7 +188,7 @@ impl RolloutWorld {
         })
     }
 
-    pub(super) async fn converge(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn converge(&self) -> HarnessResult<()> {
         let mut quiet_passes = 0_u8;
         for _pass in 0..32 {
             let before = self.store.list(&self.keys.cluster()).await?.cursor;
@@ -187,12 +206,17 @@ impl RolloutWorld {
         Err("operator suite did not reach two quiet passes".into())
     }
 
-    pub(super) async fn reconcile_pass(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn reconcile_pass(&self) -> HarnessResult<()> {
         self.suite.reconcile_snapshot().await?;
         self.publish_ready_replicas().await
     }
 
-    async fn publish_ready_replicas(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn reconcile_operators(&self) -> HarnessResult<()> {
+        self.suite.reconcile_snapshot().await?;
+        Ok(())
+    }
+
+    async fn publish_ready_replicas(&self) -> HarnessResult<()> {
         for assignment in self.list::<Assignment>("Assignment").await? {
             if assignment.status.phase != AssignmentPhase::Running {
                 self.update::<Assignment>("Assignment", &assignment.meta.id, |current| {
@@ -212,7 +236,7 @@ impl RolloutWorld {
         Ok(())
     }
 
-    async fn begin_redeploy(&self) -> Result<DeploymentId, Box<dyn std::error::Error>> {
+    async fn begin_redeploy(&self) -> HarnessResult<DeploymentId> {
         let service = self
             .update_service(|service| {
                 service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
@@ -231,7 +255,7 @@ impl RolloutWorld {
         self.timestamp.set(millis);
     }
 
-    fn ingress_len(&self) -> Result<usize, Box<dyn std::error::Error>> {
+    fn ingress_len(&self) -> HarnessResult<usize> {
         Ok(self
             .ingress
             .changes
@@ -240,10 +264,7 @@ impl RolloutWorld {
             .len())
     }
 
-    fn ingress_since(
-        &self,
-        start: usize,
-    ) -> Result<Vec<BackendChange>, Box<dyn std::error::Error>> {
+    fn ingress_since(&self, start: usize) -> HarnessResult<Vec<BackendChange>> {
         Ok(self
             .ingress
             .changes
@@ -254,9 +275,7 @@ impl RolloutWorld {
             .to_vec())
     }
 
-    pub(super) fn latest_firewall_bundle(
-        &self,
-    ) -> Result<FirewallBundle, Box<dyn std::error::Error>> {
+    pub(super) fn latest_firewall_bundle(&self) -> HarnessResult<FirewallBundle> {
         let bundles = self
             .firewall
             .bundles
@@ -268,7 +287,7 @@ impl RolloutWorld {
             .ok_or_else(|| "firewall never applied".into())
     }
 
-    async fn assert_ready(&self, node_count: u8) -> Result<(), Box<dyn std::error::Error>> {
+    async fn assert_ready(&self, node_count: u8) -> HarnessResult<()> {
         let service = self.one::<Service>("Service").await?;
         assert!(service.status.active_deployment_id.is_some());
         let deployment = self.one::<Deployment>("Deployment").await?;
@@ -324,7 +343,7 @@ impl RolloutWorld {
         kind: &str,
         id: &AssignmentId,
         change: impl FnOnce(&mut Resource),
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> HarnessResult<()> {
         let key = self
             .keys
             .resource(&ResourceKind::new(kind)?, &ResourceName::from(id.clone()));
@@ -350,14 +369,14 @@ impl RolloutWorld {
     pub(super) async fn list<Resource: serde::de::DeserializeOwned>(
         &self,
         kind: &str,
-    ) -> Result<Vec<Resource>, Box<dyn std::error::Error>> {
+    ) -> HarnessResult<Vec<Resource>> {
         list(&self.store, &self.keys, kind).await
     }
 
     async fn one<Resource: serde::de::DeserializeOwned>(
         &self,
         kind: &str,
-    ) -> Result<Resource, Box<dyn std::error::Error>> {
+    ) -> HarnessResult<Resource> {
         let mut resources = self.list(kind).await?;
         if resources.len() != 1 {
             return Err(format!("expected one {kind}, found {}", resources.len()).into());
@@ -403,7 +422,7 @@ pub(super) async fn put<Id, Spec, Status>(
     keys: &Keyspace,
     kind: &str,
     resource: &Object<Id, Spec, Status>,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> HarnessResult<()>
 where
     Id: Clone + Into<ResourceName> + serde::Serialize,
     Spec: serde::Serialize,
@@ -421,7 +440,7 @@ async fn put_key(
     store: &InMemoryStore,
     key: kernel_store::StoreKey,
     value: Vec<u8>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> HarnessResult<()> {
     let outcome = store
         .put_cas(PutRequest {
             key,
@@ -441,7 +460,7 @@ async fn list<Resource: serde::de::DeserializeOwned>(
     store: &InMemoryStore,
     keys: &Keyspace,
     kind: &str,
-) -> Result<Vec<Resource>, Box<dyn std::error::Error>> {
+) -> HarnessResult<Vec<Resource>> {
     store
         .list(&keys.resource_kind(&ResourceKind::new(kind)?))
         .await?

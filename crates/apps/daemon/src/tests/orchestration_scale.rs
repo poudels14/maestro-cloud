@@ -4,7 +4,7 @@ use super::orchestration::RolloutWorld;
 
 #[tokio::test]
 async fn replica_override_set_and_clear_preserve_ingress_cutover()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let configured = usize::from(node_count);
         let overridden = if node_count == 1 { 3 } else { 1 };
@@ -46,7 +46,7 @@ async fn converge_replica_change(
     world: &RolloutWorld,
     current: usize,
     desired: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if desired < current {
         converge_scale_down(world, current, desired).await
     } else {
@@ -61,7 +61,7 @@ async fn converge_scale_down(
     world: &RolloutWorld,
     current: usize,
     desired: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut cut_over = false;
     for _pass in 0..8 {
         world.reconcile_pass().await?;
@@ -86,7 +86,9 @@ async fn converge_scale_down(
     Ok(())
 }
 
-async fn active_target_count(world: &RolloutWorld) -> Result<usize, Box<dyn std::error::Error>> {
+async fn active_target_count(
+    world: &RolloutWorld,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     world
         .list::<TrafficGeneration>("TrafficGeneration")
         .await?

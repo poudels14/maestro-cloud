@@ -21,7 +21,7 @@ use kernel_store::{Clock, MonotonicTime};
 
 use crate::OperatorSettings;
 
-pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
+pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error + Send + Sync>> {
     Ok(OperatorSettings {
         runtime: RuntimeConfig::new(
             Duration::from_secs(30),

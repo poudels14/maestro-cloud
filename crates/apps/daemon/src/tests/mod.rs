@@ -2,6 +2,7 @@ mod control_plane;
 mod launch;
 mod operators;
 mod orchestration;
+mod orchestration_acceptance;
 mod orchestration_affinity;
 mod orchestration_commands;
 mod orchestration_delete;

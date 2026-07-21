@@ -6,7 +6,7 @@ use super::orchestration::RolloutWorld;
 
 #[tokio::test]
 async fn deleting_service_retires_traffic_then_collects_every_child()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;

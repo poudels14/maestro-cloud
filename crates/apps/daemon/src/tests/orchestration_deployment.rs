@@ -3,10 +3,10 @@ use kernel_api::{
 };
 use kernel_store::{CasOutcome, ExpectedVersion, PutRequest, Store};
 
-use super::orchestration::RolloutWorld;
+use super::orchestration::{HarnessResult, RolloutWorld};
 
 impl RolloutWorld {
-    pub(super) async fn restart_service(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) async fn restart_service(&self) -> HarnessResult<()> {
         self.update_service(|service| {
             service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
         })
@@ -18,7 +18,7 @@ impl RolloutWorld {
         &self,
         deployment_id: &DeploymentId,
         goal: DeploymentGoal,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> HarnessResult<()> {
         let key = self.keys.resource(
             &ResourceKind::new("Deployment")?,
             &ResourceName::from(deployment_id.clone()),

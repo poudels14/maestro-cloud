@@ -7,7 +7,7 @@ use super::orchestration::RolloutWorld;
 
 #[tokio::test]
 async fn cancel_queued_restart_preserves_the_serving_deployment()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -45,7 +45,7 @@ async fn cancel_queued_restart_preserves_the_serving_deployment()
 
 #[tokio::test]
 async fn remove_active_deployment_drains_then_same_spec_restart_recovers()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
         world.converge().await?;
@@ -100,7 +100,7 @@ async fn remove_active_deployment_drains_then_same_spec_restart_recovers()
 
 async fn active_service_deployment(
     world: &RolloutWorld,
-) -> Result<kernel_api::DeploymentId, Box<dyn std::error::Error>> {
+) -> Result<kernel_api::DeploymentId, Box<dyn std::error::Error + Send + Sync>> {
     active_service_deployment_optional(world)
         .await?
         .ok_or_else(|| "active service deployment missing".into())
@@ -108,7 +108,7 @@ async fn active_service_deployment(
 
 async fn active_service_deployment_optional(
     world: &RolloutWorld,
-) -> Result<Option<kernel_api::DeploymentId>, Box<dyn std::error::Error>> {
+) -> Result<Option<kernel_api::DeploymentId>, Box<dyn std::error::Error + Send + Sync>> {
     Ok(world
         .list::<Service>("Service")
         .await?
@@ -121,7 +121,7 @@ async fn active_service_deployment_optional(
 
 async fn active_traffic(
     world: &RolloutWorld,
-) -> Result<TrafficGeneration, Box<dyn std::error::Error>> {
+) -> Result<TrafficGeneration, Box<dyn std::error::Error + Send + Sync>> {
     world
         .list::<TrafficGeneration>("TrafficGeneration")
         .await?
