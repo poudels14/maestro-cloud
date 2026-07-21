@@ -14,11 +14,23 @@ export interface components {
             /** @description Registry image reference. */
             reference: string;
             /** @enum {string} */
-            source: "image";
-        } | ({
+            type: "image";
+        } | {
+            /** @description Path to the container build definition within the source. */
+            dockerfile: string;
+            /** @description Non-secret build variables. */
+            environment?: {
+                [key: string]: string;
+            };
+            /** @description Secret build variables that are redacted from debug output. */
+            secrets?: {
+                [key: string]: components["schemas"]["SecretValue"];
+            };
+            /** @description Source material to build. */
+            source: components["schemas"]["BuildSource"];
             /** @enum {string} */
-            source: "build";
-        } & WithRequired<components["schemas"]["BuildTemplate"], "source">);
+            type: "build";
+        };
         Assignment: components["schemas"]["Object5"];
         /** @description Stable identity of a scheduled workload assignment. */
         AssignmentId: string;
@@ -42,6 +54,11 @@ export interface components {
              * @description Zero-based replica slot within the deployment.
              */
             replicaIndex: number;
+            /**
+             * @description Deployment workload generation this assignment realizes.
+             * @default 1
+             */
+            restartGeneration: components["schemas"]["Generation"];
             /** @description Service being placed. */
             serviceId: components["schemas"]["ServiceId"];
             /**
@@ -142,14 +159,26 @@ export interface components {
         /** @description Stable machine-readable name of a status condition. */
         ConditionType: string;
         Deployment: components["schemas"]["Object4"];
+        /** @description Desired lifecycle outcome for one deployment. */
+        DeploymentGoal: "run" | "cancel" | "remove";
         /** @description Stable identity of one immutable service deployment. */
         DeploymentId: string;
         /** @description Persisted phase of an immutable deployment. */
         DeploymentPhase: "QUEUED" | "BUILDING" | "PENDING_READY" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
-        /** @description Immutable service snapshot and artifact selected for one deployment. */
+        /** @description Captured service snapshot and desired lifecycle for one deployment. */
         DeploymentSpec: {
             /** @description Build generated for this deployment, when the artifact needs building. */
             buildId?: components["schemas"]["BuildId"] | (null);
+            /**
+             * @description User-requested lifecycle outcome reconciled by the deployment operator.
+             * @default run
+             */
+            goal: components["schemas"]["DeploymentGoal"];
+            /**
+             * @description Desired workload generation, incremented to restart this deployment in place.
+             * @default 1
+             */
+            restartGeneration: components["schemas"]["Generation"];
             /** @description Immutable service configuration used for every replica. */
             service: components["schemas"]["ServiceSpec"];
             /** @description Service generation captured when the deployment was queued. */
@@ -360,6 +389,31 @@ export interface components {
             conditions?: components["schemas"]["Condition"][];
         };
         Node: components["schemas"]["Object"];
+        /** @description Workload access to the private node API mounted at `/run/maestro`. */
+        NodeApiAccess: "disabled" | "identityAndTelemetry" | "privileged";
+        NodeFirewall: components["schemas"]["Object15"];
+        /** @description Stable identity of a node's desired firewall ruleset. */
+        NodeFirewallId: string;
+        /** @description Complete generated nftables input desired on one node. */
+        NodeFirewallSpec: {
+            /** @description SHA-256 digest of the exact script bytes. */
+            digest: string;
+            /** @description Node whose host and forwarding hooks own this ruleset. */
+            nodeId: components["schemas"]["NodeId"];
+            /** @description Complete input applied in one atomic `nft -f` transaction. */
+            script: string;
+            /** @description Owned nftables table replaced by the script. */
+            tableName: string;
+        };
+        /** @description Node-local application evidence for one desired firewall generation. */
+        NodeFirewallStatus: {
+            /** @description Digest of the exact script accepted by the backend. */
+            appliedDigest?: string | null;
+            /** @description Desired generation most recently applied by the node agent. */
+            appliedGeneration: components["schemas"]["Generation"];
+            /** @description Generic validation and application evidence. */
+            conditions?: components["schemas"]["Condition"][];
+        };
         /** @description Stable identity of a cluster node. */
         NodeId: string;
         /** @description Identity of one running daemon instance on a cluster node. */
@@ -486,6 +540,15 @@ export interface components {
             spec: components["schemas"]["WebhookSpec"];
             /** @description Observed state written by the resource's owning controller. */
             status: components["schemas"]["WebhookStatus"];
+        };
+        /** @description A typed Maestro resource with desired and observed state. */
+        Object15: {
+            /** @description Identity, concurrency, ownership, and deletion metadata. */
+            meta: components["schemas"]["ObjectMeta15"];
+            /** @description Desired state written by users or another controller. */
+            spec: components["schemas"]["NodeFirewallSpec"];
+            /** @description Observed state written by the resource's owning controller. */
+            status: components["schemas"]["NodeFirewallStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object2: {
@@ -688,6 +751,29 @@ export interface components {
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
             id: components["schemas"]["WebhookId"];
+            /** @description Labels used by selectors and grouping. */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description Resources whose lifecycle or provenance relates to this object. */
+            ownerRefs?: components["schemas"]["OwnerReference"][];
+            /** @description Store revision used for optimistic concurrency. */
+            revision: components["schemas"]["ResourceRevision"];
+        };
+        /** @description Metadata shared by every resource kind. */
+        ObjectMeta15: {
+            /** @description Non-selecting metadata interpreted by named consumers. */
+            annotations?: {
+                [key: string]: string;
+            };
+            /** @description Time deletion was requested, or `None` while the resource is active. */
+            deletionTimestamp?: components["schemas"]["Timestamp"] | (null);
+            /** @description Controllers that must finish cleanup before physical deletion. */
+            finalizers?: components["schemas"]["FinalizerName"][];
+            /** @description Desired-state generation incremented when the specification changes. */
+            generation: components["schemas"]["Generation"];
+            /** @description Kind-specific stable resource identity. */
+            id: components["schemas"]["NodeFirewallId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -984,6 +1070,13 @@ export interface components {
              * @description Restart attempts consumed by this assignment.
              */
             restartAttempts: number;
+            /** @description Earliest UTC time at which the pending restart may be attempted. */
+            restartNotBefore?: components["schemas"]["Timestamp"] | (null);
+            /**
+             * Format: uint32
+             * @description Attempt durably reserved before a runtime restart and cleared after it is observed running.
+             */
+            restartPendingAttempt?: number | null;
             /** @description Current runtime workload identity. */
             workloadId?: components["schemas"]["WorkloadId"] | (null);
         };
@@ -1005,6 +1098,15 @@ export interface components {
         ResourceRevision: number;
         /** @description Whether new service deployments may begin. */
         RolloutState: "active" | "frozen";
+        /** @description Secret values rendered into one private, read-only workload file. */
+        SecretMountSpec: {
+            /** @description Dotenv keys and plaintext values encrypted by the store boundary. */
+            items?: {
+                [key: string]: components["schemas"]["SecretValue"];
+            };
+            /** @description Absolute workload-visible file path. */
+            mountPath: string;
+        };
         /** @description A secret-bearing wire value whose debug representation is always redacted. */
         SecretValue: string;
         Service: components["schemas"]["Object3"];
@@ -1034,6 +1136,11 @@ export interface components {
             /** @description Operator-facing service name. */
             name: string;
             /**
+             * @description Private downward API, OTLP ingest, and optional privileged Control access.
+             * @default disabled
+             */
+            nodeApi: components["schemas"]["NodeApiAccess"];
+            /**
              * @description Hard scheduling constraints.
              * @default {}
              */
@@ -1043,10 +1150,10 @@ export interface components {
              * @description Configured replica floor before a temporary override.
              */
             replicas: number;
-            /** @description Secret runtime environment, always redacted from debug output. */
-            secrets?: {
-                [key: string]: components["schemas"]["SecretValue"];
-            };
+            /** @description Secret values delivered through a private read-only file mount. */
+            secrets?: components["schemas"]["SecretMountSpec"] | (null);
+            /** @description Explicit numeric process identity, required when the node API is enabled. */
+            user?: components["schemas"]["WorkloadUserSpec"] | (null);
             /** @description Operator-supplied version used in rollout history. */
             version: string;
             /** @description Filesystem mounts. */
@@ -1085,8 +1192,13 @@ export interface components {
         TrafficGenerationSpec: {
             /** @description Deployment receiving traffic in this generation. */
             deploymentId: components["schemas"]["DeploymentId"];
-            /** @description Routes published with the target set. */
-            routeIds: components["schemas"]["IngressRouteId"][];
+            /**
+             * Format: uint64
+             * @description Monotonic per-service cutover epoch used to distinguish repeated target sets.
+             */
+            epoch: number;
+            /** @description Immutable routes published with the target set. */
+            routes: components["schemas"]["TrafficRoute"][];
             /** @description Service whose traffic is changing. */
             serviceId: components["schemas"]["ServiceId"];
             /** @description Ready workload targets included in the generation. */
@@ -1094,10 +1206,34 @@ export interface components {
         };
         /** @description Observed publication and garbage-collection state for one generation. */
         TrafficGenerationStatus: {
+            /** @description Time this generation began receiving traffic. */
+            activatedAt?: components["schemas"]["Timestamp"] | (null);
             /** @description Generic readiness and collection evidence. */
             conditions?: components["schemas"]["Condition"][];
             /** @description Current cutover phase. */
             phase: components["schemas"]["TrafficGenerationPhase"];
+            /** @description Time this generation stopped receiving new traffic. */
+            retiredAt?: components["schemas"]["Timestamp"] | (null);
+            /** @description Time the immutable generation was staged. */
+            stagedAt: components["schemas"]["Timestamp"];
+        };
+        /** @description Immutable route configuration captured for one traffic generation. */
+        TrafficRoute: {
+            /** @description Canonical hostnames accepted by the route. */
+            hosts: string[];
+            /** @description Optional path prefix required after the host matches. */
+            pathPrefix?: string | null;
+            /** @description Desired route generation included in this traffic generation. */
+            routeGeneration: components["schemas"]["Generation"];
+            /** @description Ingress route whose desired generation was captured. */
+            routeId: components["schemas"]["IngressRouteId"];
+            /** @description Optional opaque-header affinity policy. */
+            sessionAffinity?: components["schemas"]["SessionAffinity"] | (null);
+            /**
+             * Format: uint16
+             * @description Workload port receiving requests.
+             */
+            targetPort: number;
         };
         /** @description One cluster-routable workload selected for ingress traffic. */
         TrafficTarget: {
@@ -1105,6 +1241,8 @@ export interface components {
             assignmentId: components["schemas"]["AssignmentId"];
             /** @description Workload address and ingress port dialed directly over the mesh. */
             endpoint: string;
+            /** @description Node hosting the assignment, used only to group opaque affinity targets. */
+            nodeId: components["schemas"]["NodeId"];
         };
         /** @description Transport protocol selected by a firewall rule. */
         TransportProtocol: "tcp" | "udp" | "any";
@@ -1186,6 +1324,19 @@ export interface components {
         };
         /** @description Stable identity of one runtime-managed workload instance. */
         WorkloadId: string;
+        /** @description Numeric runtime identity used for process launch and Unix peer authorization. */
+        WorkloadUserSpec: {
+            /**
+             * Format: uint32
+             * @description Primary group identity inside the workload.
+             */
+            groupId: number;
+            /**
+             * Format: uint32
+             * @description User identity inside the workload and on the node when user namespaces are absent.
+             */
+            userId: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -1194,7 +1345,4 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
-type WithRequired<T, K extends keyof T> = T & {
-    [P in K]-?: T[P];
-};
 export type operations = Record<string, never>;

@@ -15,7 +15,7 @@
                 "description": "Registry image reference.",
                 "type": "string"
               },
-              "source": {
+              "type": {
                 "enum": [
                   "image"
                 ],
@@ -23,20 +23,41 @@
               }
             },
             "required": [
-              "source",
+              "type",
               "reference"
             ],
             "type": "object"
           },
           {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BuildTemplate"
-              }
-            ],
             "description": "Build an image from a source repository or uploaded archive.",
             "properties": {
+              "dockerfile": {
+                "description": "Path to the container build definition within the source.",
+                "type": "string"
+              },
+              "environment": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Non-secret build variables.",
+                "type": "object"
+              },
+              "secrets": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SecretValue"
+                },
+                "description": "Secret build variables that are redacted from debug output.",
+                "type": "object"
+              },
               "source": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BuildSource"
+                  }
+                ],
+                "description": "Source material to build."
+              },
+              "type": {
                 "enum": [
                   "build"
                 ],
@@ -44,7 +65,9 @@
               }
             },
             "required": [
-              "source"
+              "type",
+              "source",
+              "dockerfile"
             ],
             "type": "object"
           }
@@ -141,6 +164,15 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "restartGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "default": 1,
+            "description": "Deployment workload generation this assignment realizes."
           },
           "serviceId": {
             "allOf": [
@@ -532,6 +564,32 @@
       "Deployment": {
         "$ref": "#/components/schemas/Object4"
       },
+      "DeploymentGoal": {
+        "description": "Desired lifecycle outcome for one deployment.",
+        "oneOf": [
+          {
+            "description": "Continue normal build, readiness, and serving reconciliation.",
+            "enum": [
+              "run"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Cancel a deployment that has not begun serving.",
+            "enum": [
+              "cancel"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Drain workloads and retain the terminal deployment in history.",
+            "enum": [
+              "remove"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "DeploymentId": {
         "description": "Stable identity of one immutable service deployment.",
         "type": "string"
@@ -605,7 +663,7 @@
         ]
       },
       "DeploymentSpec": {
-        "description": "Immutable service snapshot and artifact selected for one deployment.",
+        "description": "Captured service snapshot and desired lifecycle for one deployment.",
         "properties": {
           "buildId": {
             "anyOf": [
@@ -620,6 +678,24 @@
               }
             ],
             "description": "Build generated for this deployment, when the artifact needs building."
+          },
+          "goal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentGoal"
+              }
+            ],
+            "default": "run",
+            "description": "User-requested lifecycle outcome reconciled by the deployment operator."
+          },
+          "restartGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "default": 1,
+            "description": "Desired workload generation, incremented to restart this deployment in place."
           },
           "service": {
             "allOf": [
@@ -1334,6 +1410,100 @@
       "Node": {
         "$ref": "#/components/schemas/Object"
       },
+      "NodeApiAccess": {
+        "description": "Workload access to the private node API mounted at `/run/maestro`.",
+        "oneOf": [
+          {
+            "description": "No node API credentials or socket are mounted.",
+            "enum": [
+              "disabled"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Downward identity and authenticated OTLP ingest are available.",
+            "enum": [
+              "identityAndTelemetry"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Identity, telemetry, and privileged Control mutations are available.",
+            "enum": [
+              "privileged"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "NodeFirewall": {
+        "$ref": "#/components/schemas/Object15"
+      },
+      "NodeFirewallId": {
+        "description": "Stable identity of a node's desired firewall ruleset.",
+        "type": "string"
+      },
+      "NodeFirewallSpec": {
+        "description": "Complete generated nftables input desired on one node.",
+        "properties": {
+          "digest": {
+            "description": "SHA-256 digest of the exact script bytes.",
+            "type": "string"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node whose host and forwarding hooks own this ruleset."
+          },
+          "script": {
+            "description": "Complete input applied in one atomic `nft -f` transaction.",
+            "type": "string"
+          },
+          "tableName": {
+            "description": "Owned nftables table replaced by the script.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "tableName",
+          "script",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "NodeFirewallStatus": {
+        "description": "Node-local application evidence for one desired firewall generation.",
+        "properties": {
+          "appliedDigest": {
+            "description": "Digest of the exact script accepted by the backend.",
+            "nullable": true,
+            "type": "string"
+          },
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently applied by the node agent."
+          },
+          "conditions": {
+            "description": "Generic validation and application evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
       "NodeId": {
         "description": "Stable identity of a cluster node.",
         "type": "string"
@@ -1764,6 +1934,41 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/WebhookStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object15": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta15"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2490,6 +2695,84 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/WebhookId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta15": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -3488,6 +3771,27 @@
             "minimum": 0,
             "type": "integer"
           },
+          "restartNotBefore": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Earliest UTC time at which the pending restart may be attempted."
+          },
+          "restartPendingAttempt": {
+            "description": "Attempt durably reserved before a runtime restart and cleared after it is observed running.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "workloadId": {
             "anyOf": [
               {
@@ -3568,6 +3872,26 @@
             "type": "string"
           }
         ]
+      },
+      "SecretMountSpec": {
+        "description": "Secret values rendered into one private, read-only workload file.",
+        "properties": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SecretValue"
+            },
+            "description": "Dotenv keys and plaintext values encrypted by the store boundary.",
+            "type": "object"
+          },
+          "mountPath": {
+            "description": "Absolute workload-visible file path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mountPath"
+        ],
+        "type": "object"
       },
       "SecretValue": {
         "description": "A secret-bearing wire value whose debug representation is always redacted.",
@@ -3655,6 +3979,15 @@
             "description": "Operator-facing service name.",
             "type": "string"
           },
+          "nodeApi": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeApiAccess"
+              }
+            ],
+            "default": "disabled",
+            "description": "Private downward API, OTLP ingest, and optional privileged Control access."
+          },
           "placement": {
             "allOf": [
               {
@@ -3671,11 +4004,32 @@
             "type": "integer"
           },
           "secrets": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/SecretValue"
-            },
-            "description": "Secret runtime environment, always redacted from debug output.",
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecretMountSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Secret values delivered through a private read-only file mount."
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadUserSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Explicit numeric process identity, required when the node API is enabled."
           },
           "version": {
             "description": "Operator-supplied version used in rollout history.",
@@ -3805,10 +4159,16 @@
             ],
             "description": "Deployment receiving traffic in this generation."
           },
-          "routeIds": {
-            "description": "Routes published with the target set.",
+          "epoch": {
+            "description": "Monotonic per-service cutover epoch used to distinguish repeated target sets.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "routes": {
+            "description": "Immutable routes published with the target set.",
             "items": {
-              "$ref": "#/components/schemas/IngressRouteId"
+              "$ref": "#/components/schemas/TrafficRoute"
             },
             "type": "array"
           },
@@ -3831,7 +4191,8 @@
         "required": [
           "serviceId",
           "deploymentId",
-          "routeIds",
+          "epoch",
+          "routes",
           "targets"
         ],
         "type": "object"
@@ -3839,6 +4200,20 @@
       "TrafficGenerationStatus": {
         "description": "Observed publication and garbage-collection state for one generation.",
         "properties": {
+          "activatedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time this generation began receiving traffic."
+          },
           "conditions": {
             "description": "Generic readiness and collection evidence.",
             "items": {
@@ -3853,10 +4228,94 @@
               }
             ],
             "description": "Current cutover phase."
+          },
+          "retiredAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time this generation stopped receiving new traffic."
+          },
+          "stagedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time the immutable generation was staged."
           }
         },
         "required": [
-          "phase"
+          "phase",
+          "stagedAt"
+        ],
+        "type": "object"
+      },
+      "TrafficRoute": {
+        "description": "Immutable route configuration captured for one traffic generation.",
+        "properties": {
+          "hosts": {
+            "description": "Canonical hostnames accepted by the route.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pathPrefix": {
+            "description": "Optional path prefix required after the host matches.",
+            "nullable": true,
+            "type": "string"
+          },
+          "routeGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired route generation included in this traffic generation."
+          },
+          "routeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteId"
+              }
+            ],
+            "description": "Ingress route whose desired generation was captured."
+          },
+          "sessionAffinity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionAffinity"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional opaque-header affinity policy."
+          },
+          "targetPort": {
+            "description": "Workload port receiving requests.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "routeId",
+          "routeGeneration",
+          "hosts",
+          "targetPort"
         ],
         "type": "object"
       },
@@ -3874,10 +4333,19 @@
           "endpoint": {
             "description": "Workload address and ingress port dialed directly over the mesh.",
             "type": "string"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node hosting the assignment, used only to group opaque affinity targets."
           }
         },
         "required": [
           "assignmentId",
+          "nodeId",
           "endpoint"
         ],
         "type": "object"
@@ -4268,6 +4736,28 @@
       "WorkloadId": {
         "description": "Stable identity of one runtime-managed workload instance.",
         "type": "string"
+      },
+      "WorkloadUserSpec": {
+        "description": "Numeric runtime identity used for process launch and Unix peer authorization.",
+        "properties": {
+          "groupId": {
+            "description": "Primary group identity inside the workload.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "userId": {
+            "description": "User identity inside the workload and on the node when user namespaces are absent.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "userId",
+          "groupId"
+        ],
+        "type": "object"
       }
     }
   },
