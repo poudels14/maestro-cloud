@@ -49,10 +49,10 @@ pub use secret::{MaskedSecret, SecretValue};
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, Build,
     BuildPhase, BuildSource, BuildSpec, BuildStatus, BuildTemplate, CommandSpec, Deployment,
-    DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe,
-    NodeApiAccess, PlacementConstraint, ReplicaState, ReplicaStateSpec, ReplicaStateStatus,
-    RolloutState, SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess,
-    VolumeMountSpec, VolumeSource, WorkloadUserSpec, workload_hostname,
+    DeploymentGoal, DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec,
+    HealthProbe, NodeApiAccess, PlacementConstraint, ReplicaState, ReplicaStateSpec,
+    ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec, ServiceStatus,
+    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec, workload_hostname,
 };
 
 #[cfg(test)]

@@ -58,7 +58,9 @@ pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
             input.settings.retirement_grace,
         );
 
-        let active = if service.meta.deletion_timestamp.is_some() {
+        let active = if service.meta.deletion_timestamp.is_some()
+            || service.status.active_deployment_id.is_none()
+        {
             retire_all(
                 &related,
                 &mut desired_statuses,

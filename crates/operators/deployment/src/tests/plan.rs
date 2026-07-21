@@ -48,6 +48,49 @@ fn frozen_build_stays_queued_then_unfreeze_creates_its_build() {
 }
 
 #[test]
+fn cancel_goal_transitions_queued_deployment_without_mutating_status_directly() {
+    let service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Queued);
+    deployment.spec.goal = kernel_api::DeploymentGoal::Cancel;
+
+    let canceled = plan(input(service, vec![deployment])).expect("cancel plan");
+    assert_eq!(canceled.deployment_updates.len(), 1);
+    assert_eq!(
+        canceled.deployment_updates[0].status.phase,
+        DeploymentPhase::Canceled
+    );
+}
+
+#[test]
+fn remove_goal_clears_active_service_then_drains_to_removed() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Ready);
+    deployment.spec.goal = kernel_api::DeploymentGoal::Remove;
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+
+    let draining = plan(input(service.clone(), vec![deployment.clone()])).expect("drain plan");
+    assert_eq!(
+        draining.deployment_updates[0].status.phase,
+        DeploymentPhase::Draining
+    );
+    assert_eq!(
+        draining.service_updates[0].status.active_deployment_id,
+        None
+    );
+
+    deployment.status = draining.deployment_updates[0].status.clone();
+    service.status = draining.service_updates[0].status.clone();
+    let mut after_grace = input(service, vec![deployment]);
+    after_grace.now = Timestamp(70_000);
+    assert_eq!(
+        plan(after_grace).expect("remove plan").deployment_updates[0]
+            .status
+            .phase,
+        DeploymentPhase::Removed
+    );
+}
+
+#[test]
 fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     let mut svc = service(Generation(1), RolloutState::Active);
     svc.spec.artifact = build_artifact();
@@ -409,6 +452,7 @@ fn deployment_generation(
             service_id: service.meta.id.clone(),
             service_generation: generation,
             service: service.spec.clone(),
+            goal: kernel_api::DeploymentGoal::Run,
             build_id: matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
                 .then(|| kernel_api::BuildId::new(format!("build-{id}")).unwrap()),
         },

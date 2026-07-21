@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentPhase,
-    NodeId, ServiceId, VolumeSource, workload_hostname,
+    ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
+    DeploymentPhase, NodeId, ServiceId, VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -23,6 +23,11 @@ fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
         serde_json::to_value(volume_source).expect("serialize volume source"),
         serde_json::json!({"type": "hostPath", "path": "/srv/data", "nodeId": "node-1"})
     );
+    assert_eq!(
+        serde_json::to_value(DeploymentGoal::Remove).expect("serialize deployment goal"),
+        serde_json::json!("remove")
+    );
+    assert_eq!(DeploymentGoal::default(), DeploymentGoal::Run);
 }
 
 #[test]

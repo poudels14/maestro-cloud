@@ -559,6 +559,32 @@ expression: openapi_document()
       "Deployment": {
         "$ref": "#/components/schemas/Object4"
       },
+      "DeploymentGoal": {
+        "description": "Desired lifecycle outcome for one deployment.",
+        "oneOf": [
+          {
+            "description": "Continue normal build, readiness, and serving reconciliation.",
+            "enum": [
+              "run"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Cancel a deployment that has not begun serving.",
+            "enum": [
+              "cancel"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Drain workloads and retain the terminal deployment in history.",
+            "enum": [
+              "remove"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "DeploymentId": {
         "description": "Stable identity of one immutable service deployment.",
         "type": "string"
@@ -632,7 +658,7 @@ expression: openapi_document()
         ]
       },
       "DeploymentSpec": {
-        "description": "Immutable service snapshot and artifact selected for one deployment.",
+        "description": "Captured service snapshot and desired lifecycle for one deployment.",
         "properties": {
           "buildId": {
             "anyOf": [
@@ -647,6 +673,15 @@ expression: openapi_document()
               }
             ],
             "description": "Build generated for this deployment, when the artifact needs building."
+          },
+          "goal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentGoal"
+              }
+            ],
+            "default": "run",
+            "description": "User-requested lifecycle outcome reconciled by the deployment operator."
           },
           "service": {
             "allOf": [

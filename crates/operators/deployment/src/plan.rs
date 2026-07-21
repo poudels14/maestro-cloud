@@ -185,8 +185,10 @@ fn desired_deployment_status(
     drain_grace: std::time::Duration,
     create_builds: &mut Vec<Build>,
 ) -> Result<DeploymentStatus, DeploymentPlanError> {
-    if service.meta.deletion_timestamp.is_some() {
-        return Ok(deletion_status(deployment, assignments, now, drain_grace));
+    if let Some(desired) =
+        crate::goal::requested_status(service, deployment, assignments, now, drain_grace)
+    {
+        return Ok(desired);
     }
     let mut desired = deployment.status.clone();
     match desired.phase {
@@ -330,6 +332,17 @@ fn coordinate_active_deployment(
         desired_service.active_deployment_id =
             candidate.map(|deployment| deployment.meta.id.clone());
     }
+    if desired_service
+        .active_deployment_id
+        .as_ref()
+        .is_some_and(|deployment_id| {
+            desired_statuses
+                .get(deployment_id)
+                .is_none_or(|status| status.phase != DeploymentPhase::Ready)
+        })
+    {
+        desired_service.active_deployment_id = None;
+    }
     if desired_service != service.status {
         service_updates.push(ResourceStatusUpdate {
             id: service.meta.id.clone(),
@@ -371,38 +384,6 @@ fn coordinate_active_deployment(
             status.draining_at.get_or_insert(now);
         }
     }
-}
-
-fn deletion_status(
-    deployment: &Deployment,
-    assignments: &[Assignment],
-    now: Timestamp,
-    drain_grace: std::time::Duration,
-) -> DeploymentStatus {
-    let mut desired = deployment.status.clone();
-    match desired.phase {
-        DeploymentPhase::Queued => desired.phase = DeploymentPhase::Canceled,
-        DeploymentPhase::Building | DeploymentPhase::PendingReady | DeploymentPhase::Ready => {
-            desired.phase = DeploymentPhase::Draining;
-            desired.draining_at.get_or_insert(now);
-        }
-        DeploymentPhase::Crashed => desired.phase = DeploymentPhase::Terminated,
-        DeploymentPhase::Draining => {
-            desired.draining_at.get_or_insert(now);
-            if drain_elapsed(desired.draining_at, now, drain_grace)
-                && !has_assignments(&deployment.meta.id, assignments)
-            {
-                desired.phase = DeploymentPhase::Removed;
-            }
-        }
-        DeploymentPhase::Terminated | DeploymentPhase::Canceled => {
-            if !has_assignments(&deployment.meta.id, assignments) {
-                desired.phase = DeploymentPhase::Removed;
-            }
-        }
-        DeploymentPhase::Removed => {}
-    }
-    desired
 }
 
 fn ensure_build<'a>(

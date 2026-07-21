@@ -339,7 +339,20 @@ impl DeploymentPhase {
     }
 }
 
-/// Immutable service snapshot and artifact selected for one deployment.
+/// Desired lifecycle outcome for one deployment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DeploymentGoal {
+    /// Continue normal build, readiness, and serving reconciliation.
+    #[default]
+    Run,
+    /// Cancel a deployment that has not begun serving.
+    Cancel,
+    /// Drain workloads and retain the terminal deployment in history.
+    Remove,
+}
+
+/// Captured service snapshot and desired lifecycle for one deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentSpec {
@@ -349,6 +362,9 @@ pub struct DeploymentSpec {
     pub service_generation: Generation,
     /// Immutable service configuration used for every replica.
     pub service: ServiceSpec,
+    /// User-requested lifecycle outcome reconciled by the deployment operator.
+    #[serde(default)]
+    pub goal: DeploymentGoal,
     /// Build generated for this deployment, when the artifact needs building.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_id: Option<BuildId>,
@@ -376,7 +392,7 @@ pub struct DeploymentStatus {
     pub conditions: Vec<Condition>,
 }
 
-/// An immutable service deployment resource.
+/// A service deployment with an immutable workload snapshot and mutable lifecycle goal.
 pub type Deployment = Object<DeploymentId, DeploymentSpec, DeploymentStatus>;
 
 /// Desired placement of one deployment replica on one node.

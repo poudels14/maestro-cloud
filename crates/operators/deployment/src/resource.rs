@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
-    ArtifactTemplate, Build, BuildId, BuildPhase, BuildSpec, BuildStatus, Deployment, DeploymentId,
-    DeploymentPhase, DeploymentSpec, DeploymentStatus, Generation, InvalidIdentifier, Object,
-    ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service,
-    ServiceId, Timestamp,
+    ArtifactTemplate, Build, BuildId, BuildPhase, BuildSpec, BuildStatus, Deployment,
+    DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus, Generation,
+    InvalidIdentifier, Object, ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind,
+    ResourceName, Service, ServiceId, Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -40,6 +40,7 @@ pub(crate) fn new_deployment(
             service_id: service.meta.id.clone(),
             service_generation: service.meta.generation,
             service: service.spec.clone(),
+            goal: DeploymentGoal::Run,
             build_id,
         },
         status: DeploymentStatus {

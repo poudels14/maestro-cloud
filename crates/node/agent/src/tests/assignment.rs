@@ -455,6 +455,7 @@ pub(crate) fn deployment() -> Deployment {
         spec: DeploymentSpec {
             service_id: ServiceId::new("api").unwrap(),
             service_generation: Generation(1),
+            goal: kernel_api::DeploymentGoal::Run,
             service: ServiceSpec {
                 name: "API".to_owned(),
                 version: "1.0.0".to_owned(),

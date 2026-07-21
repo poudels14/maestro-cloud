@@ -129,6 +129,23 @@ fn temporarily_unready_targets_preserve_the_last_active_generation() {
 }
 
 #[test]
+fn service_without_active_deployment_retires_serving_generation() {
+    let mut world = World::ready();
+    let mut active = plan(world.input()).expect("stage").create_generations[0].clone();
+    active.status.phase = TrafficGenerationPhase::Active;
+    active.status.activated_at = Some(Timestamp(1_000));
+    world.generations.push(active.clone());
+    world.service.status.active_deployment_id = None;
+
+    let retiring = plan(world.input()).expect("retire inactive service");
+    assert!(retiring.backend_changes[0].active.is_none());
+    assert_eq!(
+        update_phase(&retiring, &active.meta.id),
+        TrafficGenerationPhase::Retired
+    );
+}
+
+#[test]
 fn no_external_routes_still_acknowledges_the_active_deployment() {
     let mut world = World::ready();
     world.routes.clear();
@@ -275,6 +292,7 @@ impl World {
                 service_id: service_id.clone(),
                 service_generation: Generation(1),
                 service: service.spec.clone(),
+                goal: kernel_api::DeploymentGoal::Run,
                 build_id: None,
             },
             status: DeploymentStatus {
