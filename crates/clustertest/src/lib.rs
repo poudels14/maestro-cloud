@@ -70,9 +70,8 @@ pub use smoke::{
 };
 pub use upgrade::{
     FixtureInstanceId, MaintenanceAttempt, MaintenanceCompletion, MaintenanceFreeze,
-    MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, RollingUpgradeObservation,
-    SchedulingEligibility, SelectedRestartObservation, TargetRetention, UpgradeCluster,
-    UpgradeFault,
+    MaintenanceNodeRole, MaintenanceNodeSnapshot, MaintenanceTopology, SchedulingEligibility,
+    SelectedRestartObservation, TargetRetention, UpgradeCluster, UpgradeFault, UpgradeObservation,
 };
 
 #[cfg(test)]

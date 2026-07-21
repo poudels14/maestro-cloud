@@ -73,4 +73,7 @@ pub use smoke::{
     production_ingress_access_log_configuration_starts,
     single_node_store_endpoint_is_peer_reachable,
 };
-pub use upgrade::rolling_upgrade_retries_and_restores_nodes_serially;
+pub use upgrade::{
+    all_node_upgrade_restores_nodes_as_one_batch,
+    rolling_upgrade_retries_and_restores_nodes_serially,
+};

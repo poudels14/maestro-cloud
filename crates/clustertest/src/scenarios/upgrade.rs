@@ -16,20 +16,8 @@ where
         .topology()
         .await
         .map_err(|error| driver_error("observe maintenance topology", error))?;
-    if topology.nodes.len() != 4 {
-        return Err(ScenarioError::Assertion(format!(
-            "rolling upgrade requires four live nodes, found {}",
-            topology.nodes.len()
-        )));
-    }
     let workers = nodes_with_role(&topology, MaintenanceNodeRole::Worker);
     let voters = nodes_with_role(&topology, MaintenanceNodeRole::Voter);
-    let [failed_worker] = workers.as_slice() else {
-        return Err(ScenarioError::Assertion(format!(
-            "rolling upgrade requires one worker, found {}",
-            workers.len()
-        )));
-    };
     if voters.len() != 3 || !voters.contains(&topology.leader) {
         return Err(ScenarioError::Assertion(
             "rolling upgrade requires three voters including the leader".to_string(),
@@ -44,24 +32,40 @@ where
             .cloned(),
     );
     planned.push(topology.leader.clone());
+    let failed_node = planned.first().cloned().ok_or_else(|| {
+        ScenarioError::Assertion("rolling upgrade has no planned nodes".to_string())
+    })?;
     let target = FixtureVersion::new("2.0.0");
     let observation = cluster
         .rolling_upgrade(
             target.clone(),
             UpgradeFault::FailFirstAttempt {
-                node: failed_worker.clone(),
+                node: failed_node.clone(),
             },
         )
         .await
         .map_err(|error| driver_error("run faulted rolling upgrade", error))?;
-    let mut expected_attempts = planned.clone();
-    expected_attempts.push(failed_worker.clone());
     let actual_attempts = observation
         .attempts
         .iter()
         .map(|attempt| attempt.node.clone())
         .collect::<Vec<_>>();
-    if observation.planned_nodes != planned || actual_attempts != expected_attempts {
+    let first_attempts = first_occurrences(&actual_attempts);
+    if observation.planned_nodes != planned
+        || first_attempts != planned
+        || actual_attempts
+            .iter()
+            .filter(|node| **node == failed_node)
+            .count()
+            != 2
+        || planned.iter().skip(1).any(|node| {
+            actual_attempts
+                .iter()
+                .filter(|attempted| *attempted == node)
+                .count()
+                != 1
+        })
+    {
         return Err(ScenarioError::Assertion(format!(
             "rolling order or retry order was unsafe: {observation:?}"
         )));
@@ -101,10 +105,10 @@ where
     }
 
     let restarted = cluster
-        .restart_node(failed_worker)
+        .restart_node(&failed_node)
         .await
         .map_err(|error| driver_error("restart selected node", error))?;
-    let selected = vec![failed_worker.clone()];
+    let selected = vec![failed_node];
     if restarted.planned_nodes == selected
         && restarted.requested_nodes == selected
         && restarted.completion == MaintenanceCompletion::Succeeded
@@ -116,6 +120,83 @@ where
             "selected-node restart was not isolated: {restarted:?}"
         )))
     }
+}
+
+/// Proves all selected nodes drain, dispatch, verify, and restore as one batch.
+pub async fn all_node_upgrade_restores_nodes_as_one_batch<Cluster>(
+    cluster: &mut Cluster,
+) -> Result<(), ScenarioError>
+where
+    Cluster: UpgradeCluster,
+{
+    let topology = cluster
+        .topology()
+        .await
+        .map_err(|error| driver_error("observe all-node upgrade topology", error))?;
+    let voters = nodes_with_role(&topology, MaintenanceNodeRole::Voter);
+    if voters.len() != 3 || !voters.contains(&topology.leader) {
+        return Err(ScenarioError::Assertion(
+            "all-node upgrade requires three voters including the leader".to_string(),
+        ));
+    }
+    let target = FixtureVersion::new("3.0.0");
+    let observation = cluster
+        .all_node_upgrade(target.clone())
+        .await
+        .map_err(|error| driver_error("run all-node upgrade", error))?;
+    let planned = observation
+        .planned_nodes
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let expected = topology.nodes.keys().cloned().collect::<BTreeSet<_>>();
+    let attempted = observation
+        .attempts
+        .iter()
+        .map(|attempt| attempt.node.clone())
+        .collect::<BTreeSet<_>>();
+    if planned != expected
+        || attempted != expected
+        || observation.attempts.len() != expected.len()
+        || observation
+            .attempts
+            .iter()
+            .any(|attempt| attempt.drained_nodes != expected)
+        || observation.completion != MaintenanceCompletion::Succeeded
+        || observation.target_retention != TargetRetention::RetainedUntilCompletion
+        || observation.final_freeze != MaintenanceFreeze::Cleared
+        || observation.final_nodes.keys().ne(topology.nodes.keys())
+    {
+        return Err(ScenarioError::Assertion(format!(
+            "all-node upgrade did not complete as one restored batch: {observation:?}"
+        )));
+    }
+    for (node, final_state) in &observation.final_nodes {
+        let Some(initial_state) = topology.nodes.get(node) else {
+            return Err(ScenarioError::Assertion(format!(
+                "all-node upgrade introduced unknown node {node:?}"
+            )));
+        };
+        if final_state.role != initial_state.role
+            || final_state.version != target
+            || final_state.instance_id == initial_state.instance_id
+            || final_state.scheduling != SchedulingEligibility::Eligible
+        {
+            return Err(ScenarioError::Assertion(format!(
+                "node {node:?} was not upgraded and restored in the all-node batch: {final_state:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn first_occurrences(nodes: &[FixtureNodeName]) -> Vec<FixtureNodeName> {
+    let mut seen = BTreeSet::new();
+    nodes
+        .iter()
+        .filter(|node| seen.insert((*node).clone()))
+        .cloned()
+        .collect()
 }
 
 fn nodes_with_role(

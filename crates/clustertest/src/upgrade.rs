@@ -105,9 +105,9 @@ pub enum MaintenanceFreeze {
     Present,
 }
 
-/// Evidence produced by a rolling upgrade.
+/// Evidence produced by one parameterization of the coordinated upgrade state machine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RollingUpgradeObservation {
+pub struct UpgradeObservation {
     /// Planned node order before execution began.
     pub planned_nodes: Vec<FixtureNodeName>,
     /// Upgrade requests in issue order, including retries.
@@ -149,7 +149,13 @@ pub trait UpgradeCluster: Send {
         &mut self,
         target: FixtureVersion,
         fault: UpgradeFault,
-    ) -> Result<RollingUpgradeObservation, Self::Error>;
+    ) -> Result<UpgradeObservation, Self::Error>;
+
+    /// Runs one all-node upgrade batch without fault injection.
+    async fn all_node_upgrade(
+        &mut self,
+        target: FixtureVersion,
+    ) -> Result<UpgradeObservation, Self::Error>;
 
     /// Restarts exactly one selected node through the coordinated state machine.
     async fn restart_node(

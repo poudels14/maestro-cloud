@@ -19,10 +19,10 @@ use clustertest::{
     MaintenanceNodeSnapshot, MaintenanceTopology, MembershipAgreement, NodePorts, PeerStoreCluster,
     PeerStoreObservation, QuorumRecoveryCluster, ReadinessProbe, RegistrationCleanup,
     RegistrationObservation, ReplicaCount, ReplicaIndex, ReservationState, ResourceAvailability,
-    RestartCluster, RollingUpgradeObservation, RoutingCluster, ScheduledAssignment,
-    SchedulingCluster, SchedulingEligibility, SchedulingSnapshot, SecurityRestartState,
-    SeedControlRole, SeedSecurityCluster, SeedSecurityObservation, SelectedRestartObservation,
-    TargetRetention, UpgradeCluster, UpgradeFault, scenarios,
+    RestartCluster, RoutingCluster, ScheduledAssignment, SchedulingCluster, SchedulingEligibility,
+    SchedulingSnapshot, SecurityRestartState, SeedControlRole, SeedSecurityCluster,
+    SeedSecurityObservation, SelectedRestartObservation, TargetRetention, UpgradeCluster,
+    UpgradeFault, UpgradeObservation, scenarios,
 };
 use etcd_client::MemberAddOptions;
 use tokio::sync::broadcast;
@@ -120,13 +120,13 @@ struct MaintenanceNodeApiState {
     node: NodeInfo,
     registry: Arc<InMemoryNodeRegistry>,
     restart_requests: Arc<std::sync::Mutex<Vec<String>>>,
-    upgrade_observations: Arc<std::sync::Mutex<Vec<UpgradeObservation>>>,
+    upgrade_observations: Arc<std::sync::Mutex<Vec<NodeUpgradeObservation>>>,
     upgrade_attempts: Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
     fail_first_upgrade: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct UpgradeObservation {
+struct NodeUpgradeObservation {
     node_id: String,
     drained_nodes: Vec<String>,
 }
@@ -183,7 +183,7 @@ async fn upgrade_test_node(
         .upgrade_observations
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .push(UpgradeObservation {
+        .push(NodeUpgradeObservation {
             node_id: state.node.node_id.clone(),
             drained_nodes,
         });
@@ -3296,11 +3296,10 @@ struct OldSystemUpgradeCluster {
     _etcd: ContainerEtcdCluster,
     registry: Arc<InMemoryNodeRegistry>,
     restart_requests: Arc<std::sync::Mutex<Vec<String>>>,
-    upgrade_observations: Arc<std::sync::Mutex<Vec<UpgradeObservation>>>,
+    upgrade_observations: Arc<std::sync::Mutex<Vec<NodeUpgradeObservation>>>,
     initial_nodes: Vec<NodeInfo>,
     leader: Arc<EtcdLeaderElector>,
     follower: Arc<EtcdLeaderElector>,
-    initial_token: LeadershipToken,
     shutdown_leader: broadcast::Sender<ShutdownEvent>,
     shutdown_follower: broadcast::Sender<ShutdownEvent>,
     election_handles: Vec<tokio::task::JoinHandle<()>>,
@@ -3384,7 +3383,7 @@ impl OldSystemUpgradeCluster {
         let mut election_handles = leader
             .clone()
             .spawn(shutdown_leader.subscribe(), Logger::noop());
-        let initial_token = leader.wait_until_leading(Duration::from_secs(20)).await?;
+        leader.wait_until_leading(Duration::from_secs(20)).await?;
         election_handles.extend(
             follower
                 .clone()
@@ -3428,7 +3427,6 @@ impl OldSystemUpgradeCluster {
             initial_nodes,
             leader,
             follower,
-            initial_token,
             shutdown_leader,
             shutdown_follower,
             election_handles,
@@ -3492,48 +3490,19 @@ impl OldSystemUpgradeCluster {
             Ok(MaintenanceFreeze::Present)
         }
     }
-}
 
-#[async_trait]
-impl UpgradeCluster for OldSystemUpgradeCluster {
-    type Error = anyhow::Error;
-
-    async fn topology(&mut self) -> Result<MaintenanceTopology> {
-        let leader = match (self.leader.state(), self.follower.state()) {
-            (LeadershipState::Leading(token), _) => token.info.node_id,
-            (_, LeadershipState::Leading(token)) => token.info.node_id,
-            _ => bail!("cluster has no leader before maintenance"),
-        };
-        Ok(MaintenanceTopology {
-            nodes: self.node_snapshots().await?,
-            leader: FixtureNodeName::new(leader),
-        })
-    }
-
-    async fn rolling_upgrade(
+    async fn run_upgrade(
         &mut self,
         target: FixtureVersion,
-        fault: UpgradeFault,
-    ) -> Result<RollingUpgradeObservation> {
-        let UpgradeFault::FailFirstAttempt { node: failed_node } = fault;
-        let configured_failure = self
-            .initial_nodes
-            .first()
-            .ok_or_else(|| anyhow!("maintenance fixture has no worker"))?;
-        if configured_failure.node_id != failed_node.as_str() {
-            bail!(
-                "legacy fixture injects the first failure on `{}`, not `{}`",
-                configured_failure.node_id,
-                failed_node.as_str()
-            );
-        }
-        let created = self
-            .leader_orchestrator
-            .create_run_with_batch(
-                &self.initial_token,
-                target.as_str(),
-                super::UpgradeBatch::Rolling,
-            )
+        batch: super::UpgradeBatch,
+    ) -> Result<UpgradeObservation> {
+        self.upgrade_observations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let (orchestrator, token) = self.active_orchestrator()?;
+        let created = orchestrator
+            .create_run_with_batch(&token, target.as_str(), batch)
             .await?;
         let planned_nodes = created
             .nodes
@@ -3583,7 +3552,7 @@ impl UpgradeCluster for OldSystemUpgradeCluster {
                     .collect(),
             })
             .collect();
-        Ok(RollingUpgradeObservation {
+        Ok(UpgradeObservation {
             planned_nodes,
             attempts,
             completion: Self::completion(completed.phase),
@@ -3591,6 +3560,47 @@ impl UpgradeCluster for OldSystemUpgradeCluster {
             final_freeze: self.final_freeze().await?,
             final_nodes: self.node_snapshots().await?,
         })
+    }
+}
+
+#[async_trait]
+impl UpgradeCluster for OldSystemUpgradeCluster {
+    type Error = anyhow::Error;
+
+    async fn topology(&mut self) -> Result<MaintenanceTopology> {
+        let leader = match (self.leader.state(), self.follower.state()) {
+            (LeadershipState::Leading(token), _) => token.info.node_id,
+            (_, LeadershipState::Leading(token)) => token.info.node_id,
+            _ => bail!("cluster has no leader before maintenance"),
+        };
+        Ok(MaintenanceTopology {
+            nodes: self.node_snapshots().await?,
+            leader: FixtureNodeName::new(leader),
+        })
+    }
+
+    async fn rolling_upgrade(
+        &mut self,
+        target: FixtureVersion,
+        fault: UpgradeFault,
+    ) -> Result<UpgradeObservation> {
+        let UpgradeFault::FailFirstAttempt { node: failed_node } = fault;
+        let configured_failure = self
+            .initial_nodes
+            .first()
+            .ok_or_else(|| anyhow!("maintenance fixture has no worker"))?;
+        if configured_failure.node_id != failed_node.as_str() {
+            bail!(
+                "legacy fixture injects the first failure on `{}`, not `{}`",
+                configured_failure.node_id,
+                failed_node.as_str()
+            );
+        }
+        self.run_upgrade(target, super::UpgradeBatch::Rolling).await
+    }
+
+    async fn all_node_upgrade(&mut self, target: FixtureVersion) -> Result<UpgradeObservation> {
+        self.run_upgrade(target, super::UpgradeBatch::All).await
     }
 
     async fn restart_node(&mut self, node: &FixtureNodeName) -> Result<SelectedRestartObservation> {
@@ -3656,16 +3666,16 @@ impl Drop for OldSystemUpgradeCluster {
     }
 }
 
-/// Drives the production rolling-upgrade state machine against real etcd fencing and two real
+/// Drives both production upgrade parameterizations against real etcd fencing and two real
 /// electors. Simulated node APIs restart their controller at the requested version instead of
-/// mutating the host NixOS system. The first worker attempt fails so the test also proves that the
-/// durable cluster target advances through the healthy nodes, then retries the failed node.
+/// mutating the host NixOS system. The rolling run also injects one retryable worker failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires an isolated Linux container daemon"]
 async fn multinode_rolling_upgrade_retries_and_restores_nodes_serially() -> Result<()> {
     let mut cluster = OldSystemUpgradeCluster::start().await?;
 
     scenarios::rolling_upgrade_retries_and_restores_nodes_serially(&mut cluster).await?;
+    scenarios::all_node_upgrade_restores_nodes_as_one_batch(&mut cluster).await?;
     Ok(())
 }
 
