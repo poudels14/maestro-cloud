@@ -1,0 +1,437 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use async_trait::async_trait;
+use containerd::services::v1::leases_client::LeasesClient;
+use containerd::services::v1::transfer_client::TransferClient;
+use containerd::services::v1::{
+    CreateImageRequest, CreateRequest as CreateLeaseRequest, DeleteImageRequest,
+    DeleteRequest as DeleteLeaseRequest, GetImageRequest, Image, ListImagesRequest,
+    TransferOptions, TransferRequest,
+};
+use containerd::tonic::Code;
+use containerd::tonic::transport::Channel;
+use containerd::types::transfer::{
+    ImageExportStream, ImageImportStream, ImageStore, OciRegistry, UnpackConfiguration,
+};
+use prost_types::Any;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+use crate::containerd::ContainerdRuntime;
+use crate::containerd_artifact_stream::{
+    ContainerdArtifactStream, TransferTask, open_stream, upload_stream,
+};
+use crate::containerd_artifact_support::{
+    MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, host_platform, image_digest,
+    is_not_found, namespaced_artifact, operation_error, prune_candidates, removed_digests,
+    select_image,
+};
+use crate::{
+    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
+    ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
+};
+
+static TRANSFER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
+
+#[async_trait]
+impl ArtifactStore for ContainerdRuntime {
+    async fn build(
+        &self,
+        _request: &ArtifactBuildRequest,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        Err(ArtifactStoreError::Rejected {
+            message: "native containerd builds require the BuildKit adapter".to_owned(),
+        })
+    }
+
+    async fn pull(
+        &self,
+        reference: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let platform = host_platform();
+        let source = containerd::to_any(&OciRegistry {
+            reference: reference.as_str().to_owned(),
+            resolver: None,
+        });
+        let destination = containerd::to_any(&ImageStore {
+            name: reference.as_str().to_owned(),
+            labels: managed_labels(),
+            platforms: vec![platform.clone()],
+            unpacks: vec![UnpackConfiguration {
+                platform: Some(platform),
+                snapshotter: self.settings.snapshotter.clone(),
+            }],
+            ..Default::default()
+        });
+        transfer(
+            self.channel.clone(),
+            self.settings.namespace.clone(),
+            source,
+            destination,
+            "pull",
+            Some(reference.as_str().to_owned()),
+            None,
+        )
+        .await?;
+        let image = self.image(reference.as_str()).await?;
+        self.ensure_digest_alias(&image, reference.as_str()).await
+    }
+
+    async fn push(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+    ) -> Result<(), ArtifactStoreError> {
+        let image = select_image(&self.images().await?, digest)?;
+        transfer(
+            self.channel.clone(),
+            self.settings.namespace.clone(),
+            containerd::to_any(&ImageStore {
+                name: image.name,
+                ..Default::default()
+            }),
+            containerd::to_any(&OciRegistry {
+                reference: destination.as_str().to_owned(),
+                resolver: None,
+            }),
+            "push",
+            Some(destination.as_str().to_owned()),
+            None,
+        )
+        .await
+    }
+
+    async fn resolve_digest(
+        &self,
+        reference: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        match self.image(reference.as_str()).await {
+            Ok(image) => self.ensure_digest_alias(&image, reference.as_str()).await,
+            Err(ArtifactStoreError::NotFound { .. }) => self.pull(reference).await,
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn export(
+        &self,
+        digest: &ArtifactDigest,
+    ) -> Result<Box<dyn ArtifactByteStream>, ArtifactStoreError> {
+        let image = select_image(&self.images().await?, digest)?;
+        let stream_id = next_transfer_id("export");
+        let lease_id = next_transfer_id("lease");
+        create_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await?;
+        let duplex = match open_stream(
+            self.channel.clone(),
+            &self.settings.namespace,
+            &stream_id,
+            &lease_id,
+        )
+        .await
+        {
+            Ok(duplex) => duplex,
+            Err(error) => {
+                let _ignored =
+                    delete_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await;
+                return Err(error);
+            }
+        };
+        let transfer = spawn_transfer(
+            self.channel.clone(),
+            self.settings.namespace.clone(),
+            containerd::to_any(&ImageStore {
+                name: image.name,
+                platforms: vec![host_platform()],
+                ..Default::default()
+            }),
+            containerd::to_any(&ImageExportStream {
+                stream: stream_id,
+                media_type: String::new(),
+                platforms: vec![host_platform()],
+                all_platforms: false,
+                skip_compatibility_manifest: false,
+                skip_non_distributable: false,
+            }),
+            "export",
+            Some(digest.as_str().to_owned()),
+            lease_id,
+        );
+        Ok(Box::new(ContainerdArtifactStream::new(duplex, transfer)))
+    }
+
+    async fn import(
+        &self,
+        source: Box<dyn ArtifactByteStream>,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let stream_id = next_transfer_id("import");
+        let image_name = format!("maestro.local/artifacts/{stream_id}:latest");
+        let lease_id = next_transfer_id("lease");
+        create_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await?;
+        let duplex = match open_stream(
+            self.channel.clone(),
+            &self.settings.namespace,
+            &stream_id,
+            &lease_id,
+        )
+        .await
+        {
+            Ok(duplex) => duplex,
+            Err(error) => {
+                let _ignored =
+                    delete_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await;
+                return Err(error);
+            }
+        };
+        let platform = host_platform();
+        let transfer = spawn_transfer(
+            self.channel.clone(),
+            self.settings.namespace.clone(),
+            containerd::to_any(&ImageImportStream {
+                stream: stream_id,
+                media_type: String::new(),
+                force_compress: false,
+            }),
+            containerd::to_any(&ImageStore {
+                name: image_name.clone(),
+                labels: managed_labels(),
+                platforms: vec![platform.clone()],
+                unpacks: vec![UnpackConfiguration {
+                    platform: Some(platform),
+                    snapshotter: self.settings.snapshotter.clone(),
+                }],
+                ..Default::default()
+            }),
+            "import",
+            Some(image_name.clone()),
+            lease_id,
+        );
+        upload_stream(source, duplex, transfer).await?;
+        let image = self.image(&image_name).await?;
+        self.ensure_digest_alias(&image, &image_name).await
+    }
+
+    async fn prune(
+        &self,
+        policy: &ArtifactPrunePolicy,
+    ) -> Result<ArtifactPruneReport, ArtifactStoreError> {
+        let ArtifactPrunePolicy::Preserve(preserved) = policy;
+        let before = self.images().await?;
+        let candidates = prune_candidates(&before, preserved);
+        for candidate in &candidates {
+            let result =
+                containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
+                    .delete(namespaced_artifact(
+                        DeleteImageRequest {
+                            name: candidate.name.clone(),
+                            sync: true,
+                            target: candidate.target.clone(),
+                        },
+                        &self.settings.namespace,
+                    )?)
+                    .await;
+            if let Err(error) = result
+                && !is_not_found(&error)
+            {
+                return Err(operation_error("prune image", Some(&candidate.name), error));
+            }
+        }
+        let remaining = self.images().await?;
+        Ok(ArtifactPruneReport {
+            removed: removed_digests(&candidates, &remaining)?,
+        })
+    }
+}
+
+impl ContainerdRuntime {
+    async fn image(&self, reference: &str) -> Result<Image, ArtifactStoreError> {
+        containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
+            .get(namespaced_artifact(
+                GetImageRequest {
+                    name: reference.to_owned(),
+                },
+                &self.settings.namespace,
+            )?)
+            .await
+            .map_err(|error| operation_error("get image", Some(reference), error))?
+            .into_inner()
+            .image
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: format!("containerd omitted image metadata for `{reference}`"),
+            })
+    }
+
+    async fn images(&self) -> Result<Vec<Image>, ArtifactStoreError> {
+        Ok(
+            containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
+                .list(namespaced_artifact(
+                    ListImagesRequest {
+                        filters: Vec::new(),
+                    },
+                    &self.settings.namespace,
+                )?)
+                .await
+                .map_err(|error| operation_error("list images", None, error))?
+                .into_inner()
+                .images,
+        )
+    }
+
+    async fn ensure_digest_alias(
+        &self,
+        image: &Image,
+        reference: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let digest = image_digest(image, reference)?;
+        let alias = Image {
+            name: digest.as_str().to_owned(),
+            labels: managed_labels(),
+            target: image.target.clone(),
+            created_at: None,
+            updated_at: None,
+        };
+        let result =
+            containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
+                .create(namespaced_artifact(
+                    CreateImageRequest {
+                        image: Some(alias),
+                        source_date_epoch: None,
+                    },
+                    &self.settings.namespace,
+                )?)
+                .await;
+        match result {
+            Ok(_) => Ok(digest),
+            Err(error) if error.code() == Code::AlreadyExists => {
+                let existing = self.image(digest.as_str()).await?;
+                if image_digest(&existing, digest.as_str())? == digest {
+                    Ok(digest)
+                } else {
+                    Err(ArtifactStoreError::Rejected {
+                        message: format!(
+                            "containerd digest alias `{}` points at different content",
+                            digest.as_str()
+                        ),
+                    })
+                }
+            }
+            Err(error) => Err(operation_error(
+                "create immutable image reference",
+                Some(digest.as_str()),
+                error,
+            )),
+        }
+    }
+}
+
+fn managed_labels() -> HashMap<String, String> {
+    HashMap::from([(
+        MANAGED_ARTIFACT_LABEL.to_owned(),
+        MANAGED_ARTIFACT_VALUE.to_owned(),
+    )])
+}
+
+fn next_transfer_id(operation: &str) -> String {
+    let sequence = TRANSFER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("maestro-{operation}-{}-{sequence}", std::process::id())
+}
+
+fn spawn_transfer(
+    channel: Channel,
+    namespace: String,
+    source: Any,
+    destination: Any,
+    operation: &'static str,
+    reference: Option<String>,
+    lease_id: String,
+) -> TransferTask {
+    TransferTask::new(tokio::spawn(async move {
+        let result = transfer(
+            channel.clone(),
+            namespace.clone(),
+            source,
+            destination,
+            operation,
+            reference,
+            Some(lease_id.clone()),
+        )
+        .await;
+        let cleanup = delete_lease(channel, &namespace, &lease_id).await;
+        match result {
+            Err(error) => Err(error),
+            Ok(()) => cleanup,
+        }
+    }))
+}
+
+async fn transfer(
+    channel: Channel,
+    namespace: String,
+    source: Any,
+    destination: Any,
+    operation: &str,
+    reference: Option<String>,
+    lease_id: Option<String>,
+) -> Result<(), ArtifactStoreError> {
+    TransferClient::new(channel)
+        .transfer(artifact_request(
+            TransferRequest {
+                source: Some(source),
+                destination: Some(destination),
+                options: Some(TransferOptions::default()),
+            },
+            &namespace,
+            lease_id.as_deref(),
+        )?)
+        .await
+        .map_err(|error| operation_error(operation, reference.as_deref(), error))?;
+    Ok(())
+}
+
+async fn create_lease(
+    channel: Channel,
+    namespace: &str,
+    lease_id: &str,
+) -> Result<(), ArtifactStoreError> {
+    let expires = (OffsetDateTime::now_utc() + time::Duration::hours(1))
+        .format(&Rfc3339)
+        .map_err(|error| ArtifactStoreError::Unavailable {
+            message: format!("format containerd lease expiration: {error}"),
+        })?;
+    LeasesClient::new(channel)
+        .create(namespaced_artifact(
+            CreateLeaseRequest {
+                id: lease_id.to_owned(),
+                labels: HashMap::from([(LEASE_EXPIRATION_LABEL.to_owned(), expires)]),
+            },
+            namespace,
+        )?)
+        .await
+        .map_err(|error| operation_error("create transfer lease", Some(lease_id), error))?;
+    Ok(())
+}
+
+async fn delete_lease(
+    channel: Channel,
+    namespace: &str,
+    lease_id: &str,
+) -> Result<(), ArtifactStoreError> {
+    let result = LeasesClient::new(channel)
+        .delete(namespaced_artifact(
+            DeleteLeaseRequest {
+                id: lease_id.to_owned(),
+                sync: true,
+            },
+            namespace,
+        )?)
+        .await;
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if is_not_found(&error) => Ok(()),
+        Err(error) => Err(operation_error(
+            "delete transfer lease",
+            Some(lease_id),
+            error,
+        )),
+    }
+}

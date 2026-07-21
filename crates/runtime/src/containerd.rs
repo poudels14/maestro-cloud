@@ -107,6 +107,8 @@ impl WorkloadRuntime for ContainerdRuntime {
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
             RuntimeCapability::DynamicNetwork,
+            RuntimeCapability::PushArtifact,
+            RuntimeCapability::TransferArtifact,
         ])
     }
 

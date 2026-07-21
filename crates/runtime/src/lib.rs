@@ -12,6 +12,12 @@ mod clock;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_artifact;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_artifact_stream;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_artifact_support;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_config;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_event;

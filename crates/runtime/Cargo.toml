@@ -23,7 +23,7 @@ supervisor = { version = "0.1.0", path = "../kernel/supervisor" }
 tar = { workspace = true, optional = true }
 test-util = { version = "=0.12.5", package = "parking_lot", optional = true }
 thiserror = "=2.0.18"
-time = { version = "=0.3.53", features = ["parsing"] }
+time = { version = "=0.3.53", features = ["formatting", "parsing"] }
 tokio = { version = "=1.52.3", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, optional = true }
 
