@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use metrics::{MetricAppendReport, MetricStoreError, WorkloadMetricPoint};
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,17 +22,23 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v4(&mut connection)?,
+        (0, _) => initialize_v5(&mut connection)?,
         (1, 1) => {
             migrate_v1_to_v2(&mut connection)?;
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
+            migrate_v4_to_v5(&mut connection)?;
         }
         (1, 2) => {
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
+            migrate_v4_to_v5(&mut connection)?;
         }
-        (1, 3) => migrate_v3_to_v4(&mut connection)?,
+        (1, 3) => {
+            migrate_v3_to_v4(&mut connection)?;
+            migrate_v4_to_v5(&mut connection)?;
+        }
+        (1, 4) => migrate_v4_to_v5(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, version) => {
             return Err(format!(
@@ -60,6 +66,11 @@ pub(crate) fn append(
         .map_err(unavailable("read latest metric sequence"))?;
     let mut report = MetricAppendReport::default();
     for point in points {
+        point
+            .validate()
+            .map_err(|error| MetricStoreError::Rejected {
+                message: error.to_string(),
+            })?;
         let encoded = serde_json::to_string(point).map_err(|error| MetricStoreError::Rejected {
             message: format!("normalized metric point could not be encoded: {error}"),
         })?;
@@ -92,9 +103,13 @@ pub(crate) fn append(
                 let previous_sequence = transaction
                     .query_row(
                         "SELECT sequence FROM normalized_metrics
-                         WHERE node_id = ?1 AND workload_id = ?2
+                         WHERE cluster_id = ?1 AND node_id = ?2 AND workload_id = ?3
                          ORDER BY sequence DESC LIMIT 1",
-                        params![point.id.node_id.as_str(), point.id.workload_id.as_str()],
+                        params![
+                            point.metadata.cluster_id.as_str(),
+                            point.id.node_id.as_str(),
+                            point.id.workload_id.as_str()
+                        ],
                         |row| row.get::<_, i64>(0),
                     )
                     .optional()
@@ -108,14 +123,15 @@ pub(crate) fn append(
                     .execute(
                         "INSERT INTO normalized_metrics
                          (sequence, previous_sequence, node_id, workload_id, collected_at_ms,
-                          service_id, deployment_id, point_json)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                          cluster_id, service_id, deployment_id, point_json)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         params![
                             sequence,
                             previous_sequence,
                             point.id.node_id.as_str(),
                             point.id.workload_id.as_str(),
                             point.id.collected_at.0,
+                            point.metadata.cluster_id.as_str(),
                             point.metadata.service_id.as_str(),
                             point.metadata.deployment_id.as_str(),
                             encoded
@@ -132,7 +148,7 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v5(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -144,15 +160,16 @@ fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
                  node_id VARCHAR NOT NULL,
                  workload_id VARCHAR NOT NULL,
                  collected_at_ms BIGINT NOT NULL,
+                 cluster_id VARCHAR NOT NULL,
                  service_id VARCHAR NOT NULL,
                  deployment_id VARCHAR NOT NULL,
                  point_json VARCHAR NOT NULL,
                  PRIMARY KEY (node_id, workload_id, collected_at_ms)
              );
              CREATE INDEX normalized_metrics_service_time
-                 ON normalized_metrics (service_id, collected_at_ms);
+                 ON normalized_metrics (cluster_id, service_id, collected_at_ms);
              CREATE INDEX normalized_metrics_deployment_time
-                 ON normalized_metrics (deployment_id, collected_at_ms);
+                 ON normalized_metrics (cluster_id, deployment_id, collected_at_ms);
              CREATE TABLE metric_sink_cursors (
                  sink_id VARCHAR PRIMARY KEY,
                  last_sequence BIGINT NOT NULL
@@ -168,7 +185,7 @@ fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
              );
              CREATE INDEX host_metrics_node_time
                  ON host_metrics (cluster_id, node_id, collected_at_ms);
-             INSERT INTO schema_version (version) VALUES (4);",
+             INSERT INTO schema_version (version) VALUES (5);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
@@ -244,6 +261,110 @@ fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), String> {
              CREATE INDEX host_metrics_node_time
                  ON host_metrics (cluster_id, node_id, collected_at_ms);
              UPDATE schema_version SET version = 4;",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v4_to_v5(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE normalized_metrics_v5 (
+                 sequence BIGINT NOT NULL UNIQUE,
+                 previous_sequence BIGINT,
+                 node_id VARCHAR NOT NULL,
+                 workload_id VARCHAR NOT NULL,
+                 collected_at_ms BIGINT NOT NULL,
+                 cluster_id VARCHAR NOT NULL,
+                 service_id VARCHAR NOT NULL,
+                 deployment_id VARCHAR NOT NULL,
+                 point_json VARCHAR NOT NULL,
+                 PRIMARY KEY (node_id, workload_id, collected_at_ms)
+             );",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT sequence, previous_sequence, node_id, workload_id,
+                        collected_at_ms, service_id, deployment_id, point_json
+                 FROM normalized_metrics
+                 ORDER BY sequence",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    for (
+        sequence,
+        previous_sequence,
+        node_id,
+        workload_id,
+        collected_at,
+        service_id,
+        deployment_id,
+        encoded,
+    ) in rows
+    {
+        let point: WorkloadMetricPoint = serde_json::from_str(&encoded)
+            .map_err(|error| format!("decode v4 workload metric during migration: {error}"))?;
+        point
+            .validate()
+            .map_err(|error| format!("validate v4 workload metric during migration: {error}"))?;
+        if point.id.node_id.as_str() != node_id
+            || point.id.workload_id.as_str() != workload_id
+            || point.id.collected_at.0 != collected_at
+            || point.metadata.service_id.as_str() != service_id
+            || point.metadata.deployment_id.as_str() != deployment_id
+        {
+            return Err("v4 workload metric identity differed from its stored key".to_owned());
+        }
+        transaction
+            .execute(
+                "INSERT INTO normalized_metrics_v5
+                 (sequence, previous_sequence, node_id, workload_id, collected_at_ms,
+                  cluster_id, service_id, deployment_id, point_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    sequence,
+                    previous_sequence,
+                    node_id,
+                    workload_id,
+                    collected_at,
+                    point.metadata.cluster_id.as_str(),
+                    service_id,
+                    deployment_id,
+                    encoded,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction
+        .execute_batch(
+            "DROP TABLE normalized_metrics;
+             ALTER TABLE normalized_metrics_v5 RENAME TO normalized_metrics;
+             CREATE INDEX normalized_metrics_service_time
+                 ON normalized_metrics (cluster_id, service_id, collected_at_ms);
+             CREATE INDEX normalized_metrics_deployment_time
+                 ON normalized_metrics (cluster_id, deployment_id, collected_at_ms);
+             UPDATE schema_version SET version = 5;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

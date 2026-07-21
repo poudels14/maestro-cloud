@@ -73,3 +73,35 @@ pub struct WorkloadMetricPoint {
     /// Maximum allowed processes, absent when unlimited.
     pub processes_maximum: Option<u64>,
 }
+
+impl WorkloadMetricPoint {
+    /// Validates ownership and counter relationships required by durable backends.
+    pub fn validate(&self) -> Result<(), WorkloadMetricValidationError> {
+        if self.id.node_id != self.metadata.node_id
+            || self.id.workload_id != self.metadata.workload_id
+        {
+            return Err(WorkloadMetricValidationError::Ownership);
+        }
+        if self.cpu_throttled_periods > self.cpu_periods {
+            return Err(WorkloadMetricValidationError::Cpu);
+        }
+        if self.network_receive_bytes.is_some() != self.network_transmit_bytes.is_some() {
+            return Err(WorkloadMetricValidationError::Network);
+        }
+        Ok(())
+    }
+}
+
+/// A normalized workload sample violated durable storage invariants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WorkloadMetricValidationError {
+    /// Record identity and durable workload ownership differed.
+    #[error("workload metric identity does not match its metadata ownership")]
+    Ownership,
+    /// Throttled scheduling periods exceeded all observed scheduling periods.
+    #[error("workload metric CPU counters are internally inconsistent")]
+    Cpu,
+    /// Only one direction of the optional network counter pair was present.
+    #[error("workload metric network counters must be both present or both absent")]
+    Network,
+}

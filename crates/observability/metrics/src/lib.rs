@@ -18,6 +18,7 @@ mod host_store;
 mod http;
 mod model;
 mod pipeline;
+mod query;
 mod sink_worker;
 mod store;
 
@@ -44,8 +45,12 @@ pub use http::{
     MetricHttpRequest, MetricHttpResponse, MetricHttpTransport, MetricHttpTransportError,
     ReqwestMetricHttpTransport, ReqwestMetricHttpTransportError,
 };
-pub use model::{MetricRecordId, WorkloadMetricPoint};
+pub use model::{MetricRecordId, WorkloadMetricPoint, WorkloadMetricValidationError};
 pub use pipeline::WorkloadMetricPipeline;
+pub use query::{
+    WorkloadMetricHistoryPoint, WorkloadMetricQuery, WorkloadMetricQueryError,
+    WorkloadMetricQueryStore, WorkloadMetricQueryStoreError,
+};
 pub use sink_worker::{
     MetricSinkSleeper, MetricSinkWorker, MetricSinkWorkerError, MetricSinkWorkerReport,
     MetricSinkWorkerSettings, MetricSinkWorkerSettingsError, TokioMetricSinkSleeper,

@@ -3,12 +3,18 @@ use std::collections::BTreeMap;
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use runtime::WorkloadMetadata;
 
+#[path = "workload_query_conformance.rs"]
+mod workload_query_conformance;
+
+pub use workload_query_conformance::check_workload_metric_query_store;
+
 use crate::{
     HostDiskMetricPoint, HostMetricComponent, HostMetricPoint, HostMetricQuery,
     HostMetricQueryError, HostMetricQueryStore, HostMetricQueryStoreError, HostMetricRecordId,
     HostMetricStore, HostResourceMetricPoint, LatestHostMetricQuery, MetricAppendReport,
     MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSinkId,
-    MetricStore, MetricStoreError, WorkloadMetricPoint,
+    MetricStore, MetricStoreError, WorkloadMetricPoint, WorkloadMetricQueryError,
+    WorkloadMetricQueryStoreError,
 };
 
 /// Runs bounded history, component filtering, and latest-per-node checks on a host query store.
@@ -206,7 +212,17 @@ pub async fn check_metric_store(
             committed: 1,
             deduplicated: 0,
         },
-    )
+    )?;
+
+    let mut invalid = metric_point("invalid-workload", 2, 10)?;
+    invalid.metadata.node_id = NodeId::new("other-node")?;
+    if !matches!(
+        store.append(&[invalid]).await,
+        Err(MetricStoreError::Rejected { .. })
+    ) {
+        return Err(MetricStoreConformanceError::InvalidMetricPointAccepted);
+    }
+    Ok(())
 }
 
 /// Runs ordered-read, stable-baseline, and isolated-cursor checks on a fresh store.
@@ -379,6 +395,12 @@ pub enum MetricStoreConformanceError {
     /// A host query fixture unexpectedly violated the public bounds.
     #[error(transparent)]
     HostQuery(#[from] HostMetricQueryError),
+    /// The workload query view failed while processing valid conformance input.
+    #[error(transparent)]
+    WorkloadQueryStore(#[from] WorkloadMetricQueryStoreError),
+    /// A workload query fixture unexpectedly violated the public bounds.
+    #[error(transparent)]
+    WorkloadQuery(#[from] WorkloadMetricQueryError),
     /// A sink identifier in the conformance fixture was unexpectedly invalid.
     #[error(transparent)]
     SinkId(#[from] crate::MetricSinkIdError),
@@ -397,12 +419,21 @@ pub enum MetricStoreConformanceError {
     /// An empty or internally inconsistent host point was accepted.
     #[error("host metric store accepted an invalid point")]
     InvalidHostPointAccepted,
+    /// A workload point with inconsistent ownership or counters was accepted.
+    #[error("metric store accepted an invalid workload point")]
+    InvalidMetricPointAccepted,
     /// Host history ordering, filtering, or latest selection differed from the contract.
     #[error("host metric query store returned an unexpected view")]
     UnexpectedHostQuery,
     /// An inverted or unbounded host query was accepted.
     #[error("host metric query accepted invalid bounds")]
     InvalidHostQueryAccepted,
+    /// Workload history ownership, ordering, filtering, or baseline selection was incorrect.
+    #[error("workload metric query store returned an unexpected view")]
+    UnexpectedWorkloadQuery,
+    /// An inverted or unbounded workload query was accepted.
+    #[error("workload metric query accepted invalid bounds")]
+    InvalidWorkloadQueryAccepted,
     /// A zero bound, unknown cursor, or cursor regression was accepted.
     #[error("metric delivery store accepted an invalid operation")]
     InvalidDeliveryAccepted,

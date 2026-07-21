@@ -12,6 +12,7 @@ mod metric_duck;
 mod metric_schema;
 mod schema;
 mod settings;
+mod workload_metric_schema;
 
 pub use duck::{DuckLogStore, DuckLogStoreRuntime};
 pub use error::DuckStoreError;

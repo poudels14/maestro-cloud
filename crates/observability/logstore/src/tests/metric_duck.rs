@@ -4,7 +4,7 @@ use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Times
 use metrics::{
     HostMetricComponent, HostMetricQueryStore, HostMetricStore, LatestHostMetricQuery,
     MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId, MetricStore,
-    WorkloadMetricPoint,
+    WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
 };
 use runtime::WorkloadMetadata;
 
@@ -20,6 +20,11 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     )?)
     .await?;
     metrics::conformance::check_metric_store(runtime.store().as_ref()).await?;
+    metrics::conformance::check_workload_metric_query_store(
+        runtime.store().as_ref(),
+        runtime.store().as_ref(),
+    )
+    .await?;
     metrics::conformance::check_host_metric_store(runtime.store().as_ref()).await?;
     metrics::conformance::check_host_metric_query_store(
         runtime.store().as_ref(),
@@ -111,6 +116,20 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
     assert_eq!(pending.sequence, MetricSequence(2));
     assert_eq!(pending.previous.as_ref(), Some(&point));
     assert_eq!(&pending.point, &next);
+    let history = restarted
+        .store()
+        .query_workload_metrics(&WorkloadMetricQuery::new(
+            ClusterId::new("cluster-1")?,
+            Timestamp(1),
+            Timestamp(2),
+            8,
+        )?)
+        .await?;
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history.get(1).and_then(|history| history.previous.as_ref()),
+        Some(&point)
+    );
     restarted.shutdown().await?;
     Ok(())
 }
@@ -192,7 +211,18 @@ async fn duck_metric_store_migrates_v3_host_component_indexes()
              PRIMARY KEY (cluster_id, node_id, collected_at_ms)
          );
          CREATE INDEX host_metrics_node_time
-             ON host_metrics (cluster_id, node_id, collected_at_ms);",
+             ON host_metrics (cluster_id, node_id, collected_at_ms);
+         CREATE TABLE normalized_metrics (
+             sequence BIGINT NOT NULL UNIQUE,
+             previous_sequence BIGINT,
+             node_id VARCHAR NOT NULL,
+             workload_id VARCHAR NOT NULL,
+             collected_at_ms BIGINT NOT NULL,
+             service_id VARCHAR NOT NULL,
+             deployment_id VARCHAR NOT NULL,
+             point_json VARCHAR NOT NULL,
+             PRIMARY KEY (node_id, workload_id, collected_at_ms)
+         );",
     )?;
     connection.execute(
         "INSERT INTO host_metrics VALUES (?1, ?2, ?3, ?4)",

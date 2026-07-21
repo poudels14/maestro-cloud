@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use kernel_api::{NodeId, WorkloadId};
+use kernel_api::{ClusterId, NodeId, WorkloadId};
 
 use crate::{
     HostMetricQueryStore, HostMetricStore, InMemoryHostMetricStore, MetricAppendReport,
     MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSink,
     MetricSinkError, MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime,
-    MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
+    MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricHistoryPoint, WorkloadMetricPoint,
+    WorkloadMetricQuery, WorkloadMetricQueryStore, WorkloadMetricQueryStoreError,
 };
 
 /// Deterministic idempotent metric store for pipeline and composition tests.
@@ -23,7 +24,7 @@ pub struct InMemoryMetricStore {
 struct MetricState {
     points: BTreeMap<MetricRecordId, StoredMetricPoint>,
     sequences: BTreeMap<MetricSequence, MetricRecordId>,
-    last_by_workload: BTreeMap<(NodeId, WorkloadId), MetricSequence>,
+    last_by_workload: BTreeMap<(ClusterId, NodeId, WorkloadId), MetricSequence>,
     cursors: BTreeMap<MetricSinkId, MetricSequence>,
     last_sequence: u64,
 }
@@ -66,6 +67,11 @@ impl MetricStore for InMemoryMetricStore {
         let mut pending_order = Vec::new();
         let mut deduplicated = 0_usize;
         for point in points {
+            point
+                .validate()
+                .map_err(|error| MetricStoreError::Rejected {
+                    message: error.to_string(),
+                })?;
             let committed = state.points.get(&point.id).map(|stored| &stored.point);
             let existing = pending.get(&point.id).or(committed);
             match existing {
@@ -100,7 +106,11 @@ impl MetricStore for InMemoryMetricStore {
                 })?;
             state.last_sequence = state.last_sequence.saturating_add(1);
             let sequence = MetricSequence(state.last_sequence);
-            let owner = (point.id.node_id.clone(), point.id.workload_id.clone());
+            let owner = (
+                point.metadata.cluster_id.clone(),
+                point.id.node_id.clone(),
+                point.id.workload_id.clone(),
+            );
             let previous = state.last_by_workload.insert(owner, sequence);
             state.sequences.insert(sequence, id.clone());
             state.points.insert(
@@ -178,6 +188,74 @@ impl MetricDeliveryStore for InMemoryMetricStore {
     }
 }
 
+#[async_trait]
+impl WorkloadMetricQueryStore for InMemoryMetricStore {
+    async fn query_workload_metrics(
+        &self,
+        query: &WorkloadMetricQuery,
+    ) -> Result<Vec<WorkloadMetricHistoryPoint>, WorkloadMetricQueryStoreError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| WorkloadMetricQueryStoreError::Unavailable {
+                message: "in-memory metric store lock was poisoned".to_owned(),
+            })?;
+        state
+            .points
+            .values()
+            .filter(|stored| stored.point.metadata.cluster_id == *query.cluster_id())
+            .filter(|stored| {
+                query
+                    .node_id()
+                    .is_none_or(|node| stored.point.id.node_id == *node)
+            })
+            .filter(|stored| {
+                query
+                    .service_id()
+                    .is_none_or(|service| stored.point.metadata.service_id == *service)
+            })
+            .filter(|stored| {
+                query
+                    .deployment_id()
+                    .is_none_or(|deployment| stored.point.metadata.deployment_id == *deployment)
+            })
+            .filter(|stored| {
+                stored.point.id.collected_at.0 >= query.from().0
+                    && stored.point.id.collected_at.0 <= query.to().0
+            })
+            .take(query.limit())
+            .map(|stored| {
+                let previous = stored
+                    .previous
+                    .map(|sequence| query_previous(&state, sequence))
+                    .transpose()?;
+                Ok(WorkloadMetricHistoryPoint {
+                    point: stored.point.clone(),
+                    previous,
+                })
+            })
+            .collect()
+    }
+}
+
+fn query_previous(
+    state: &MetricState,
+    sequence: MetricSequence,
+) -> Result<WorkloadMetricPoint, WorkloadMetricQueryStoreError> {
+    let id = state.sequences.get(&sequence).ok_or_else(|| {
+        WorkloadMetricQueryStoreError::Unavailable {
+            message: "in-memory metric query baseline sequence is missing".to_owned(),
+        }
+    })?;
+    state
+        .points
+        .get(id)
+        .map(|stored| stored.point.clone())
+        .ok_or_else(|| WorkloadMetricQueryStoreError::Unavailable {
+            message: "in-memory metric query baseline point is missing".to_owned(),
+        })
+}
+
 /// No-op lifecycle owner for an in-memory metric store used by composition tests.
 pub struct InMemoryMetricStoreRuntime {
     store: Arc<InMemoryMetricStore>,
@@ -217,6 +295,10 @@ impl MetricStoreRuntime for InMemoryMetricStoreRuntime {
     }
 
     fn delivery_store(&self) -> Arc<dyn MetricDeliveryStore> {
+        self.store.clone()
+    }
+
+    fn query_store(&self) -> Arc<dyn WorkloadMetricQueryStore> {
         self.store.clone()
     }
 

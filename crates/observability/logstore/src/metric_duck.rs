@@ -6,7 +6,9 @@ use metrics::{
     HostMetricPoint, HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError,
     HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricDeliveryStore,
     MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
-    MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
+    MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricHistoryPoint,
+    WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
+    WorkloadMetricQueryStoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,6 +31,11 @@ enum Command {
     LatestHost {
         query: LatestHostMetricQuery,
         response: oneshot::Sender<Result<Vec<HostMetricPoint>, HostMetricQueryStoreError>>,
+    },
+    QueryWorkloads {
+        query: WorkloadMetricQuery,
+        response:
+            oneshot::Sender<Result<Vec<WorkloadMetricHistoryPoint>, WorkloadMetricQueryStoreError>>,
     },
     ReadAfter {
         cursor: Option<MetricSequence>,
@@ -211,6 +218,26 @@ impl HostMetricQueryStore for DuckMetricStore {
 }
 
 #[async_trait]
+impl WorkloadMetricQueryStore for DuckMetricStore {
+    async fn query_workload_metrics(
+        &self,
+        query: &WorkloadMetricQuery,
+    ) -> Result<Vec<WorkloadMetricHistoryPoint>, WorkloadMetricQueryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::QueryWorkloads {
+                query: query.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| workload_query_worker_stopped("accepting workload history query"))?;
+        result
+            .await
+            .map_err(|_| workload_query_worker_stopped("completing workload history query"))?
+    }
+}
+
+#[async_trait]
 impl MetricDeliveryStore for DuckMetricStore {
     async fn read_after(
         &self,
@@ -278,6 +305,10 @@ impl MetricStoreRuntime for DuckMetricStoreRuntime {
         self.store.clone()
     }
 
+    fn query_store(&self) -> Arc<dyn WorkloadMetricQueryStore> {
+        self.store.clone()
+    }
+
     fn host_store(&self) -> Arc<dyn HostMetricStore> {
         self.store.clone()
     }
@@ -328,6 +359,10 @@ fn run_worker(
                 let _ignored =
                     response.send(crate::host_metric_schema::latest(&connection, &query));
             }
+            Command::QueryWorkloads { query, response } => {
+                let _ignored =
+                    response.send(crate::workload_metric_schema::query(&connection, &query));
+            }
             Command::ReadAfter {
                 cursor,
                 limit,
@@ -373,6 +408,12 @@ fn delivery_worker_stopped(action: &'static str) -> MetricDeliveryStoreError {
 
 fn host_query_worker_stopped(action: &'static str) -> HostMetricQueryStoreError {
     HostMetricQueryStoreError::Unavailable {
+        message: format!("DuckDB metric writer stopped before {action}"),
+    }
+}
+
+fn workload_query_worker_stopped(action: &'static str) -> WorkloadMetricQueryStoreError {
+    WorkloadMetricQueryStoreError::Unavailable {
         message: format!("DuckDB metric writer stopped before {action}"),
     }
 }
