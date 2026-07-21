@@ -146,7 +146,7 @@ fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
     ));
 }
 
-struct World {
+pub(super) struct World {
     settings: FirewallSettings,
     policies: Vec<FirewallPolicy>,
     services: Vec<Service>,
@@ -155,7 +155,7 @@ struct World {
 }
 
 impl World {
-    fn standard() -> Self {
+    pub(super) fn standard() -> Self {
         let api = service("api");
         let system = service("maestro-dns");
         let settings = FirewallSettings {
@@ -239,7 +239,7 @@ impl World {
         }
     }
 
-    fn input(&self) -> FirewallInput {
+    pub(super) fn input(&self) -> FirewallInput {
         FirewallInput {
             settings: self.settings.clone(),
             policies: self.policies.clone(),

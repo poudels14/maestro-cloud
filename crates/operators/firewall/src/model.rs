@@ -50,6 +50,15 @@ pub struct FirewallRuleset {
     pub digest: String,
 }
 
+/// Complete immutable artifact handed to the firewall side-effect boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FirewallBundle {
+    /// Deterministically ordered complete rulesets for every active node network.
+    pub rulesets: Vec<FirewallRuleset>,
+    /// SHA-256 digest over the ordered node identities and exact ruleset bytes.
+    pub digest: String,
+}
+
 /// Optimistic status replacement after the exact bundle is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirewallPolicyStatusUpdate {
@@ -70,4 +79,14 @@ pub struct FirewallPlan {
     pub bundle_digest: String,
     /// Policies whose generation or applied bundle digest is stale.
     pub policy_updates: Vec<FirewallPolicyStatusUpdate>,
+}
+
+impl FirewallPlan {
+    /// Copies the exact backend artifact out of this pure plan.
+    pub fn bundle(&self) -> FirewallBundle {
+        FirewallBundle {
+            rulesets: self.rulesets.clone(),
+            digest: self.bundle_digest.clone(),
+        }
+    }
 }
