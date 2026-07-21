@@ -1,0 +1,200 @@
+---
+source: crates/operators/firewall/src/tests/plan.rs
+expression: artifact
+---
+node: node-1
+digest: 8567c1fa851c307ca12f4ce532b5a45fc92de908c12538de92dc5a21d4742ece
+table inet maestro_firewall {
+    set all_workloads_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.0/24, 10.42.2.0/24 }
+    }
+
+    set control_allow_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8 }
+    }
+
+    set control_allow_v6 {
+        type ipv6_addr
+        flags interval
+        elements = { fd00::/8 }
+    }
+
+    set local_workloads_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.0/24 }
+    }
+
+    set p_2a6d0d2d4563b576_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 192.0.2.0/24 }
+    }
+
+    set p_48adcf3a3b64b4ee_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.20.0.0/16 }
+    }
+
+    set p_59f202aa5b13d550_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8 }
+    }
+
+    set p_59f202aa5b13d550_r_1 {
+        type ipv6_addr
+        flags interval
+        elements = { 2001:db8::/32 }
+    }
+
+    set src_f19bd4c5b3923f70_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.10 }
+    }
+
+    set system_sources_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.250 }
+    }
+
+    chain forward {
+        type filter hook forward priority -50; policy accept;
+        ct state established,related accept
+        ip saddr @system_sources_v4 accept
+        ip saddr @src_f19bd4c5b3923f70_v4 jump policy_2a6d0d2d4563b576
+        iifname "maestro0" jump policy_59f202aa5b13d550
+    }
+
+    chain input {
+        type filter hook input priority -50; policy accept;
+        ct state established,related accept
+        ip saddr @local_workloads_v4 ip daddr 10.42.1.1 tcp dport 53 accept
+        ip saddr @local_workloads_v4 ip daddr 10.42.1.1 udp dport 53 accept
+        ip saddr @control_allow_v4 tcp dport { 3000, 3001 } accept
+        ip6 saddr @control_allow_v6 tcp dport { 3000, 3001 } accept
+        tcp dport { 3000, 3001 } reject
+        ip saddr @all_workloads_v4 reject
+        jump policy_48adcf3a3b64b4ee
+    }
+
+    chain policy_2a6d0d2d4563b576 {
+        ip daddr @p_2a6d0d2d4563b576_r_0 tcp dport 5432 accept
+        reject
+    }
+
+    chain policy_48adcf3a3b64b4ee {
+        ip saddr @p_48adcf3a3b64b4ee_r_0 tcp dport 22 accept
+        accept
+    }
+
+    chain policy_59f202aa5b13d550 {
+        ip daddr @p_59f202aa5b13d550_r_0 tcp dport 443 accept
+        ip6 daddr @p_59f202aa5b13d550_r_1 tcp dport 8000-8080 accept
+        ip6 daddr @p_59f202aa5b13d550_r_1 udp dport 8000-8080 accept
+        reject
+    }
+
+}
+
+node: node-2
+digest: 2d4e732ffe06efcf3c724ce4fb279800f131bb175c93180854706b370fd1c31b
+table inet maestro_firewall {
+    set all_workloads_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.0/24, 10.42.2.0/24 }
+    }
+
+    set control_allow_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8 }
+    }
+
+    set control_allow_v6 {
+        type ipv6_addr
+        flags interval
+        elements = { fd00::/8 }
+    }
+
+    set local_workloads_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.2.0/24 }
+    }
+
+    set p_2a6d0d2d4563b576_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 192.0.2.0/24 }
+    }
+
+    set p_48adcf3a3b64b4ee_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.20.0.0/16 }
+    }
+
+    set p_59f202aa5b13d550_r_0 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8 }
+    }
+
+    set p_59f202aa5b13d550_r_1 {
+        type ipv6_addr
+        flags interval
+        elements = { 2001:db8::/32 }
+    }
+
+    set src_f19bd4c5b3923f70_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.2.10 }
+    }
+
+    chain forward {
+        type filter hook forward priority -50; policy accept;
+        ct state established,related accept
+        ip saddr @src_f19bd4c5b3923f70_v4 jump policy_2a6d0d2d4563b576
+        iifname "maestro0" jump policy_59f202aa5b13d550
+    }
+
+    chain input {
+        type filter hook input priority -50; policy accept;
+        ct state established,related accept
+        ip saddr @local_workloads_v4 ip daddr 10.42.2.1 tcp dport 53 accept
+        ip saddr @local_workloads_v4 ip daddr 10.42.2.1 udp dport 53 accept
+        ip saddr @control_allow_v4 tcp dport { 3000, 3001 } accept
+        ip6 saddr @control_allow_v6 tcp dport { 3000, 3001 } accept
+        tcp dport { 3000, 3001 } reject
+        ip saddr @all_workloads_v4 reject
+        jump policy_48adcf3a3b64b4ee
+    }
+
+    chain policy_2a6d0d2d4563b576 {
+        ip daddr @p_2a6d0d2d4563b576_r_0 tcp dport 5432 accept
+        reject
+    }
+
+    chain policy_48adcf3a3b64b4ee {
+        ip saddr @p_48adcf3a3b64b4ee_r_0 tcp dport 22 accept
+        accept
+    }
+
+    chain policy_59f202aa5b13d550 {
+        ip daddr @p_59f202aa5b13d550_r_0 tcp dport 443 accept
+        ip6 daddr @p_59f202aa5b13d550_r_1 tcp dport 8000-8080 accept
+        ip6 daddr @p_59f202aa5b13d550_r_1 udp dport 8000-8080 accept
+        reject
+    }
+
+}
