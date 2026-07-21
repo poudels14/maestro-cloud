@@ -14,11 +14,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::duck_worker::{
     archive_worker_stopped, backup_worker_stopped, dead_worker_stopped, delivery_worker_stopped,
-    run_worker, stats_worker_stopped,
+    retention_worker_stopped, run_worker, stats_worker_stopped,
 };
 use crate::log_backup_schema::PendingLogBackupPartition;
 use crate::{
-    DuckStoreError, DuckStoreSettings, LogArchiveError, LogBackupError, LogRolloverReport,
+    DuckStoreError, DuckStoreSettings, LogArchiveError, LogBackupError, LogRetentionError,
+    LogRetentionReport, LogRolloverReport,
 };
 
 pub(crate) enum Command {
@@ -74,6 +75,10 @@ pub(crate) enum Command {
         partition: PendingLogBackupPartition,
         updated_at: Timestamp,
         response: oneshot::Sender<Result<(), LogBackupError>>,
+    },
+    PruneBackedUp {
+        cutoff: chrono::NaiveDate,
+        response: oneshot::Sender<Result<LogRetentionReport, LogRetentionError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -210,6 +215,21 @@ impl DuckLogStore {
         result
             .await
             .map_err(|_| backup_worker_stopped("completing backup commit"))?
+    }
+
+    /// Removes cold partitions strictly before `cutoff` only after every object is backed up.
+    pub async fn prune_backed_up_before(
+        &self,
+        cutoff: chrono::NaiveDate,
+    ) -> Result<LogRetentionReport, LogRetentionError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::PruneBackedUp { cutoff, response })
+            .await
+            .map_err(|_| retention_worker_stopped("accepting retention prune"))?;
+        result
+            .await
+            .map_err(|_| retention_worker_stopped("completing retention prune"))?
     }
 }
 

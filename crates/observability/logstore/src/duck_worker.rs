@@ -5,7 +5,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::duck::Command;
 use crate::{
-    LogArchiveError, LogBackupError, delivery_schema, log_archive, log_backup_schema, schema,
+    LogArchiveError, LogBackupError, LogRetentionError, delivery_schema, log_archive,
+    log_backup_schema, log_retention, schema,
 };
 
 pub(crate) fn run_worker(
@@ -125,6 +126,13 @@ pub(crate) fn run_worker(
                     updated_at.0,
                 ));
             }
+            Command::PruneBackedUp { cutoff, response } => {
+                let _ignored = response.send(log_retention::prune_backed_up_before(
+                    &mut connection,
+                    cold_root,
+                    cutoff,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
@@ -142,6 +150,12 @@ pub(crate) fn archive_worker_stopped(action: &'static str) -> LogArchiveError {
 
 pub(crate) fn backup_worker_stopped(action: &'static str) -> LogBackupError {
     LogBackupError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+pub(crate) fn retention_worker_stopped(action: &'static str) -> LogRetentionError {
+    LogRetentionError::Unavailable {
         message: format!("DuckDB worker stopped before {action}"),
     }
 }

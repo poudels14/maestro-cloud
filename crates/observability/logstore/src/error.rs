@@ -53,3 +53,20 @@ pub enum LogArchiveError {
         message: String,
     },
 }
+
+/// Fully backed-up cold log partitions could not be pruned safely.
+#[derive(Debug, thiserror::Error)]
+pub enum LogRetentionError {
+    /// The cutoff or persisted partition state was invalid.
+    #[error("log retention rejected operation: {message}")]
+    Rejected {
+        /// Stable validation detail.
+        message: String,
+    },
+    /// DuckDB or the cold-tier filesystem was unavailable.
+    #[error("log retention is unavailable: {message}")]
+    Unavailable {
+        /// Safe storage diagnostic.
+        message: String,
+    },
+}

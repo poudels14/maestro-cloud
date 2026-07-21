@@ -4,4 +4,5 @@ mod archive;
 mod backup;
 mod duck;
 mod metric_duck;
+mod retention;
 mod settings;
