@@ -6,26 +6,26 @@ use sha2::{Digest, Sha256};
 
 use super::S3BackupObjectStoreError;
 
-pub(super) const MULTIPART_THRESHOLD_BYTES: u64 = 100 * 1024 * 1024;
-pub(super) const DEFAULT_MULTIPART_PART_BYTES: u64 = 64 * 1024 * 1024;
-pub(super) const MAX_MULTIPART_PARTS: u64 = 10_000;
-pub(super) const MAX_MULTIPART_PART_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+pub(crate) const MULTIPART_THRESHOLD_BYTES: u64 = 100 * 1024 * 1024;
+pub(crate) const DEFAULT_MULTIPART_PART_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_MULTIPART_PARTS: u64 = 10_000;
+pub(crate) const MAX_MULTIPART_PART_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
-pub(super) struct ObjectDigest {
-    pub(super) size: u64,
-    pub(super) whole_base64: String,
-    pub(super) whole_hex: String,
-    pub(super) parts: Vec<PartDigest>,
+pub(crate) struct ObjectDigest {
+    pub(crate) size: u64,
+    pub(crate) whole_base64: String,
+    pub(crate) whole_hex: String,
+    pub(crate) parts: Vec<PartDigest>,
 }
 
-pub(super) struct PartDigest {
-    pub(super) number: i32,
-    pub(super) offset: u64,
-    pub(super) length: u64,
-    pub(super) checksum_base64: String,
+pub(crate) struct PartDigest {
+    pub(crate) number: i32,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
+    pub(crate) checksum_base64: String,
 }
 
-pub(super) fn digest_file(path: &Path) -> Result<ObjectDigest, S3BackupObjectStoreError> {
+pub(crate) fn digest_file(path: &Path) -> Result<ObjectDigest, S3BackupObjectStoreError> {
     let mut file = std::fs::File::open(path).map_err(|error| unavailable("open object", error))?;
     let size = file
         .metadata()
@@ -34,13 +34,13 @@ pub(super) fn digest_file(path: &Path) -> Result<ObjectDigest, S3BackupObjectSto
     digest_reader(&mut file, size, None)
 }
 
-pub(super) fn digest_bytes(bytes: &[u8]) -> Result<ObjectDigest, S3BackupObjectStoreError> {
+pub(crate) fn digest_bytes(bytes: &[u8]) -> Result<ObjectDigest, S3BackupObjectStoreError> {
     let size = u64::try_from(bytes.len()).map_err(|error| rejected(error.to_string()))?;
     digest_reader(&mut std::io::Cursor::new(bytes), size, None)
 }
 
 #[cfg(test)]
-pub(super) fn digest_bytes_with_part_size(
+pub(crate) fn digest_bytes_with_part_size(
     bytes: &[u8],
     part_size: u64,
 ) -> Result<ObjectDigest, S3BackupObjectStoreError> {
@@ -117,7 +117,7 @@ fn digest_reader(
     })
 }
 
-pub(super) fn multipart_part_size(size: u64) -> Result<u64, S3BackupObjectStoreError> {
+pub(crate) fn multipart_part_size(size: u64) -> Result<u64, S3BackupObjectStoreError> {
     let minimum = size.div_ceil(MAX_MULTIPART_PARTS);
     let mebibyte = 1024 * 1024;
     let part_size = DEFAULT_MULTIPART_PART_BYTES.max(minimum.div_ceil(mebibyte) * mebibyte);
@@ -129,7 +129,7 @@ pub(super) fn multipart_part_size(size: u64) -> Result<u64, S3BackupObjectStoreE
     Ok(part_size)
 }
 
-pub(super) fn composite_sha256(
+pub(crate) fn composite_sha256(
     part_checksums: &[String],
 ) -> Result<String, S3BackupObjectStoreError> {
     if part_checksums.is_empty() {

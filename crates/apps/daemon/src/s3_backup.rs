@@ -12,6 +12,12 @@ mod multipart;
 use digest::{ObjectDigest, digest_bytes, digest_file};
 use multipart::upload_multipart;
 
+#[cfg(test)]
+pub(crate) use digest::{
+    DEFAULT_MULTIPART_PART_BYTES, MAX_MULTIPART_PART_BYTES, MAX_MULTIPART_PARTS,
+    MULTIPART_THRESHOLD_BYTES, composite_sha256, digest_bytes_with_part_size, multipart_part_size,
+};
+
 /// Production S3 object-store adapter with whole-object verification and SSE-KMS.
 pub struct S3BackupObjectStore {
     client: aws_sdk_s3::Client,
@@ -75,12 +81,20 @@ impl S3BackupObjectStore {
         if head.content_length() != Some(expected_size)
             || head.checksum_sha256() != Some(stored_checksum.as_str())
             || head.server_side_encryption() != Some(&ServerSideEncryption::AwsKms)
-            || head.ssekms_key_id() != Some(object.kms_key_id.as_str())
+            || !head
+                .ssekms_key_id()
+                .is_some_and(|actual| kms_key_matches(&object.kms_key_id, actual))
             || metadata_sha != Some(digest.whole_hex.as_str())
         {
             return Err(unavailable(
                 "verify uploaded object metadata",
-                "S3 metadata did not match the upload contract",
+                format!(
+                    "S3 metadata did not match the upload contract: length={:?}, checksum={:?}, encryption={:?}, KMS key={:?}, sha256 metadata={metadata_sha:?}",
+                    head.content_length(),
+                    head.checksum_sha256(),
+                    head.server_side_encryption(),
+                    head.ssekms_key_id(),
+                ),
             ));
         }
         Ok(BackupObjectReceipt {
@@ -140,7 +154,7 @@ async fn digest_object(body: &BackupObjectBody) -> Result<ObjectDigest, S3Backup
     }
 }
 
-fn validate_upload(object: &BackupObjectUpload) -> Result<(), S3BackupObjectStoreError> {
+pub(crate) fn validate_upload(object: &BackupObjectUpload) -> Result<(), S3BackupObjectStoreError> {
     if object.key.is_empty()
         || object.key.starts_with('/')
         || object.key.split('/').any(|part| part.is_empty())
@@ -163,6 +177,13 @@ fn validate_upload(object: &BackupObjectUpload) -> Result<(), S3BackupObjectStor
         return Err(rejected("S3 backup SHA-256 is invalid"));
     }
     Ok(())
+}
+
+pub(crate) fn kms_key_matches(configured: &str, actual: &str) -> bool {
+    actual == configured
+        || actual
+            .strip_prefix("arn:aws:kms:")
+            .is_some_and(|canonical| canonical == configured)
 }
 
 /// Construction, validation, or S3 delivery failure from the production adapter.
@@ -194,77 +215,5 @@ fn rejected(message: impl Into<String>) -> S3BackupObjectStoreError {
 fn unavailable(action: &str, error: impl std::fmt::Display) -> S3BackupObjectStoreError {
     S3BackupObjectStoreError::Unavailable {
         message: format!("failed to {action}: {error}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use base64::Engine;
-    use sha2::{Digest, Sha256};
-
-    use super::digest::{
-        DEFAULT_MULTIPART_PART_BYTES, MAX_MULTIPART_PART_BYTES, MAX_MULTIPART_PARTS,
-        MULTIPART_THRESHOLD_BYTES, composite_sha256, digest_bytes_with_part_size,
-        multipart_part_size,
-    };
-    use super::*;
-
-    #[test]
-    fn multipart_digest_uses_s3_composite_checksum_contract()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let bytes = vec![7_u8; 10];
-        let digest = digest_bytes_with_part_size(&bytes, 6)?;
-        assert_eq!(digest.parts.len(), 2);
-        assert_eq!(digest.parts.first().ok_or("first part missing")?.length, 6);
-        assert_eq!(digest.parts.get(1).ok_or("second part missing")?.offset, 6);
-        assert_eq!(digest.whole_hex, format!("{:x}", Sha256::digest(&bytes)));
-        let checksums = digest
-            .parts
-            .iter()
-            .map(|part| part.checksum_base64.clone())
-            .collect::<Vec<_>>();
-        let expected = composite_sha256(&checksums)?;
-        let decoded = checksums
-            .iter()
-            .map(|checksum| base64::engine::general_purpose::STANDARD.decode(checksum))
-            .collect::<Result<Vec<_>, _>>()?;
-        let combined = decoded.concat();
-        assert_eq!(
-            expected,
-            format!(
-                "{}-2",
-                base64::engine::general_purpose::STANDARD.encode(Sha256::digest(combined))
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn multipart_plan_stays_within_s3_limits() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(
-            multipart_part_size(MULTIPART_THRESHOLD_BYTES)?,
-            DEFAULT_MULTIPART_PART_BYTES
-        );
-        let five_tebibytes = 5 * 1024 * 1024 * 1024 * 1024;
-        let part_size = multipart_part_size(five_tebibytes)?;
-        assert!(part_size <= MAX_MULTIPART_PART_BYTES);
-        assert!(five_tebibytes.div_ceil(part_size) <= MAX_MULTIPART_PARTS);
-        Ok(())
-    }
-
-    #[test]
-    fn upload_validation_rejects_ambiguous_keys_and_checksums() {
-        let object = BackupObjectUpload {
-            key: "/absolute".to_owned(),
-            body: BackupObjectBody::Bytes(Vec::new()),
-            size_bytes: 0,
-            sha256: "not-a-digest".to_owned(),
-            kms_key_id: "kms".to_owned(),
-            commit_marker: false,
-        };
-        assert!(matches!(
-            validate_upload(&object),
-            Err(S3BackupObjectStoreError::Rejected { .. })
-        ));
     }
 }

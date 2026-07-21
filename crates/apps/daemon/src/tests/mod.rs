@@ -21,6 +21,7 @@ mod orchestration_scale;
 mod orchestration_service;
 mod plan;
 mod runtime;
+mod s3_backup;
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;

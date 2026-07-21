@@ -21,7 +21,7 @@ const MAX_KMS_KEY_BYTES: usize = 4_096;
 pub struct LogBackupLaunchConfig {
     /// S3 bucket receiving node-qualified Parquet objects and manifests.
     pub bucket: String,
-    /// Required server-side encryption KMS key ID, alias, or ARN.
+    /// Required AWS KMS key ARN or S3-compatible KMS key identity.
     pub kms_key_id: String,
     /// Optional AWS region override; the standard provider chain is used otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
