@@ -6,7 +6,9 @@ use node_fabric::otlp::{logs, metrics, traces};
 use node_fabric::proto::{MutationResult, ResourceMutation};
 use tonic::Status;
 
-use crate::{NodeApiServices, NodeControlHandler, NodeTelemetryHandler};
+use crate::{
+    NodeApiServices, NodeControlHandler, NodeLogHandler, NodeMetricHandler, NodeTraceHandler,
+};
 
 #[derive(Debug, Default)]
 struct NoopHandlers;
@@ -23,7 +25,7 @@ impl NodeControlHandler for NoopHandlers {
 }
 
 #[async_trait]
-impl NodeTelemetryHandler for NoopHandlers {
+impl NodeLogHandler for NoopHandlers {
     async fn export_logs(
         &self,
         _claims: WorkloadClaims,
@@ -31,7 +33,10 @@ impl NodeTelemetryHandler for NoopHandlers {
     ) -> Result<logs::ExportLogsServiceResponse, Status> {
         Ok(logs::ExportLogsServiceResponse::default())
     }
+}
 
+#[async_trait]
+impl NodeMetricHandler for NoopHandlers {
     async fn export_metrics(
         &self,
         _claims: WorkloadClaims,
@@ -39,7 +44,10 @@ impl NodeTelemetryHandler for NoopHandlers {
     ) -> Result<metrics::ExportMetricsServiceResponse, Status> {
         Ok(metrics::ExportMetricsServiceResponse::default())
     }
+}
 
+#[async_trait]
+impl NodeTraceHandler for NoopHandlers {
     async fn export_traces(
         &self,
         _claims: WorkloadClaims,
@@ -51,5 +59,10 @@ impl NodeTelemetryHandler for NoopHandlers {
 
 pub(super) fn node_api_services() -> NodeApiServices {
     let handlers = Arc::new(NoopHandlers);
-    NodeApiServices::new(handlers.clone(), handlers)
+    NodeApiServices::new(
+        handlers.clone(),
+        handlers.clone(),
+        handlers.clone(),
+        handlers,
+    )
 }

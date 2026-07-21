@@ -96,7 +96,7 @@ pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, Syste
 #[cfg(unix)]
 pub use node_api::{
     BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeApiSocketOwner,
-    NodeControlHandler, NodeTelemetryHandler,
+    NodeControlHandler, NodeLogHandler, NodeMetricHandler, NodeTraceHandler,
 };
 #[cfg(unix)]
 pub use node_api_files::NodeApiMountError;

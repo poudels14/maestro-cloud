@@ -31,23 +31,31 @@ pub trait NodeControlHandler: Send + Sync + 'static {
     ) -> Result<MutationResult, Status>;
 }
 
-/// Accepts authenticated standard OTLP exports from one workload.
+/// Accepts authenticated OTLP log exports from one workload.
 #[async_trait]
-pub trait NodeTelemetryHandler: Send + Sync + 'static {
+pub trait NodeLogHandler: Send + Sync + 'static {
     /// Accepts an OTLP log batch.
     async fn export_logs(
         &self,
         claims: WorkloadClaims,
         request: logs::ExportLogsServiceRequest,
     ) -> Result<logs::ExportLogsServiceResponse, Status>;
+}
 
+/// Accepts authenticated OTLP metric exports from one workload.
+#[async_trait]
+pub trait NodeMetricHandler: Send + Sync + 'static {
     /// Accepts an OTLP metric batch.
     async fn export_metrics(
         &self,
         claims: WorkloadClaims,
         request: metrics::ExportMetricsServiceRequest,
     ) -> Result<metrics::ExportMetricsServiceResponse, Status>;
+}
 
+/// Accepts authenticated OTLP trace exports from one workload.
+#[async_trait]
+pub trait NodeTraceHandler: Send + Sync + 'static {
     /// Accepts an OTLP trace batch.
     async fn export_traces(
         &self,
@@ -60,16 +68,25 @@ pub trait NodeTelemetryHandler: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct NodeApiServices {
     control: Arc<dyn NodeControlHandler>,
-    telemetry: Arc<dyn NodeTelemetryHandler>,
+    logs: Arc<dyn NodeLogHandler>,
+    metrics: Arc<dyn NodeMetricHandler>,
+    traces: Arc<dyn NodeTraceHandler>,
 }
 
 impl NodeApiServices {
     /// Constructs the service set shared by per-workload listeners.
     pub fn new(
         control: Arc<dyn NodeControlHandler>,
-        telemetry: Arc<dyn NodeTelemetryHandler>,
+        logs: Arc<dyn NodeLogHandler>,
+        metrics: Arc<dyn NodeMetricHandler>,
+        traces: Arc<dyn NodeTraceHandler>,
     ) -> Self {
-        Self { control, telemetry }
+        Self {
+            control,
+            logs,
+            metrics,
+            traces,
+        }
     }
 }
 
@@ -78,7 +95,9 @@ impl Debug for NodeApiServices {
         formatter
             .debug_struct("NodeApiServices")
             .field("control", &"dyn NodeControlHandler")
-            .field("telemetry", &"dyn NodeTelemetryHandler")
+            .field("logs", &"dyn NodeLogHandler")
+            .field("metrics", &"dyn NodeMetricHandler")
+            .field("traces", &"dyn NodeTraceHandler")
             .finish()
     }
 }
@@ -174,7 +193,7 @@ impl logs::logs_service_server::LogsService for WorkloadNodeApiService {
     ) -> Result<Response<logs::ExportLogsServiceResponse>, Status> {
         let claims = self.authenticate(&request)?;
         self.services
-            .telemetry
+            .logs
             .export_logs(claims, request.into_inner())
             .await
             .map(Response::new)
@@ -189,7 +208,7 @@ impl metrics::metrics_service_server::MetricsService for WorkloadNodeApiService 
     ) -> Result<Response<metrics::ExportMetricsServiceResponse>, Status> {
         let claims = self.authenticate(&request)?;
         self.services
-            .telemetry
+            .metrics
             .export_metrics(claims, request.into_inner())
             .await
             .map(Response::new)
@@ -204,7 +223,7 @@ impl traces::trace_service_server::TraceService for WorkloadNodeApiService {
     ) -> Result<Response<traces::ExportTraceServiceResponse>, Status> {
         let claims = self.authenticate(&request)?;
         self.services
-            .telemetry
+            .traces
             .export_traces(claims, request.into_inner())
             .await
             .map(Response::new)

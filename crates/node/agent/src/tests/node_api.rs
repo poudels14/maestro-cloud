@@ -18,8 +18,8 @@ use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Request, Status};
 
 use crate::{
-    BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner, NodeControlHandler,
-    NodeTelemetryHandler,
+    BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner, NodeControlHandler, NodeLogHandler,
+    NodeMetricHandler, NodeTraceHandler,
 };
 
 #[derive(Debug, Default)]
@@ -47,7 +47,7 @@ impl NodeControlHandler for RecordingHandlers {
 }
 
 #[async_trait]
-impl NodeTelemetryHandler for RecordingHandlers {
+impl NodeLogHandler for RecordingHandlers {
     async fn export_logs(
         &self,
         claims: WorkloadClaims,
@@ -61,7 +61,10 @@ impl NodeTelemetryHandler for RecordingHandlers {
             partial_success: None,
         })
     }
+}
 
+#[async_trait]
+impl NodeMetricHandler for RecordingHandlers {
     async fn export_metrics(
         &self,
         claims: WorkloadClaims,
@@ -75,7 +78,10 @@ impl NodeTelemetryHandler for RecordingHandlers {
             partial_success: None,
         })
     }
+}
 
+#[async_trait]
+impl NodeTraceHandler for RecordingHandlers {
     async fn export_traces(
         &self,
         claims: WorkloadClaims,
@@ -97,7 +103,12 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
     let socket_path = temporary.path().join("node.sock");
     let metadata = std::fs::metadata(temporary.path()).expect("directory metadata");
     let handlers = Arc::new(RecordingHandlers::default());
-    let services = NodeApiServices::new(handlers.clone(), handlers.clone());
+    let services = NodeApiServices::new(
+        handlers.clone(),
+        handlers.clone(),
+        handlers.clone(),
+        handlers.clone(),
+    );
     let bound = BoundWorkloadNodeApi::bind(
         &socket_path,
         WorkloadAuthorization::new(WorkloadToken::from_bytes([7; 32]), metadata.uid(), claims()),
@@ -208,7 +219,12 @@ async fn uds_server_rejects_unprivileged_control() {
             group_id: metadata.gid(),
         },
         false,
-        NodeApiServices::new(handlers.clone(), handlers),
+        NodeApiServices::new(
+            handlers.clone(),
+            handlers.clone(),
+            handlers.clone(),
+            handlers,
+        ),
     )
     .expect("bind node API");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
