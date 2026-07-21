@@ -5,8 +5,12 @@
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod conformance;
+mod dead_letter;
+mod delivery;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
+#[cfg(any(test, feature = "test-util"))]
+mod fake_delivery;
 mod filter;
 mod model;
 #[cfg(unix)]
@@ -14,10 +18,18 @@ mod otlp;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
+mod sink_worker;
 mod store;
 
+pub use dead_letter::{DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterStats};
+pub use delivery::{
+    LogDeliveryStore, LogDeliveryStoreError, LogSequence, LogSink, LogSinkError, LogSinkId,
+    LogSinkIdError, LogSinkOutcome, SequencedLogEntry,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{InMemoryLogStore, InMemoryLogStoreRuntime};
+#[cfg(any(test, feature = "test-util"))]
+pub use fake_delivery::{InMemoryDeadLetterStore, InMemoryLogDeliveryStore, RecordingLogSink};
 pub use filter::{
     LogFilter, LogFilterChain, LogFilterKind, SuccessfulHealthcheckFilter, TailscaleNoiseFilter,
     standard_ingest_filters,
@@ -33,6 +45,10 @@ pub use parser::{
 };
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
+pub use sink_worker::{
+    SinkSleeper, SinkWorker, SinkWorkerError, SinkWorkerReport, SinkWorkerSettings,
+    SinkWorkerSettingsError, TokioSinkSleeper,
+};
 pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};
 
 #[cfg(test)]

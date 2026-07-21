@@ -6,4 +6,5 @@ mod otlp;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
+mod sink_worker;
 mod store;
