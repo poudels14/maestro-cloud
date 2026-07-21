@@ -22,7 +22,10 @@ pub use model::{
 };
 #[cfg(unix)]
 pub use otlp::OtlpLogHandler;
-pub use parser::{JsonLogParser, LogParser, ParsedLog, PlainTextLogParser, standard_parsers};
+pub use parser::{
+    DatePrefixedLogParser, JsonLogParser, LogParser, LogrusLogParser, ParsedLog,
+    PlainTextLogParser, Rfc3339PrefixedLogParser, standard_parsers,
+};
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
 pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};

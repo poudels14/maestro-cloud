@@ -3387,14 +3387,17 @@ name = "logs"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "kernel-api",
  "node-agent",
  "node-fabric",
+ "proptest",
  "prost",
  "runtime",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strip-ansi-escapes",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
