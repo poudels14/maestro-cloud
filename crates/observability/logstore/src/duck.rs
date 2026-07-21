@@ -4,8 +4,9 @@ use std::thread::JoinHandle;
 use async_trait::async_trait;
 use logs::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
-    LogDeliveryStoreError, LogSequence, LogSinkId, LogStore, LogStoreError, LogStoreRuntime,
-    LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
+    LogDeliveryStoreError, LogSequence, LogSinkId, LogSpoolStats, LogStatsStore,
+    LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
+    SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -49,6 +50,10 @@ enum Command {
         sink_id: LogSinkId,
         through: Option<LogSequence>,
         response: oneshot::Sender<Result<u64, DeadLetterStoreError>>,
+    },
+    StatsSnapshot {
+        sink_ids: Vec<LogSinkId>,
+        response: oneshot::Sender<Result<LogSpoolStats, LogStatsStoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -287,6 +292,26 @@ impl DeadLetterStore for DuckLogStore {
 }
 
 #[async_trait]
+impl LogStatsStore for DuckLogStore {
+    async fn stats_snapshot(
+        &self,
+        sink_ids: &[LogSinkId],
+    ) -> Result<LogSpoolStats, LogStatsStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::StatsSnapshot {
+                sink_ids: sink_ids.to_vec(),
+                response,
+            })
+            .await
+            .map_err(|_| stats_worker_stopped("accepting stats snapshot"))?;
+        result
+            .await
+            .map_err(|_| stats_worker_stopped("completing stats snapshot"))?
+    }
+}
+
+#[async_trait]
 impl LogStoreRuntime for DuckLogStoreRuntime {
     fn store(&self) -> Arc<dyn LogStore> {
         self.store.clone()
@@ -297,6 +322,10 @@ impl LogStoreRuntime for DuckLogStoreRuntime {
     }
 
     fn dead_letter_store(&self) -> Arc<dyn DeadLetterStore> {
+        self.store.clone()
+    }
+
+    fn stats_store(&self) -> Arc<dyn LogStatsStore> {
         self.store.clone()
     }
 
@@ -390,6 +419,13 @@ fn run_worker(
                     through,
                 ));
             }
+            Command::StatsSnapshot { sink_ids, response } => {
+                let _ignored = response.send(delivery_schema::stats_snapshot(
+                    &connection,
+                    path,
+                    &sink_ids,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
@@ -407,6 +443,12 @@ fn delivery_worker_stopped(action: &'static str) -> LogDeliveryStoreError {
 
 fn dead_worker_stopped(action: &'static str) -> DeadLetterStoreError {
     DeadLetterStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+fn stats_worker_stopped(action: &'static str) -> LogStatsStoreError {
+    LogStatsStoreError::Unavailable {
         message: format!("DuckDB worker stopped before {action}"),
     }
 }

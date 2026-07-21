@@ -1,10 +1,13 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use duckdb::{Connection, OptionalExt, params};
 use logs::{
-    DeadLetterStoreError, IngestLogEntry, LogDeliveryStoreError, LogSequence, LogSinkId,
-    SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
+    DeadLetterStoreError, IngestLogEntry, LogDeliveryStoreError, LogSequence, LogSinkCursorStats,
+    LogSinkId, LogSpoolStats, LogStatsStoreError, MAX_RETAINED_DEAD_LETTERS, SequencedLogEntry,
+    SinkDeadLetter, SinkDeadLetterSnapshot, SinkDeadLetterStats,
 };
 
-const MAX_DEAD_LETTERS: i64 = 100_000;
 const MAX_DEAD_LETTER_REASON_BYTES: usize = 4_096;
 const MAX_DEAD_LETTER_PAYLOAD_BYTES: usize = 5_000_000;
 
@@ -141,7 +144,7 @@ pub(crate) fn record_dead_letter(
             row.get::<_, i64>(0)
         })
         .map_err(dead_unavailable("count retained dead letters"))?;
-    if count >= MAX_DEAD_LETTERS {
+    if u64::try_from(count).unwrap_or(u64::MAX) >= MAX_RETAINED_DEAD_LETTERS {
         return Err(dead_rejected("dead-letter row limit has been reached"));
     }
     transaction
@@ -254,6 +257,134 @@ pub(crate) fn purge_dead_letters(
     Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
 }
 
+pub(crate) fn stats_snapshot(
+    connection: &Connection,
+    path: &Path,
+    sink_ids: &[LogSinkId],
+) -> Result<LogSpoolStats, LogStatsStoreError> {
+    let (row_count, high_watermark) = connection
+        .query_row(
+            "SELECT COUNT(*), COALESCE(MAX(sequence), 0) FROM normalized_logs",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(stats_unavailable("read spool totals"))?;
+    let oldest_entry_at_ms = connection
+        .query_row(
+            "SELECT event_at_ms FROM normalized_logs ORDER BY sequence ASC LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(stats_unavailable("read oldest retained log"))?;
+    let high_watermark = i64_to_stats_sequence(high_watermark)?;
+    let mut sinks = Vec::new();
+    for sink_id in sink_ids.iter().cloned().collect::<BTreeSet<_>>() {
+        let cursor = load_stats_cursor(connection, &sink_id)?;
+        let cursor_value = cursor.map_or(0, |sequence| sequence.0);
+        let pending_entries = high_watermark.0.saturating_sub(cursor_value);
+        let cursor_value = i64::try_from(cursor_value)
+            .map_err(|_| stats_rejected("sink cursor exceeds durable range"))?;
+        let oldest_pending_at_ms = connection
+            .query_row(
+                "SELECT event_at_ms FROM normalized_logs
+                 WHERE sequence > ?1 ORDER BY sequence ASC LIMIT 1",
+                params![cursor_value],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(stats_unavailable("read oldest pending log"))?;
+        sinks.push(LogSinkCursorStats {
+            sink_id,
+            cursor,
+            pending_entries,
+            oldest_pending_at_ms,
+        });
+    }
+    let (dead_count, dead_bytes) = connection
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(octet_length(payload)), 0)
+             FROM sink_dead_letters",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(stats_unavailable("read dead-letter totals"))?;
+    let latest = connection
+        .query_row(
+            "SELECT status_code, reason, recorded_at_ms
+             FROM sink_dead_letters
+             ORDER BY recorded_at_ms DESC, sink_id DESC, source_sequence DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(stats_unavailable("read latest dead letter"))?;
+    let (latest_status, latest_error, latest_at_ms) = match latest {
+        Some((status, error, recorded_at)) => (
+            status
+                .map(|status| {
+                    u16::try_from(status)
+                        .map_err(|_| stats_unavailable_message("stored status code is invalid"))
+                })
+                .transpose()?,
+            Some(error),
+            Some(recorded_at),
+        ),
+        None => (None, None, None),
+    };
+    Ok(LogSpoolStats {
+        row_count: u64::try_from(row_count)
+            .map_err(|_| stats_unavailable_message("stored log row count is invalid"))?,
+        high_watermark,
+        oldest_entry_at_ms,
+        database_bytes: database_file_set_bytes(path),
+        sinks,
+        dead_letters: SinkDeadLetterSnapshot {
+            count: u64::try_from(dead_count)
+                .map_err(|_| stats_unavailable_message("stored dead-letter count is invalid"))?,
+            payload_bytes: u64::try_from(dead_bytes).map_err(|_| {
+                stats_unavailable_message("stored dead-letter byte count is invalid")
+            })?,
+            latest_at_ms,
+            latest_status,
+            latest_error,
+        },
+    })
+}
+
+fn load_stats_cursor(
+    connection: &Connection,
+    sink_id: &LogSinkId,
+) -> Result<Option<LogSequence>, LogStatsStoreError> {
+    connection
+        .query_row(
+            "SELECT last_sequence FROM sink_cursors WHERE sink_id = ?1",
+            params![sink_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(stats_unavailable("read stats sink cursor"))?
+        .map(i64_to_stats_sequence)
+        .transpose()
+}
+
+fn database_file_set_bytes(path: &Path) -> u64 {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push(".wal");
+    [path.to_path_buf(), wal.into()]
+        .into_iter()
+        .filter_map(|candidate| std::fs::metadata(candidate).ok())
+        .fold(0_u64, |total, metadata| {
+            total.saturating_add(metadata.len())
+        })
+}
+
 fn validate_dead_letter(dead_letter: &SinkDeadLetter) -> Result<(), DeadLetterStoreError> {
     if dead_letter.reason.len() > MAX_DEAD_LETTER_REASON_BYTES {
         return Err(dead_rejected("dead-letter reason exceeds 4096 bytes"));
@@ -284,6 +415,12 @@ fn dead_i64_to_sequence(sequence: i64) -> Result<LogSequence, DeadLetterStoreErr
         .map_err(|_| dead_unavailable_message("stored dead-letter sequence is negative"))
 }
 
+fn i64_to_stats_sequence(sequence: i64) -> Result<LogSequence, LogStatsStoreError> {
+    u64::try_from(sequence)
+        .map(LogSequence)
+        .map_err(|_| stats_unavailable_message("stored log sequence is negative"))
+}
+
 fn delivery_rejected(message: &str) -> LogDeliveryStoreError {
     LogDeliveryStoreError::Rejected {
         message: message.to_owned(),
@@ -300,6 +437,24 @@ fn delivery_unavailable(
 
 fn delivery_unavailable_message(message: &str) -> LogDeliveryStoreError {
     LogDeliveryStoreError::Unavailable {
+        message: message.to_owned(),
+    }
+}
+
+fn stats_rejected(message: &str) -> LogStatsStoreError {
+    LogStatsStoreError::Rejected {
+        message: message.to_owned(),
+    }
+}
+
+fn stats_unavailable(action: &'static str) -> impl FnOnce(duckdb::Error) -> LogStatsStoreError {
+    move |error| LogStatsStoreError::Unavailable {
+        message: format!("failed to {action}: {error}"),
+    }
+}
+
+fn stats_unavailable_message(message: &str) -> LogStatsStoreError {
+    LogStatsStoreError::Unavailable {
         message: message.to_owned(),
     }
 }

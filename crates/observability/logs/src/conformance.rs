@@ -5,8 +5,8 @@ use kernel_api::{ClusterId, NodeId, Timestamp};
 use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogBody,
     LogDeliveryStore, LogDeliveryStoreError, LogOrigin, LogProducer, LogRecordId, LogSequence,
-    LogSinkId, LogSinkIdError, LogStore, LogStoreError, LogStream, OriginCursor, SequencedLogEntry,
-    SinkDeadLetter,
+    LogSinkId, LogSinkIdError, LogStatsStore, LogStatsStoreError, LogStore, LogStoreError,
+    LogStream, OriginCursor, SequencedLogEntry, SinkDeadLetter,
 };
 
 /// Runs the reusable append, replay, collision, and atomicity battery on a fresh store.
@@ -157,6 +157,70 @@ pub async fn check_dead_letter_store(
     Ok(())
 }
 
+/// Runs spool, pending-cursor, and aggregate dead-letter stats checks on a fresh shared store.
+pub async fn check_log_stats_store(
+    append: &dyn LogStore,
+    delivery: &dyn LogDeliveryStore,
+    dead_letters: &dyn DeadLetterStore,
+    stats: &dyn LogStatsStore,
+) -> Result<(), LogStatsConformanceError> {
+    let mut first = entry("stats-producer-1", "cursor-1", "first")?;
+    first.event_at = Timestamp(10);
+    let mut second = entry("stats-producer-2", "cursor-1", "second")?;
+    second.event_at = Timestamp(20);
+    append.append(&[first, second]).await?;
+    let entries = delivery.read_after(None, 8).await?;
+    let first_sequence = entries
+        .first()
+        .map(|entry| entry.sequence)
+        .ok_or(LogStatsConformanceError::UnexpectedStats)?;
+    let first_sink = LogSinkId::new("a-first")?;
+    let second_sink = LogSinkId::new("z-last")?;
+    delivery
+        .commit_sink_cursor(&first_sink, first_sequence)
+        .await?;
+    dead_letters
+        .record(&SinkDeadLetter {
+            sink_id: second_sink.clone(),
+            source_sequence: first_sequence,
+            status_code: Some(413),
+            reason: "too large".to_owned(),
+            payload: b"payload".to_vec(),
+            recorded_at: Timestamp(30),
+        })
+        .await?;
+
+    let snapshot = stats
+        .stats_snapshot(&[second_sink.clone(), first_sink.clone(), second_sink])
+        .await?;
+    let expected_sinks = [
+        (first_sink, Some(first_sequence), 1, Some(20)),
+        (LogSinkId::new("z-last")?, None, 2, Some(10)),
+    ];
+    let sinks_match = snapshot.sinks.iter().zip(expected_sinks).all(
+        |(actual, (sink_id, cursor, pending, oldest))| {
+            actual.sink_id == sink_id
+                && actual.cursor == cursor
+                && actual.pending_entries == pending
+                && actual.oldest_pending_at_ms == oldest
+        },
+    );
+    if snapshot.row_count != 2
+        || snapshot.high_watermark != LogSequence(2)
+        || snapshot.oldest_entry_at_ms != Some(10)
+        || snapshot.sinks.len() != 2
+        || !sinks_match
+        || snapshot.dead_letters.count != 1
+        || snapshot.dead_letters.payload_bytes != 7
+        || snapshot.dead_letters.latest_at_ms != Some(30)
+        || snapshot.dead_letters.latest_status != Some(413)
+        || snapshot.dead_letters.latest_error.as_deref() != Some("too large")
+    {
+        return Err(LogStatsConformanceError::UnexpectedStats);
+    }
+    Ok(())
+}
+
 fn require_report(
     stage: &'static str,
     actual: LogAppendReport,
@@ -268,4 +332,30 @@ pub enum DeadLetterConformanceError {
     /// Explicit purge did not report the exact removed rows.
     #[error("dead-letter store returned unexpected purge accounting")]
     UnexpectedPurge,
+}
+
+/// A store violated the operational log statistics contract.
+#[derive(Debug, thiserror::Error)]
+pub enum LogStatsConformanceError {
+    /// Normalized append storage failed valid fixture input.
+    #[error(transparent)]
+    Append(#[from] LogStoreError),
+    /// Ordered delivery storage failed valid fixture input.
+    #[error(transparent)]
+    Delivery(#[from] LogDeliveryStoreError),
+    /// Dead-letter storage failed valid fixture input.
+    #[error(transparent)]
+    DeadLetter(#[from] DeadLetterStoreError),
+    /// Statistics storage failed a valid snapshot query.
+    #[error(transparent)]
+    Stats(#[from] LogStatsStoreError),
+    /// A fixture identifier unexpectedly failed validation.
+    #[error(transparent)]
+    InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
+    /// A fixture sink identifier unexpectedly failed validation.
+    #[error(transparent)]
+    InvalidSinkId(#[from] LogSinkIdError),
+    /// Statistics did not describe the durable fixture state.
+    #[error("log stats store returned an unexpected snapshot")]
+    UnexpectedStats,
 }

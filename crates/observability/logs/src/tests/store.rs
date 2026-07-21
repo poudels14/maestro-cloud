@@ -15,6 +15,14 @@ async fn in_memory_store_passes_the_shared_conformance_battery()
 }
 
 #[tokio::test]
+async fn in_memory_store_passes_operational_stats_conformance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = InMemoryLogStore::new();
+    crate::conformance::check_log_stats_store(&store, &store, &store, &store).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn in_memory_store_is_atomic_idempotent_and_collision_safe()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = InMemoryLogStore::new();

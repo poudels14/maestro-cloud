@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::{DeadLetterStore, IngestLogEntry, LogDeliveryStore};
+use crate::{DeadLetterStore, IngestLogEntry, LogDeliveryStore, LogStatsStore};
 
 /// Outcome of one atomic idempotent append batch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +33,9 @@ pub trait LogStoreRuntime: Send {
 
     /// Returns the durable poison-payload quarantine owned by this runtime.
     fn dead_letter_store(&self) -> Arc<dyn DeadLetterStore>;
+
+    /// Returns the durable spool, cursor, and quarantine statistics boundary.
+    fn stats_store(&self) -> Arc<dyn LogStatsStore>;
 
     /// Drains accepted writes and releases the store's owned resources.
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError>;

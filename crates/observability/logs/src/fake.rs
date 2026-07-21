@@ -5,8 +5,10 @@ use async_trait::async_trait;
 
 use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
-    LogDeliveryStoreError, LogRecordId, LogSequence, LogSinkId, LogStore, LogStoreError,
-    LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
+    LogDeliveryStoreError, LogRecordId, LogSequence, LogSinkCursorStats, LogSinkId, LogSpoolStats,
+    LogStatsStore, LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime,
+    LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterSnapshot,
+    SinkDeadLetterStats,
 };
 
 /// Deterministic idempotent log store for pipeline and composition tests.
@@ -233,6 +235,74 @@ impl DeadLetterStore for InMemoryLogStore {
     }
 }
 
+#[async_trait]
+impl LogStatsStore for InMemoryLogStore {
+    async fn stats_snapshot(
+        &self,
+        sink_ids: &[LogSinkId],
+    ) -> Result<LogSpoolStats, LogStatsStoreError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| LogStatsStoreError::Unavailable {
+                message: "in-memory log stats lock was poisoned".to_owned(),
+            })?;
+        let mut entries = state.entries.values().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.sequence);
+        let mut requested = sink_ids.to_vec();
+        requested.sort();
+        requested.dedup();
+        let sinks = requested
+            .into_iter()
+            .map(|sink_id| {
+                let cursor = state.cursors.get(&sink_id).copied();
+                let mut pending = entries
+                    .iter()
+                    .filter(|entry| cursor.is_none_or(|cursor| entry.sequence > cursor));
+                let oldest_pending_at_ms = pending.next().map(|entry| entry.entry.event_at.0);
+                let pending_entries = u64::try_from(pending.count())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(u64::from(oldest_pending_at_ms.is_some()));
+                LogSinkCursorStats {
+                    sink_id,
+                    cursor,
+                    pending_entries,
+                    oldest_pending_at_ms,
+                }
+            })
+            .collect();
+        let latest = state.dead_letters.values().max_by_key(|dead_letter| {
+            (
+                dead_letter.recorded_at.0,
+                &dead_letter.sink_id,
+                dead_letter.source_sequence,
+            )
+        });
+        let dead_letters = SinkDeadLetterSnapshot {
+            count: u64::try_from(state.dead_letters.len()).unwrap_or(u64::MAX),
+            payload_bytes: state
+                .dead_letters
+                .values()
+                .fold(0_u64, |total, dead_letter| {
+                    total.saturating_add(
+                        u64::try_from(dead_letter.payload.len()).unwrap_or(u64::MAX),
+                    )
+                }),
+            latest_at_ms: latest.map(|dead_letter| dead_letter.recorded_at.0),
+            latest_status: latest.and_then(|dead_letter| dead_letter.status_code),
+            latest_error: latest.map(|dead_letter| dead_letter.reason.clone()),
+        };
+        Ok(LogSpoolStats {
+            row_count: u64::try_from(entries.len()).unwrap_or(u64::MAX),
+            high_watermark: LogSequence(state.last_sequence),
+            oldest_entry_at_ms: entries.first().map(|entry| entry.entry.event_at.0),
+            database_bytes: 0,
+            sinks,
+            dead_letters,
+        })
+    }
+}
+
 /// No-op lifecycle owner for an in-memory log store used by composition tests.
 pub struct InMemoryLogStoreRuntime {
     store: Arc<InMemoryLogStore>,
@@ -269,6 +339,10 @@ impl LogStoreRuntime for InMemoryLogStoreRuntime {
     }
 
     fn dead_letter_store(&self) -> Arc<dyn DeadLetterStore> {
+        self.store.clone()
+    }
+
+    fn stats_store(&self) -> Arc<dyn LogStatsStore> {
         self.store.clone()
     }
 

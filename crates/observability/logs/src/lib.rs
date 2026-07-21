@@ -22,6 +22,7 @@ mod parser;
 mod pipeline;
 mod sink_runtime;
 mod sink_worker;
+mod stats;
 mod store;
 
 pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
@@ -62,6 +63,10 @@ pub use sink_runtime::{
 pub use sink_worker::{
     SinkSleeper, SinkWorker, SinkWorkerError, SinkWorkerReport, SinkWorkerSettings,
     SinkWorkerSettingsError, TokioSinkSleeper,
+};
+pub use stats::{
+    LogSinkCursorStats, LogSpoolStats, LogStatsStore, LogStatsStoreError,
+    MAX_RETAINED_DEAD_LETTERS, SinkDeadLetterSnapshot,
 };
 pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};
 

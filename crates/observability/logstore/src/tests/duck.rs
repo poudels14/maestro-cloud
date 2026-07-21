@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use kernel_api::{ClusterId, NodeId, Timestamp};
 use logs::{
     DeadLetterStore, IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer,
-    LogRecordId, LogSequence, LogSinkId, LogStore, LogStream, OriginCursor, SinkDeadLetter,
+    LogRecordId, LogSequence, LogSinkId, LogStatsStore, LogStore, LogStream, OriginCursor,
+    SinkDeadLetter,
 };
 
 use crate::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
@@ -38,6 +39,28 @@ async fn duck_store_passes_shared_conformance_and_closes_cleanly()
     logs::conformance::check_log_delivery_store(runtime.store().as_ref(), &delivery_entries)
         .await?;
     logs::conformance::check_dead_letter_store(runtime.store().as_ref()).await?;
+    runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_store_passes_operational_stats_conformance() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temporary = tempfile::tempdir()?;
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
+        temporary.path().join("logs.duckdb"),
+        8,
+    )?)
+    .await?;
+    let store = runtime.store();
+    logs::conformance::check_log_stats_store(
+        store.as_ref(),
+        store.as_ref(),
+        store.as_ref(),
+        store.as_ref(),
+    )
+    .await?;
+    assert!(store.stats_snapshot(&[]).await?.database_bytes > 0);
     runtime.shutdown().await?;
     Ok(())
 }
