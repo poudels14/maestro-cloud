@@ -107,11 +107,44 @@ impl Keyspace {
         self.key("control/scheduler-generation")
     }
 
+    /// Root watched by Traefik's cluster-scoped dynamic configuration provider.
+    pub fn traefik(&self) -> StorePrefix {
+        self.prefix("integrations/traefik")
+    }
+
+    /// Exact dynamic-provider key below the cluster's Traefik root.
+    pub fn traefik_entry(&self, relative: &str) -> Result<StoreKey, StoreError> {
+        validate_relative_path(relative)?;
+        Ok(self.key(&format!("integrations/traefik/{relative}")))
+    }
+
+    /// Dynamic-provider subtree below the cluster's Traefik root.
+    pub fn traefik_prefix(&self, relative: &str) -> Result<StorePrefix, StoreError> {
+        validate_relative_path(relative)?;
+        Ok(self.prefix(&format!("integrations/traefik/{relative}")))
+    }
+
     fn key(&self, suffix: &str) -> StoreKey {
         StoreKey(format!("{}/{suffix}", self.root))
     }
 
     fn prefix(&self, suffix: &str) -> StorePrefix {
         StorePrefix(format!("{}/{suffix}/", self.root))
+    }
+}
+
+fn validate_relative_path(relative: &str) -> Result<(), StoreError> {
+    if relative.is_empty()
+        || relative.starts_with('/')
+        || relative.ends_with('/')
+        || relative
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        Err(StoreError::Contract {
+            message: format!("invalid Traefik provider path: {relative}"),
+        })
+    } else {
+        Ok(())
     }
 }

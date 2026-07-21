@@ -13,6 +13,7 @@ mod resource;
 mod snapshot;
 mod target;
 mod traefik;
+mod traefik_store;
 mod validation;
 mod writer;
 
@@ -25,6 +26,7 @@ pub use model::{
 pub use plan::{IngressPlanError, plan};
 pub use reconciler::IngressReconciler;
 pub use traefik::{TraefikBackend, TraefikCutover, TraefikProvider, TraefikStage};
+pub use traefik_store::StoreTraefikProvider;
 
 #[cfg(test)]
 mod tests;

@@ -40,4 +40,22 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         keys.scheduler_generation().as_str(),
         "/maestro/clusters/production/control/scheduler-generation"
     );
+    assert_eq!(
+        keys.traefik().as_str(),
+        "/maestro/clusters/production/integrations/traefik/"
+    );
+    assert_eq!(
+        keys.traefik_entry("http/routers/api/rule")
+            .expect("Traefik entry")
+            .as_str(),
+        "/maestro/clusters/production/integrations/traefik/http/routers/api/rule"
+    );
+    assert_eq!(
+        keys.traefik_prefix("http/services/api")
+            .expect("Traefik prefix")
+            .as_str(),
+        "/maestro/clusters/production/integrations/traefik/http/services/api/"
+    );
+    assert!(keys.traefik_entry("../control/leader").is_err());
+    assert!(keys.traefik_prefix("/http/routers").is_err());
 }

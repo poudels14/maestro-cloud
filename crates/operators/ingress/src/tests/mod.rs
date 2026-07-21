@@ -3,3 +3,4 @@
 mod plan;
 mod store;
 mod traefik;
+mod traefik_store;
