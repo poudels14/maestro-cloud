@@ -50,6 +50,8 @@ mod execution;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
 #[cfg(any(test, feature = "test-util"))]
+mod fake_network;
+#[cfg(any(test, feature = "test-util"))]
 mod fake_state;
 #[cfg(any(test, feature = "test-util"))]
 mod fake_stream;
@@ -87,6 +89,8 @@ pub use execution::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{FakeRuntime, FakeRuntimeCall, FakeRuntimeOperation};
+#[cfg(any(test, feature = "test-util"))]
+pub use fake_network::FakeNetworkProvider;
 pub use network::{
     AddressLease, AddressRequest, NetworkAttachment, NetworkCidr, NetworkHandle, NetworkProvider,
     NetworkProviderError, NetworkSpec, WorkloadNetworkStatus,

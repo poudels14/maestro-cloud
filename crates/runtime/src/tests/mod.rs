@@ -30,6 +30,7 @@ mod docker_stream;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker_support;
 mod fake;
+mod fake_network;
 mod network;
 #[cfg(target_os = "linux")]
 mod process;

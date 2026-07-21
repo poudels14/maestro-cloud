@@ -19,14 +19,12 @@ use kernel_store::{
     Store,
 };
 use runtime::{
-    FakeRuntime, FakeRuntimeOperation, NetworkCidr, NetworkProvider, RuntimeError, ShutdownRequest,
-    WorkloadRuntime,
+    FakeNetworkProvider, FakeRuntime, FakeRuntimeOperation, NetworkCidr, NetworkProvider,
+    RuntimeError, ShutdownRequest, WorkloadRuntime,
 };
 use tokio::sync::{Notify, watch};
 
 use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock};
-
-use super::fake_network::FakeNetworkProvider;
 
 #[cfg(unix)]
 mod node_api;
