@@ -35,4 +35,8 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         keys.leader().as_str(),
         "/maestro/clusters/production/control/leader"
     );
+    assert_eq!(
+        keys.scheduler_generation().as_str(),
+        "/maestro/clusters/production/control/scheduler-generation"
+    );
 }

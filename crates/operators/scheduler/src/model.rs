@@ -104,6 +104,15 @@ pub enum UnschedulableReason {
         /// Node whose address pool is full.
         node_id: NodeId,
     },
+    /// Host-backed volumes in one service belong to different nodes.
+    ConflictingHostVolumeNodes,
+    /// An explicit placement node conflicts with the service's host-backed volume owner.
+    HostVolumePlacementMismatch {
+        /// Node required by the mounted host path.
+        volume_node_id: NodeId,
+        /// Different node required by service placement.
+        placement_node_id: NodeId,
+    },
 }
 
 /// One replica slot that the planner could not place.

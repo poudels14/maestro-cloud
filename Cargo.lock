@@ -4933,8 +4933,15 @@ dependencies = [
 name = "scheduler"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "kernel-api",
+ "kernel-controller",
+ "kernel-store",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

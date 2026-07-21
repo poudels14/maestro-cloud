@@ -1,0 +1,222 @@
+use std::collections::BTreeMap;
+
+use kernel_api::{
+    Assignment, AssignmentId, ClusterId, InvalidIdentifier, ResourceKind, ResourceName,
+};
+use kernel_controller::{ControllerError, FencedStore};
+use kernel_store::{
+    Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, Transaction, TransactionOutcome,
+    Version,
+};
+
+/// Atomic assignment changes applied by one successfully fenced scheduler pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AssignmentWriteReport {
+    pub(crate) created: usize,
+    pub(crate) deleted: usize,
+    pub(crate) conflict: bool,
+}
+
+pub(crate) struct AssignmentWriter {
+    keyspace: Keyspace,
+    assignment_kind: ResourceKind,
+}
+
+impl AssignmentWriter {
+    pub(crate) fn new(cluster_id: &ClusterId) -> Result<Self, InvalidIdentifier> {
+        Ok(Self {
+            keyspace: Keyspace::new(cluster_id),
+            assignment_kind: ResourceKind::new("Assignment")?,
+        })
+    }
+
+    /// Applies one all-or-nothing assignment diff while preserving agent-owned status fields.
+    ///
+    /// Cancellation may leave the complete transaction committed. A subsequent resource relist
+    /// observes that result and computes an empty diff; partial assignment generations are never
+    /// visible.
+    pub(crate) async fn apply(
+        &self,
+        fenced_store: &FencedStore,
+        current: &[StoredValue],
+        desired: &[Assignment],
+        scheduler_generation: ExpectedVersion,
+        dependency_compares: Vec<Compare>,
+    ) -> Result<AssignmentWriteReport, AssignmentWriteError> {
+        let current = self.decode_current(current)?;
+        let desired = self.index_desired(desired)?;
+        let mut compares = dependency_compares;
+        let mut mutations = Vec::new();
+        let mut created = 0_usize;
+        let mut deleted = 0_usize;
+
+        for (assignment_id, resource) in &desired {
+            let key = self.assignment_key(assignment_id);
+            match current.get(assignment_id) {
+                Some(stored) if stored.resource.spec == resource.spec => {}
+                Some(stored) => {
+                    return Err(AssignmentWriteError::IdentityCollision {
+                        assignment_id: assignment_id.clone(),
+                        existing_version: stored.version,
+                    });
+                }
+                None => {
+                    compares.push(Compare {
+                        key: key.clone(),
+                        expected: ExpectedVersion::Missing,
+                    });
+                    mutations.push(Mutation::Put {
+                        key,
+                        value: serde_json::to_vec(resource).map_err(|error| {
+                            AssignmentWriteError::Serialize {
+                                assignment_id: assignment_id.clone(),
+                                message: error.to_string(),
+                            }
+                        })?,
+                        session: None,
+                    });
+                    created = created.saturating_add(1);
+                }
+            }
+        }
+        for (assignment_id, stored) in &current {
+            if !desired.contains_key(assignment_id) {
+                compares.push(Compare {
+                    key: stored.key.clone(),
+                    expected: ExpectedVersion::Exact(stored.version),
+                });
+                mutations.push(Mutation::Delete {
+                    key: stored.key.clone(),
+                });
+                deleted = deleted.saturating_add(1);
+            }
+        }
+        compares.push(Compare {
+            key: self.keyspace.scheduler_generation(),
+            expected: scheduler_generation,
+        });
+        if !mutations.is_empty() {
+            mutations.push(Mutation::Put {
+                key: self.keyspace.scheduler_generation(),
+                value: b"assignment generation".to_vec(),
+                session: None,
+            });
+        }
+
+        let outcome = fenced_store
+            .txn(Transaction {
+                compares,
+                mutations,
+            })
+            .await?;
+        match outcome {
+            TransactionOutcome::Applied { .. } => Ok(AssignmentWriteReport {
+                created,
+                deleted,
+                conflict: false,
+            }),
+            TransactionOutcome::Conflict => Ok(AssignmentWriteReport {
+                conflict: true,
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn decode_current(
+        &self,
+        current: &[StoredValue],
+    ) -> Result<BTreeMap<AssignmentId, StoredAssignment>, AssignmentWriteError> {
+        let mut decoded = BTreeMap::new();
+        for stored in current {
+            let resource: Assignment = serde_json::from_slice(&stored.value).map_err(|error| {
+                AssignmentWriteError::MalformedResource {
+                    key: stored.key.to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+            let expected_key = self.assignment_key(&resource.meta.id);
+            if stored.key != expected_key {
+                return Err(AssignmentWriteError::ResourceIdentityMismatch {
+                    assignment_id: resource.meta.id,
+                    key: stored.key.to_string(),
+                });
+            }
+            let assignment_id = resource.meta.id.clone();
+            if decoded
+                .insert(
+                    assignment_id.clone(),
+                    StoredAssignment {
+                        key: stored.key.clone(),
+                        version: stored.version,
+                        resource,
+                    },
+                )
+                .is_some()
+            {
+                return Err(AssignmentWriteError::DuplicateAssignment { assignment_id });
+            }
+        }
+        Ok(decoded)
+    }
+
+    fn index_desired<'a>(
+        &self,
+        desired: &'a [Assignment],
+    ) -> Result<BTreeMap<AssignmentId, &'a Assignment>, AssignmentWriteError> {
+        let mut indexed = BTreeMap::new();
+        for resource in desired {
+            let assignment_id = resource.meta.id.clone();
+            if indexed.insert(assignment_id.clone(), resource).is_some() {
+                return Err(AssignmentWriteError::DuplicateAssignment { assignment_id });
+            }
+        }
+        Ok(indexed)
+    }
+
+    fn assignment_key(&self, assignment_id: &AssignmentId) -> kernel_store::StoreKey {
+        self.keyspace.resource(
+            &self.assignment_kind,
+            &ResourceName::from(assignment_id.clone()),
+        )
+    }
+}
+
+struct StoredAssignment {
+    key: kernel_store::StoreKey,
+    version: Version,
+    resource: Assignment,
+}
+
+/// Matchable assignment-set decoding, identity, serialization, and fencing failures.
+#[derive(Debug, thiserror::Error)]
+pub enum AssignmentWriteError {
+    /// The controller kernel rejected the fenced transaction.
+    #[error(transparent)]
+    Controller(#[from] ControllerError),
+    /// Stored assignment JSON was invalid.
+    #[error("malformed Assignment resource at `{key}`: {message}")]
+    MalformedResource { key: String, message: String },
+    /// Assignment metadata did not match its canonical key.
+    #[error("Assignment `{assignment_id}` does not match store key `{key}`")]
+    ResourceIdentityMismatch {
+        assignment_id: AssignmentId,
+        key: String,
+    },
+    /// The same assignment identity appeared more than once.
+    #[error("Assignment `{assignment_id}` occurs more than once in one scheduler snapshot")]
+    DuplicateAssignment { assignment_id: AssignmentId },
+    /// A generated stable identity resolved to a different immutable specification.
+    #[error(
+        "generated Assignment `{assignment_id}` conflicts with immutable stored version {existing_version:?}"
+    )]
+    IdentityCollision {
+        assignment_id: AssignmentId,
+        existing_version: Version,
+    },
+    /// A desired assignment could not be serialized for persistence.
+    #[error("failed to serialize Assignment `{assignment_id}`: {message}")]
+    Serialize {
+        assignment_id: AssignmentId,
+        message: String,
+    },
+}

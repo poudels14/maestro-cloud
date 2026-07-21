@@ -97,6 +97,11 @@ impl Keyspace {
         self.key(&format!("control/requests/{request_id}"))
     }
 
+    /// Scheduler-owned generation fence advanced with every assignment-set mutation.
+    pub fn scheduler_generation(&self) -> StoreKey {
+        self.key("control/scheduler-generation")
+    }
+
     fn key(&self, suffix: &str) -> StoreKey {
         StoreKey(format!("{}/{suffix}", self.root))
     }
