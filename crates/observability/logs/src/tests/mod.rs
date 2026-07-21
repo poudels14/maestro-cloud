@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod cluster_stats;
 mod datadog;
 mod filter;
 #[cfg(unix)]

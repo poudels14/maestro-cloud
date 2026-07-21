@@ -3,6 +3,7 @@
 //! This crate may depend on runtime and node-agent contracts, but must not depend on cluster
 //! formation, operators, application composition roots, or a particular storage backend.
 
+mod cluster_stats;
 #[cfg(any(test, feature = "test-util"))]
 pub mod conformance;
 mod datadog;
@@ -25,6 +26,11 @@ mod sink_worker;
 mod stats;
 mod store;
 
+pub use cluster_stats::{
+    BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsSnapshot, DeadLetterStatsSnapshot,
+    ProbeStatsSnapshot, SinkStatsSnapshot, SpoolStatsSnapshot, StatsMetricPoint, StatsWarning,
+    collect_controller_stats,
+};
 pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
 pub use dead_letter::{
     DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterMetadata,
