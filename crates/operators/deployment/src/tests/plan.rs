@@ -219,6 +219,35 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
 }
 
 #[test]
+fn active_old_traffic_does_not_drain_a_newer_queued_candidate() {
+    let mut service = service(Generation(2), RolloutState::Active);
+    let old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(1),
+        DeploymentPhase::Ready,
+    );
+    let incoming = deployment_generation(
+        &service,
+        "deployment-new",
+        Generation(2),
+        DeploymentPhase::Queued,
+    );
+    service.status.active_deployment_id = Some(old.meta.id.clone());
+    let mut snapshot = input(service, vec![old.clone(), incoming.clone()]);
+    snapshot.traffic_generations = vec![traffic(&old)];
+
+    let advancing = plan(snapshot).expect("advance candidate");
+
+    assert_eq!(advancing.deployment_updates.len(), 1);
+    assert_eq!(advancing.deployment_updates[0].id, incoming.meta.id);
+    assert_eq!(
+        advancing.deployment_updates[0].status.phase,
+        DeploymentPhase::Building
+    );
+}
+
+#[test]
 fn draining_waits_for_grace_and_assignment_removal() {
     let service = service(Generation(1), RolloutState::Active);
     let mut deployment = deployment(&service, DeploymentPhase::Draining);

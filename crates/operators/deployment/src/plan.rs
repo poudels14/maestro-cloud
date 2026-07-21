@@ -341,6 +341,12 @@ fn coordinate_active_deployment(
     let Some(active_id) = desired_service.active_deployment_id else {
         return;
     };
+    let Some(active_deployment) = deployments
+        .iter()
+        .find(|deployment| deployment.meta.id == active_id)
+    else {
+        return;
+    };
     let cutover_acknowledged = traffic.iter().any(|generation| {
         generation.meta.deletion_timestamp.is_none()
             && generation.spec.service_id == service.meta.id
@@ -351,7 +357,7 @@ fn coordinate_active_deployment(
         return;
     }
     for deployment in deployments {
-        if deployment.meta.id == active_id {
+        if deployment.spec.service_generation >= active_deployment.spec.service_generation {
             continue;
         }
         let Some(status) = desired_statuses.get_mut(&deployment.meta.id) else {
