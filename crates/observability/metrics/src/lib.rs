@@ -15,6 +15,7 @@ mod host_fake;
 mod host_model;
 mod host_pipeline;
 mod host_query;
+mod host_sink_worker;
 mod host_store;
 mod http;
 mod model;
@@ -36,7 +37,7 @@ pub use host_delivery::{
     SequencedHostMetricPoint,
 };
 #[cfg(any(test, feature = "test-util"))]
-pub use host_fake::InMemoryHostMetricStore;
+pub use host_fake::{InMemoryHostMetricStore, RecordingHostMetricSink};
 pub use host_model::{
     HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostMetricValidationError,
     HostResourceMetricPoint,
@@ -45,6 +46,9 @@ pub use host_pipeline::HostMetricPipeline;
 pub use host_query::{
     HostMetricComponent, HostMetricHistoryPoint, HostMetricQuery, HostMetricQueryError,
     HostMetricQueryStore, HostMetricQueryStoreError, LatestHostMetricQuery,
+};
+pub use host_sink_worker::{
+    HostMetricSinkWorker, HostMetricSinkWorkerError, HostMetricSinkWorkerReport,
 };
 pub use host_store::HostMetricStore;
 pub use http::{

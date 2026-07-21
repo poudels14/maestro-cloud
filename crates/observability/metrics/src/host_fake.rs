@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
@@ -8,8 +8,8 @@ use kernel_api::{ClusterId, NodeId};
 use crate::{
     HostMetricDeliveryStore, HostMetricDeliveryStoreError, HostMetricHistoryPoint, HostMetricPoint,
     HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError, HostMetricRecordId,
-    HostMetricSequence, HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricSinkId,
-    MetricStoreError, SequencedHostMetricPoint,
+    HostMetricSequence, HostMetricSink, HostMetricStore, LatestHostMetricQuery, MetricAppendReport,
+    MetricSinkError, MetricSinkId, MetricStoreError, SequencedHostMetricPoint,
 };
 
 /// Deterministic idempotent host metric store for pipeline and composition tests.
@@ -226,6 +226,63 @@ impl HostMetricQueryStore for InMemoryHostMetricStore {
             }
         }
         Ok(latest.into_values().take(query.limit()).collect())
+    }
+}
+
+/// Scriptable host-metric sink recording every attempted sequence batch.
+pub struct RecordingHostMetricSink {
+    id: MetricSinkId,
+    responses: Mutex<VecDeque<Result<(), MetricSinkError>>>,
+    attempts: Mutex<Vec<Vec<HostMetricSequence>>>,
+}
+
+impl RecordingHostMetricSink {
+    /// Creates a host sink that consumes scripted responses then succeeds by default.
+    pub fn new(
+        id: MetricSinkId,
+        responses: impl IntoIterator<Item = Result<(), MetricSinkError>>,
+    ) -> Self {
+        Self {
+            id,
+            responses: Mutex::new(responses.into_iter().collect()),
+            attempts: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns every attempted host sequence batch, including retries.
+    pub fn attempts(&self) -> Result<Vec<Vec<HostMetricSequence>>, MetricSinkError> {
+        self.attempts
+            .lock()
+            .map(|attempts| attempts.clone())
+            .map_err(|_| MetricSinkError::Unavailable {
+                message: "recording host metric sink attempt lock was poisoned".to_owned(),
+            })
+    }
+}
+
+#[async_trait]
+impl HostMetricSink for RecordingHostMetricSink {
+    fn id(&self) -> &MetricSinkId {
+        &self.id
+    }
+
+    async fn send_host_metrics(
+        &self,
+        points: &[SequencedHostMetricPoint],
+    ) -> Result<(), MetricSinkError> {
+        self.attempts
+            .lock()
+            .map_err(|_| MetricSinkError::Unavailable {
+                message: "recording host metric sink attempt lock was poisoned".to_owned(),
+            })?
+            .push(points.iter().map(|point| point.sequence).collect());
+        self.responses
+            .lock()
+            .map_err(|_| MetricSinkError::Unavailable {
+                message: "recording host metric sink response lock was poisoned".to_owned(),
+            })?
+            .pop_front()
+            .unwrap_or(Ok(()))
     }
 }
 
