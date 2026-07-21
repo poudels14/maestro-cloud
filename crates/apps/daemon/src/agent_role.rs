@@ -151,7 +151,7 @@ where
         }
     };
     let assignment_agent = if spec.workload_enabled {
-        match build_assignment_agent(factory, plan, spec, store.clone()) {
+        match build_assignment_agent(factory, plan, spec, store.clone(), runtimes.log_store()) {
             Ok(agent) => Some(agent),
             Err(error) => return runtimes.fail(error).await,
         }

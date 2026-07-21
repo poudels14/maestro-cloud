@@ -1,11 +1,13 @@
 use std::net::Ipv4Addr;
+use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use cluster::StoreStartMode;
 use kernel_api::{
-    AssignmentPhase, DeploymentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole, Timestamp,
+    AssignmentPhase, DeploymentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
+    Timestamp, WorkloadUserSpec,
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
@@ -88,6 +90,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .get(&NodeId::new("master")?)
             .ok_or("master topology missing")?
             .workload_subnet,
+        Some(WorkloadUserSpec {
+            user_id: std::fs::metadata(directory.path())?.uid(),
+            group_id: std::fs::metadata(directory.path())?.gid(),
+        }),
     )
     .await?;
     let factory = DaemonRoleFactory::new(
@@ -202,6 +208,12 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     );
     assert_eq!(network_provider.lease_count(), 1);
     assert_eq!(network_provider.attachment_count(), 1);
+    assert!(
+        directory
+            .path()
+            .join("volatile/node-api/assignment-1/node.sock")
+            .exists()
+    );
     let metric_points = metric_store.points()?;
     assert_eq!(metric_points.len(), 1);
     let metric_point = metric_points
@@ -348,6 +360,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
         &cluster.cluster_id,
         &worker_id,
         worker.workload_subnet,
+        None,
     )
     .await?;
     let directory = tempfile::tempdir()?;

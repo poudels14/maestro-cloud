@@ -9,6 +9,7 @@ use kernel_api::{
     NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId, Object, ObjectMeta,
     PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
     ResourceKind, ResourceName, ResourceRevision, ServiceId, ServiceSpec, Timestamp,
+    WorkloadUserSpec,
 };
 use kernel_store::{CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store};
 
@@ -17,6 +18,7 @@ pub(super) async fn seed_agent_resources(
     cluster_id: &ClusterId,
     node_id: &NodeId,
     workload_subnet: cluster::Ipv4Cidr,
+    node_api_user: Option<WorkloadUserSpec>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let workload_address = workload_subnet
         .workload_addresses()
@@ -38,7 +40,7 @@ pub(super) async fn seed_agent_resources(
         (
             "Deployment",
             "deployment-1",
-            serde_json::to_vec(&deployment()?)?,
+            serde_json::to_vec(&deployment(node_api_user)?)?,
         ),
         (
             "Assignment",
@@ -179,7 +181,9 @@ fn replica_state(assignment: &Assignment) -> Result<ReplicaState, kernel_api::In
     })
 }
 
-fn deployment() -> Result<Deployment, kernel_api::InvalidIdentifier> {
+fn deployment(
+    node_api_user: Option<WorkloadUserSpec>,
+) -> Result<Deployment, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(DeploymentId::new("deployment-1")?),
         spec: DeploymentSpec {
@@ -206,8 +210,12 @@ fn deployment() -> Result<Deployment, kernel_api::InvalidIdentifier> {
                 }),
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
-                user: None,
-                node_api: NodeApiAccess::Disabled,
+                user: node_api_user,
+                node_api: if node_api_user.is_some() {
+                    NodeApiAccess::IdentityAndTelemetry
+                } else {
+                    NodeApiAccess::Disabled
+                },
                 secrets: None,
                 volumes: Vec::new(),
                 placement: PlacementConstraint::default(),

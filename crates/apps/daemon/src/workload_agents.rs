@@ -2,12 +2,13 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use kernel_store::Store;
-use logs::{LogStore, RuntimeLogPipeline};
+use logs::{LogStore, OtlpLogHandler, RuntimeLogPipeline};
 use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
 use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
-    HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, RuntimeLogAgent,
-    RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
+    HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, NodeApiServices,
+    RuntimeLogAgent, RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent,
+    WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 
@@ -19,6 +20,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
+    log_store: Arc<dyn LogStore>,
 ) -> Result<AssignmentAgent, RoleError> {
     let node = plan
         .cluster()
@@ -54,7 +56,13 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             node_api_root: factory.volatile_root.join("node-api"),
         },
         #[cfg(unix)]
-        None,
+        Some(NodeApiServices::with_log_ingest(Arc::new(
+            OtlpLogHandler::new(
+                plan.cluster().cluster_id.clone(),
+                log_store,
+                factory.status_clock.clone(),
+            ),
+        ))),
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
     )
