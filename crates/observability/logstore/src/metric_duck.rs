@@ -3,10 +3,11 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use metrics::{
-    HostMetricHistoryPoint, HostMetricPoint, HostMetricQuery, HostMetricQueryStore,
-    HostMetricQueryStoreError, HostMetricStore, LatestHostMetricQuery, MetricAppendReport,
-    MetricDeliveryStore, MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore,
-    MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint,
+    HostMetricDeliveryStore, HostMetricDeliveryStoreError, HostMetricHistoryPoint, HostMetricPoint,
+    HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError, HostMetricSequence,
+    HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricDeliveryStore,
+    MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
+    MetricStoreRuntime, MetricStoreRuntimeError, SequencedHostMetricPoint, SequencedMetricPoint,
     WorkloadMetricHistoryPoint, WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
     WorkloadMetricQueryStoreError,
 };
@@ -15,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::metric_schema;
 use crate::{DuckStoreError, DuckStoreSettings};
 
-enum Command {
+pub(crate) enum Command {
     Append {
         points: Vec<WorkloadMetricPoint>,
         response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
@@ -51,6 +52,21 @@ enum Command {
         sequence: MetricSequence,
         response: oneshot::Sender<Result<(), MetricDeliveryStoreError>>,
     },
+    ReadHostAfter {
+        cursor: Option<HostMetricSequence>,
+        limit: usize,
+        response:
+            oneshot::Sender<Result<Vec<SequencedHostMetricPoint>, HostMetricDeliveryStoreError>>,
+    },
+    LoadHostCursor {
+        sink_id: MetricSinkId,
+        response: oneshot::Sender<Result<Option<HostMetricSequence>, HostMetricDeliveryStoreError>>,
+    },
+    CommitHostCursor {
+        sink_id: MetricSinkId,
+        sequence: HostMetricSequence,
+        response: oneshot::Sender<Result<(), HostMetricDeliveryStoreError>>,
+    },
     Shutdown {
         response: oneshot::Sender<()>,
     },
@@ -58,7 +74,7 @@ enum Command {
 
 /// Async metric append handle applying bounded backpressure to one DuckDB owner thread.
 pub struct DuckMetricStore {
-    commands: mpsc::Sender<Command>,
+    pub(crate) commands: mpsc::Sender<Command>,
 }
 
 /// Explicit lifetime owner for the blocking metric DuckDB writer thread.
@@ -317,6 +333,10 @@ impl MetricStoreRuntime for DuckMetricStoreRuntime {
         self.store.clone()
     }
 
+    fn host_delivery_store(&self) -> Arc<dyn HostMetricDeliveryStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {
         DuckMetricStoreRuntime::shutdown(*self)
             .await
@@ -386,6 +406,34 @@ fn run_worker(
                 response,
             } => {
                 let _ignored = response.send(crate::metric_delivery_schema::commit_cursor(
+                    &mut connection,
+                    &sink_id,
+                    sequence,
+                ));
+            }
+            Command::ReadHostAfter {
+                cursor,
+                limit,
+                response,
+            } => {
+                let _ignored = response.send(crate::host_metric_delivery_schema::read_after(
+                    &connection,
+                    cursor,
+                    limit,
+                ));
+            }
+            Command::LoadHostCursor { sink_id, response } => {
+                let _ignored = response.send(crate::host_metric_delivery_schema::load_cursor(
+                    &connection,
+                    &sink_id,
+                ));
+            }
+            Command::CommitHostCursor {
+                sink_id,
+                sequence,
+                response,
+            } => {
+                let _ignored = response.send(crate::host_metric_delivery_schema::commit_cursor(
                     &mut connection,
                     &sink_id,
                     sequence,

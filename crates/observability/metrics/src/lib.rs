@@ -9,6 +9,7 @@ mod datadog;
 mod delivery;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
+mod host_delivery;
 #[cfg(any(test, feature = "test-util"))]
 mod host_fake;
 mod host_model;
@@ -30,6 +31,10 @@ pub use delivery::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{InMemoryMetricStore, InMemoryMetricStoreRuntime, RecordingMetricSink};
+pub use host_delivery::{
+    HostMetricDeliveryStore, HostMetricDeliveryStoreError, HostMetricSequence, HostMetricSink,
+    SequencedHostMetricPoint,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use host_fake::InMemoryHostMetricStore;
 pub use host_model::{

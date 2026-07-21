@@ -3,9 +3,12 @@ use std::collections::BTreeMap;
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use runtime::WorkloadMetadata;
 
+#[path = "host_delivery_conformance.rs"]
+mod host_delivery_conformance;
 #[path = "workload_query_conformance.rs"]
 mod workload_query_conformance;
 
+pub use host_delivery_conformance::check_host_metric_delivery_store;
 pub use workload_query_conformance::check_workload_metric_query_store;
 
 use crate::{

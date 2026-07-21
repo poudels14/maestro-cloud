@@ -11,5 +11,7 @@ async fn in_memory_metric_store_passes_the_shared_conformance_battery()
     let host = InMemoryHostMetricStore::new();
     crate::conformance::check_host_metric_store(&host).await?;
     crate::conformance::check_host_metric_query_store(&host, &host).await?;
+    let host_delivery = InMemoryHostMetricStore::new();
+    crate::conformance::check_host_metric_delivery_store(&host_delivery, &host_delivery).await?;
     Ok(())
 }

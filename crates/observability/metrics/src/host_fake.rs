@@ -1,18 +1,36 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
+use kernel_api::{ClusterId, NodeId};
 
 use crate::{
-    HostMetricHistoryPoint, HostMetricPoint, HostMetricQuery, HostMetricQueryStore,
-    HostMetricQueryStoreError, HostMetricRecordId, HostMetricStore, LatestHostMetricQuery,
-    MetricAppendReport, MetricStoreError,
+    HostMetricDeliveryStore, HostMetricDeliveryStoreError, HostMetricHistoryPoint, HostMetricPoint,
+    HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError, HostMetricRecordId,
+    HostMetricSequence, HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricSinkId,
+    MetricStoreError, SequencedHostMetricPoint,
 };
 
 /// Deterministic idempotent host metric store for pipeline and composition tests.
 #[derive(Default)]
 pub struct InMemoryHostMetricStore {
-    points: Mutex<BTreeMap<HostMetricRecordId, HostMetricPoint>>,
+    state: Mutex<HostMetricState>,
+    fail_next_cursor_commit: AtomicBool,
+}
+
+#[derive(Default)]
+struct HostMetricState {
+    points: BTreeMap<HostMetricRecordId, StoredHostMetricPoint>,
+    sequences: BTreeMap<HostMetricSequence, HostMetricRecordId>,
+    last_resource_by_node: BTreeMap<(ClusterId, NodeId), HostMetricSequence>,
+    cursors: BTreeMap<MetricSinkId, HostMetricSequence>,
+    last_sequence: u64,
+}
+
+struct StoredHostMetricPoint {
+    previous_resources: Option<HostMetricSequence>,
+    point: HostMetricPoint,
 }
 
 impl InMemoryHostMetricStore {
@@ -23,7 +41,16 @@ impl InMemoryHostMetricStore {
 
     /// Returns all committed points in stable record-id order.
     pub fn points(&self) -> Result<Vec<HostMetricPoint>, MetricStoreError> {
-        Ok(lock(&self.points)?.values().cloned().collect())
+        Ok(lock_store(&self.state)?
+            .points
+            .values()
+            .map(|stored| stored.point.clone())
+            .collect())
+    }
+
+    /// Injects one host cursor commit failure without mutating progress.
+    pub fn fail_next_cursor_commit(&self) {
+        self.fail_next_cursor_commit.store(true, Ordering::SeqCst);
     }
 }
 
@@ -33,8 +60,9 @@ impl HostMetricStore for InMemoryHostMetricStore {
         &self,
         points: &[HostMetricPoint],
     ) -> Result<MetricAppendReport, MetricStoreError> {
-        let mut committed = lock(&self.points)?;
+        let mut state = lock_store(&self.state)?;
         let mut pending = BTreeMap::<HostMetricRecordId, HostMetricPoint>::new();
+        let mut pending_order = Vec::new();
         let mut deduplicated = 0_usize;
         for point in points {
             point
@@ -42,30 +70,108 @@ impl HostMetricStore for InMemoryHostMetricStore {
                 .map_err(|error| MetricStoreError::Rejected {
                     message: error.to_string(),
                 })?;
-            let existing = pending.get(&point.id).or_else(|| committed.get(&point.id));
+            let committed = state.points.get(&point.id).map(|stored| &stored.point);
+            let existing = pending.get(&point.id).or(committed);
             match existing {
                 Some(existing) if existing == point => {
                     deduplicated = deduplicated.saturating_add(1);
                 }
-                Some(_) => {
-                    return Err(MetricStoreError::Rejected {
-                        message: format!(
-                            "host sample identity `{}/{}/{}` was reused with different content",
-                            point.id.cluster_id, point.id.node_id, point.id.collected_at.0
-                        ),
-                    });
-                }
+                Some(_) => return Err(identity_collision(point)),
                 None => {
                     pending.insert(point.id.clone(), point.clone());
+                    pending_order.push(point.id.clone());
                 }
             }
         }
         let committed_count = pending.len();
-        committed.extend(pending);
+        let increment = u64::try_from(committed_count).map_err(|_| sequence_exhausted())?;
+        state
+            .last_sequence
+            .checked_add(increment)
+            .ok_or_else(sequence_exhausted)?;
+        for id in pending_order {
+            let point = pending
+                .remove(&id)
+                .ok_or_else(|| MetricStoreError::Unavailable {
+                    message: "validated host append lost a pending point".to_owned(),
+                })?;
+            state.last_sequence = state.last_sequence.saturating_add(1);
+            let sequence = HostMetricSequence(state.last_sequence);
+            let owner = (point.id.cluster_id.clone(), point.id.node_id.clone());
+            let previous_resources = point
+                .resources
+                .as_ref()
+                .and_then(|_| state.last_resource_by_node.insert(owner, sequence));
+            state.sequences.insert(sequence, id.clone());
+            state.points.insert(
+                id,
+                StoredHostMetricPoint {
+                    previous_resources,
+                    point,
+                },
+            );
+        }
         Ok(MetricAppendReport {
             committed: committed_count,
             deduplicated,
         })
+    }
+}
+
+#[async_trait]
+impl HostMetricDeliveryStore for InMemoryHostMetricStore {
+    async fn read_host_metrics_after(
+        &self,
+        cursor: Option<HostMetricSequence>,
+        limit: usize,
+    ) -> Result<Vec<SequencedHostMetricPoint>, HostMetricDeliveryStoreError> {
+        if limit == 0 {
+            return Err(delivery_rejected(
+                "host metric delivery read limit must be non-zero",
+            ));
+        }
+        let state = lock_delivery(&self.state)?;
+        state
+            .sequences
+            .iter()
+            .filter(|(sequence, _)| cursor.is_none_or(|cursor| **sequence > cursor))
+            .take(limit)
+            .map(|(sequence, id)| sequenced(&state, *sequence, id))
+            .collect()
+    }
+
+    async fn load_host_metric_sink_cursor(
+        &self,
+        sink_id: &MetricSinkId,
+    ) -> Result<Option<HostMetricSequence>, HostMetricDeliveryStoreError> {
+        Ok(lock_delivery(&self.state)?.cursors.get(sink_id).copied())
+    }
+
+    async fn commit_host_metric_sink_cursor(
+        &self,
+        sink_id: &MetricSinkId,
+        sequence: HostMetricSequence,
+    ) -> Result<(), HostMetricDeliveryStoreError> {
+        if self.fail_next_cursor_commit.swap(false, Ordering::SeqCst) {
+            return Err(delivery_unavailable(
+                "injected host metric cursor commit failure",
+            ));
+        }
+        let mut state = lock_delivery(&self.state)?;
+        if !state.sequences.contains_key(&sequence) {
+            return Err(delivery_rejected(
+                "host metric sink cursor does not identify a stored point",
+            ));
+        }
+        if state
+            .cursors
+            .get(sink_id)
+            .is_some_and(|cursor| sequence < *cursor)
+        {
+            return Err(delivery_rejected("host metric sink cursor cannot regress"));
+        }
+        state.cursors.insert(sink_id.clone(), sequence);
+        Ok(())
     }
 }
 
@@ -75,14 +181,19 @@ impl HostMetricQueryStore for InMemoryHostMetricStore {
         &self,
         query: &HostMetricQuery,
     ) -> Result<Vec<HostMetricHistoryPoint>, HostMetricQueryStoreError> {
-        let points = lock_query(&self.points)?;
+        let state = lock_query(&self.state)?;
         let mut previous = BTreeMap::new();
         let mut history = Vec::new();
-        for point in points.values().filter(|point| {
-            point.id.cluster_id == *query.cluster_id()
-                && query.node_id().is_none_or(|node| point.id.node_id == *node)
-                && query.component().matches(point)
-        }) {
+        for point in state
+            .points
+            .values()
+            .map(|stored| &stored.point)
+            .filter(|point| {
+                point.id.cluster_id == *query.cluster_id()
+                    && query.node_id().is_none_or(|node| point.id.node_id == *node)
+                    && query.component().matches(point)
+            })
+        {
             if point.id.collected_at.0 > query.to().0 {
                 continue;
             }
@@ -105,7 +216,11 @@ impl HostMetricQueryStore for InMemoryHostMetricStore {
         query: &LatestHostMetricQuery,
     ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
         let mut latest = BTreeMap::new();
-        for point in lock_query(&self.points)?.values() {
+        for point in lock_query(&self.state)?
+            .points
+            .values()
+            .map(|stored| &stored.point)
+        {
             if point.id.cluster_id == *query.cluster_id() && query.component().matches(point) {
                 latest.insert(point.id.node_id.clone(), point.clone());
             }
@@ -114,21 +229,84 @@ impl HostMetricQueryStore for InMemoryHostMetricStore {
     }
 }
 
-fn lock(
-    points: &Mutex<BTreeMap<HostMetricRecordId, HostMetricPoint>>,
-) -> Result<MutexGuard<'_, BTreeMap<HostMetricRecordId, HostMetricPoint>>, MetricStoreError> {
-    points.lock().map_err(|_| MetricStoreError::Unavailable {
+fn sequenced(
+    state: &HostMetricState,
+    sequence: HostMetricSequence,
+    id: &HostMetricRecordId,
+) -> Result<SequencedHostMetricPoint, HostMetricDeliveryStoreError> {
+    let stored = state
+        .points
+        .get(id)
+        .ok_or_else(|| delivery_unavailable("host metric sequence lost its point"))?;
+    let previous_resources = stored
+        .previous_resources
+        .map(|previous| {
+            let previous_id = state.sequences.get(&previous).ok_or_else(|| {
+                delivery_unavailable("host resource baseline sequence is missing")
+            })?;
+            state
+                .points
+                .get(previous_id)
+                .map(|stored| stored.point.clone())
+                .ok_or_else(|| delivery_unavailable("host resource baseline point is missing"))
+        })
+        .transpose()?;
+    Ok(SequencedHostMetricPoint {
+        sequence,
+        point: stored.point.clone(),
+        previous_resources,
+    })
+}
+
+fn identity_collision(point: &HostMetricPoint) -> MetricStoreError {
+    MetricStoreError::Rejected {
+        message: format!(
+            "host sample identity `{}/{}/{}` was reused with different content",
+            point.id.cluster_id, point.id.node_id, point.id.collected_at.0
+        ),
+    }
+}
+
+fn sequence_exhausted() -> MetricStoreError {
+    MetricStoreError::Rejected {
+        message: "host metric delivery sequence space is exhausted".to_owned(),
+    }
+}
+
+fn delivery_rejected(message: &str) -> HostMetricDeliveryStoreError {
+    HostMetricDeliveryStoreError::Rejected {
+        message: message.to_owned(),
+    }
+}
+
+fn delivery_unavailable(message: &str) -> HostMetricDeliveryStoreError {
+    HostMetricDeliveryStoreError::Unavailable {
+        message: message.to_owned(),
+    }
+}
+
+fn lock_store(
+    state: &Mutex<HostMetricState>,
+) -> Result<MutexGuard<'_, HostMetricState>, MetricStoreError> {
+    state.lock().map_err(|_| MetricStoreError::Unavailable {
         message: "in-memory host metric store lock was poisoned".to_owned(),
     })
 }
 
+fn lock_delivery(
+    state: &Mutex<HostMetricState>,
+) -> Result<MutexGuard<'_, HostMetricState>, HostMetricDeliveryStoreError> {
+    state
+        .lock()
+        .map_err(|_| delivery_unavailable("in-memory host metric delivery lock was poisoned"))
+}
+
 fn lock_query(
-    points: &Mutex<BTreeMap<HostMetricRecordId, HostMetricPoint>>,
-) -> Result<MutexGuard<'_, BTreeMap<HostMetricRecordId, HostMetricPoint>>, HostMetricQueryStoreError>
-{
-    points
+    state: &Mutex<HostMetricState>,
+) -> Result<MutexGuard<'_, HostMetricState>, HostMetricQueryStoreError> {
+    state
         .lock()
         .map_err(|_| HostMetricQueryStoreError::Unavailable {
-            message: "in-memory host metric store lock was poisoned".to_owned(),
+            message: "in-memory host metric query lock was poisoned".to_owned(),
         })
 }

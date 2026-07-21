@@ -11,6 +11,15 @@ pub(crate) fn append(
     let transaction = connection
         .transaction()
         .map_err(store_unavailable("begin host metric append transaction"))?;
+    let mut delivery_sequence = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(delivery_sequence), 0) FROM host_metrics",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(store_unavailable(
+            "read latest host metric delivery sequence",
+        ))?;
     let mut report = MetricAppendReport::default();
     for point in points {
         point
@@ -47,13 +56,35 @@ pub(crate) fn append(
                 });
             }
             None => {
+                let previous_resources = if point.resources.is_some() {
+                    transaction
+                        .query_row(
+                            "SELECT delivery_sequence FROM host_metrics
+                             WHERE cluster_id = ?1 AND node_id = ?2 AND has_resources
+                             ORDER BY delivery_sequence DESC LIMIT 1",
+                            params![point.id.cluster_id.as_str(), point.id.node_id.as_str()],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()
+                        .map_err(store_unavailable("read host metric resource baseline"))?
+                } else {
+                    None
+                };
+                delivery_sequence =
+                    delivery_sequence
+                        .checked_add(1)
+                        .ok_or_else(|| MetricStoreError::Rejected {
+                            message: "host metric delivery sequence space is exhausted".to_owned(),
+                        })?;
                 transaction
                     .execute(
                         "INSERT INTO host_metrics
-                         (cluster_id, node_id, collected_at_ms, point_json,
-                          has_resources, has_disks)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                         (delivery_sequence, previous_resource_sequence, cluster_id, node_id,
+                          collected_at_ms, point_json, has_resources, has_disks)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                         params![
+                            delivery_sequence,
+                            previous_resources,
                             point.id.cluster_id.as_str(),
                             point.id.node_id.as_str(),
                             point.id.collected_at.0,

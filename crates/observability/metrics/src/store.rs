@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::{
-    HostMetricQueryStore, HostMetricStore, MetricDeliveryStore, WorkloadMetricPoint,
-    WorkloadMetricQueryStore,
+    HostMetricDeliveryStore, HostMetricQueryStore, HostMetricStore, MetricDeliveryStore,
+    WorkloadMetricPoint, WorkloadMetricQueryStore,
 };
 
 /// Outcome of one atomic idempotent metric append batch.
@@ -45,6 +45,9 @@ pub trait MetricStoreRuntime: Send {
 
     /// Returns bounded host resource and disk reads over the same durable data.
     fn host_query_store(&self) -> Arc<dyn HostMetricQueryStore>;
+
+    /// Returns ordered reads and independently checkpointed cursors over host telemetry.
+    fn host_delivery_store(&self) -> Arc<dyn HostMetricDeliveryStore>;
 
     /// Drains accepted writes and releases the store's owned resources.
     async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError>;

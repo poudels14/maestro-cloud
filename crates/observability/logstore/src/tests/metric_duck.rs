@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use metrics::{
-    HostMetricComponent, HostMetricQueryStore, HostMetricStore, LatestHostMetricQuery,
-    MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId, MetricStore,
-    WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
+    HostMetricComponent, HostMetricDeliveryStore, HostMetricQueryStore, HostMetricSequence,
+    HostMetricStore, LatestHostMetricQuery, MetricDeliveryStore, MetricRecordId, MetricSequence,
+    MetricSinkId, MetricStore, WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
 };
 use runtime::WorkloadMetadata;
 
@@ -44,6 +44,18 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     )
     .await?;
     delivery.shutdown().await?;
+
+    let host_delivery = DuckMetricStoreRuntime::open(DuckStoreSettings::new(
+        temporary.path().join("host-metric-delivery.duckdb"),
+        8,
+    )?)
+    .await?;
+    metrics::conformance::check_host_metric_delivery_store(
+        host_delivery.store().as_ref(),
+        host_delivery.store().as_ref(),
+    )
+    .await?;
+    host_delivery.shutdown().await?;
     Ok(())
 }
 
@@ -80,6 +92,10 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
         .store()
         .commit_sink_cursor(&MetricSinkId::new("datadog")?, MetricSequence(1))
         .await?;
+    runtime
+        .store()
+        .commit_host_metric_sink_cursor(&MetricSinkId::new("datadog")?, HostMetricSequence(1))
+        .await?;
     runtime.shutdown().await?;
 
     let restarted = DuckMetricStoreRuntime::open(settings).await?;
@@ -105,6 +121,36 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
             .load_sink_cursor(&MetricSinkId::new("datadog")?)
             .await?,
         Some(MetricSequence(1))
+    );
+    assert_eq!(
+        restarted
+            .store()
+            .load_host_metric_sink_cursor(&MetricSinkId::new("datadog")?)
+            .await?,
+        Some(HostMetricSequence(1))
+    );
+    let mut next_host = host.clone();
+    next_host.id.collected_at = Timestamp(2);
+    next_host
+        .resources
+        .as_mut()
+        .ok_or("host resource fixture missing")?
+        .cpu_total_ticks = 200;
+    restarted
+        .store()
+        .append_host_metrics(std::slice::from_ref(&next_host))
+        .await?;
+    let host_pending = restarted
+        .store()
+        .read_host_metrics_after(Some(HostMetricSequence(1)), 8)
+        .await?;
+    assert_eq!(
+        host_pending.first().map(|point| (
+            point.sequence,
+            &point.point,
+            point.previous_resources.as_ref()
+        )),
+        Some((HostMetricSequence(2), &next_host, Some(&host)))
     );
     let pending = restarted
         .store()
@@ -199,6 +245,8 @@ async fn duck_metric_store_migrates_v3_host_component_indexes()
     let path = temporary.path().join("metrics.duckdb");
     let mut host = metrics::conformance::host_metric_point("node-1", 5, 512)?;
     host.disks = None;
+    let mut next = metrics::conformance::host_metric_point("node-1", 6, 768)?;
+    next.disks = None;
     let connection = duckdb::Connection::open(&path)?;
     connection.execute_batch(
         "CREATE TABLE schema_version (version BIGINT NOT NULL);
@@ -233,6 +281,15 @@ async fn duck_metric_store_migrates_v3_host_component_indexes()
             serde_json::to_string(&host)?,
         ],
     )?;
+    connection.execute(
+        "INSERT INTO host_metrics VALUES (?1, ?2, ?3, ?4)",
+        duckdb::params![
+            next.id.cluster_id.as_str(),
+            next.id.node_id.as_str(),
+            next.id.collected_at.0,
+            serde_json::to_string(&next)?,
+        ],
+    )?;
     drop(connection);
 
     let runtime = DuckMetricStoreRuntime::open(DuckStoreSettings::new(path, 8)?).await?;
@@ -252,8 +309,20 @@ async fn duck_metric_store_migrates_v3_host_component_indexes()
             8,
         )?)
         .await?;
-    assert_eq!(resources, [host]);
+    assert_eq!(resources, [next.clone()]);
     assert!(disks.is_empty());
+    let delivery = runtime.store().read_host_metrics_after(None, 8).await?;
+    assert_eq!(delivery.len(), 2);
+    assert_eq!(
+        delivery.get(1).map(|point| point.sequence),
+        Some(HostMetricSequence(2))
+    );
+    assert_eq!(
+        delivery
+            .get(1)
+            .and_then(|point| point.previous_resources.as_ref()),
+        Some(&host)
+    );
     runtime.shutdown().await?;
     Ok(())
 }
