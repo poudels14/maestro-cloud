@@ -11,6 +11,10 @@ mod fake_network;
 mod health;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
+#[cfg(unix)]
+mod log_agent;
+#[cfg(unix)]
+mod log_checkpoint;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;

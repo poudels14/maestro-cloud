@@ -21,6 +21,10 @@ mod health_probe;
 mod health_status;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
+#[cfg(unix)]
+mod log_agent;
+#[cfg(unix)]
+mod log_checkpoint;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
@@ -36,6 +40,14 @@ mod stats;
 
 #[cfg(target_os = "linux")]
 pub use linux_mesh::LinuxMeshBackend;
+#[cfg(unix)]
+pub use log_agent::{
+    RuntimeLogAgent, RuntimeLogAgentError, RuntimeLogAgentSettings, RuntimeLogFailure,
+    RuntimeLogFailureStage, RuntimeLogReport, WorkloadLogEntry, WorkloadLogSink,
+    WorkloadLogSinkError,
+};
+#[cfg(unix)]
+pub use log_checkpoint::{FileLogCheckpointStore, LogCheckpointError, LogCheckpointStore};
 
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
