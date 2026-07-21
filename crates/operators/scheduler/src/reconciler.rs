@@ -111,6 +111,7 @@ fn classify_error(error: SchedulerError) -> ReconcileError {
 fn terminal_reason(error: &SchedulerError) -> &'static str {
     match error {
         SchedulerError::ZeroReplacementGrace => "InvalidSchedulerSettings",
+        SchedulerError::ZeroDeploymentDrainGrace => "InvalidSchedulerSettings",
         SchedulerError::InvalidIdentifier(_) => "InvalidResourceIdentity",
         SchedulerError::MalformedResource { .. } => "MalformedResource",
         SchedulerError::ResourceIdentityMismatch { .. } => "ResourceIdentityMismatch",

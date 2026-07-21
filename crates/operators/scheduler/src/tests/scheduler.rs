@@ -158,6 +158,7 @@ impl World {
             cluster_id,
             SchedulerSettings {
                 replacement_grace: Duration::from_secs(30),
+                deployment_drain_grace: Duration::from_secs(30),
             },
         )?;
         let world = Self {
@@ -196,7 +197,10 @@ impl World {
         Ok(())
     }
 
-    async fn reconcile(&self, now: Timestamp) -> Result<crate::SchedulerReport, SchedulerError> {
+    pub(super) async fn reconcile(
+        &self,
+        now: Timestamp,
+    ) -> Result<crate::SchedulerReport, SchedulerError> {
         self.scheduler.reconcile_once(&self.fenced, now).await
     }
 
@@ -241,6 +245,29 @@ impl World {
             .put_cas(PutRequest {
                 key,
                 value: serde_json::to_vec(&service)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub(super) async fn set_deployment_draining(
+        &self,
+        draining_at: Timestamp,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let key = self.keys.resource(
+            &ResourceKind::new("Deployment")?,
+            &ResourceName::new("deployment-1")?,
+        );
+        let stored = self.store.get(&key).await?.ok_or("deployment missing")?;
+        let mut deployment: Deployment = serde_json::from_slice(&stored.value)?;
+        deployment.status.phase = DeploymentPhase::Draining;
+        deployment.status.draining_at = Some(draining_at);
+        self.store
+            .put_cas(PutRequest {
+                key,
+                value: serde_json::to_vec(&deployment)?,
                 expected: ExpectedVersion::Exact(stored.version),
                 session: None,
             })

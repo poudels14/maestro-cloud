@@ -21,6 +21,7 @@ async fn scheduler_runtime_watches_liveness_resyncs_grace_and_finalizes_assignme
         kernel_api::ClusterId::new("cluster-1")?,
         SchedulerSettings {
             replacement_grace: Duration::from_secs(30),
+            deployment_drain_grace: Duration::from_secs(30),
         },
         wall_clock.clone(),
     )?);

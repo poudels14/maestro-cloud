@@ -30,9 +30,11 @@ pub(crate) fn project(
     live_nodes: &BTreeSet<NodeId>,
     now: Timestamp,
     replacement_grace: Duration,
+    deployment_drain_grace: Duration,
 ) -> Result<Projection, SchedulerError> {
     let (nodes, held) = schedule_nodes(snapshot, live_nodes, now, replacement_grace)?;
-    let (services, validation_errors, retained_on_error) = schedule_services(snapshot);
+    let (services, validation_errors, retained_on_error) =
+        schedule_services(snapshot, now, deployment_drain_grace);
     Ok(Projection {
         input: ScheduleInput {
             cluster_id,
@@ -151,6 +153,8 @@ fn within_grace(now: Timestamp, since: Timestamp, grace: Duration) -> bool {
 
 fn schedule_services(
     snapshot: &ResourceSnapshot,
+    now: Timestamp,
+    deployment_drain_grace: Duration,
 ) -> (
     Vec<ServiceSchedule>,
     Vec<UnschedulableReplica>,
@@ -160,7 +164,7 @@ fn schedule_services(
         .deployments
         .values()
         .filter(|deployment| deployment.meta.deletion_timestamp.is_none())
-        .filter(|deployment| active_deployment(deployment))
+        .filter(|deployment| active_deployment(deployment, now, deployment_drain_grace))
         .fold(
             BTreeMap::<ServiceId, Vec<&Deployment>>::new(),
             |mut by_service, deployment| {
@@ -238,17 +242,26 @@ fn schedule_services(
     (services, validation_errors, retained_on_error)
 }
 
-fn active_deployment(deployment: &Deployment) -> bool {
+fn active_deployment(
+    deployment: &Deployment,
+    now: Timestamp,
+    deployment_drain_grace: Duration,
+) -> bool {
     matches!(
         deployment.status.phase,
         DeploymentPhase::Building
             | DeploymentPhase::PendingReady
             | DeploymentPhase::Ready
             | DeploymentPhase::Draining
-    ) && (matches!(
-        deployment.spec.service.artifact,
-        ArtifactTemplate::Image { .. }
-    ) || deployment.status.image_digest.is_some())
+    ) && (deployment.status.phase != DeploymentPhase::Draining
+        || deployment
+            .status
+            .draining_at
+            .is_none_or(|started| within_grace(now, started, deployment_drain_grace)))
+        && (matches!(
+            deployment.spec.service.artifact,
+            ArtifactTemplate::Image { .. }
+        ) || deployment.status.image_digest.is_some())
 }
 
 fn deployment_order(phase: DeploymentPhase) -> u8 {

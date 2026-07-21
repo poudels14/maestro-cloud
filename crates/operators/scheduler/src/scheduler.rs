@@ -15,6 +15,8 @@ use crate::resource::ResourceSnapshot;
 pub struct SchedulerSettings {
     /// Time an unavailable node retains its assignments before replacement is allowed.
     pub replacement_grace: Duration,
+    /// Time a draining deployment retains assignments while traffic leaves.
+    pub deployment_drain_grace: Duration,
 }
 
 impl SchedulerSettings {
@@ -22,6 +24,8 @@ impl SchedulerSettings {
     pub fn validate(self) -> Result<Self, SchedulerError> {
         if self.replacement_grace.is_zero() {
             Err(SchedulerError::ZeroReplacementGrace)
+        } else if self.deployment_drain_grace.is_zero() {
+            Err(SchedulerError::ZeroDeploymentDrainGrace)
         } else {
             Ok(self)
         }
@@ -89,6 +93,7 @@ impl Scheduler {
             &live_nodes,
             now,
             self.settings.replacement_grace,
+            self.settings.deployment_drain_grace,
         )?;
         let mut schedule = crate::plan(projection.input);
         schedule.assignments.extend(projection.retained_on_error);
@@ -167,6 +172,9 @@ pub enum SchedulerError {
     /// A zero grace period would replace nodes immediately on transient loss.
     #[error("scheduler replacement grace must be greater than zero")]
     ZeroReplacementGrace,
+    /// A zero drain grace could remove workloads before traffic converges.
+    #[error("scheduler deployment drain grace must be greater than zero")]
+    ZeroDeploymentDrainGrace,
     /// A static or stored resource identifier was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] InvalidIdentifier),
