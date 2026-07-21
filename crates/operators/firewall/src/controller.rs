@@ -1,18 +1,20 @@
-use std::sync::Arc;
-
 use kernel_api::ClusterId;
 use kernel_controller::{ControllerError, FencedStore};
 use kernel_store::Keyspace;
 
 use crate::snapshot::ResourceSnapshot;
 use crate::writer::{FirewallWriteError, FirewallWriter};
-use crate::{FirewallBackend, FirewallBackendError, FirewallPlanError, FirewallSettings};
+use crate::{FirewallPlanError, FirewallSettings};
 
 /// Result of one finite, globally fenced firewall convergence pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FirewallReport {
-    /// Number of complete per-node rulesets handed to the backend.
-    pub applied_rulesets: usize,
+    /// Number of per-node desired rulesets created or replaced in the store.
+    pub published_rulesets: usize,
+    /// Number of desired rulesets still awaiting exact node acknowledgement.
+    pub pending_rulesets: usize,
+    /// Whether this pass changed the desired per-node resource set.
+    pub desired_state_changed: bool,
     /// Policy statuses atomically acknowledged after backend success.
     pub updated_policies: usize,
     /// Digest of the complete planned bundle, including an empty bundle.
@@ -21,25 +23,19 @@ pub struct FirewallReport {
     pub conflict: bool,
 }
 
-/// Store-backed firewall controller with an idempotent whole-bundle backend.
+/// Store-backed firewall controller publishing desired state for node-local application.
 pub struct FirewallController {
     keyspace: Keyspace,
     settings: FirewallSettings,
-    backend: Arc<dyn FirewallBackend>,
     reconcile_gate: tokio::sync::Mutex<()>,
 }
 
 impl FirewallController {
     /// Constructs a firewall controller without reading or mutating cluster state.
-    pub fn new(
-        cluster_id: ClusterId,
-        settings: FirewallSettings,
-        backend: Arc<dyn FirewallBackend>,
-    ) -> Self {
+    pub fn new(cluster_id: ClusterId, settings: FirewallSettings) -> Self {
         Self {
             keyspace: Keyspace::new(&cluster_id),
             settings,
-            backend,
             reconcile_gate: tokio::sync::Mutex::new(()),
         }
     }
@@ -48,7 +44,7 @@ impl FirewallController {
         &self.keyspace
     }
 
-    /// Projects, preflights, applies, and atomically acknowledges one exact snapshot.
+    /// Publishes per-node desired state and acknowledges policies only after every node applies it.
     pub async fn reconcile_once(
         &self,
         store: &FencedStore,
@@ -56,20 +52,13 @@ impl FirewallController {
         let _guard = self.reconcile_gate.lock().await;
         let snapshot = ResourceSnapshot::load(store, &self.keyspace).await?;
         let plan = crate::plan(snapshot.input(self.settings.clone()))?;
-        if !FirewallWriter::preflight(store, &snapshot).await? {
-            return Ok(FirewallReport {
-                bundle_digest: plan.bundle_digest,
-                conflict: true,
-                ..Default::default()
-            });
-        }
-        let bundle = plan.bundle();
-        self.backend.apply(&bundle).await?;
-        let write = FirewallWriter::apply(store, &snapshot, &plan).await?;
+        let write = FirewallWriter::apply(store, &self.keyspace, &snapshot, &plan).await?;
         Ok(FirewallReport {
-            applied_rulesets: bundle.rulesets.len(),
+            published_rulesets: write.published_rulesets,
+            pending_rulesets: write.pending_rulesets,
+            desired_state_changed: write.desired_state_changed,
             updated_policies: write.updated_policies,
-            bundle_digest: bundle.digest,
+            bundle_digest: plan.bundle_digest,
             conflict: write.conflict,
         })
     }
@@ -90,9 +79,6 @@ pub enum FirewallError {
     /// The atomic policy-status writer rejected a planned mutation.
     #[error(transparent)]
     Write(#[from] FirewallWriteError),
-    /// The firewall backend failed before status acknowledgement.
-    #[error(transparent)]
-    Backend(#[from] FirewallBackendError),
     /// A relevant stored resource could not be decoded.
     #[error("malformed {kind} resource at `{key}`: {message}")]
     MalformedResource {

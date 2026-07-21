@@ -58,11 +58,13 @@ impl FirewallPolicyReconciler {
             .reconcile_once(context.store())
             .await
             .map_err(classify_error)?;
-        Ok(if report.conflict {
-            Action::Requeue(CONFLICT_RETRY)
-        } else {
-            Action::Done
-        })
+        Ok(
+            if report.conflict || report.desired_state_changed || report.pending_rulesets > 0 {
+                Action::Requeue(CONFLICT_RETRY)
+            } else {
+                Action::Done
+            },
+        )
     }
 }
 
@@ -146,11 +148,13 @@ impl Reconciler for FirewallBaselineReconciler {
             .reconcile_once(context.store())
             .await
             .map_err(classify_error)?;
-        Ok(if report.conflict {
-            Action::Requeue(CONFLICT_RETRY)
-        } else {
-            Action::Done
-        })
+        Ok(
+            if report.conflict || report.desired_state_changed || report.pending_rulesets > 0 {
+                Action::Requeue(CONFLICT_RETRY)
+            } else {
+                Action::Done
+            },
+        )
     }
 }
 
@@ -160,9 +164,6 @@ fn classify_error(error: FirewallError) -> ReconcileError {
         FirewallError::Write(FirewallWriteError::Controller(error)) => {
             ReconcileError::Infrastructure(error)
         }
-        FirewallError::Backend(error) => ReconcileError::Retryable {
-            message: error.to_string(),
-        },
         error => ReconcileError::Terminal {
             reason: terminal_reason(&error).to_string(),
             message: error.to_string(),
@@ -178,7 +179,6 @@ fn terminal_reason(error: &FirewallError) -> &'static str {
         FirewallError::ResourceIdentityMismatch { .. } => "ResourceIdentityMismatch",
         FirewallError::DuplicateResource { .. } => "DuplicateResource",
         FirewallError::Write(_) => "FirewallMutationFailed",
-        FirewallError::Backend(_) => "FirewallBackendFailed",
         FirewallError::Controller(_) => "FirewallInfrastructureFailed",
     }
 }

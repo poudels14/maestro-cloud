@@ -34,6 +34,7 @@ impl EgressWorld {
         let bundle = self
             .inner
             .latest_firewall_bundle()
+            .await
             .map_err(EgressError::from_driver)?;
         let policy = policies.first();
         let policy_acknowledged = policy.is_some_and(|policy| {

@@ -3,8 +3,7 @@ use std::sync::Arc;
 use deployment::{DeploymentReconciler, LifecycleSettings};
 use dns::{DnsReconciler, DnsSettings};
 use firewall::{
-    FirewallBackend, FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler,
-    FirewallSettings,
+    FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler, FirewallSettings,
 };
 use ingress::{IngressBackend, IngressReconciler, IngressSettings};
 use kernel_api::ClusterId;
@@ -39,8 +38,6 @@ pub struct OperatorSettings {
 pub struct OperatorBackends {
     /// Publishes staged and active ingress configuration.
     pub ingress: Arc<dyn IngressBackend>,
-    /// Applies complete deterministic per-node firewall bundles.
-    pub firewall: Arc<dyn FirewallBackend>,
 }
 
 /// Rebuilds and runs the complete operator suite for each leadership fence.
@@ -167,11 +164,7 @@ impl OperatorSuite {
             monotonic_clock.clone(),
             settings.runtime.clone(),
         );
-        let firewall = Arc::new(FirewallController::new(
-            cluster_id,
-            settings.firewall,
-            backends.firewall,
-        ));
+        let firewall = Arc::new(FirewallController::new(cluster_id, settings.firewall));
         let firewall_policies = Arc::new(FirewallPolicyReconciler::new(firewall.clone())?).runtime(
             store.clone(),
             monotonic_clock.clone(),

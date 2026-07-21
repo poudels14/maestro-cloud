@@ -4,11 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use firewall::{FirewallBackend, FirewallBackendError, FirewallBundle};
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
-    ArtifactTemplate, ClusterId, Deployment, ExecPolicy, Generation, NodeApiAccess, NodeId,
-    NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, Object,
+    ArtifactTemplate, ClusterId, Deployment, ExecPolicy, Generation, NodeApiAccess, NodeFirewall,
+    NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, Object,
     ObjectMeta, PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState,
     Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
 };
@@ -58,7 +57,6 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     put(&store, &keys, "Service", &service()?).await?;
     put(&store, &keys, "NodeNetwork", &network()?).await?;
     let ingress = Arc::new(RecordingIngress::default());
-    let firewall = Arc::new(RecordingFirewall::default());
     let suite = OperatorSuite::new(
         cluster_id,
         fenced,
@@ -67,7 +65,6 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
         settings()?,
         OperatorBackends {
             ingress: ingress.clone(),
-            firewall: firewall.clone(),
         },
     )?;
 
@@ -92,19 +89,8 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
         list::<Deployment>(&store, &keys, "Deployment").await?.len(),
         1
     );
-    let bundles = firewall
-        .bundles
-        .lock()
-        .map_err(|_| "firewall bundle lock poisoned")?;
-    assert_eq!(bundles.len(), 2);
-    assert!(
-        bundles
-            .first()
-            .and_then(|bundle| bundle.rulesets.first())
-            .ok_or("baseline ruleset missing")?
-            .script
-            .contains("tcp dport 53 accept")
-    );
+    let desired_firewall = one::<NodeFirewall>(&store, &keys, "NodeFirewall").await?;
+    assert!(desired_firewall.spec.script.contains("tcp dport 53 accept"));
     let ingress_changes = ingress
         .changes
         .lock()
@@ -130,22 +116,6 @@ impl IngressBackend for RecordingIngress {
             .lock()
             .map_err(|_| IngressBackendError::new("ingress change lock poisoned"))?
             .push(change.clone());
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct RecordingFirewall {
-    bundles: Mutex<Vec<FirewallBundle>>,
-}
-
-#[async_trait]
-impl FirewallBackend for RecordingFirewall {
-    async fn apply(&self, bundle: &FirewallBundle) -> Result<(), FirewallBackendError> {
-        self.bundles
-            .lock()
-            .map_err(|_| FirewallBackendError::new("firewall bundle lock poisoned"))?
-            .push(bundle.clone());
         Ok(())
     }
 }

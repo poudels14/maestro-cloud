@@ -3,9 +3,9 @@ use std::fmt::Display;
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentSpec, AssignmentStatus, FirewallPolicy, FirewallPolicyId,
-    FirewallPolicySpec, FirewallPolicyStatus, NodeNetwork, NodeNetworkId, NodeNetworkSpec,
-    NodeNetworkStatus, Object, ResourceKind, ResourceName, Service, ServiceId, ServiceSpec,
-    ServiceStatus,
+    FirewallPolicySpec, FirewallPolicyStatus, NodeFirewall, NodeFirewallId, NodeFirewallSpec,
+    NodeFirewallStatus, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, Object,
+    ResourceKind, ResourceName, Service, ServiceId, ServiceSpec, ServiceStatus,
 };
 use kernel_controller::FencedStore;
 use kernel_store::{Compare, ExpectedVersion, Keyspace, StoredValue};
@@ -18,6 +18,7 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) services: BTreeMap<ServiceId, StoredResource<Service>>,
     pub(crate) assignments: BTreeMap<AssignmentId, StoredResource<Assignment>>,
     pub(crate) node_networks: BTreeMap<NodeNetworkId, StoredResource<NodeNetwork>>,
+    pub(crate) node_firewalls: BTreeMap<NodeFirewallId, StoredResource<NodeFirewall>>,
 }
 
 impl ResourceSnapshot {
@@ -44,6 +45,11 @@ impl ResourceSnapshot {
                 &values,
                 keyspace,
                 "NodeNetwork",
+            )?,
+            node_firewalls: decode_kind::<NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus>(
+                &values,
+                keyspace,
+                "NodeFirewall",
             )?,
         })
     }
@@ -74,6 +80,11 @@ impl ResourceSnapshot {
             .chain(self.services.values().map(|resource| &resource.stored))
             .chain(self.assignments.values().map(|resource| &resource.stored))
             .chain(self.node_networks.values().map(|resource| &resource.stored))
+            .chain(
+                self.node_firewalls
+                    .values()
+                    .map(|resource| &resource.stored),
+            )
     }
 }
 

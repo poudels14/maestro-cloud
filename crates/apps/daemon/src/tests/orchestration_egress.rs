@@ -20,7 +20,7 @@ async fn egress_policy_applies_exact_bundle_then_finalizes_without_a_rule_gap()
             .into_iter()
             .next()
             .ok_or("firewall policy missing")?;
-        let bundle = world.latest_firewall_bundle()?;
+        let bundle = world.latest_firewall_bundle().await?;
         assert_eq!(applied.status.applied_generation, applied.meta.generation);
         assert_eq!(
             applied.status.ruleset_digest.as_deref(),
@@ -44,7 +44,8 @@ async fn egress_policy_applies_exact_bundle_then_finalizes_without_a_rule_gap()
         );
         assert!(
             world
-                .latest_firewall_bundle()?
+                .latest_firewall_bundle()
+                .await?
                 .rulesets
                 .iter()
                 .all(|ruleset| !ruleset.script.contains("192.0.2.0/24"))

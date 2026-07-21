@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use firewall::{FirewallBackend, FirewallBackendError, FirewallBundle};
+use firewall::{FirewallBundle, FirewallRuleset};
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
-    DeploymentPhase, DnsRecord, Generation, NodeId, NodeInstanceId, Object, ResourceKind,
-    ResourceName, Service, TrafficGeneration, TrafficGenerationPhase,
+    DeploymentPhase, DnsRecord, FirewallPolicy, Generation, NodeFirewall, NodeId, NodeInstanceId,
+    Object, ResourceKind, ResourceName, Service, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -100,7 +100,6 @@ pub(super) struct RolloutWorld {
     pub(super) store: Arc<InMemoryStore>,
     suite: OperatorSuite,
     ingress: Arc<RecordingIngress>,
-    firewall: Arc<RecordingFirewall>,
     timestamp: Arc<ManualTimestampClock>,
     _session: Box<dyn Session>,
 }
@@ -157,7 +156,6 @@ impl RolloutWorld {
         }
 
         let ingress = Arc::new(RecordingIngress::default());
-        let firewall = Arc::new(RecordingFirewall::default());
         let timestamp = Arc::new(ManualTimestampClock::new(10_000));
         let mut operator_settings = settings()?;
         if !seed_service {
@@ -174,7 +172,6 @@ impl RolloutWorld {
             operator_settings,
             OperatorBackends {
                 ingress: ingress.clone(),
-                firewall: firewall.clone(),
             },
         )?;
         Ok(Self {
@@ -182,7 +179,6 @@ impl RolloutWorld {
             store,
             suite,
             ingress,
-            firewall,
             timestamp,
             _session: session,
         })
@@ -208,11 +204,46 @@ impl RolloutWorld {
 
     pub(super) async fn reconcile_pass(&self) -> HarnessResult<()> {
         self.suite.reconcile_snapshot().await?;
+        self.ack_firewalls().await?;
         self.publish_ready_replicas().await
     }
 
     pub(super) async fn reconcile_operators(&self) -> HarnessResult<()> {
         self.suite.reconcile_snapshot().await?;
+        self.ack_firewalls().await?;
+        Ok(())
+    }
+
+    async fn ack_firewalls(&self) -> HarnessResult<()> {
+        let kind = ResourceKind::new("NodeFirewall")?;
+        for stored in self
+            .store
+            .list(&self.keys.resource_kind(&kind))
+            .await?
+            .values
+        {
+            let mut resource: NodeFirewall = serde_json::from_slice(&stored.value)?;
+            if resource.status.applied_generation == resource.meta.generation
+                && resource.status.applied_digest.as_deref() == Some(resource.spec.digest.as_str())
+            {
+                continue;
+            }
+            resource.meta.revision = stored.version.resource_revision();
+            resource.status.applied_generation = resource.meta.generation;
+            resource.status.applied_digest = Some(resource.spec.digest.clone());
+            let outcome = self
+                .store
+                .put_cas(PutRequest {
+                    key: stored.key,
+                    value: serde_json::to_vec(&resource)?,
+                    expected: ExpectedVersion::Exact(stored.version),
+                    session: None,
+                })
+                .await?;
+            if !matches!(outcome, CasOutcome::Applied(_)) {
+                return Err("NodeFirewall acknowledgement conflicted".into());
+            }
+        }
         Ok(())
     }
 
@@ -280,16 +311,28 @@ impl RolloutWorld {
             .to_vec())
     }
 
-    pub(super) fn latest_firewall_bundle(&self) -> HarnessResult<FirewallBundle> {
-        let bundles = self
-            .firewall
-            .bundles
-            .lock()
-            .map_err(|_| "firewall bundle lock poisoned")?;
-        bundles
-            .last()
-            .cloned()
-            .ok_or_else(|| "firewall never applied".into())
+    pub(super) async fn latest_firewall_bundle(&self) -> HarnessResult<FirewallBundle> {
+        let rulesets = self
+            .list::<NodeFirewall>("NodeFirewall")
+            .await?
+            .into_iter()
+            .map(|resource| FirewallRuleset {
+                node_id: resource.spec.node_id,
+                table_name: resource.spec.table_name,
+                script: resource.spec.script,
+                digest: resource.spec.digest,
+            })
+            .collect::<Vec<_>>();
+        if rulesets.is_empty() {
+            return Err("firewall desired state was never published".into());
+        }
+        let digest = self
+            .list::<FirewallPolicy>("FirewallPolicy")
+            .await?
+            .into_iter()
+            .find_map(|policy| policy.status.ruleset_digest)
+            .unwrap_or_default();
+        Ok(FirewallBundle { rulesets, digest })
     }
 
     async fn assert_ready(&self, node_count: u8) -> HarnessResult<()> {
@@ -331,14 +374,7 @@ impl RolloutWorld {
                 .len(),
             usize::from(node_count)
         );
-        let firewall = self
-            .firewall
-            .bundles
-            .lock()
-            .map_err(|_| "firewall bundle lock poisoned")?
-            .last()
-            .cloned()
-            .ok_or("firewall never applied")?;
+        let firewall = self.latest_firewall_bundle().await?;
         assert_eq!(firewall.rulesets.len(), usize::from(node_count));
         Ok(())
     }
@@ -402,22 +438,6 @@ impl IngressBackend for RecordingIngress {
             .lock()
             .map_err(|_| IngressBackendError::new("ingress change lock poisoned"))?
             .push(change.clone());
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct RecordingFirewall {
-    bundles: Mutex<Vec<FirewallBundle>>,
-}
-
-#[async_trait]
-impl FirewallBackend for RecordingFirewall {
-    async fn apply(&self, bundle: &FirewallBundle) -> Result<(), FirewallBackendError> {
-        self.bundles
-            .lock()
-            .map_err(|_| FirewallBackendError::new("firewall bundle lock poisoned"))?
-            .push(bundle.clone());
         Ok(())
     }
 }
