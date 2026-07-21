@@ -17,6 +17,7 @@ mod assignment_types;
 mod cgroup_stats;
 mod dns;
 mod dns_resource;
+mod dns_server;
 mod exec;
 mod health;
 mod health_probe;
@@ -64,6 +65,7 @@ pub use dns::{
     DnsResponseCode, DnsZoneSummary, MAESTRO_DNS_ZONE,
 };
 pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
+pub use dns_server::{BoundDnsServer, DnsServerError, DnsServerSettings};
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
