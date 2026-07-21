@@ -48,6 +48,7 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
                 revision: "main".to_string(),
             },
             dockerfile: "Dockerfile".to_string(),
+            watch: false,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },

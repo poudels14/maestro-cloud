@@ -66,6 +66,10 @@ expression: openapi_document()
                   "build"
                 ],
                 "type": "string"
+              },
+              "watch": {
+                "description": "Poll the configured Git ref and roll out newly resolved commits.",
+                "type": "boolean"
               }
             },
             "required": [
@@ -445,6 +449,10 @@ expression: openapi_document()
               }
             ],
             "description": "Source material to build."
+          },
+          "watch": {
+            "description": "Poll the configured Git ref and roll out newly resolved commits.",
+            "type": "boolean"
           }
         },
         "required": [

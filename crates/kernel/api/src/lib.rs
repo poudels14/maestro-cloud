@@ -48,12 +48,13 @@ pub use schema::{
 };
 pub use secret::{MaskedSecret, SecretValue};
 pub use workload::{
-    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, Build,
-    BuildPhase, BuildSource, BuildSpec, BuildStatus, BuildTemplate, CommandSpec, Deployment,
-    DeploymentGoal, DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec,
-    HealthProbe, NodeApiAccess, PlacementConstraint, ReplicaState, ReplicaStateSpec,
-    ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec, ServiceStatus,
-    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec, workload_hostname,
+    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,
+    BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,
+    BuildTemplate, CommandSpec, Deployment, DeploymentGoal, DeploymentPhase, DeploymentSpec,
+    DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe, NodeApiAccess, PlacementConstraint,
+    ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState, SecretMountSpec, Service,
+    ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    workload_hostname,
 };
 
 #[cfg(test)]

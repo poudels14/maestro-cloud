@@ -27,6 +27,42 @@ fn creates_one_stable_deployment_per_service_generation() {
 }
 
 #[test]
+fn watched_commit_creates_a_pinned_deployment_in_the_same_service_generation() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let ArtifactTemplate::Build { template } = &mut service.spec.artifact else {
+        return;
+    };
+    template.watch = true;
+    let initial = plan(input(service.clone(), Vec::new()))
+        .expect("initial deployment")
+        .create_deployments
+        .remove(0);
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_WATCH_REVISION_ANNOTATION.to_string()),
+        "0123456789abcdef0123456789abcdef01234567".to_string(),
+    );
+
+    let watched = plan(input(service, vec![initial.clone()]))
+        .expect("watched deployment")
+        .create_deployments
+        .remove(0);
+
+    assert_ne!(watched.meta.id, initial.meta.id);
+    assert_eq!(watched.spec.service_generation, Generation(7));
+    let ArtifactTemplate::Build { template } = watched.spec.service.artifact else {
+        return;
+    };
+    assert_eq!(
+        template.source,
+        BuildSource::Git {
+            repository: "https://example.test/repo.git".to_string(),
+            revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        }
+    );
+}
+
+#[test]
 fn frozen_build_stays_queued_then_unfreeze_creates_its_build() {
     let mut frozen = service(Generation(1), RolloutState::Frozen);
     frozen.spec.artifact = build_artifact();
@@ -262,6 +298,48 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
 }
 
 #[test]
+fn newer_watched_deployment_activates_and_drains_within_one_service_generation() {
+    let mut service = service(Generation(2), RolloutState::Active);
+    let mut old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(2),
+        DeploymentPhase::Ready,
+    );
+    old.status.created_at = Timestamp(10_000);
+    let mut incoming = deployment_generation(
+        &service,
+        "deployment-new",
+        Generation(2),
+        DeploymentPhase::Ready,
+    );
+    incoming.status.created_at = Timestamp(20_000);
+    service.status.active_deployment_id = Some(old.meta.id.clone());
+
+    let activated = plan(input(service.clone(), vec![old.clone(), incoming.clone()]))
+        .expect("activate watched deployment");
+    assert_eq!(
+        activated
+            .service_updates
+            .first()
+            .map(|update| update.status.active_deployment_id.clone()),
+        Some(Some(incoming.meta.id.clone()))
+    );
+
+    service.status.active_deployment_id = Some(incoming.meta.id.clone());
+    let mut acknowledged = input(service, vec![old.clone(), incoming.clone()]);
+    acknowledged.traffic_generations = vec![traffic(&incoming)];
+    let drained = plan(acknowledged).expect("drain watched predecessor");
+    assert_eq!(drained.deployment_updates.len(), 1);
+    let update = drained
+        .deployment_updates
+        .first()
+        .expect("watched drain update");
+    assert_eq!(update.id, old.meta.id);
+    assert_eq!(update.status.phase, DeploymentPhase::Draining);
+}
+
+#[test]
 fn active_old_traffic_does_not_drain_a_newer_queued_candidate() {
     let mut service = service(Generation(2), RolloutState::Active);
     let old = deployment_generation(
@@ -431,6 +509,7 @@ fn build_template() -> BuildTemplate {
             revision: "main".to_string(),
         },
         dockerfile: "Dockerfile".to_string(),
+        watch: false,
         environment: BTreeMap::new(),
         secrets: BTreeMap::new(),
     }

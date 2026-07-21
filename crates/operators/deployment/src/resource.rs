@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
-    ArtifactTemplate, Build, BuildId, BuildPhase, BuildSpec, BuildStatus, Deployment,
-    DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus, Generation,
-    InvalidIdentifier, Object, ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind,
-    ResourceName, Service, ServiceId, Timestamp,
+    ArtifactTemplate, BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase, BuildSource,
+    BuildSpec, BuildStatus, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase,
+    DeploymentSpec, DeploymentStatus, Generation, InvalidIdentifier, Object, ObjectMeta,
+    OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service, ServiceId,
+    Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,14 +19,13 @@ pub(crate) fn new_deployment(
     service: &Service,
     now: Timestamp,
 ) -> Result<Deployment, DeploymentPlanError> {
-    let deployment_id = DeploymentId::new(stable_id(
-        "deployment",
-        &[
-            cluster_id.as_str(),
-            service.meta.id.as_str(),
-            &service.meta.generation.0.to_string(),
-        ],
-    ))?;
+    let watched_revision = watched_revision(service);
+    let generation = service.meta.generation.0.to_string();
+    let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
+    if let Some(revision) = watched_revision {
+        identity.push(revision);
+    }
+    let deployment_id = DeploymentId::new(stable_id("deployment", &identity))?;
     let build_id = matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
         .then(|| {
             BuildId::new(stable_id(
@@ -34,13 +34,30 @@ pub(crate) fn new_deployment(
             ))
         })
         .transpose()?;
+    let mut captured_service = service.spec.clone();
+    if let (
+        Some(revision),
+        ArtifactTemplate::Build {
+            template:
+                kernel_api::BuildTemplate {
+                    source:
+                        BuildSource::Git {
+                            revision: desired, ..
+                        },
+                    ..
+                },
+        },
+    ) = (watched_revision, &mut captured_service.artifact)
+    {
+        *desired = revision.to_string();
+    }
     Ok(Object {
         meta: child_metadata(deployment_id, SERVICE_KIND, service.meta.id.clone().into())?,
         spec: DeploymentSpec {
             service_id: service.meta.id.clone(),
             service_generation: service.meta.generation,
             restart_generation: Generation(1),
-            service: service.spec.clone(),
+            service: captured_service,
             goal: DeploymentGoal::Run,
             build_id,
         },
@@ -53,6 +70,23 @@ pub(crate) fn new_deployment(
             conditions: Vec::new(),
         },
     })
+}
+
+fn watched_revision(service: &Service) -> Option<&str> {
+    let ArtifactTemplate::Build { template } = &service.spec.artifact else {
+        return None;
+    };
+    if !template.watch || !matches!(template.source, BuildSource::Git { .. }) {
+        return None;
+    }
+    service
+        .meta
+        .annotations
+        .get(&kernel_api::AnnotationKey(
+            BUILD_WATCH_REVISION_ANNOTATION.to_string(),
+        ))
+        .map(String::as_str)
+        .filter(|revision| !revision.trim().is_empty())
 }
 
 pub(crate) fn new_build(

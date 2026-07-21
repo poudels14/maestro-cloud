@@ -328,6 +328,7 @@ fn build_service() -> Service {
                 revision: "main".to_string(),
             },
             dockerfile: "Dockerfile".to_string(),
+            watch: false,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },

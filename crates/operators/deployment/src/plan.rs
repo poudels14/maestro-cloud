@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, Build, BuildId, BuildPhase, Deployment, DeploymentId,
-    DeploymentPhase, DeploymentStatus, Generation, InvalidIdentifier, ReplicaState, Service,
-    ServiceId, Timestamp, TrafficGenerationPhase,
+    DeploymentPhase, DeploymentStatus, InvalidIdentifier, ReplicaState, Service, ServiceId,
+    Timestamp, TrafficGenerationPhase,
 };
 
 use crate::readiness::{all_exhausted, all_ready, current_slots, drain_elapsed, has_assignments};
@@ -42,21 +42,19 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             .values()
             .filter(|deployment| deployment.spec.service_id == service.meta.id)
             .collect::<Vec<_>>();
-        let current_generation = related
-            .iter()
-            .filter(|deployment| deployment.spec.service_generation == service.meta.generation)
-            .copied()
-            .collect::<Vec<_>>();
-        if current_generation.len() > 1 {
-            return Err(DeploymentPlanError::DuplicateServiceGeneration {
-                service_id: service.meta.id.clone(),
-                generation: service.meta.generation,
-            });
-        }
-        if current_generation.is_empty() && service.meta.deletion_timestamp.is_none() {
-            output
-                .create_deployments
-                .push(new_deployment(&input.cluster_id, service, input.now)?);
+        if service.meta.deletion_timestamp.is_none() {
+            let desired = new_deployment(&input.cluster_id, service, input.now)?;
+            let watched_revision = desired.spec.service != service.spec;
+            let exists = if watched_revision {
+                deployments.contains_key(&desired.meta.id)
+            } else {
+                related
+                    .iter()
+                    .any(|deployment| deployment.spec.service_generation == service.meta.generation)
+            };
+            if !exists {
+                output.create_deployments.push(desired);
+            }
         }
 
         for deployment in &related {
@@ -313,7 +311,7 @@ fn coordinate_active_deployment(
                 .then_with(|| left.meta.id.cmp(&right.meta.id))
         })
         .copied();
-    let active_generation = service
+    let active_deployment = service
         .status
         .active_deployment_id
         .as_ref()
@@ -322,10 +320,9 @@ fn coordinate_active_deployment(
                 .iter()
                 .find(|deployment| &deployment.meta.id == id)
         })
-        .map(|deployment| deployment.spec.service_generation);
+        .copied();
     let should_activate = candidate.is_some_and(|candidate| {
-        service.status.active_deployment_id.is_none()
-            || active_generation.is_none_or(|active| candidate.spec.service_generation > active)
+        active_deployment.is_none_or(|active| rollout_order(candidate, active).is_gt())
     });
     let mut desired_service = service.status.clone();
     if should_activate {
@@ -370,7 +367,7 @@ fn coordinate_active_deployment(
         return;
     }
     for deployment in deployments {
-        if deployment.spec.service_generation >= active_deployment.spec.service_generation {
+        if !rollout_order(deployment, active_deployment).is_lt() {
             continue;
         }
         let Some(status) = desired_statuses.get_mut(&deployment.meta.id) else {
@@ -384,6 +381,14 @@ fn coordinate_active_deployment(
             status.draining_at.get_or_insert(now);
         }
     }
+}
+
+fn rollout_order(left: &Deployment, right: &Deployment) -> std::cmp::Ordering {
+    left.spec
+        .service_generation
+        .cmp(&right.spec.service_generation)
+        .then_with(|| left.status.created_at.cmp(&right.status.created_at))
+        .then_with(|| left.meta.id.cmp(&right.meta.id))
 }
 
 fn ensure_build<'a>(
@@ -440,12 +445,6 @@ pub enum DeploymentPlanError {
     DuplicateResource {
         kind: &'static str,
         resource_id: String,
-    },
-    /// More than one deployment captured the same Service generation.
-    #[error("Service `{service_id}` generation {generation:?} has multiple Deployments")]
-    DuplicateServiceGeneration {
-        service_id: ServiceId,
-        generation: Generation,
     },
     /// A Deployment referenced a Service absent from the complete input snapshot.
     #[error("Deployment `{deployment_id}` references missing Service `{service_id}`")]

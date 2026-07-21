@@ -173,6 +173,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                     revision: "main".to_string(),
                 },
                 dockerfile: dockerfile.to_string(),
+                watch: false,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
                 secrets: BTreeMap::from([(
                     "TOKEN".to_string(),

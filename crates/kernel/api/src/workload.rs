@@ -9,6 +9,9 @@ use crate::{
     ReplicaStateId, SecretValue, ServiceId, Timestamp, WorkloadId,
 };
 
+/// Service annotation containing the immutable Git revision desired by build-watch.
+pub const BUILD_WATCH_REVISION_ANNOTATION: &str = "build.maestro.dev/revision";
+
 /// Runtime artifact selected for a service deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -34,12 +37,19 @@ pub struct BuildTemplate {
     pub source: BuildSource,
     /// Path to the container build definition within the source.
     pub dockerfile: String,
+    /// Poll the configured Git ref and roll out newly resolved commits.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub watch: bool,
     /// Non-secret build variables.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
     /// Secret build variables that are redacted from debug output.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<String, SecretValue>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Material used as the input to an artifact build.
