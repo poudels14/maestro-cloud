@@ -11,6 +11,7 @@ mod assignment_resource;
 mod assignment_restart;
 mod assignment_status;
 mod assignment_types;
+mod exec;
 mod health;
 mod health_probe;
 mod health_status;
@@ -27,6 +28,7 @@ pub use linux_mesh::LinuxMeshBackend;
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
 pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};
+pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
 pub use mesh::{

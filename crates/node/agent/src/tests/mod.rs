@@ -3,6 +3,7 @@
 mod assignment;
 mod assignment_plan;
 mod assignment_restart;
+mod exec;
 mod fake_mesh;
 mod fake_network;
 mod health;
