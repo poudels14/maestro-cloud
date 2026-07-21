@@ -168,8 +168,10 @@ fn log_agent(
             cluster_id: cluster_id(),
             node_id: node_id(),
             max_frames_per_workload: 16,
+            poll_interval: Duration::from_secs(1),
         },
         world.status_clock.clone(),
+        world.monotonic_clock.clone(),
     )
     .unwrap()
 }

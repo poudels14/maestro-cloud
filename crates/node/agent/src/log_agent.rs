@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, Timestamp, WorkloadId};
+use kernel_store::Clock;
 use runtime::{LogMode, LogRequest, LogSource, WorkloadMetadata, WorkloadRuntime};
+use tokio::sync::watch;
 
 use crate::{LogCheckpointError, LogCheckpointStore, StatusClock};
 
@@ -16,6 +19,8 @@ pub struct RuntimeLogAgentSettings {
     pub node_id: NodeId,
     /// Maximum frames examined for one workload in a single sweep.
     pub max_frames_per_workload: usize,
+    /// Delay between complete runtime snapshots.
+    pub poll_interval: Duration,
 }
 
 /// One unmodified runtime frame enriched with durable workload ownership.
@@ -109,6 +114,7 @@ pub struct RuntimeLogAgent {
     sink: Arc<dyn WorkloadLogSink>,
     settings: RuntimeLogAgentSettings,
     clock: Arc<dyn StatusClock>,
+    monotonic_clock: Arc<dyn Clock>,
 }
 
 impl RuntimeLogAgent {
@@ -119,9 +125,13 @@ impl RuntimeLogAgent {
         sink: Arc<dyn WorkloadLogSink>,
         settings: RuntimeLogAgentSettings,
         clock: Arc<dyn StatusClock>,
+        monotonic_clock: Arc<dyn Clock>,
     ) -> Result<Self, RuntimeLogAgentError> {
         if settings.max_frames_per_workload == 0 {
             return Err(RuntimeLogAgentError::InvalidFrameLimit);
+        }
+        if settings.poll_interval.is_zero() {
+            return Err(RuntimeLogAgentError::InvalidPollInterval);
         }
         Ok(Self {
             runtime,
@@ -129,7 +139,33 @@ impl RuntimeLogAgent {
             sink,
             settings,
             clock,
+            monotonic_clock,
         })
+    }
+
+    /// Repeatedly ships finite snapshots until shutdown, preserving durable cursors per sweep.
+    pub async fn run(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RuntimeLogAgentError> {
+        loop {
+            if *shutdown.borrow() {
+                return Ok(());
+            }
+            let _report = self.collect_once().await?;
+            let next_poll = self
+                .monotonic_clock
+                .now()
+                .saturating_add(self.settings.poll_interval);
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(());
+                    }
+                }
+                () = self.monotonic_clock.sleep_until(next_poll) => {}
+            }
+        }
     }
 
     /// Delivers one finite, fair snapshot from every locally owned runtime object.
@@ -264,6 +300,9 @@ pub enum RuntimeLogAgentError {
     /// A zero frame bound could never make progress.
     #[error("runtime log max_frames_per_workload must be greater than zero")]
     InvalidFrameLimit,
+    /// A zero interval would hot-loop over runtime snapshots.
+    #[error("runtime log poll interval must be greater than zero")]
+    InvalidPollInterval,
     /// The authoritative local runtime snapshot was unavailable.
     #[error(transparent)]
     Runtime(#[from] runtime::RuntimeError),

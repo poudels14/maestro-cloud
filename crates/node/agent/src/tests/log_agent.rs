@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, Timestamp, WorkloadId};
+use kernel_store::{Clock, MonotonicTime};
 use runtime::{
     FakeRuntime, FakeRuntimeOperation, LogCursor, LogSource, ProcessWorkload, RuntimeError,
     WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
@@ -14,6 +16,35 @@ use crate::{
     RuntimeLogAgentSettings, RuntimeLogFailureStage, StatusClock, WorkloadLogEntry,
     WorkloadLogSink, WorkloadLogSinkError,
 };
+use tokio::sync::{Notify, watch};
+
+#[tokio::test]
+async fn log_agent_run_collects_immediately_and_owns_shutdown()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    runtime.append_log(
+        &workload_id("workload-1"),
+        LogSource::Stdout,
+        b"ready\n".to_vec(),
+    )?;
+    let sink = Arc::new(RecordingSink::default());
+    let agent = agent(
+        runtime,
+        &temporary.path().join("checkpoints"),
+        sink.clone(),
+        16,
+    )?;
+    let (shutdown, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { agent.run(receiver).await });
+
+    sink.wait_for_entry().await;
+    assert_eq!(sink.entries().len(), 1);
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn log_agent_resumes_from_durable_cursors_after_restart()
@@ -162,7 +193,7 @@ async fn log_agent_bounds_workloads_and_isolates_stream_open_failures()
 }
 
 #[tokio::test]
-async fn log_agent_cleans_stale_checkpoints_and_rejects_zero_limit()
+async fn log_agent_cleans_stale_checkpoints_and_rejects_invalid_bounds()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
     let root = temporary.path().join("log-checkpoints");
@@ -183,19 +214,38 @@ async fn log_agent_cleans_stale_checkpoints_and_rejects_zero_limit()
     assert_eq!(store.load(&workload_id("removed-workload")).await?, None);
 
     let invalid = RuntimeLogAgent::new(
+        runtime.clone(),
+        Arc::new(FileLogCheckpointStore::new(root.clone())?),
+        sink.clone(),
+        RuntimeLogAgentSettings {
+            cluster_id: cluster_id(),
+            node_id: node_id(),
+            max_frames_per_workload: 0,
+            poll_interval: Duration::from_secs(1),
+        },
+        Arc::new(FixedClock),
+        Arc::new(PausedClock),
+    );
+    assert!(matches!(
+        invalid,
+        Err(RuntimeLogAgentError::InvalidFrameLimit)
+    ));
+    let invalid_poll = RuntimeLogAgent::new(
         runtime,
         Arc::new(FileLogCheckpointStore::new(root)?),
         sink,
         RuntimeLogAgentSettings {
             cluster_id: cluster_id(),
             node_id: node_id(),
-            max_frames_per_workload: 0,
+            max_frames_per_workload: 16,
+            poll_interval: Duration::ZERO,
         },
         Arc::new(FixedClock),
+        Arc::new(PausedClock),
     );
     assert!(matches!(
-        invalid,
-        Err(RuntimeLogAgentError::InvalidFrameLimit)
+        invalid_poll,
+        Err(RuntimeLogAgentError::InvalidPollInterval)
     ));
     Ok(())
 }
@@ -204,11 +254,16 @@ async fn log_agent_cleans_stale_checkpoints_and_rejects_zero_limit()
 struct RecordingSink {
     entries: Mutex<Vec<WorkloadLogEntry>>,
     fail_next: AtomicBool,
+    delivered: Notify,
 }
 
 impl RecordingSink {
     fn entries(&self) -> Vec<WorkloadLogEntry> {
         self.entries.lock().expect("recording sink lock").clone()
+    }
+
+    async fn wait_for_entry(&self) {
+        self.delivered.notified().await;
     }
 }
 
@@ -224,6 +279,7 @@ impl WorkloadLogSink for RecordingSink {
             .lock()
             .expect("recording sink lock")
             .push(entry);
+        self.delivered.notify_one();
         Ok(())
     }
 }
@@ -233,6 +289,19 @@ struct FixedClock;
 impl StatusClock for FixedClock {
     fn now(&self) -> Timestamp {
         Timestamp(1_750_000_000_000)
+    }
+}
+
+struct PausedClock;
+
+#[async_trait]
+impl Clock for PausedClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::ZERO)
+    }
+
+    async fn sleep_until(&self, _deadline: MonotonicTime) {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -252,8 +321,10 @@ fn agent(
             cluster_id: cluster_id(),
             node_id: node_id(),
             max_frames_per_workload,
+            poll_interval: Duration::from_secs(1),
         },
         Arc::new(FixedClock),
+        Arc::new(PausedClock),
     )
 }
 
