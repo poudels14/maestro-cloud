@@ -8,7 +8,8 @@ use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, DeploymentId,
     DeploymentPhase, DnsRecord, Generation, NodeId, NodeInstanceId, Object, ResourceKind,
-    ResourceName, Service, ServiceId, Timestamp, TrafficGeneration, TrafficGenerationPhase,
+    ResourceName, RolloutState, Service, ServiceId, Timestamp, TrafficGeneration,
+    TrafficGenerationPhase,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -241,6 +242,15 @@ impl RolloutWorld {
         at: Timestamp,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.update_service(|service| service.meta.deletion_timestamp = Some(at))
+            .await
+            .map(|_service| ())
+    }
+
+    pub(super) async fn set_rollout_state(
+        &self,
+        state: RolloutState,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.update_service(|service| service.status.rollout = state)
             .await
             .map(|_service| ())
     }

@@ -1,26 +1,79 @@
-use kernel_api::{Assignment, TrafficGeneration, TrafficGenerationPhase};
+use kernel_api::{Assignment, Service, TrafficGeneration, TrafficGenerationPhase};
 
 use super::orchestration::RolloutWorld;
 
 #[tokio::test]
-async fn scale_down_keeps_old_targets_until_ingress_cutover()
+async fn replica_override_set_and_clear_preserve_ingress_cutover()
 -> Result<(), Box<dyn std::error::Error>> {
-    let world = RolloutWorld::new(3).await?;
-    world.converge().await?;
-    world.set_replica_override(Some(1)).await?;
+    for node_count in [1_u8, 3_u8] {
+        let configured = usize::from(node_count);
+        let overridden = if node_count == 1 { 3 } else { 1 };
+        let world = RolloutWorld::new(node_count).await?;
+        world.converge().await?;
 
+        world
+            .set_replica_override(Some(u32::try_from(overridden)?))
+            .await?;
+        converge_replica_change(&world, configured, overridden).await?;
+        assert_eq!(
+            world
+                .list::<Service>("Service")
+                .await?
+                .first()
+                .ok_or("service missing")?
+                .status
+                .replica_override,
+            Some(u32::try_from(overridden)?)
+        );
+
+        world.set_replica_override(None).await?;
+        converge_replica_change(&world, overridden, configured).await?;
+        assert_eq!(
+            world
+                .list::<Service>("Service")
+                .await?
+                .first()
+                .ok_or("service missing")?
+                .status
+                .replica_override,
+            None
+        );
+    }
+    Ok(())
+}
+
+async fn converge_replica_change(
+    world: &RolloutWorld,
+    current: usize,
+    desired: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if desired < current {
+        converge_scale_down(world, current, desired).await
+    } else {
+        world.converge().await?;
+        assert_eq!(world.list::<Assignment>("Assignment").await?.len(), desired);
+        assert_eq!(active_target_count(world).await?, desired);
+        Ok(())
+    }
+}
+
+async fn converge_scale_down(
+    world: &RolloutWorld,
+    current: usize,
+    desired: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut cut_over = false;
     for _pass in 0..8 {
         world.reconcile_pass().await?;
-        let active_targets = active_target_count(&world).await?;
+        let active_targets = active_target_count(world).await?;
         let assignment_count = world.list::<Assignment>("Assignment").await?.len();
-        if active_targets == 1 {
-            assert_eq!(assignment_count, 3);
+        if active_targets == desired {
+            assert_eq!(assignment_count, current);
             cut_over = true;
             break;
         }
-        assert_eq!(active_targets, 3);
-        assert_eq!(assignment_count, 3);
+        assert_eq!(active_targets, current);
+        assert_eq!(assignment_count, current);
     }
     assert!(
         cut_over,
@@ -28,8 +81,8 @@ async fn scale_down_keeps_old_targets_until_ingress_cutover()
     );
 
     world.reconcile_pass().await?;
-    assert_eq!(world.list::<Assignment>("Assignment").await?.len(), 1);
-    assert_eq!(active_target_count(&world).await?, 1);
+    assert_eq!(world.list::<Assignment>("Assignment").await?.len(), desired);
+    assert_eq!(active_target_count(world).await?, desired);
     Ok(())
 }
 
