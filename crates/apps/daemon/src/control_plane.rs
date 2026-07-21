@@ -252,6 +252,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub node_upgrade: Option<NodeUpgradeDependencies>,
     /// Validated node-local operator API transport and authentication policy.
     pub api_settings: ServerSettings,
+    /// Static firewall compiler settings exposed to read-only API dry-runs.
+    pub firewall_settings: firewall::FirewallSettings,
 }
 
 /// Concrete daemon factory composing node agents and control-plane leader work when declared.
@@ -283,6 +285,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) status_clock: Arc<dyn StatusClock>,
     pub(crate) node_upgrade: Option<NodeUpgradeDependencies>,
     pub(crate) api_settings: ServerSettings,
+    pub(crate) firewall_settings: firewall::FirewallSettings,
     pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
@@ -328,6 +331,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             status_clock: dependencies.status_clock,
             node_upgrade: dependencies.node_upgrade,
             api_settings: dependencies.api_settings,
+            firewall_settings: dependencies.firewall_settings,
             settings,
             store: Mutex::new(None),
             leader_workload: None,

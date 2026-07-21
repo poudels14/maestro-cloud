@@ -201,7 +201,7 @@ fn plan_write(
     }
 }
 
-fn normalize_spec(spec: &mut FirewallPolicySpec) -> Result<(), ApiError> {
+pub(super) fn normalize_spec(spec: &mut FirewallPolicySpec) -> Result<(), ApiError> {
     match (&spec.direction, &spec.subject) {
         (FirewallDirection::Egress, FirewallSubject::Global)
         | (FirewallDirection::HostInput, FirewallSubject::Global)
@@ -269,7 +269,7 @@ async fn validate_policy_state(
     Ok(())
 }
 
-fn new_policy(policy_id: FirewallPolicyId, spec: FirewallPolicySpec) -> FirewallPolicy {
+pub(super) fn new_policy(policy_id: FirewallPolicyId, spec: FirewallPolicySpec) -> FirewallPolicy {
     Object {
         meta: ObjectMeta {
             id: policy_id,

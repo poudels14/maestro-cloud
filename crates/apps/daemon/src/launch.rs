@@ -279,6 +279,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 .map_err(|error| invalid(error.to_string()))
         })
         .transpose()?;
+    let api_firewall_settings = operator_settings.firewall.clone();
     let store_upgrades = configured_upgrade
         .as_ref()
         .map(|_| {
@@ -348,6 +349,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 rebooter: upgrade.rebooter,
             }),
             api_settings,
+            firewall_settings: api_firewall_settings,
         },
         DaemonRoleSettings::default(),
     )

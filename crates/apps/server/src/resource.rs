@@ -25,10 +25,25 @@ where
         .list(&keys.resource_kind(&resource_kind))
         .await
         .map_err(|error| ApiError::internal(format!("failed to list {kind} resources: {error}")))?;
-    listed
-        .values
+    decode_list(&listed.values, &keys, &resource_kind, kind)
+}
+
+pub(crate) fn decode_list<Id, Spec, Status>(
+    values: &[StoredValue],
+    keys: &Keyspace,
+    resource_kind: &kernel_api::ResourceKind,
+    kind: BuiltinKind,
+) -> Result<Vec<Object<Id, Spec, Status>>, ApiError>
+where
+    Id: Clone + Display + Into<ResourceName> + DeserializeOwned,
+    Spec: DeserializeOwned,
+    Status: DeserializeOwned,
+{
+    let prefix = keys.resource_kind(resource_kind);
+    values
         .iter()
-        .map(|stored| decode(stored, &keys, &resource_kind, kind))
+        .filter(|stored| stored.key.as_str().starts_with(prefix.as_str()))
+        .map(|stored| decode(stored, keys, resource_kind, kind))
         .collect()
 }
 

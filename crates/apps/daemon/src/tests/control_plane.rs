@@ -37,7 +37,7 @@ use tokio::sync::{Notify, watch};
 
 use crate::{
     AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    LeaderWorkload, RoleError,
+    LeaderWorkload, OperatorSettings, RoleError,
 };
 
 use super::cluster_with_nodes;
@@ -139,6 +139,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
             api_settings: ServerSettings::new(api_address, None),
+            firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {
             poll_interval: Duration::from_millis(1),
@@ -440,6 +441,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
             api_settings: ServerSettings::new("127.0.0.1:0".parse()?, None),
+            firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default(),
     );

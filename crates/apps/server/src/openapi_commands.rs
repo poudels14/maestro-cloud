@@ -1,5 +1,7 @@
 use serde_json::{Map, Value, json};
 
+use crate::openapi::get_operation;
+
 pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert(
         "CommandRequest".to_string(),
@@ -124,6 +126,106 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "FirewallDryRunRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["spec"],
+            "properties": {
+                "spec": {"$ref": "#/components/schemas/FirewallPolicySpec"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FirewallDryRunRuleset".to_string(),
+        json!({
+            "type": "object",
+            "required": ["nodeId", "tableName", "script", "digest"],
+            "properties": {
+                "nodeId": {"$ref": "#/components/schemas/NodeId"},
+                "tableName": {"type": "string"},
+                "script": {"type": "string"},
+                "digest": {"type": "string"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FirewallDryRunResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["bundleDigest", "rulesets"],
+            "properties": {
+                "bundleDigest": {"type": "string"},
+                "rulesets": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/FirewallDryRunRuleset"}
+                }
+            }
+        }),
+    );
+}
+
+pub(crate) fn firewall_policy_operation() -> Value {
+    let mut operation = get_operation("getFirewallPolicy", "policyId", "FirewallPolicy");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert(
+            "put".to_string(),
+            command_operation(
+                "putFirewallPolicy",
+                &["policyId"],
+                "FirewallPolicyWriteRequest",
+                "FirewallPolicyCommandResponse",
+            ),
+        );
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "deleteFirewallPolicy",
+                &["policyId"],
+                "CommandRequest",
+                "FirewallPolicyCommandResponse",
+            ),
+        );
+    }
+    operation
+}
+
+pub(crate) fn firewall_dry_run_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "dryRunFirewallPolicy",
+            "security": [{"bearerAuth": []}],
+            "parameters": [{
+                "name": "policyId",
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            }],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/FirewallDryRunRequest"}
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Deterministic effective rules without persistence",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/FirewallDryRunResponse"}
+                        }
+                    }
+                },
+                "400": {"description": "Invalid proposed policy"},
+                "409": {"description": "Proposed policy conflicts with cluster state"},
+                "413": {"description": "Request body exceeds the command limit"},
+                "503": {"description": "Firewall planning is unavailable"}
+            }
+        }
+    })
 }
 
 pub(crate) fn deployment_command_path(operation_id: &str) -> Value {

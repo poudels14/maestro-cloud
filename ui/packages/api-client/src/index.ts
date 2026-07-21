@@ -91,6 +91,11 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["FirewallPolicyCommandResponse"]>;
+  dryRunFirewallPolicy(
+    policyId: string,
+    request: ApiSchemas["FirewallDryRunRequest"],
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["FirewallDryRunResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -249,6 +254,26 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     return transport.request(request);
   }
 
+  function submit<Response, Body>(
+    path: string,
+    body: Body,
+    options?: ApiRequestOptions
+  ): Promise<Response> {
+    const request: TransportRequest<Response, Body> = {
+      method: "POST",
+      path,
+      body,
+      decode: decodeJson
+    };
+    if (options?.headers !== undefined) {
+      request.headers = options.headers;
+    }
+    if (options?.signal !== undefined) {
+      request.signal = options.signal;
+    }
+    return transport.request(request);
+  }
+
   return {
     listNodes: (options) => get("/api/cluster/nodes", options),
     getNode: (nodeId, options) =>
@@ -308,6 +333,12 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         `/api/firewall/policies/${encodeURIComponent(policyId)}`,
         request,
         idempotencyKey,
+        options
+      ),
+    dryRunFirewallPolicy: (policyId, request, options) =>
+      submit(
+        `/api/firewall/policies/${encodeURIComponent(policyId)}/dry-run`,
+        request,
         options
       ),
     listServices: (options) => get("/api/services", options),

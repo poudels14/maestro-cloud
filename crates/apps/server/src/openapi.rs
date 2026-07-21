@@ -1,7 +1,8 @@
 use serde_json::{Map, Value, json};
 
 use crate::openapi_commands::{
-    command_operation, command_path, deployment_command_path, insert_command_schemas,
+    command_operation, command_path, deployment_command_path, firewall_dry_run_path,
+    firewall_policy_operation, insert_command_schemas,
 };
 
 /// Composes server path operations over the canonical kernel component schemas.
@@ -75,6 +76,10 @@ pub fn openapi_document() -> Value {
         (
             "/api/firewall/policies/{policyId}".to_string(),
             firewall_policy_operation(),
+        ),
+        (
+            "/api/firewall/policies/{policyId}/dry-run".to_string(),
+            firewall_dry_run_path(),
         ),
         (
             "/api/services".to_string(),
@@ -287,31 +292,6 @@ fn upgrade_operation() -> Value {
     operation
 }
 
-fn firewall_policy_operation() -> Value {
-    let mut operation = get_operation("getFirewallPolicy", "policyId", "FirewallPolicy");
-    if let Some(item) = operation.as_object_mut() {
-        item.insert(
-            "put".to_string(),
-            command_operation(
-                "putFirewallPolicy",
-                &["policyId"],
-                "FirewallPolicyWriteRequest",
-                "FirewallPolicyCommandResponse",
-            ),
-        );
-        item.insert(
-            "delete".to_string(),
-            command_operation(
-                "deleteFirewallPolicy",
-                &["policyId"],
-                "CommandRequest",
-                "FirewallPolicyCommandResponse",
-            ),
-        );
-    }
-    operation
-}
-
 fn service_operation() -> Value {
     let mut operation = get_operation("getService", "serviceId", "Service");
     if let Some(item) = operation.as_object_mut() {
@@ -393,7 +373,7 @@ fn list_operation(operation_id: &str, schema: &str) -> Value {
     })
 }
 
-fn get_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
+pub(crate) fn get_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
     json!({
         "get": {
             "operationId": operation_id,

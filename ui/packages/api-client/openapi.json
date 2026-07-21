@@ -1081,6 +1081,59 @@
           }
         ]
       },
+      "FirewallDryRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/FirewallPolicySpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "FirewallDryRunResponse": {
+        "properties": {
+          "bundleDigest": {
+            "type": "string"
+          },
+          "rulesets": {
+            "items": {
+              "$ref": "#/components/schemas/FirewallDryRunRuleset"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundleDigest",
+          "rulesets"
+        ],
+        "type": "object"
+      },
+      "FirewallDryRunRuleset": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "script": {
+            "type": "string"
+          },
+          "tableName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "tableName",
+          "script",
+          "digest"
+        ],
+        "type": "object"
+      },
       "FirewallPolicy": {
         "$ref": "#/components/schemas/Object9"
       },
@@ -5759,6 +5812,60 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/firewall/policies/{policyId}/dry-run": {
+      "post": {
+        "operationId": "dryRunFirewallPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirewallDryRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirewallDryRunResponse"
+                }
+              }
+            },
+            "description": "Deterministic effective rules without persistence"
+          },
+          "400": {
+            "description": "Invalid proposed policy"
+          },
+          "409": {
+            "description": "Proposed policy conflicts with cluster state"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          },
+          "503": {
+            "description": "Firewall planning is unavailable"
           }
         },
         "security": [

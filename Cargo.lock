@@ -5327,6 +5327,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-server",
+ "firewall",
  "http-body-util",
  "ipnet",
  "jsonwebtoken",

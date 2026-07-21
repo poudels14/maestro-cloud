@@ -47,6 +47,14 @@ impl ApiError {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payloadTooLarge", message)
     }
 
+    pub(crate) fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "serviceUnavailable",
+            message,
+        )
+    }
+
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }

@@ -92,7 +92,9 @@ where
         store.clone(),
         plan.cluster().cluster_id.clone(),
         factory.api_settings.clone(),
-    ) {
+    )
+    .map(|server| server.with_firewall_settings(factory.firewall_settings.clone()))
+    {
         Ok(server) => match server.bind().await {
             Ok(server) => server,
             Err(error) => {

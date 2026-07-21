@@ -2,6 +2,7 @@ mod cluster;
 mod cluster_commands;
 mod deployment_commands;
 mod deployments;
+mod firewall_dry_run;
 mod firewall_policies;
 mod network_observations;
 mod observations;
@@ -22,6 +23,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(cluster_commands::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
+        .merge(firewall_dry_run::router())
         .merge(firewall_policies::router())
         .merge(network_observations::router())
         .merge(observations::router())

@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/firewall/policies/{policyId}/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["dryRunFirewallPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -879,6 +895,19 @@ export interface components {
         FinalizerName: string;
         /** @description Network direction governed by a firewall policy. */
         FirewallDirection: "egress" | "hostInput";
+        FirewallDryRunRequest: {
+            spec: components["schemas"]["FirewallPolicySpec"];
+        };
+        FirewallDryRunResponse: {
+            bundleDigest: string;
+            rulesets: components["schemas"]["FirewallDryRunRuleset"][];
+        };
+        FirewallDryRunRuleset: {
+            digest: string;
+            nodeId: components["schemas"]["NodeId"];
+            script: string;
+            tableName: string;
+        };
         FirewallPolicy: components["schemas"]["Object9"];
         FirewallPolicyCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
@@ -2653,6 +2682,60 @@ export interface operations {
             };
             /** @description Request body exceeds the command limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    dryRunFirewallPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FirewallDryRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Deterministic effective rules without persistence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FirewallDryRunResponse"];
+                };
+            };
+            /** @description Invalid proposed policy */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Proposed policy conflicts with cluster state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Firewall planning is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
