@@ -25,6 +25,8 @@ mod health;
 mod health_probe;
 mod health_status;
 #[cfg(target_os = "linux")]
+mod host_disks;
+#[cfg(target_os = "linux")]
 mod host_stats;
 #[cfg(target_os = "linux")]
 mod linux_bridge;
@@ -91,6 +93,11 @@ pub use firewall::{
 };
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
+#[cfg(target_os = "linux")]
+pub use host_disks::{
+    HostDiskError, HostDiskFailure, HostDiskReader, HostDiskReport, HostDiskStats,
+    LinuxHostDiskReader,
+};
 #[cfg(target_os = "linux")]
 pub use host_stats::{
     HostCpuStats, HostMemoryStats, HostNetworkStats, HostResourceStats, HostStatsError,

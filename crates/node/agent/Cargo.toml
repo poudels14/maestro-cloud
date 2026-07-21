@@ -34,6 +34,7 @@ tempfile = "=3.27.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 futures-util = "=0.3.33"
+libc.workspace = true
 netlink-packet-route = "=0.30.0"
 rtnetlink = "=0.21.0"
 wireguard-control = "=2.0.0"

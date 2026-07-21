@@ -11,7 +11,7 @@ docker = { version = "=0.21.0", package = "bollard", optional = true }
 futures-util = "=0.3.33"
 hex = "=0.4.3"
 kernel-api = { version = "0.1.0", path = "../kernel/api" }
-libc = "=0.2.186"
+libc.workspace = true
 prost = "=0.14.4"
 prost-types = "=0.14.4"
 serde = { version = "=1.0.228", features = ["derive"] }

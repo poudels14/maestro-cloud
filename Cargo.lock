@@ -3746,6 +3746,7 @@ dependencies = [
  "insta",
  "kernel-api",
  "kernel-store",
+ "libc",
  "netlink-packet-route 0.30.0",
  "node-fabric",
  "reqwest",
