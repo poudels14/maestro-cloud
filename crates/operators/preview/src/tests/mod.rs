@@ -2,4 +2,5 @@
 
 mod reconciler;
 mod resource;
+mod source_plan;
 mod support;
