@@ -37,6 +37,27 @@ async fn runtime_pipeline_normalizes_identity_json_and_exact_replays()
     Ok(())
 }
 
+#[tokio::test]
+async fn standard_pipeline_drops_tailscale_noise_before_persistence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryLogStore::new());
+    let pipeline = RuntimeLogPipeline::standard(store.clone());
+    let mut noisy = workload_entry();
+    noisy.metadata.service_id = ServiceId::new("tailscale")?;
+    noisy.payload = b"magicsock: disco key changed".to_vec();
+
+    pipeline.ingest(noisy).await?;
+    assert!(store.entries()?.is_empty());
+
+    let mut useful = workload_entry();
+    useful.cursor = LogCursor::new("cursor-2");
+    useful.metadata.service_id = ServiceId::new("tailscale")?;
+    useful.payload = b"listening on 100.64.0.1".to_vec();
+    pipeline.ingest(useful).await?;
+    assert_eq!(store.entries()?.len(), 1);
+    Ok(())
+}
+
 fn workload_entry() -> WorkloadLogEntry {
     WorkloadLogEntry {
         metadata: WorkloadMetadata {

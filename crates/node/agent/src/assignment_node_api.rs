@@ -31,7 +31,7 @@ pub(crate) async fn mount_node_api(
                 node_id: assignment.spec.node_id.clone(),
                 service_id: assignment.spec.service_id.clone(),
                 deployment_id: assignment.spec.deployment_id.clone(),
-                labels: workload_labels(assignment),
+                labels: workload_labels(assignment, deployment),
             },
             deployment.spec.service.node_api.allows_control(),
         )

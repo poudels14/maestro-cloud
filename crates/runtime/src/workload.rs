@@ -14,6 +14,9 @@ use crate::{
     LogStream, RuntimeError,
 };
 
+/// Workload metadata label carrying the configured HTTP healthcheck path.
+pub const HEALTHCHECK_PATH_LABEL: &str = "maestro.healthcheck-path";
+
 /// Ownership labels persisted on backend objects so a restarted agent can adopt them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

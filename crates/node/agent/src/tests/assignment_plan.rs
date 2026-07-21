@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use kernel_api::{VolumeSource, WorkloadUserSpec};
-use runtime::{MountAccess, MountSource, WorkloadSpec, WorkloadUser};
+use kernel_api::{HealthCheckSpec, HealthProbe, VolumeSource, WorkloadUserSpec};
+use runtime::{HEALTHCHECK_PATH_LABEL, MountAccess, MountSource, WorkloadSpec, WorkloadUser};
 
 use crate::assignment_plan::{WorkloadPlanError, node_api_user, workload_spec};
 
@@ -84,6 +84,42 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
             user_id: 1_000,
             group_id: 1_001,
         })
+    );
+    Ok(())
+}
+
+#[test]
+fn assignment_plan_carries_the_http_healthcheck_path_as_observability_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let assignment = assignment();
+    let mut deployment = deployment();
+    deployment.spec.service.health_check = Some(HealthCheckSpec {
+        probe: HealthProbe::Http {
+            port: 8080,
+            path: "/health".to_owned(),
+        },
+        interval_secs: 10,
+        unhealthy_threshold: 3,
+    });
+
+    let WorkloadSpec::Container(workload) = workload_spec(
+        &cluster_id(),
+        &assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+    assert_eq!(
+        workload
+            .configuration
+            .metadata
+            .labels
+            .get(HEALTHCHECK_PATH_LABEL)
+            .map(String::as_str),
+        Some("/health")
     );
     Ok(())
 }

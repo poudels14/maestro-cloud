@@ -5,14 +5,15 @@ use node_agent::{WorkloadLogEntry, WorkloadLogSink, WorkloadLogSinkError};
 use runtime::LogSource;
 
 use crate::{
-    IngestLogEntry, LogOrigin, LogParser, LogProducer, LogRecordId, LogStore, LogStoreError,
-    LogStream, OriginCursor, standard_parsers,
+    IngestLogEntry, LogFilterChain, LogOrigin, LogParser, LogProducer, LogRecordId, LogStore,
+    LogStoreError, LogStream, OriginCursor, standard_ingest_filters, standard_parsers,
 };
 
 /// Normalizes runtime-native frames and commits one replay-safe representation.
 pub struct RuntimeLogPipeline {
     store: Arc<dyn LogStore>,
     parsers: Vec<Arc<dyn LogParser>>,
+    filters: LogFilterChain,
 }
 
 impl RuntimeLogPipeline {
@@ -21,12 +22,30 @@ impl RuntimeLogPipeline {
         Self {
             store,
             parsers: standard_parsers(),
+            filters: standard_ingest_filters(),
         }
     }
 
     /// Builds an explicit parser chain; an unmatched payload is permanently rejected.
     pub fn with_parsers(store: Arc<dyn LogStore>, parsers: Vec<Arc<dyn LogParser>>) -> Self {
-        Self { store, parsers }
+        Self {
+            store,
+            parsers,
+            filters: LogFilterChain::default(),
+        }
+    }
+
+    /// Builds explicit parser and source-level filter chains.
+    pub fn with_components(
+        store: Arc<dyn LogStore>,
+        parsers: Vec<Arc<dyn LogParser>>,
+        filters: LogFilterChain,
+    ) -> Self {
+        Self {
+            store,
+            parsers,
+            filters,
+        }
     }
 }
 
@@ -59,6 +78,9 @@ impl WorkloadLogSink for RuntimeLogPipeline {
             body: parsed.body,
             attributes: parsed.attributes,
         };
+        if self.filters.dropped_by(&normalized).is_some() {
+            return Ok(());
+        }
         self.store
             .append(&[normalized])
             .await

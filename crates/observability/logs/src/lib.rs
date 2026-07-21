@@ -7,6 +7,7 @@
 pub mod conformance;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
+mod filter;
 mod model;
 #[cfg(unix)]
 mod otlp;
@@ -17,6 +18,10 @@ mod store;
 
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{InMemoryLogStore, InMemoryLogStoreRuntime};
+pub use filter::{
+    LogFilter, LogFilterChain, LogFilterKind, SuccessfulHealthcheckFilter, TailscaleNoiseFilter,
+    standard_ingest_filters,
+};
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,
 };

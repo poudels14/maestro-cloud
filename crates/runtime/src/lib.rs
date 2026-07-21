@@ -102,10 +102,11 @@ pub use process::ProcessRuntime;
 #[cfg(target_os = "linux")]
 pub use process_settings::ProcessRuntimeSettings;
 pub use workload::{
-    CgroupPath, ContainerWorkload, EventCursor, EventRequest, MountAccess, MountSource,
-    ObservedWorkload, ProcessWorkload, RuntimeEvent, RuntimeEventKind, RuntimeEventStream,
-    ShutdownRequest, VmWorkload, WorkloadConfiguration, WorkloadHandle, WorkloadMetadata,
-    WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus, WorkloadUser,
+    CgroupPath, ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, MountAccess,
+    MountSource, ObservedWorkload, ProcessWorkload, RuntimeEvent, RuntimeEventKind,
+    RuntimeEventStream, ShutdownRequest, VmWorkload, WorkloadConfiguration, WorkloadHandle,
+    WorkloadMetadata, WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
+    WorkloadUser,
 };
 
 /// Reusable backend-neutral conformance batteries.

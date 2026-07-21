@@ -3,13 +3,13 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, ClusterId, Deployment, VolumeAccess, VolumeSource, WorkloadId,
-    workload_hostname,
+    ArtifactTemplate, Assignment, ClusterId, Deployment, HealthProbe, VolumeAccess, VolumeSource,
+    WorkloadId, workload_hostname,
 };
 use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
-    ArtifactReference, ContainerWorkload, MountAccess, MountSource, WorkloadConfiguration,
-    WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
+    ArtifactReference, ContainerWorkload, HEALTHCHECK_PATH_LABEL, MountAccess, MountSource,
+    WorkloadConfiguration, WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
 };
 
 pub(crate) fn workload_spec(
@@ -34,7 +34,7 @@ pub(crate) fn workload_spec(
         .map(|mount| workload_mount(assignment, mount))
         .collect::<Result<Vec<_>, _>>()?;
     mounts.extend(additional_mounts);
-    let labels = workload_labels(assignment);
+    let labels = workload_labels(assignment, deployment);
     Ok(WorkloadSpec::Container(ContainerWorkload {
         configuration: WorkloadConfiguration {
             metadata: WorkloadMetadata {
@@ -61,7 +61,10 @@ pub(crate) fn workload_spec(
     }))
 }
 
-pub(crate) fn workload_labels(assignment: &Assignment) -> BTreeMap<String, String> {
+pub(crate) fn workload_labels(
+    assignment: &Assignment,
+    deployment: &Deployment,
+) -> BTreeMap<String, String> {
     let mut labels = assignment
         .meta
         .labels
@@ -80,6 +83,15 @@ pub(crate) fn workload_labels(assignment: &Assignment) -> BTreeMap<String, Strin
         "maestro.replica-index".to_owned(),
         assignment.spec.replica_index.to_string(),
     );
+    if let Some(HealthProbe::Http { path, .. }) = deployment
+        .spec
+        .service
+        .health_check
+        .as_ref()
+        .map(|health_check| &health_check.probe)
+    {
+        labels.insert(HEALTHCHECK_PATH_LABEL.to_owned(), path.clone());
+    }
     labels
 }
 
