@@ -2,7 +2,9 @@ use crate::{PreviewPhase, UpgradePhase};
 
 #[test]
 fn closing_preview_can_reopen_but_expired_preview_is_terminal() {
+    assert!(PreviewPhase::Pending.can_transition_to(PreviewPhase::Closing));
     assert!(PreviewPhase::Active.can_transition_to(PreviewPhase::Closing));
+    assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Pending));
     assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Active));
     assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Expired));
     assert!(!PreviewPhase::Expired.can_transition_to(PreviewPhase::Active));

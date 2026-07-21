@@ -50,9 +50,14 @@ impl PreviewPhase {
         self == target
             || matches!(
                 (self, target),
-                (Self::Pending, Self::Active | Self::Failed | Self::Canceled)
-                    | (Self::Active, Self::Closing | Self::Expired | Self::Failed)
-                    | (Self::Closing, Self::Active | Self::Expired | Self::Failed)
+                (
+                    Self::Pending,
+                    Self::Active | Self::Closing | Self::Expired | Self::Failed | Self::Canceled
+                ) | (Self::Active, Self::Closing | Self::Expired | Self::Failed)
+                    | (
+                        Self::Closing,
+                        Self::Pending | Self::Active | Self::Expired | Self::Failed
+                    )
                     | (Self::Failed, Self::Pending)
             )
     }
