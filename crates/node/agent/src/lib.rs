@@ -25,6 +25,8 @@ mod health;
 mod health_probe;
 mod health_status;
 #[cfg(target_os = "linux")]
+mod host_stats;
+#[cfg(target_os = "linux")]
 mod linux_bridge;
 #[cfg(target_os = "linux")]
 mod linux_firewall;
@@ -89,6 +91,11 @@ pub use firewall::{
 };
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
+#[cfg(target_os = "linux")]
+pub use host_stats::{
+    HostCpuStats, HostMemoryStats, HostNetworkStats, HostResourceStats, HostStatsError,
+    HostStatsReader, LinuxHostStatsReader,
+};
 pub use mesh::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
     MeshError, MeshInterface, MeshPeer, MeshPlanner, MeshReconciler, MeshRoute, MeshSubnet,
