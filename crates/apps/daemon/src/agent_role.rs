@@ -7,9 +7,9 @@ use cluster::{StoreRuntime, StoreShutdown, WIREGUARD_MTU_BYTES};
 use kernel_store::{Clock, Store};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AssignmentAgent, AssignmentAgentSettings, AuthoritativeDnsResolver,
-    DnsResourceAgent, DnsServerSettings, FirewallBackend, MeshBackend, MeshPlanner,
-    MeshResourceAgent, NodeFirewallAgent, WORKLOAD_BRIDGE_NAME, WorkloadBridge,
-    WorkloadBridgeAgent, WorkloadBridgeBackend,
+    DnsResourceAgent, DnsServerSettings, FirewallBackend, HealthAgent, HealthAgentSettings,
+    MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent, WORKLOAD_BRIDGE_NAME,
+    WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 use tokio::sync::watch;
@@ -108,6 +108,14 @@ where
     } else {
         None
     };
+    let health_agent = if spec.workload_enabled {
+        match build_health_agent(factory, plan, spec, store.clone()) {
+            Ok(agent) => Some(agent),
+            Err(error) => return fail_after_store_start(store_runtime, error).await,
+        }
+    } else {
+        None
+    };
     if let Err(error) = bridge_agent.reconcile_once().await {
         return fail_after_store_start(
             store_runtime,
@@ -168,6 +176,15 @@ where
         )
         .await;
     }
+    if let Some(agent) = health_agent.as_ref()
+        && let Err(error) = agent.reconcile_once().await
+    {
+        return fail_after_store_start(
+            store_runtime,
+            role_error("establish initial workload health", error),
+        )
+        .await;
+    }
 
     let publish_store_error = {
         match factory.store.lock() {
@@ -187,6 +204,7 @@ where
     let firewall_shutdown = bridge_shutdown.clone();
     let dns_server_shutdown = bridge_shutdown.clone();
     let assignment_shutdown = bridge_shutdown.clone();
+    let health_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -230,6 +248,14 @@ where
                 .run(assignment_shutdown)
                 .await
                 .map_err(|error| role_error("run assignment agent", error))
+        }));
+    }
+    if let Some(agent) = health_agent {
+        tasks.push(tokio::spawn(async move {
+            agent
+                .run(health_shutdown)
+                .await
+                .map_err(|error| role_error("run workload health agent", error))
         }));
     }
     Ok(Box::new(AgentRoleRuntime {
@@ -379,6 +405,26 @@ fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendTyp
         factory.status_clock.clone(),
     )
     .map_err(|error| role_error("construct assignment agent", error))
+}
+
+fn build_health_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+) -> Result<HealthAgent, RoleError> {
+    HealthAgent::new(
+        store,
+        factory.health_prober.clone(),
+        HealthAgentSettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            poll_interval: factory.settings.health_poll_interval,
+        },
+        factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
+    )
+    .map_err(|error| role_error("construct workload health agent", error))
 }
 
 async fn fail_after_store_start<T>(

@@ -34,6 +34,7 @@ async fn leader_workload_stops_before_recampaign_and_resignation()
         Duration::from_secs(30),
         Duration::from_secs(30),
         Duration::from_secs(5),
+        Duration::from_secs(5),
         Duration::from_secs(1),
         Duration::from_secs(1),
         Duration::from_secs(10),

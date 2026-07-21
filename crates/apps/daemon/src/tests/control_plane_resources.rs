@@ -5,9 +5,10 @@ use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     ClusterId, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec,
     DeploymentStatus, DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue,
-    ExecPolicy, Generation, NodeApiAccess, NodeFirewall, NodeFirewallId, NodeFirewallSpec,
-    NodeFirewallStatus, NodeId, Object, ObjectMeta, PlacementConstraint, ResourceKind,
-    ResourceName, ResourceRevision, ServiceId, ServiceSpec, Timestamp,
+    ExecPolicy, Generation, HealthCheckSpec, HealthProbe, NodeApiAccess, NodeFirewall,
+    NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId, Object, ObjectMeta,
+    PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
+    ResourceKind, ResourceName, ResourceRevision, ServiceId, ServiceSpec, Timestamp,
 };
 use kernel_store::{CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store};
 
@@ -22,6 +23,7 @@ pub(super) async fn seed_agent_resources(
         .next()
         .ok_or("workload subnet has no assignable address")?;
     let assignment = workload_assignment(node_id, workload_address)?;
+    let replica = replica_state(&assignment)?;
     let resources = [
         (
             "NodeFirewall",
@@ -43,6 +45,7 @@ pub(super) async fn seed_agent_resources(
             "assignment-1",
             serde_json::to_vec(&assignment)?,
         ),
+        ("ReplicaState", "replica-1", serde_json::to_vec(&replica)?),
     ];
     for (kind, id, value) in resources {
         put(store, cluster_id, kind, id, value).await?;
@@ -59,6 +62,18 @@ pub(super) async fn load_assignment(
         &ResourceName::new("assignment-1")?,
     );
     let stored = store.get(&key).await?.ok_or("assignment was not stored")?;
+    Ok(serde_json::from_slice(&stored.value)?)
+}
+
+pub(super) async fn load_replica(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+) -> Result<ReplicaState, Box<dyn std::error::Error>> {
+    let key = Keyspace::new(cluster_id).resource(
+        &ResourceKind::new("ReplicaState")?,
+        &ResourceName::new("replica-1")?,
+    );
+    let stored = store.get(&key).await?.ok_or("replica was not stored")?;
     Ok(serde_json::from_slice(&stored.value)?)
 }
 
@@ -142,6 +157,28 @@ fn workload_assignment(
     })
 }
 
+fn replica_state(assignment: &Assignment) -> Result<ReplicaState, kernel_api::InvalidIdentifier> {
+    Ok(Object {
+        meta: metadata(ReplicaStateId::new("replica-1")?),
+        spec: ReplicaStateSpec {
+            service_id: assignment.spec.service_id.clone(),
+            deployment_id: assignment.spec.deployment_id.clone(),
+            assignment_id: assignment.meta.id.clone(),
+            replica_index: assignment.spec.replica_index,
+        },
+        status: ReplicaStateStatus {
+            phase: DeploymentPhase::PendingReady,
+            node_id: Some(assignment.spec.node_id.clone()),
+            workload_id: None,
+            healthcheck_failures: 0,
+            restart_attempts: 0,
+            restart_pending_attempt: None,
+            restart_not_before: None,
+            conditions: Vec::new(),
+        },
+    })
+}
+
 fn deployment() -> Result<Deployment, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(DeploymentId::new("deployment-1")?),
@@ -159,7 +196,14 @@ fn deployment() -> Result<Deployment, kernel_api::InvalidIdentifier> {
                 command: None,
                 replicas: 1,
                 exposed_ports: vec![8080],
-                health_check: None,
+                health_check: Some(HealthCheckSpec {
+                    probe: HealthProbe::Http {
+                        port: 8080,
+                        path: "/ready".to_owned(),
+                    },
+                    interval_secs: 30,
+                    unhealthy_threshold: 3,
+                }),
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
                 user: None,

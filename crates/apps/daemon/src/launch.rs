@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cluster::{
     ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle,
@@ -12,7 +12,7 @@ use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
 use node_agent::{
     HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
-    NftablesFirewallBackend, SystemStatusClock,
+    NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
@@ -219,6 +219,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: containerd.clone(),
             network_provider: containerd,
+            health_prober: Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?),
             volatile_root,
             mesh_identity,
             instance_id,
@@ -357,6 +358,9 @@ pub enum DaemonLaunchError {
     /// The node-local WireGuard identity could not be loaded safely.
     #[error(transparent)]
     MeshIdentity(#[from] node_agent::MeshIdentityError),
+    /// The production workload health probe adapter could not be constructed.
+    #[error(transparent)]
+    HealthProbe(#[from] node_agent::HealthProbeError),
     /// The native workload runtime could not be configured or reached.
     #[error(transparent)]
     Runtime(#[from] runtime::RuntimeError),

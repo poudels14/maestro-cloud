@@ -1,5 +1,6 @@
 mod control_plane;
 mod control_plane_resources;
+mod control_plane_store;
 mod launch;
 mod leadership;
 mod operators;

@@ -3,18 +3,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cluster::{
-    MemberActivation, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderError,
-    StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreShutdown, StoreStartMode,
+use cluster::StoreStartMode;
+use kernel_api::{
+    AssignmentPhase, DeploymentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole, Timestamp,
 };
-use kernel_api::{AssignmentPhase, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole, Timestamp};
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
 use node_agent::{
     AuthoritativeDnsResolver, DnsQueryType, DnsServerBinder, DnsServerError, DnsServerRuntime,
-    DnsServerSettings, FirewallBackend, FirewallBackendError, MeshBackend, MeshBackendError,
-    MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge, WorkloadBridgeBackend,
-    WorkloadBridgeBackendError,
+    DnsServerSettings, FirewallBackend, FirewallBackendError, HealthProbeError, HealthProbeTarget,
+    HealthProber, MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock,
+    WorkloadBridge, WorkloadBridgeBackend, WorkloadBridgeBackendError,
 };
 use runtime::{FakeNetworkProvider, FakeRuntime, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
@@ -25,7 +24,8 @@ use crate::{
 };
 
 use super::cluster_with_nodes;
-use super::control_plane_resources::{load_assignment, seed_agent_resources};
+use super::control_plane_resources::{load_assignment, load_replica, seed_agent_resources};
+use super::control_plane_store::FakeProvider;
 
 #[tokio::test]
 async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
@@ -33,10 +33,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let clock: Arc<dyn Clock> = Arc::new(PausedClock);
     let store = Arc::new(InMemoryStore::new(clock.clone()));
     let shutdowns = Arc::new(Mutex::new(0_u32));
-    let provider = Arc::new(FakeProvider {
-        store: store.clone(),
-        shutdowns: shutdowns.clone(),
-    });
+    let provider = Arc::new(FakeProvider::new(store.clone(), shutdowns.clone()));
     let applications = Arc::new(Mutex::new(Vec::new()));
     let backend = RecordingMeshBackend {
         applications: applications.clone(),
@@ -47,6 +44,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let dns_bindings = Arc::new(Mutex::new(Vec::new()));
     let workload_runtime = Arc::new(FakeRuntime::new());
     let network_provider = Arc::new(FakeNetworkProvider::default());
+    let health_targets = Arc::new(Mutex::new(Vec::new()));
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -83,6 +81,9 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             }),
             workload_runtime: workload_runtime.clone(),
             network_provider: network_provider.clone(),
+            health_prober: Arc::new(RecordingHealthProber {
+                targets: health_targets.clone(),
+            }),
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
@@ -150,6 +151,29 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     );
     assert_eq!(network_provider.lease_count(), 1);
     assert_eq!(network_provider.attachment_count(), 1);
+    assert_eq!(
+        load_replica(&store, &cluster.cluster_id)
+            .await?
+            .status
+            .phase,
+        DeploymentPhase::Ready
+    );
+    let workload_address = cluster
+        .nodes
+        .get(&NodeId::new("master")?)
+        .and_then(|node| node.workload_subnet.workload_addresses().next())
+        .ok_or("master workload address missing")?;
+    assert_eq!(
+        health_targets
+            .lock()
+            .map_err(|_| "health target lock poisoned")?
+            .as_slice(),
+        &[HealthProbeTarget::Http {
+            address: workload_address.into(),
+            port: 8080,
+            path: "/ready".to_owned(),
+        }]
+    );
 
     let leader_key = Keyspace::new(&cluster.cluster_id).leader();
     let stored_leader = store.get(&leader_key).await?.ok_or("leader key missing")?;
@@ -227,6 +251,9 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             }),
             workload_runtime: workload_runtime.clone(),
             network_provider: network_provider.clone(),
+            health_prober: Arc::new(RecordingHealthProber {
+                targets: Arc::new(Mutex::new(Vec::new())),
+            }),
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("worker-instance")?,
@@ -272,6 +299,7 @@ fn settings_reject_keepalive_at_or_after_leadership_ttl() {
             Duration::from_secs(30),
             Duration::from_secs(5),
             Duration::from_secs(5),
+            Duration::from_secs(5),
             Duration::from_secs(1),
             Duration::from_secs(10),
         )
@@ -297,6 +325,23 @@ struct FixedStatusClock;
 impl StatusClock for FixedStatusClock {
     fn now(&self) -> Timestamp {
         Timestamp(1_750_000_000_000)
+    }
+}
+
+struct RecordingHealthProber {
+    targets: Arc<Mutex<Vec<HealthProbeTarget>>>,
+}
+
+#[async_trait]
+impl HealthProber for RecordingHealthProber {
+    async fn probe(&self, target: &HealthProbeTarget) -> Result<(), HealthProbeError> {
+        self.targets
+            .lock()
+            .map_err(|_| HealthProbeError::Unavailable {
+                message: "health target lock poisoned".to_owned(),
+            })?
+            .push(target.clone());
+        Ok(())
     }
 }
 
@@ -412,77 +457,5 @@ impl DnsServerRuntime for WaitingDnsServer {
             }
         }
         Ok(())
-    }
-}
-
-struct FakeProvider {
-    store: Arc<InMemoryStore>,
-    shutdowns: Arc<Mutex<u32>>,
-}
-
-#[async_trait]
-impl StoreProvider for FakeProvider {
-    async fn start(
-        &self,
-        _mode: StoreStartMode,
-    ) -> Result<Box<dyn StoreRuntime>, StoreProviderError> {
-        Ok(Box::new(FakeStoreRuntime {
-            store: self.store.clone(),
-            shutdowns: self.shutdowns.clone(),
-        }))
-    }
-
-    async fn stage_member(
-        &self,
-        _member: StoreMember,
-    ) -> Result<(StoreJoinTicket, MemberActivation), StoreProviderError> {
-        Err(unsupported())
-    }
-
-    async fn activate_member(
-        &self,
-        _ticket: &StoreJoinTicket,
-    ) -> Result<MemberActivation, StoreProviderError> {
-        Err(unsupported())
-    }
-
-    async fn remove_member(&self, _node_id: &NodeId) -> Result<(), StoreProviderError> {
-        Err(unsupported())
-    }
-
-    async fn recover(
-        &self,
-        _permit: StoreRecoveryPermit,
-    ) -> Result<StoreRecovery, StoreProviderError> {
-        Err(unsupported())
-    }
-}
-
-struct FakeStoreRuntime {
-    store: Arc<InMemoryStore>,
-    shutdowns: Arc<Mutex<u32>>,
-}
-
-#[async_trait]
-impl StoreRuntime for FakeStoreRuntime {
-    fn store(&self) -> Arc<dyn Store> {
-        self.store.clone()
-    }
-
-    async fn shutdown(self: Box<Self>, _request: StoreShutdown) -> Result<(), StoreProviderError> {
-        let mut shutdowns = self
-            .shutdowns
-            .lock()
-            .map_err(|_| StoreProviderError::Lifecycle {
-                reason: "shutdown count lock poisoned".to_owned(),
-            })?;
-        *shutdowns = shutdowns.saturating_add(1);
-        Ok(())
-    }
-}
-
-fn unsupported() -> StoreProviderError {
-    StoreProviderError::InvalidConfiguration {
-        reason: "operation is not used by the daemon role test".to_owned(),
     }
 }

@@ -8,7 +8,8 @@ use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use node_agent::{
-    DnsServerBinder, FirewallBackend, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
+    DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity, StatusClock,
+    WorkloadBridgeBackend,
 };
 use runtime::{NetworkProvider, WorkloadRuntime};
 use tokio::sync::watch;
@@ -50,6 +51,7 @@ pub struct ControlPlaneRoleSettings {
     pub(crate) dns_resync_interval: Duration,
     pub(crate) firewall_resync_interval: Duration,
     pub(crate) assignment_resync_interval: Duration,
+    pub(crate) health_poll_interval: Duration,
     pub(crate) workload_stop_timeout: Duration,
     pub(crate) restart_backoff_base: Duration,
     pub(crate) restart_backoff_max: Duration,
@@ -66,6 +68,7 @@ impl ControlPlaneRoleSettings {
         mesh_resync_interval: Duration,
         dns_resync_interval: Duration,
         firewall_resync_interval: Duration,
+        health_poll_interval: Duration,
         leadership_ttl: Duration,
         leadership_keepalive_interval: Duration,
         campaign_retry_interval: Duration,
@@ -75,6 +78,7 @@ impl ControlPlaneRoleSettings {
             || mesh_resync_interval.is_zero()
             || dns_resync_interval.is_zero()
             || firewall_resync_interval.is_zero()
+            || health_poll_interval.is_zero()
             || leadership_ttl.is_zero()
             || leadership_keepalive_interval.is_zero()
             || campaign_retry_interval.is_zero()
@@ -82,7 +86,7 @@ impl ControlPlaneRoleSettings {
             || leadership_keepalive_interval >= leadership_ttl
         {
             return Err(RoleError::new(
-                "control-plane intervals must be non-zero and leadership keepalive must precede TTL",
+                "daemon intervals must be non-zero and leadership keepalive must precede TTL",
             ));
         }
         Ok(Self {
@@ -91,6 +95,7 @@ impl ControlPlaneRoleSettings {
             dns_resync_interval,
             firewall_resync_interval,
             assignment_resync_interval: Duration::from_secs(30),
+            health_poll_interval,
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -110,6 +115,7 @@ impl Default for ControlPlaneRoleSettings {
             dns_resync_interval: Duration::from_secs(30),
             firewall_resync_interval: Duration::from_secs(30),
             assignment_resync_interval: Duration::from_secs(30),
+            health_poll_interval: Duration::from_secs(5),
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -137,6 +143,8 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, Br
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
     /// Host-owned workload address allocator and attachment backend.
     pub network_provider: Arc<dyn NetworkProvider>,
+    /// Bounded HTTP and TCP probe adapter for local workload readiness.
+    pub health_prober: Arc<dyn HealthProber>,
     /// Volatile tmpfs-backed root for workload secrets and node API sockets.
     pub volatile_root: PathBuf,
     /// Persisted node-local WireGuard identity.
@@ -158,6 +166,7 @@ pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeB
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
+    pub(crate) health_prober: Arc<dyn HealthProber>,
     pub(crate) volatile_root: PathBuf,
     pub(crate) mesh_identity: MeshIdentity,
     instance_id: NodeInstanceId,
@@ -188,6 +197,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
             network_provider: dependencies.network_provider,
+            health_prober: dependencies.health_prober,
             volatile_root: dependencies.volatile_root,
             mesh_identity: dependencies.mesh_identity,
             instance_id: dependencies.instance_id,
