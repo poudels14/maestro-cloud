@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, Timestamp};
 use logs::{
-    IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore, LogStream, OriginCursor,
+    BackupStatsSnapshot, IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore,
+    LogStream, OriginCursor,
 };
 
 use crate::{
@@ -154,6 +155,48 @@ fn backup_settings_reject_ambiguous_prefixes_and_kms_keys()
     let node = NodeId::new("node-one")?;
     assert!(LogBackupSettings::new("../escape", node.clone(), "kms").is_err());
     assert!(LogBackupSettings::new("production", node, "").is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn backup_stats_survive_restart_and_replace_the_singleton_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
+    let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
+    let store = runtime.store();
+    assert_eq!(store.load_backup_stats().await?, None);
+    let stats = BackupStatsSnapshot {
+        configured: true,
+        last_attempt_at_ms: Some(100),
+        pending_partitions: 3,
+        pending_bytes: 4_096,
+        oldest_pending_date: Some("2026-07-20".to_owned()),
+        ..BackupStatsSnapshot::default()
+    };
+    store.save_backup_stats(&stats, Timestamp(100)).await?;
+    runtime.shutdown().await?;
+
+    let restarted = DuckLogStoreRuntime::open(settings.clone()).await?;
+    let store = restarted.store();
+    assert_eq!(store.load_backup_stats().await?, Some(stats.clone()));
+    let replaced = BackupStatsSnapshot {
+        last_success_at_ms: Some(200),
+        pending_partitions: 0,
+        pending_bytes: 0,
+        ..stats
+    };
+    store.save_backup_stats(&replaced, Timestamp(200)).await?;
+    assert_eq!(store.load_backup_stats().await?, Some(replaced));
+    restarted.shutdown().await?;
+
+    let connection = duckdb::Connection::open(settings.path)?;
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM backup_stats", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
     Ok(())
 }
 

@@ -13,6 +13,7 @@ mod host_metric_schema;
 mod log_archive;
 mod log_backup;
 mod log_backup_schema;
+mod log_backup_stats_schema;
 mod log_retention;
 mod metric_delivery_schema;
 mod metric_duck;

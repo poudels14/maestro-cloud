@@ -250,7 +250,7 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        3
+        4
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
@@ -329,7 +329,7 @@ async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        3
+        4
     );
     Ok(())
 }

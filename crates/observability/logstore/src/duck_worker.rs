@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::duck::Command;
 use crate::{
     LogArchiveError, LogBackupError, LogRetentionError, delivery_schema, log_archive,
-    log_backup_schema, log_retention, schema,
+    log_backup_schema, log_backup_stats_schema, log_retention, schema,
 };
 
 pub(crate) fn run_worker(
@@ -123,6 +123,20 @@ pub(crate) fn run_worker(
                 let _ignored = response.send(log_backup_schema::mark_backed_up(
                     &mut connection,
                     &partition,
+                    updated_at.0,
+                ));
+            }
+            Command::LoadBackupStats { response } => {
+                let _ignored = response.send(log_backup_stats_schema::load(&connection));
+            }
+            Command::SaveBackupStats {
+                stats,
+                updated_at,
+                response,
+            } => {
+                let _ignored = response.send(log_backup_stats_schema::save(
+                    &connection,
+                    &stats,
                     updated_at.0,
                 ));
             }

@@ -76,6 +76,14 @@ pub(crate) enum Command {
         updated_at: Timestamp,
         response: oneshot::Sender<Result<(), LogBackupError>>,
     },
+    LoadBackupStats {
+        response: oneshot::Sender<Result<Option<logs::BackupStatsSnapshot>, LogBackupError>>,
+    },
+    SaveBackupStats {
+        stats: logs::BackupStatsSnapshot,
+        updated_at: Timestamp,
+        response: oneshot::Sender<Result<(), LogBackupError>>,
+    },
     PruneBackedUp {
         cutoff: chrono::NaiveDate,
         response: oneshot::Sender<Result<LogRetentionReport, LogRetentionError>>,
@@ -215,6 +223,40 @@ impl DuckLogStore {
         result
             .await
             .map_err(|_| backup_worker_stopped("completing backup commit"))?
+    }
+
+    /// Loads the most recently persisted backup health snapshot, if one exists.
+    pub async fn load_backup_stats(
+        &self,
+    ) -> Result<Option<logs::BackupStatsSnapshot>, LogBackupError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::LoadBackupStats { response })
+            .await
+            .map_err(|_| backup_worker_stopped("accepting backup stats read"))?;
+        result
+            .await
+            .map_err(|_| backup_worker_stopped("completing backup stats read"))?
+    }
+
+    /// Atomically replaces the singleton backup health snapshot.
+    pub async fn save_backup_stats(
+        &self,
+        stats: &logs::BackupStatsSnapshot,
+        updated_at: Timestamp,
+    ) -> Result<(), LogBackupError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::SaveBackupStats {
+                stats: stats.clone(),
+                updated_at,
+                response,
+            })
+            .await
+            .map_err(|_| backup_worker_stopped("accepting backup stats write"))?;
+        result
+            .await
+            .map_err(|_| backup_worker_stopped("completing backup stats write"))?
     }
 
     /// Removes cold partitions strictly before `cutoff` only after every object is backed up.

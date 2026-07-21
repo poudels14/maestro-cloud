@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,13 +22,18 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v3(&mut connection)?,
+        (0, _) => initialize_v4(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, 1) => {
             migrate_v1_to_v2(&mut connection)?;
             migrate_v2_to_v3(&mut connection)?;
+            migrate_v3_to_v4(&mut connection)?;
         }
-        (1, 2) => migrate_v2_to_v3(&mut connection)?,
+        (1, 2) => {
+            migrate_v2_to_v3(&mut connection)?;
+            migrate_v3_to_v4(&mut connection)?;
+        }
+        (1, 3) => migrate_v3_to_v4(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -126,7 +131,7 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v3(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -173,7 +178,12 @@ fn initialize_v3(connection: &mut Connection) -> Result<(), String> {
                  updated_at_ms BIGINT NOT NULL,
                  PRIMARY KEY (partition_key, sequence_low)
              );
-             INSERT INTO schema_version (version) VALUES (3);",
+             CREATE TABLE backup_stats (
+                 singleton BOOLEAN PRIMARY KEY CHECK (singleton = TRUE),
+                 value_json VARCHAR NOT NULL,
+                 updated_at_ms BIGINT NOT NULL
+             );
+             INSERT INTO schema_version (version) VALUES (4);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
@@ -249,6 +259,23 @@ fn migrate_v2_to_v3(connection: &mut Connection) -> Result<(), String> {
                  PRIMARY KEY (partition_key, sequence_low)
              );
              UPDATE schema_version SET version = 3;",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE backup_stats (
+                 singleton BOOLEAN PRIMARY KEY CHECK (singleton = TRUE),
+                 value_json VARCHAR NOT NULL,
+                 updated_at_ms BIGINT NOT NULL
+             );
+             UPDATE schema_version SET version = 4;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
