@@ -75,7 +75,18 @@ async fn deployment_history_is_service_scoped_and_masks_captured_secrets()
     Ok(())
 }
 
-fn deployment(id: &str, service_id: &str) -> Result<Deployment, kernel_api::InvalidIdentifier> {
+pub(super) fn deployment(
+    id: &str,
+    service_id: &str,
+) -> Result<Deployment, kernel_api::InvalidIdentifier> {
+    deployment_in_phase(id, service_id, DeploymentPhase::Ready)
+}
+
+pub(super) fn deployment_in_phase(
+    id: &str,
+    service_id: &str,
+    phase: DeploymentPhase,
+) -> Result<Deployment, kernel_api::InvalidIdentifier> {
     let captured_service = service()?.spec;
     Ok(Deployment {
         meta: metadata(DeploymentId::new(id)?),
@@ -88,7 +99,7 @@ fn deployment(id: &str, service_id: &str) -> Result<Deployment, kernel_api::Inva
             build_id: None,
         },
         status: DeploymentStatus {
-            phase: DeploymentPhase::Ready,
+            phase,
             created_at: Timestamp(1_000),
             ready_at: Some(Timestamp(2_000)),
             draining_at: None,

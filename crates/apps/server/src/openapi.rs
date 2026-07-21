@@ -18,12 +18,64 @@ pub fn openapi_document() -> Value {
         ),
         ("/api/services/{serviceId}".to_string(), service_operation()),
         (
+            "/api/services/{serviceId}/redeploy".to_string(),
+            command_path(
+                "post",
+                "redeployService",
+                &["serviceId"],
+                "CommandRequest",
+                "ServiceCommandResponse",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/freeze".to_string(),
+            command_path(
+                "post",
+                "freezeService",
+                &["serviceId"],
+                "CommandRequest",
+                "ServiceCommandResponse",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/unfreeze".to_string(),
+            command_path(
+                "post",
+                "unfreezeService",
+                &["serviceId"],
+                "CommandRequest",
+                "ServiceCommandResponse",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/replicas".to_string(),
+            command_path(
+                "put",
+                "setServiceReplicas",
+                &["serviceId"],
+                "ReplicaOverrideRequest",
+                "ServiceCommandResponse",
+            ),
+        ),
+        (
             "/api/services/{serviceId}/deployments".to_string(),
             nested_list_operation("listDeployments", "serviceId", "Deployment"),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}".to_string(),
             deployment_operation(),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/restart".to_string(),
+            deployment_command_path("restartDeployment"),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/cancel".to_string(),
+            deployment_command_path("cancelDeployment"),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/remove".to_string(),
+            deployment_command_path("removeDeployment"),
         ),
         ("/healthz".to_string(), health_operation()),
         ("/openapi.json".to_string(), openapi_operation()),
@@ -67,6 +119,7 @@ pub fn openapi_document() -> Value {
                         }
                     }),
                 );
+                insert_command_schemas(schemas);
             }
         }
     }
@@ -77,8 +130,148 @@ fn service_operation() -> Value {
     let mut operation = get_operation("getService", "serviceId", "Service");
     if let Some(item) = operation.as_object_mut() {
         item.insert("put".to_string(), put_service_operation());
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "deleteService",
+                &["serviceId"],
+                "CommandRequest",
+                "ServiceCommandResponse",
+            ),
+        );
     }
     operation
+}
+
+fn insert_command_schemas(schemas: &mut Map<String, Value>) {
+    schemas.insert(
+        "CommandRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["expectedRevision"],
+            "properties": {
+                "expectedRevision": {"$ref": "#/components/schemas/ResourceRevision"}
+            }
+        }),
+    );
+    schemas.insert(
+        "ReplicaOverrideRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["expectedRevision", "replicas"],
+            "properties": {
+                "expectedRevision": {"$ref": "#/components/schemas/ResourceRevision"},
+                "replicas": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "Temporary replica count, or null to clear the override"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ServiceCommandResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["serviceId", "generation", "rollout"],
+            "properties": {
+                "serviceId": {"$ref": "#/components/schemas/ServiceId"},
+                "generation": {"$ref": "#/components/schemas/Generation"},
+                "rollout": {"$ref": "#/components/schemas/RolloutState"},
+                "replicaOverride": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                },
+                "deletionTimestamp": {"$ref": "#/components/schemas/Timestamp"}
+            }
+        }),
+    );
+    schemas.insert(
+        "DeploymentCommandResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["deploymentId", "generation", "restartGeneration", "goal"],
+            "properties": {
+                "deploymentId": {"$ref": "#/components/schemas/DeploymentId"},
+                "generation": {"$ref": "#/components/schemas/Generation"},
+                "restartGeneration": {"$ref": "#/components/schemas/Generation"},
+                "goal": {"$ref": "#/components/schemas/DeploymentGoal"}
+            }
+        }),
+    );
+}
+
+fn deployment_command_path(operation_id: &str) -> Value {
+    command_path(
+        "post",
+        operation_id,
+        &["serviceId", "deploymentId"],
+        "CommandRequest",
+        "DeploymentCommandResponse",
+    )
+}
+
+fn command_path(
+    method: &str,
+    operation_id: &str,
+    parameters: &[&str],
+    request_schema: &str,
+    response_schema: &str,
+) -> Value {
+    Value::Object(Map::from_iter([(
+        method.to_string(),
+        command_operation(operation_id, parameters, request_schema, response_schema),
+    )]))
+}
+
+fn command_operation(
+    operation_id: &str,
+    parameters: &[&str],
+    request_schema: &str,
+    response_schema: &str,
+) -> Value {
+    let mut parameters = path_parameters(parameters)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    parameters.push(json!({
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string"}
+    }));
+    json!({
+        "operationId": operation_id,
+        "security": [{"bearerAuth": []}],
+        "parameters": parameters,
+        "requestBody": {
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": format!("#/components/schemas/{request_schema}")}
+                }
+            }
+        },
+        "responses": {
+            "202": {
+                "description": "Lifecycle command accepted for reconciliation",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": format!("#/components/schemas/{response_schema}")}
+                    }
+                }
+            },
+            "400": {"description": "Invalid command request"},
+            "404": {"description": "Resource not found"},
+            "409": {"description": "Revision, idempotency, or lifecycle conflict"},
+            "413": {"description": "Request body exceeds the command limit"}
+        }
+    })
 }
 
 fn put_service_operation() -> Value {

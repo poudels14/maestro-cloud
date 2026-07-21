@@ -457,6 +457,18 @@
         ],
         "type": "object"
       },
+      "CommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision"
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
       "CommandSpec": {
         "description": "Executable and argument vector passed without shell reinterpretation.",
         "properties": {
@@ -571,6 +583,29 @@
       },
       "Deployment": {
         "$ref": "#/components/schemas/Object4"
+      },
+      "DeploymentCommandResponse": {
+        "properties": {
+          "deploymentId": {
+            "$ref": "#/components/schemas/DeploymentId"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/Generation"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/DeploymentGoal"
+          },
+          "restartGeneration": {
+            "$ref": "#/components/schemas/Generation"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "restartGeneration",
+          "goal"
+        ],
+        "type": "object"
       },
       "DeploymentGoal": {
         "description": "Desired lifecycle outcome for one deployment.",
@@ -3741,6 +3776,26 @@
         ],
         "type": "object"
       },
+      "ReplicaOverrideRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision"
+          },
+          "replicas": {
+            "description": "Temporary replica count, or null to clear the override",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "replicas"
+        ],
+        "type": "object"
+      },
       "ReplicaState": {
         "$ref": "#/components/schemas/Object6"
       },
@@ -3962,6 +4017,33 @@
       },
       "Service": {
         "$ref": "#/components/schemas/Object3"
+      },
+      "ServiceCommandResponse": {
+        "properties": {
+          "deletionTimestamp": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/Generation"
+          },
+          "replicaOverride": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rollout": {
+            "$ref": "#/components/schemas/RolloutState"
+          },
+          "serviceId": {
+            "$ref": "#/components/schemas/ServiceId"
+          }
+        },
+        "required": [
+          "serviceId",
+          "generation",
+          "rollout"
+        ],
+        "type": "object"
       },
       "ServiceId": {
         "description": "Stable identity of a deployable service.",
@@ -4969,6 +5051,66 @@
       }
     },
     "/api/services/{serviceId}": {
+      "delete": {
+        "operationId": "deleteService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
       "get": {
         "operationId": "getService",
         "parameters": [
@@ -5129,6 +5271,464 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/deployments/{deploymentId}/cancel": {
+      "post": {
+        "operationId": "cancelDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/deployments/{deploymentId}/remove": {
+      "post": {
+        "operationId": "removeDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/deployments/{deploymentId}/restart": {
+      "post": {
+        "operationId": "restartDeployment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/freeze": {
+      "post": {
+        "operationId": "freezeService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/redeploy": {
+      "post": {
+        "operationId": "redeployService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/replicas": {
+      "put": {
+        "operationId": "setServiceReplicas",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplicaOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/unfreeze": {
+      "post": {
+        "operationId": "unfreezeService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
           }
         },
         "security": [

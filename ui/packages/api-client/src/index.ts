@@ -105,6 +105,57 @@ export interface MaestroApiClient {
     deploymentId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["Deployment"]>;
+  redeployService(
+    serviceId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  freezeService(
+    serviceId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  unfreezeService(
+    serviceId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  setServiceReplicas(
+    serviceId: string,
+    request: ApiSchemas["ReplicaOverrideRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  deleteService(
+    serviceId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  restartDeployment(
+    serviceId: string,
+    deploymentId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["DeploymentCommandResponse"]>;
+  cancelDeployment(
+    serviceId: string,
+    deploymentId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["DeploymentCommandResponse"]>;
+  removeDeployment(
+    serviceId: string,
+    deploymentId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["DeploymentCommandResponse"]>;
   putService(
     serviceId: string,
     request: ApiSchemas["ServiceWriteRequest"],
@@ -129,14 +180,15 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     return transport.request(request);
   }
 
-  function put<Response, Body>(
+  function mutate<Response, Body>(
+    method: "DELETE" | "POST" | "PUT",
     path: string,
     body: Body,
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<Response> {
     const request: TransportRequest<Response, Body> = {
-      method: "PUT",
+      method,
       path,
       body,
       headers: {
@@ -165,8 +217,73 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}`,
         options
       ),
+    redeployService: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/redeploy`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    freezeService: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/freeze`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    unfreezeService: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/unfreeze`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    setServiceReplicas: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "PUT",
+        `/api/services/${encodeURIComponent(serviceId)}/replicas`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    deleteService: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "DELETE",
+        `/api/services/${encodeURIComponent(serviceId)}`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    restartDeployment: (serviceId, deploymentId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/restart`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    cancelDeployment: (serviceId, deploymentId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    removeDeployment: (serviceId, deploymentId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/remove`,
+        request,
+        idempotencyKey,
+        options
+      ),
     putService: (serviceId, request, idempotencyKey, options) =>
-      put(
+      mutate(
+        "PUT",
         `/api/services/${encodeURIComponent(serviceId)}`,
         request,
         idempotencyKey,

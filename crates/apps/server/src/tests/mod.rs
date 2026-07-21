@@ -21,7 +21,9 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
+mod deployment_commands;
 mod deployments;
+mod service_commands;
 mod services;
 
 #[test]
@@ -191,7 +193,29 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     );
     assert!(
         document
+            .pointer("/paths/~1api~1services~1{serviceId}/delete")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1redeploy/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1replicas/put")
+            .is_some()
+    );
+    assert!(
+        document
             .pointer("/paths/~1api~1services~1{serviceId}~1deployments/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer(
+                "/paths/~1api~1services~1{serviceId}~1deployments~1{deploymentId}~1restart/post"
+            )
             .is_some()
     );
     assert!(
