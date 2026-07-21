@@ -19,8 +19,8 @@ use runtime::{FakeNetworkProvider, FakeRuntime, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
-    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
-    Daemon, DaemonPlan, LeaderWorkload, RoleError,
+    AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
+    LeaderWorkload, RoleError,
 };
 
 use super::cluster_with_nodes;
@@ -63,8 +63,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .workload_subnet,
     )
     .await?;
-    let factory = ControlPlaneRoleFactory::new(
-        ControlPlaneRoleDependencies {
+    let factory = DaemonRoleFactory::new(
+        DaemonRoleDependencies {
             agent_store: AgentStore::Managed {
                 provider,
                 start_mode: StoreStartMode::Bootstrap,
@@ -90,7 +90,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
         },
-        ControlPlaneRoleSettings::default(),
+        DaemonRoleSettings::default(),
     )
     .with_leader_workload(workload.clone());
 
@@ -234,8 +234,8 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
     )?;
     let workload_runtime = Arc::new(FakeRuntime::new());
     let network_provider = Arc::new(FakeNetworkProvider::default());
-    let factory = ControlPlaneRoleFactory::new(
-        ControlPlaneRoleDependencies {
+    let factory = DaemonRoleFactory::new(
+        DaemonRoleDependencies {
             agent_store: AgentStore::Remote(store.clone()),
             mesh_backend: RecordingMeshBackend {
                 applications: Arc::new(Mutex::new(Vec::new())),
@@ -260,7 +260,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
         },
-        ControlPlaneRoleSettings::default(),
+        DaemonRoleSettings::default(),
     );
 
     let running = Daemon::new(plan, factory).start().await?;
@@ -292,7 +292,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
 #[test]
 fn settings_reject_keepalive_at_or_after_leadership_ttl() {
     assert!(
-        ControlPlaneRoleSettings::new(
+        DaemonRoleSettings::new(
             Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(30),

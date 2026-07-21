@@ -12,7 +12,7 @@ use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime};
 use tokio::sync::{Notify, watch};
 
 use crate::leadership::run_leadership;
-use crate::{ControlPlaneRoleSettings, LeaderWorkload, RoleError};
+use crate::{DaemonRoleSettings, LeaderWorkload, RoleError};
 
 #[tokio::test]
 async fn leader_workload_stops_before_recampaign_and_resignation()
@@ -28,7 +28,7 @@ async fn leader_workload_stops_before_recampaign_and_resignation()
         inner: StoreLeaderElector::new(store.clone(), leader_key.clone()),
         fail_next_lease: AtomicBool::new(true),
     });
-    let settings = ControlPlaneRoleSettings::new(
+    let settings = DaemonRoleSettings::new(
         Duration::from_secs(30),
         Duration::from_secs(30),
         Duration::from_secs(30),

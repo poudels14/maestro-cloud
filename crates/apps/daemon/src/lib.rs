@@ -14,8 +14,7 @@ mod plan;
 mod runtime;
 
 pub use control_plane::{
-    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
-    LeaderWorkload,
+    AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{

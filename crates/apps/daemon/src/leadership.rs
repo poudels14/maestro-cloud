@@ -5,7 +5,7 @@ use kernel_store::{Clock, Store, StoreKey};
 use tokio::sync::watch;
 
 use crate::RoleError;
-use crate::control_plane::{ControlPlaneRoleSettings, LeaderWorkload, role_error};
+use crate::control_plane::{DaemonRoleSettings, LeaderWorkload, role_error};
 
 pub(crate) async fn run_leadership(
     store: Arc<dyn Store>,
@@ -15,7 +15,7 @@ pub(crate) async fn run_leadership(
     mut lease: Option<Box<dyn LeadershipLease>>,
     workload: Option<Arc<dyn LeaderWorkload>>,
     clock: Arc<dyn Clock>,
-    settings: ControlPlaneRoleSettings,
+    settings: DaemonRoleSettings,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), RoleError> {
     loop {
@@ -65,7 +65,7 @@ async fn run_term(
     lease: Box<dyn LeadershipLease>,
     workload: Option<Arc<dyn LeaderWorkload>>,
     clock: Arc<dyn Clock>,
-    settings: ControlPlaneRoleSettings,
+    settings: DaemonRoleSettings,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<Option<Box<dyn LeadershipLease>>, RoleError> {
     let Some(workload) = workload else {
@@ -113,7 +113,7 @@ async fn run_term(
 async fn keep_lease(
     lease: Box<dyn LeadershipLease>,
     clock: Arc<dyn Clock>,
-    settings: ControlPlaneRoleSettings,
+    settings: DaemonRoleSettings,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<Option<Box<dyn LeadershipLease>>, RoleError> {
     loop {

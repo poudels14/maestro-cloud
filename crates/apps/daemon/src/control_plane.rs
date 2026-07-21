@@ -45,7 +45,7 @@ pub trait LeaderWorkload: Send + Sync {
 
 /// Time bounds for node resync, leadership, and graceful store shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ControlPlaneRoleSettings {
+pub struct DaemonRoleSettings {
     pub(crate) bridge_resync_interval: Duration,
     pub(crate) mesh_resync_interval: Duration,
     pub(crate) dns_resync_interval: Duration,
@@ -61,7 +61,7 @@ pub struct ControlPlaneRoleSettings {
     pub(crate) store_shutdown_grace: Duration,
 }
 
-impl ControlPlaneRoleSettings {
+impl DaemonRoleSettings {
     /// Creates bounded settings and rejects hot loops or expired leadership.
     pub fn new(
         bridge_resync_interval: Duration,
@@ -107,7 +107,7 @@ impl ControlPlaneRoleSettings {
     }
 }
 
-impl Default for ControlPlaneRoleSettings {
+impl Default for DaemonRoleSettings {
     fn default() -> Self {
         Self {
             bridge_resync_interval: Duration::from_secs(30),
@@ -128,7 +128,7 @@ impl Default for ControlPlaneRoleSettings {
 }
 
 /// Production adapters and identities required by the concrete role factory.
-pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBackendType> {
+pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     /// Local provider ownership or a remote worker store connection.
     pub agent_store: AgentStore,
     /// Host-network adapter that applies exact WireGuard and route state.
@@ -158,7 +158,7 @@ pub struct ControlPlaneRoleDependencies<MeshBackendType, FirewallBackendType, Br
 }
 
 /// Concrete daemon factory composing node agents and control-plane leader work when declared.
-pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType> {
+pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     pub(crate) agent_store: AgentStore,
     pub(crate) mesh_backend: Mutex<Option<MeshBackendType>>,
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
@@ -172,22 +172,22 @@ pub struct ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeB
     instance_id: NodeInstanceId,
     pub(crate) monotonic_clock: Arc<dyn Clock>,
     pub(crate) status_clock: Arc<dyn StatusClock>,
-    pub(crate) settings: ControlPlaneRoleSettings,
+    pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
 }
 
 impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
-    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
+    DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 {
     /// Binds all production adapters without starting tasks or processes.
     pub fn new(
-        dependencies: ControlPlaneRoleDependencies<
+        dependencies: DaemonRoleDependencies<
             MeshBackendType,
             FirewallBackendType,
             BridgeBackendType,
         >,
-        settings: ControlPlaneRoleSettings,
+        settings: DaemonRoleSettings,
     ) -> Self {
         Self {
             agent_store: dependencies.agent_store,
@@ -218,7 +218,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
 
 #[async_trait]
 impl<MeshBackendType, FirewallBackendType, BridgeBackendType> RoleFactory
-    for ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
+    for DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 where
     MeshBackendType: MeshBackend + 'static,
     FirewallBackendType: FirewallBackend + 'static,
@@ -242,7 +242,7 @@ where
 }
 
 impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
-    ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
+    DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>
 where
     MeshBackendType: MeshBackend + 'static,
     FirewallBackendType: FirewallBackend + 'static,

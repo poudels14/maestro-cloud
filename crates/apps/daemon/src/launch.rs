@@ -18,8 +18,8 @@ use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentStore, ControlPlaneRoleDependencies, ControlPlaneRoleFactory, ControlPlaneRoleSettings,
-    Daemon, DaemonPlan, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
+    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -210,8 +210,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         OperatorSettings::production(&cluster)?,
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
-    let factory = ControlPlaneRoleFactory::new(
-        ControlPlaneRoleDependencies {
+    let factory = DaemonRoleFactory::new(
+        DaemonRoleDependencies {
             agent_store,
             mesh_backend: LinuxMeshBackend::new(),
             firewall_backend: NftablesFirewallBackend::new(),
@@ -226,7 +226,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             monotonic_clock: clock,
             status_clock: Arc::new(SystemStatusClock),
         },
-        ControlPlaneRoleSettings::default(),
+        DaemonRoleSettings::default(),
     )
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)

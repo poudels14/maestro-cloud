@@ -15,11 +15,11 @@ use runtime::{NetworkCidr, NetworkSpec};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::control_plane::{ControlPlaneRoleFactory, role_error};
+use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
 pub(crate) async fn start_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
 ) -> Result<Box<dyn RoleRuntime>, RoleError>
@@ -268,7 +268,7 @@ where
 }
 
 fn build_bridge_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     backend: BridgeBackendType,
@@ -296,7 +296,7 @@ where
 }
 
 fn build_mesh_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
@@ -339,7 +339,7 @@ where
 }
 
 fn build_firewall_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
@@ -361,7 +361,7 @@ where
 }
 
 fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
@@ -408,7 +408,7 @@ fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendTyp
 }
 
 fn build_health_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &ControlPlaneRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn Store>,
