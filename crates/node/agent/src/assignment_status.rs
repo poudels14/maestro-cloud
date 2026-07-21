@@ -6,6 +6,8 @@ use runtime::{NetworkProviderError, RuntimeError, WorkloadHandle, WorkloadStatus
 
 use crate::assignment_plan::WorkloadPlanError;
 use crate::secret_mount::SecretMountError;
+#[cfg(unix)]
+use crate::{NodeApiMountError, NodeApiServerError};
 
 const RUNTIME_READY_CONDITION: &str = "RuntimeReady";
 const WORKLOAD_RUNNING_REASON: &str = "WorkloadRunning";
@@ -118,6 +120,29 @@ impl From<SecretMountError> for ConvergeFailure {
             }
             SecretMountError::Task { .. } | SecretMountError::Io { .. } => {
                 Self::pending("SecretMountUnavailable", error.to_string())
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl From<NodeApiMountError> for ConvergeFailure {
+    fn from(error: NodeApiMountError) -> Self {
+        match error {
+            NodeApiMountError::InvalidRoot { .. }
+            | NodeApiMountError::ServicesUnavailable
+            | NodeApiMountError::UnsafePath { .. }
+            | NodeApiMountError::InvalidCredential { .. }
+            | NodeApiMountError::BindingConflict { .. }
+            | NodeApiMountError::OwnerConflict { .. }
+            | NodeApiMountError::Server(NodeApiServerError::OwnerMismatch { .. }) => {
+                Self::failed("NodeApiMountRejected", error.to_string())
+            }
+            NodeApiMountError::Random { .. }
+            | NodeApiMountError::Task { .. }
+            | NodeApiMountError::Server(_)
+            | NodeApiMountError::Io { .. } => {
+                Self::pending("NodeApiMountUnavailable", error.to_string())
             }
         }
     }

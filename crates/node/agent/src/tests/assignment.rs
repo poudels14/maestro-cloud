@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
+use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
@@ -8,10 +9,10 @@ use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     ClusterId, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus,
-    ExecPolicy, Generation, NodeId, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
-    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, ResourceRevision,
-    SecretMountSpec, SecretValue, ServiceId, ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec,
-    VolumeSource,
+    ExecPolicy, Generation, NodeApiAccess, NodeId, ObjectMeta, PlacementConstraint, ReplicaState,
+    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName,
+    ResourceRevision, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, Timestamp,
+    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
 };
 use kernel_store::{
     Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
@@ -23,9 +24,12 @@ use runtime::{
 };
 use tokio::sync::{Notify, watch};
 
-use crate::{AssignmentAgent, AssignmentAgentSettings, StatusClock};
+use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock};
 
 use super::fake_network::FakeNetworkProvider;
+
+#[cfg(unix)]
+mod node_api;
 
 #[tokio::test]
 async fn assignment_reconcile_runs_and_re_adopts_one_exactly_addressed_workload()
@@ -489,6 +493,7 @@ struct World {
     monotonic_clock: Arc<TestMonotonicClock>,
     status_clock: Arc<TestStatusClock>,
     secrets: tempfile::TempDir,
+    node_api: tempfile::TempDir,
 }
 
 impl World {
@@ -501,10 +506,15 @@ impl World {
             monotonic_clock,
             status_clock: Arc::new(TestStatusClock::new(1_750_000_000_000)),
             secrets: tempfile::tempdir().unwrap(),
+            node_api: tempfile::tempdir().unwrap(),
         }
     }
 
     fn agent(&self) -> AssignmentAgent {
+        self.agent_with_node_api(None)
+    }
+
+    fn agent_with_node_api(&self, services: Option<NodeApiServices>) -> AssignmentAgent {
         let runtime: Arc<dyn WorkloadRuntime> = self.runtime.clone();
         let network: Arc<dyn NetworkProvider> = self.network.clone();
         AssignmentAgent::new(
@@ -524,7 +534,9 @@ impl World {
                 restart_backoff_base: Duration::from_secs(5),
                 restart_backoff_max: Duration::from_secs(60),
                 secrets_root: self.secrets.path().to_path_buf(),
+                node_api_root: self.node_api.path().join("mounts"),
             },
+            services,
             self.monotonic_clock.clone(),
             self.status_clock.clone(),
         )

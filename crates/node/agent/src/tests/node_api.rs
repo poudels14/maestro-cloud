@@ -17,7 +17,10 @@ use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Request, Status};
 
-use crate::{BoundWorkloadNodeApi, NodeApiServices, NodeControlHandler, NodeTelemetryHandler};
+use crate::{
+    BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner, NodeControlHandler,
+    NodeTelemetryHandler,
+};
 
 #[derive(Debug, Default)]
 struct RecordingHandlers {
@@ -98,6 +101,10 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
     let bound = BoundWorkloadNodeApi::bind(
         &socket_path,
         WorkloadAuthorization::new(WorkloadToken::from_bytes([7; 32]), metadata.uid(), claims()),
+        NodeApiSocketOwner {
+            user_id: metadata.uid(),
+            group_id: metadata.gid(),
+        },
         true,
         services,
     )
@@ -188,44 +195,18 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
 }
 
 #[tokio::test]
-async fn uds_server_rejects_peer_mismatch_and_unprivileged_control() {
+async fn uds_server_rejects_unprivileged_control() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let socket_path = temporary.path().join("node.sock");
     let metadata = std::fs::metadata(temporary.path()).expect("directory metadata");
     let handlers = Arc::new(RecordingHandlers::default());
     let bound = BoundWorkloadNodeApi::bind(
         &socket_path,
-        WorkloadAuthorization::new(
-            WorkloadToken::from_bytes([7; 32]),
-            metadata.uid().wrapping_add(1),
-            claims(),
-        ),
-        false,
-        NodeApiServices::new(handlers.clone(), handlers),
-    )
-    .expect("bind node API");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(bound.serve_with_shutdown(async move {
-        let _ = shutdown_rx.await;
-    }));
-    let channel = connect(&socket_path).await;
-    let error = IdentityClient::new(channel.clone())
-        .get_identity(authenticated(GetIdentityRequest {}, 7))
-        .await
-        .expect_err("different peer user must fail");
-    assert_eq!(error.code(), Code::Unauthenticated);
-    drop(channel);
-    shutdown_tx.send(()).expect("request shutdown");
-    server
-        .await
-        .expect("server task")
-        .expect("clean server shutdown");
-
-    let socket_path = temporary.path().join("unprivileged.sock");
-    let handlers = Arc::new(RecordingHandlers::default());
-    let bound = BoundWorkloadNodeApi::bind(
-        &socket_path,
         WorkloadAuthorization::new(WorkloadToken::from_bytes([7; 32]), metadata.uid(), claims()),
+        NodeApiSocketOwner {
+            user_id: metadata.uid(),
+            group_id: metadata.gid(),
+        },
         false,
         NodeApiServices::new(handlers.clone(), handlers),
     )

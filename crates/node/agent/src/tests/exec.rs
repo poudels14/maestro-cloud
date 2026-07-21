@@ -201,7 +201,7 @@ impl ExecWorld {
         let mut deployment = deployment();
         deployment.spec.service.exec = policy;
         seed(store.as_ref(), &assignment, &deployment).await?;
-        let spec = workload_spec(&cluster_id(), &assignment, &deployment, None)?;
+        let spec = workload_spec(&cluster_id(), &assignment, &deployment, Vec::new())?;
         let handle = runtime.create(&spec).await?;
         runtime.start(&handle).await?;
         let runtime_trait: Arc<dyn WorkloadRuntime> = runtime;

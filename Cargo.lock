@@ -3479,6 +3479,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures-util",
+ "getrandom 0.4.3",
  "kernel-api",
  "kernel-store",
  "netlink-packet-route 0.30.0",

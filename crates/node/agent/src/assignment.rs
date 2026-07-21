@@ -15,6 +15,10 @@ use tokio::sync::watch;
 
 use crate::StatusClock;
 use crate::assignment_error::AssignmentAgentError;
+#[cfg(unix)]
+use crate::assignment_node_api::{active_node_api_workloads, mount_node_api};
+#[cfg(not(unix))]
+use crate::assignment_plan::node_api_user;
 use crate::assignment_plan::{workload_id, workload_spec};
 use crate::assignment_resource::{
     decode_assignment, decode_assignments, decode_deployments, decode_replicas,
@@ -30,6 +34,8 @@ use crate::assignment_types::{
     monotonic_deadline,
 };
 use crate::secret_mount::SecretMountManager;
+#[cfg(unix)]
+use crate::{NodeApiServices, node_api_mount::NodeApiMountManager};
 
 const ASSIGNMENT_KIND: &str = "Assignment";
 const DEPLOYMENT_KIND: &str = "Deployment";
@@ -51,6 +57,8 @@ pub struct AssignmentAgent {
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
     secrets: SecretMountManager,
+    #[cfg(unix)]
+    node_api: NodeApiMountManager,
 }
 
 impl AssignmentAgent {
@@ -60,6 +68,7 @@ impl AssignmentAgent {
         runtime: Arc<dyn WorkloadRuntime>,
         network: Arc<dyn NetworkProvider>,
         settings: AssignmentAgentSettings,
+        #[cfg(unix)] node_api_services: Option<NodeApiServices>,
         monotonic_clock: Arc<dyn Clock>,
         status_clock: Arc<dyn StatusClock>,
     ) -> Result<Self, AssignmentAgentError> {
@@ -71,6 +80,8 @@ impl AssignmentAgent {
             return Err(AssignmentAgentError::ZeroDeadline);
         }
         let secrets = SecretMountManager::new(settings.secrets_root.clone())?;
+        #[cfg(unix)]
+        let node_api = NodeApiMountManager::new(settings.node_api_root.clone(), node_api_services)?;
         Ok(Self {
             keyspace: Keyspace::new(&settings.cluster_id),
             assignment_kind: ResourceKind::new(ASSIGNMENT_KIND)?,
@@ -83,6 +94,8 @@ impl AssignmentAgent {
             monotonic_clock,
             status_clock,
             secrets,
+            #[cfg(unix)]
+            node_api,
         })
     }
 
@@ -104,6 +117,8 @@ impl AssignmentAgent {
         let mut runtime_cursor: Option<EventCursor> = None;
         loop {
             if *shutdown.borrow() {
+                #[cfg(unix)]
+                self.node_api.shutdown_all().await?;
                 return Ok(());
             }
             let (report, cursor) = self.reconcile_with_cursor().await?;
@@ -141,6 +156,8 @@ impl AssignmentAgent {
                 tokio::select! {
                     changed = shutdown.changed() => {
                         if changed.is_err() || *shutdown.borrow() {
+                            #[cfg(unix)]
+                            self.node_api.shutdown_all().await?;
                             return Ok(());
                         }
                     }
@@ -285,6 +302,14 @@ impl AssignmentAgent {
                 .map(|assignment| assignment.meta.id.to_string())
                 .collect::<BTreeSet<_>>();
             report.secret_mounts_collected = self.secrets.cleanup_stale(&active_workloads).await?;
+            #[cfg(unix)]
+            {
+                let active_node_api_workloads = active_node_api_workloads(&active, &deployments);
+                report.node_api_mounts_collected = self
+                    .node_api
+                    .cleanup_stale(&active_node_api_workloads)
+                    .await?;
+            }
         }
         for assignment in local
             .iter()
@@ -310,15 +335,30 @@ impl AssignmentAgent {
         network: &NetworkHandle,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
         let workload_id = workload_id(assignment)?;
+        let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
             Some(secrets) => Some(self.secrets.materialize(&workload_id, secrets).await?),
             None => None,
         };
+        additional_mounts.extend(secret_mount);
+        #[cfg(unix)]
+        if let Some(node_api_mount) =
+            mount_node_api(&self.node_api, assignment, deployment, &workload_id).await?
+        {
+            additional_mounts.push(node_api_mount);
+        }
+        #[cfg(not(unix))]
+        if node_api_user(deployment)?.is_some() {
+            return Err(ConvergeFailure::failed(
+                "NodeApiUnsupported",
+                "node API workloads require a Unix host".to_owned(),
+            ));
+        }
         let spec = workload_spec(
             &self.settings.cluster_id,
             assignment,
             deployment,
-            secret_mount,
+            additional_mounts,
         )?;
         let handle = self.runtime.create(&spec).await?;
         let lease = self
@@ -444,6 +484,8 @@ impl AssignmentAgent {
         }
         self.runtime.remove(handle).await?;
         self.secrets.cleanup(handle.workload_id()).await?;
+        #[cfg(unix)]
+        self.node_api.cleanup(handle.workload_id()).await?;
         Ok(())
     }
 

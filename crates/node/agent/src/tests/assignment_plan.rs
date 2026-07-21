@@ -1,7 +1,7 @@
 use kernel_api::{VolumeSource, WorkloadUserSpec};
 use runtime::{MountAccess, MountSource, WorkloadSpec, WorkloadUser};
 
-use crate::assignment_plan::{WorkloadPlanError, workload_spec};
+use crate::assignment_plan::{WorkloadPlanError, node_api_user, workload_spec};
 
 use super::assignment::{assignment, cluster_id, deployment, node_id};
 
@@ -11,7 +11,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
     let assignment = assignment();
     let deployment = deployment();
     let WorkloadSpec::Container(workload) =
-        workload_spec(&cluster_id(), &assignment, &deployment, None)?
+        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new())?
     else {
         return Err("assignment did not produce a container workload".into());
     };
@@ -61,7 +61,7 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
     });
 
     let WorkloadSpec::Container(workload) =
-        workload_spec(&cluster_id(), &assignment, &deployment, None)?
+        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new())?
     else {
         return Err("assignment did not produce a container workload".into());
     };
@@ -76,6 +76,23 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
 }
 
 #[test]
+fn assignment_plan_rejects_mounts_over_the_private_node_api_directory() {
+    let mut deployment = deployment();
+    deployment.spec.service.node_api = kernel_api::NodeApiAccess::IdentityAndTelemetry;
+    deployment.spec.service.user = Some(WorkloadUserSpec {
+        user_id: 1_000,
+        group_id: 1_001,
+    });
+    deployment.spec.service.volumes.first_mut().unwrap().target =
+        "/run/maestro/node.sock".to_owned();
+
+    assert!(matches!(
+        node_api_user(&deployment),
+        Err(WorkloadPlanError::ReservedNodeApiMount { .. })
+    ));
+}
+
+#[test]
 fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
     let assignment = assignment();
     let mut deployment = deployment();
@@ -84,7 +101,7 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
         node_id: kernel_api::NodeId::new("node-2").unwrap(),
     };
     assert!(matches!(
-        workload_spec(&cluster_id(), &assignment, &deployment, None),
+        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new()),
         Err(WorkloadPlanError::HostVolumeNodeMismatch { .. })
     ));
     assert_ne!(assignment.spec.node_id, node_id("node-2"));

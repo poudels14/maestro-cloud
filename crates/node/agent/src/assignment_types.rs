@@ -26,6 +26,8 @@ pub struct AssignmentAgentSettings {
     pub restart_backoff_max: Duration,
     /// Volatile host directory containing per-workload secret files.
     pub secrets_root: PathBuf,
+    /// Volatile host directory containing per-workload node API credentials and sockets.
+    pub node_api_root: PathBuf,
 }
 
 /// Results of one complete desired/runtime-state comparison.
@@ -45,6 +47,8 @@ pub struct AssignmentReconcileReport {
     pub garbage_collected: usize,
     /// Stale per-workload secret directories zeroized and removed.
     pub secret_mounts_collected: usize,
+    /// Stale per-workload node API credentials and listeners removed.
+    pub node_api_mounts_collected: usize,
     /// Malformed resources skipped without crashing the agent loop.
     pub malformed_resources: usize,
 }

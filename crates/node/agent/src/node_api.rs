@@ -219,28 +219,57 @@ pub struct BoundWorkloadNodeApi {
     service: WorkloadNodeApiService,
 }
 
+/// Filesystem owner allowed to connect to one workload-private socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeApiSocketOwner {
+    /// Numeric workload user identity.
+    pub user_id: u32,
+    /// Numeric workload primary group identity.
+    pub group_id: u32,
+}
+
 impl BoundWorkloadNodeApi {
     /// Binds one workload-private node API listener.
     pub fn bind(
         socket_path: impl AsRef<Path>,
         authorization: WorkloadAuthorization,
+        owner: NodeApiSocketOwner,
         control_allowed: bool,
         services: NodeApiServices,
     ) -> Result<Self, NodeApiServerError> {
         let socket_path = socket_path.as_ref().to_path_buf();
+        if authorization.expected_user_id() != owner.user_id {
+            return Err(NodeApiServerError::OwnerMismatch {
+                authorized_user_id: authorization.expected_user_id(),
+                socket_user_id: owner.user_id,
+            });
+        }
         let listener = UnixListener::bind(&socket_path)
             .map_err(|source| NodeApiServerError::io("bind", &socket_path, source))?;
-        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666))
-            .map_err(|source| NodeApiServerError::io("set permissions on", &socket_path, source))?;
         let metadata = std::fs::symlink_metadata(&socket_path)
             .map_err(|source| NodeApiServerError::io("inspect", &socket_path, source))?;
+        let socket_identity = SocketIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        let configured =
+            std::os::unix::fs::chown(&socket_path, Some(owner.user_id), Some(owner.group_id))
+                .map_err(|source| NodeApiServerError::io("set owner on", &socket_path, source))
+                .and_then(|()| {
+                    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                        .map_err(|source| {
+                            NodeApiServerError::io("set permissions on", &socket_path, source)
+                        })
+                });
+        if let Err(error) = configured {
+            drop(listener);
+            let _cleanup = Self::remove_socket_if_owned(&socket_path, socket_identity);
+            return Err(error);
+        }
         Ok(Self {
             listener,
             socket_path,
-            socket_identity: SocketIdentity {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-            },
+            socket_identity,
             service: WorkloadNodeApiService {
                 authorization: Arc::new(authorization),
                 control_allowed,
@@ -333,6 +362,16 @@ pub enum NodeApiServerError {
     SocketReplaced {
         /// Path whose identity changed.
         path: PathBuf,
+    },
+    /// Socket ownership and authorization were configured for different users.
+    #[error(
+        "node API authorized user {authorized_user_id} does not match socket owner {socket_user_id}"
+    )]
+    OwnerMismatch {
+        /// User accepted by peer-credential authentication.
+        authorized_user_id: u32,
+        /// User able to open the socket by filesystem permissions.
+        socket_user_id: u32,
     },
 }
 

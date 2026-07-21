@@ -1,6 +1,8 @@
 use kernel_store::StoreError;
 use runtime::{NetworkProviderError, RuntimeError};
 
+#[cfg(unix)]
+use crate::NodeApiMountError;
 use crate::secret_mount::SecretMountError;
 
 /// Why node-local assignment reconciliation could not complete its snapshot.
@@ -24,6 +26,10 @@ pub enum AssignmentAgentError {
     /// Secret materialization or zeroizing cleanup failed.
     #[error(transparent)]
     Secret(#[from] SecretMountError),
+    /// Node API credential, listener, or cleanup management failed.
+    #[cfg(unix)]
+    #[error(transparent)]
+    NodeApi(#[from] NodeApiMountError),
     /// The assignment disappeared while its observed status was being committed.
     #[error("assignment `{assignment_id}` disappeared before status update")]
     AssignmentDisappeared { assignment_id: String },

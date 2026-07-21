@@ -6,6 +6,8 @@
 
 mod assignment;
 mod assignment_error;
+#[cfg(unix)]
+mod assignment_node_api;
 mod assignment_plan;
 mod assignment_resource;
 mod assignment_restart;
@@ -22,6 +24,10 @@ mod mesh_identity;
 mod mesh_resource;
 #[cfg(unix)]
 mod node_api;
+#[cfg(unix)]
+mod node_api_files;
+#[cfg(unix)]
+mod node_api_mount;
 mod secret_mount;
 
 #[cfg(target_os = "linux")]
@@ -41,9 +47,11 @@ pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, Wi
 pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
 #[cfg(unix)]
 pub use node_api::{
-    BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeControlHandler,
-    NodeTelemetryHandler,
+    BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeApiSocketOwner,
+    NodeControlHandler, NodeTelemetryHandler,
 };
+#[cfg(unix)]
+pub use node_api_files::NodeApiMountError;
 pub use secret_mount::SecretMountError;
 
 #[cfg(test)]

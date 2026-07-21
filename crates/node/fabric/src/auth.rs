@@ -73,6 +73,11 @@ impl WorkloadAuthorization {
         }
     }
 
+    /// Returns the host user bound to kernel peer-credential checks.
+    pub fn expected_user_id(&self) -> u32 {
+        self.expected_user_id
+    }
+
     /// Authenticates one request using constant-time token comparison and kernel peer identity.
     pub fn authorize(
         &self,
