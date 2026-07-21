@@ -644,6 +644,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/webhooks/{webhookId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -2139,6 +2155,12 @@ export interface components {
             observedGeneration?: components["schemas"]["Generation"] | (null);
             /** @description Earliest wall-clock time a failed transition may be retried. */
             retryAt?: components["schemas"]["Timestamp"] | (null);
+        };
+        WebhookTestRequest: Record<string, never>;
+        WebhookTestResponse: {
+            deliveryId: string;
+            testedAt: components["schemas"]["Timestamp"];
+            webhookId: components["schemas"]["WebhookId"];
         };
         WebhookWriteRequest: {
             /** Format: uri */
@@ -3923,6 +3945,76 @@ export interface operations {
             };
             /** @description Request body exceeds the command limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    testWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                webhookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Test delivery completed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookTestResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Webhook endpoint rejected or did not complete the delivery */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Webhook delivery is not configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

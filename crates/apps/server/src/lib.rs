@@ -42,6 +42,7 @@ pub(crate) struct AppState {
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
+    pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
 }
 
 /// Validated API application that has not yet claimed its listener.
@@ -65,6 +66,7 @@ impl ApiServer {
             store,
             cluster_id,
             firewall_settings: None,
+            webhook_backend: None,
         };
         let router = routes::router(
             state.clone(),
@@ -80,6 +82,19 @@ impl ApiServer {
     /// Enables firewall dry-runs with the same static settings as the leader operator.
     pub fn with_firewall_settings(mut self, settings: firewall::FirewallSettings) -> Self {
         self.state.firewall_settings = Some(settings);
+        self.router = routes::router(
+            self.state.clone(),
+            AuthPolicy::new(self.settings.jwt_secret_key.clone()),
+        );
+        self
+    }
+
+    /// Enables webhook test commands through the same delivery seam as the leader operator.
+    pub fn with_webhook_backend(
+        mut self,
+        backend: Arc<dyn webhook::WebhookDeliveryBackend>,
+    ) -> Self {
+        self.state.webhook_backend = Some(backend);
         self.router = routes::router(
             self.state.clone(),
             AuthPolicy::new(self.settings.jwt_secret_key.clone()),

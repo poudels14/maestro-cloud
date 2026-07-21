@@ -96,6 +96,12 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["WebhookCommandResponse"]>;
+  testWebhook(
+    webhookId: string,
+    request: ApiSchemas["WebhookTestRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["WebhookTestResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -359,6 +365,14 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       mutate(
         "DELETE",
         `/api/webhooks/${encodeURIComponent(webhookId)}`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    testWebhook: (webhookId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/webhooks/${encodeURIComponent(webhookId)}/test`,
         request,
         idempotencyKey,
         options

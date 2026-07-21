@@ -200,6 +200,22 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "WebhookTestRequest".to_string(),
+        json!({"type": "object", "additionalProperties": false}),
+    );
+    schemas.insert(
+        "WebhookTestResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["webhookId", "deliveryId", "testedAt"],
+            "properties": {
+                "webhookId": {"$ref": "#/components/schemas/WebhookId"},
+                "deliveryId": {"type": "string"},
+                "testedAt": {"$ref": "#/components/schemas/Timestamp"}
+            }
+        }),
+    );
 }
 
 pub(crate) fn webhook_operation() -> Value {
@@ -225,6 +241,34 @@ pub(crate) fn webhook_operation() -> Value {
         );
     }
     operation
+}
+
+pub(crate) fn webhook_test_path() -> Value {
+    let mut operation = command_operation(
+        "testWebhook",
+        &["webhookId"],
+        "WebhookTestRequest",
+        "WebhookTestResponse",
+    );
+    if let Some(responses) = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        && let Some(mut response) = responses.remove("202")
+    {
+        if let Some(response) = response.as_object_mut() {
+            response.insert("description".to_string(), json!("Test delivery completed"));
+        }
+        responses.insert("200".to_string(), response);
+        responses.insert(
+            "502".to_string(),
+            json!({"description": "Webhook endpoint rejected or did not complete the delivery"}),
+        );
+        responses.insert(
+            "503".to_string(),
+            json!({"description": "Webhook delivery is not configured"}),
+        );
+    }
+    Value::Object(Map::from_iter([("post".to_string(), operation)]))
 }
 
 pub(crate) fn firewall_policy_operation() -> Value {

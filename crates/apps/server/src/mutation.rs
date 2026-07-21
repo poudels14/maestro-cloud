@@ -13,6 +13,7 @@ pub(crate) const MAXIMUM_REQUEST_BYTES: usize = 1024 * 1_024;
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
 pub(crate) struct MutationRequest {
+    request_id: RequestId,
     claim_key: kernel_store::StoreKey,
     fingerprint: RequestFingerprint,
 }
@@ -37,10 +38,16 @@ impl MutationRequest {
             update_digest(&mut digest, part.as_bytes());
         }
         update_digest(&mut digest, &encoded);
+        let claim_key = Keyspace::new(&state.cluster_id).request_claim(&request_id);
         Ok(Self {
-            claim_key: Keyspace::new(&state.cluster_id).request_claim(&request_id),
+            request_id,
+            claim_key,
             fingerprint: RequestFingerprint::new(digest.finalize().into()),
         })
+    }
+
+    pub(crate) fn request_id(&self) -> &RequestId {
+        &self.request_id
     }
 
     pub(crate) async fn replay<Response: DeserializeOwned>(

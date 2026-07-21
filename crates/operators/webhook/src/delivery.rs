@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, ResourceName, ResourceRevision, SecretValue, Timestamp, WebhookEvent, WebhookId,
+    ClusterId, DeploymentPhase, PreviewPhase, RequestId, ResourceName, ResourceRevision,
+    SecretValue, Timestamp, UpgradePhase, WebhookEvent, WebhookId, WebhookNodeAvailability,
     WebhookObservedState,
 };
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,9 @@ pub struct WebhookDelivery {
     pub webhook_id: WebhookId,
     /// Subscription class of the transition.
     pub event: WebhookEvent,
+    /// Whether this payload was explicitly requested by an operator test command.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub test: bool,
     /// Built-in resource identity within the event class.
     pub resource_id: ResourceName,
     /// Previously acknowledged state, absent for a newly created resource.
@@ -62,6 +66,7 @@ impl WebhookDelivery {
             cluster_id,
             webhook_id,
             event,
+            test: false,
             resource_id,
             previous,
             current,
@@ -70,6 +75,58 @@ impl WebhookDelivery {
             observed_at,
         })
     }
+
+    /// Creates a deterministic synthetic delivery for an operator test command.
+    pub fn test(
+        cluster_id: ClusterId,
+        webhook_id: WebhookId,
+        event: WebhookEvent,
+        request_id: &RequestId,
+        observed_at: Timestamp,
+    ) -> Result<Self, WebhookDeliveryError> {
+        let identity = serde_json::to_vec(&(&cluster_id, &webhook_id, "test", request_id))
+            .map_err(|error| WebhookDeliveryError::Rejected {
+                message: format!("failed to encode test delivery identity: {error}"),
+            })?;
+        Ok(Self {
+            delivery_id: format!("wd_{}", hex::encode(Sha256::digest(identity))),
+            cluster_id: cluster_id.clone(),
+            webhook_id,
+            event,
+            test: true,
+            resource_id: ResourceName::new("test").map_err(|error| {
+                WebhookDeliveryError::Rejected {
+                    message: error.to_string(),
+                }
+            })?,
+            previous: None,
+            current: test_state(event),
+            resource_revision: ResourceRevision::default(),
+            text: format!("Maestro `{cluster_id}` webhook test message."),
+            observed_at,
+        })
+    }
+}
+
+const fn test_state(event: WebhookEvent) -> WebhookObservedState {
+    match event {
+        WebhookEvent::DeploymentTransition => {
+            WebhookObservedState::DeploymentTransition(DeploymentPhase::Queued)
+        }
+        WebhookEvent::NodeAvailability => {
+            WebhookObservedState::NodeAvailability(WebhookNodeAvailability::Available)
+        }
+        WebhookEvent::PreviewTransition => {
+            WebhookObservedState::PreviewTransition(PreviewPhase::Pending)
+        }
+        WebhookEvent::UpgradeTransition => {
+            WebhookObservedState::UpgradeTransition(UpgradePhase::Pending)
+        }
+    }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn delivery_text(

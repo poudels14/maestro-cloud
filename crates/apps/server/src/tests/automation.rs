@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use kernel_api::{
@@ -7,6 +11,7 @@ use kernel_api::{
 use kernel_store::{Keyspace, Store};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use webhook::{WebhookDelivery, WebhookDeliveryBackend, WebhookDeliveryError};
 
 use crate::{ApiServer, ServerSettings};
 
@@ -118,6 +123,18 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
             .status(),
         StatusCode::ACCEPTED
     );
+    assert_eq!(
+        command(
+            &server,
+            Method::POST,
+            "/api/webhooks/deployments/test",
+            "unconfigured-webhook-test",
+            json!({}),
+        )
+        .await?
+        .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 
     let response = request(&server, "/api/webhooks/deployments", None).await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -199,6 +216,124 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
     Ok(())
 }
 
+#[tokio::test]
+async fn webhook_test_retries_failures_and_replays_success()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let backend = Arc::new(RecordingWebhookBackend::default());
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?
+    .with_webhook_backend(backend.clone());
+    let create = webhook_request(
+        None,
+        "https://hooks.example.test/events",
+        Some(SIGNING_SECRET),
+    );
+    assert_eq!(
+        mutate(&server, Method::PUT, "create-test-webhook", create)
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    backend.reject.store(true, Ordering::SeqCst);
+    assert_eq!(
+        command(
+            &server,
+            Method::POST,
+            "/api/webhooks/deployments/test",
+            "test-webhook",
+            json!({}),
+        )
+        .await?
+        .status(),
+        StatusCode::BAD_GATEWAY
+    );
+    backend.reject.store(false, Ordering::SeqCst);
+    let successful = command(
+        &server,
+        Method::POST,
+        "/api/webhooks/deployments/test",
+        "test-webhook",
+        json!({}),
+    )
+    .await?;
+    assert_eq!(successful.status(), StatusCode::OK);
+    let successful: Value = decode(successful).await?;
+    assert_eq!(successful.get("webhookId"), Some(&json!("deployments")));
+    assert!(
+        successful
+            .get("deliveryId")
+            .and_then(Value::as_str)
+            .is_some()
+    );
+
+    let replayed = command(
+        &server,
+        Method::POST,
+        "/api/webhooks/deployments/test",
+        "test-webhook",
+        json!({}),
+    )
+    .await?;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(decode::<Value>(replayed).await?, successful);
+    let attempts = backend
+        .attempts
+        .lock()
+        .map_err(|_| "webhook attempts lock was poisoned")?;
+    assert_eq!(attempts.len(), 2);
+    let first = attempts.first().ok_or("first webhook attempt is missing")?;
+    let second = attempts.get(1).ok_or("second webhook attempt is missing")?;
+    assert_eq!(first.delivery.delivery_id, second.delivery.delivery_id);
+    assert!(second.delivery.test);
+    assert_eq!(second.endpoint, "https://hooks.example.test/events");
+    assert_eq!(second.signing_secret, SIGNING_SECRET);
+    Ok(())
+}
+
+#[derive(Default)]
+struct RecordingWebhookBackend {
+    attempts: Mutex<Vec<RecordedWebhook>>,
+    reject: AtomicBool,
+}
+
+struct RecordedWebhook {
+    endpoint: String,
+    signing_secret: String,
+    delivery: WebhookDelivery,
+}
+
+#[async_trait]
+impl WebhookDeliveryBackend for RecordingWebhookBackend {
+    async fn deliver(
+        &self,
+        endpoint: &str,
+        signing_secret: &kernel_api::SecretValue,
+        delivery: &WebhookDelivery,
+    ) -> Result<(), WebhookDeliveryError> {
+        self.attempts
+            .lock()
+            .map_err(|_| WebhookDeliveryError::Unavailable {
+                message: "webhook attempts lock was poisoned".to_string(),
+            })?
+            .push(RecordedWebhook {
+                endpoint: endpoint.to_string(),
+                signing_secret: signing_secret.expose().to_string(),
+                delivery: delivery.clone(),
+            });
+        if self.reject.load(Ordering::SeqCst) {
+            return Err(WebhookDeliveryError::Rejected {
+                message: "receiver returned an unsuccessful status".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 fn webhook_request(
     expected_revision: Option<ResourceRevision>,
     endpoint: &str,
@@ -240,12 +375,29 @@ async fn mutate(
     idempotency_key: &str,
     payload: Value,
 ) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    command(
+        server,
+        method,
+        "/api/webhooks/deployments",
+        idempotency_key,
+        payload,
+    )
+    .await
+}
+
+async fn command(
+    server: &ApiServer,
+    method: Method,
+    uri: &str,
+    idempotency_key: &str,
+    payload: Value,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
     Ok(server
         .router()
         .oneshot(
             Request::builder()
                 .method(method)
-                .uri("/api/webhooks/deployments")
+                .uri(uri)
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("Idempotency-Key", idempotency_key)
                 .body(Body::from(serde_json::to_vec(&payload)?))?,

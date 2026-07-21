@@ -283,6 +283,11 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .pointer("/paths/~1api~1webhooks~1{webhookId}/delete")
             .is_some()
     );
+    assert!(
+        document
+            .pointer("/paths/~1api~1webhooks~1{webhookId}~1test/post")
+            .is_some()
+    );
     assert_eq!(
         document.pointer("/components/securitySchemes/bearerAuth/scheme"),
         Some(&Value::String("bearer".to_string()))

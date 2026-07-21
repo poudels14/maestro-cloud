@@ -5248,6 +5248,29 @@
         ],
         "type": "object"
       },
+      "WebhookTestRequest": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "WebhookTestResponse": {
+        "properties": {
+          "deliveryId": {
+            "type": "string"
+          },
+          "testedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "webhookId": {
+            "$ref": "#/components/schemas/WebhookId"
+          }
+        },
+        "required": [
+          "webhookId",
+          "deliveryId",
+          "testedAt"
+        ],
+        "type": "object"
+      },
       "WebhookWriteRequest": {
         "additionalProperties": false,
         "properties": {
@@ -7457,6 +7480,74 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/webhooks/{webhookId}/test": {
+      "post": {
+        "operationId": "testWebhook",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "webhookId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTestResponse"
+                }
+              }
+            },
+            "description": "Test delivery completed"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          },
+          "502": {
+            "description": "Webhook endpoint rejected or did not complete the delivery"
+          },
+          "503": {
+            "description": "Webhook delivery is not configured"
           }
         },
         "security": [

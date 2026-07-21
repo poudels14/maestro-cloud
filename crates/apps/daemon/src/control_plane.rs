@@ -286,6 +286,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) node_upgrade: Option<NodeUpgradeDependencies>,
     pub(crate) api_settings: ServerSettings,
     pub(crate) firewall_settings: firewall::FirewallSettings,
+    pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
     pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
@@ -332,6 +333,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             node_upgrade: dependencies.node_upgrade,
             api_settings: dependencies.api_settings,
             firewall_settings: dependencies.firewall_settings,
+            webhook_backend: None,
             settings,
             store: Mutex::new(None),
             leader_workload: None,
@@ -341,6 +343,15 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
     /// Attaches the workload started for each successfully fenced leadership term.
     pub fn with_leader_workload(mut self, workload: Arc<dyn LeaderWorkload>) -> Self {
         self.leader_workload = Some(workload);
+        self
+    }
+
+    /// Shares the outbound webhook transport with the authenticated test endpoint.
+    pub fn with_webhook_backend(
+        mut self,
+        backend: Arc<dyn webhook::WebhookDeliveryBackend>,
+    ) -> Self {
+        self.webhook_backend = Some(backend);
         self
     }
 

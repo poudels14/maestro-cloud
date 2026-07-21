@@ -93,8 +93,13 @@ where
         plan.cluster().cluster_id.clone(),
         factory.api_settings.clone(),
     )
-    .map(|server| server.with_firewall_settings(factory.firewall_settings.clone()))
-    {
+    .map(|server| {
+        let server = server.with_firewall_settings(factory.firewall_settings.clone());
+        match &factory.webhook_backend {
+            Some(backend) => server.with_webhook_backend(backend.clone()),
+            None => server,
+        }
+    }) {
         Ok(server) => match server.bind().await {
             Ok(server) => server,
             Err(error) => {

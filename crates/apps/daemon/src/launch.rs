@@ -307,7 +307,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             pull_requests: configured_preview.map(|preview| preview.pull_requests),
             upgrades: None,
             store_upgrades,
-            webhooks: webhook_backend,
+            webhooks: webhook_backend.clone(),
         },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
@@ -360,6 +360,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         DaemonRoleSettings::default(),
     )
     .with_log_maintenance(log_maintenance)
+    .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
 }
