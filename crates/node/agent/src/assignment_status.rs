@@ -22,6 +22,7 @@ pub(crate) struct ConvergeFailure {
     phase: AssignmentPhase,
     reason: &'static str,
     message: String,
+    retry_at: Option<Timestamp>,
 }
 
 impl ConvergeFailure {
@@ -30,6 +31,16 @@ impl ConvergeFailure {
             phase: AssignmentPhase::Pending,
             reason,
             message,
+            retry_at: None,
+        }
+    }
+
+    pub(crate) fn pending_at(reason: &'static str, message: String, retry_at: Timestamp) -> Self {
+        Self {
+            phase: AssignmentPhase::Pending,
+            reason,
+            message,
+            retry_at: Some(retry_at),
         }
     }
 
@@ -38,7 +49,12 @@ impl ConvergeFailure {
             phase: AssignmentPhase::Failed,
             reason,
             message,
+            retry_at: None,
         }
+    }
+
+    pub(crate) fn retry_at(&self) -> Option<Timestamp> {
+        self.retry_at
     }
 }
 

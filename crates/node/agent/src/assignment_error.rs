@@ -7,8 +7,8 @@ pub enum AssignmentAgentError {
     /// A configured resource kind or observed identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
-    /// A zero deadline would create an unbounded loop or immediate forced shutdown.
-    #[error("assignment stop and resync deadlines must be positive")]
+    /// An invalid deadline would create an unbounded loop, hot loop, or inverted backoff.
+    #[error("assignment deadlines must be positive and restart backoff must not decrease")]
     ZeroDeadline,
     /// Store access or watch setup failed.
     #[error(transparent)]

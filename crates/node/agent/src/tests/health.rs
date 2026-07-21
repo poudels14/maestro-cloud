@@ -164,6 +164,7 @@ fn health_resources(threshold: u32) -> (Assignment, Deployment, ReplicaState) {
             healthcheck_failures: 0,
             restart_attempts: 0,
             restart_pending_attempt: None,
+            restart_not_before: None,
             conditions: Vec::new(),
         },
     };

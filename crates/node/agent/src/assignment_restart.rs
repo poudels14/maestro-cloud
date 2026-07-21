@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use kernel_api::{
     AssignmentId, Condition, ConditionReason, ConditionState, ConditionType, DeploymentPhase,
     ReplicaState, ResourceKind, ResourceName, Timestamp,
@@ -10,8 +12,8 @@ const RUNTIME_RESTART_CONDITION: &str = "RuntimeRestart";
 const MAX_CAS_ATTEMPTS: usize = 16;
 
 pub(crate) enum RestartReservation {
-    Reserved,
-    Exhausted,
+    Reserved { not_before: Timestamp },
+    Exhausted { maximum: u32 },
 }
 
 pub(crate) async fn reserve_restart(
@@ -21,6 +23,8 @@ pub(crate) async fn reserve_restart(
     replica: &ReplicaState,
     assignment_id: &AssignmentId,
     maximum: Option<u32>,
+    backoff_base: Duration,
+    backoff_max: Duration,
     now: Timestamp,
 ) -> Result<RestartReservation, RestartTrackingError> {
     let name = ResourceName::new(replica.meta.id.as_str())?;
@@ -41,11 +45,15 @@ pub(crate) async fn reserve_restart(
         })?;
         validate_assignment(&current, assignment_id)?;
         if current.status.restart_pending_attempt.is_some() {
-            return Ok(RestartReservation::Reserved);
+            return Ok(RestartReservation::Reserved {
+                not_before: current.status.restart_not_before.unwrap_or(now),
+            });
         }
-        if maximum.is_some_and(|maximum| current.status.restart_attempts >= maximum) {
+        if let Some(maximum) = maximum
+            && current.status.restart_attempts >= maximum
+        {
             if restart_limit_recorded(&current) {
-                return Ok(RestartReservation::Exhausted);
+                return Ok(RestartReservation::Exhausted { maximum });
             }
             current.status.phase = DeploymentPhase::Crashed;
             upsert_restart_condition(
@@ -54,7 +62,7 @@ pub(crate) async fn reserve_restart(
                 "RestartLimitReached",
                 format!(
                     "workload exhausted its restart limit of {} attempts",
-                    maximum.unwrap_or(u32::MAX)
+                    maximum
                 ),
                 now,
             );
@@ -75,20 +83,25 @@ pub(crate) async fn reserve_restart(
                     .await?,
                 CasOutcome::Applied(_)
             ) {
-                return Ok(RestartReservation::Exhausted);
+                return Ok(RestartReservation::Exhausted { maximum });
             }
             continue;
         }
         let next_attempt = current.status.restart_attempts.saturating_add(1);
+        let not_before = restart_deadline(now, backoff_base, backoff_max, next_attempt);
         current.status.restart_attempts = next_attempt;
         current.status.restart_pending_attempt = Some(next_attempt);
+        current.status.restart_not_before = Some(not_before);
         current.status.healthcheck_failures = 0;
         current.status.phase = DeploymentPhase::PendingReady;
         upsert_restart_condition(
             &mut current,
             ConditionState::Unknown,
             "RestartScheduled",
-            format!("runtime restart attempt {next_attempt} is durably reserved"),
+            format!(
+                "runtime restart attempt {next_attempt} is reserved until {}",
+                not_before.0
+            ),
             now,
         );
         current.meta.revision = stored.version.resource_revision();
@@ -108,7 +121,7 @@ pub(crate) async fn reserve_restart(
                 .await?,
             CasOutcome::Applied(_)
         ) {
-            return Ok(RestartReservation::Reserved);
+            return Ok(RestartReservation::Reserved { not_before });
         }
     }
     Err(RestartTrackingError::Contention {
@@ -154,6 +167,7 @@ pub(crate) async fn finish_pending_restart(
             return Ok(false);
         };
         current.status.restart_pending_attempt = None;
+        current.status.restart_not_before = None;
         upsert_restart_condition(
             &mut current,
             ConditionState::True,
@@ -184,6 +198,19 @@ pub(crate) async fn finish_pending_restart(
     Err(RestartTrackingError::Contention {
         replica_id: replica.meta.id.to_string(),
     })
+}
+
+pub(crate) fn restart_deadline(
+    now: Timestamp,
+    backoff_base: Duration,
+    backoff_max: Duration,
+    attempt: u32,
+) -> Timestamp {
+    let exponent = attempt.saturating_sub(1).min(31);
+    let factor = 1_u32.checked_shl(exponent).unwrap_or(u32::MAX);
+    let delay = backoff_base.saturating_mul(factor).min(backoff_max);
+    let milliseconds = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
+    Timestamp(now.0.saturating_add(milliseconds))
 }
 
 fn validate_assignment(

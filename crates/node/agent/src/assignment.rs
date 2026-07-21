@@ -2,16 +2,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kernel_api::{
-    Assignment, ClusterId, Deployment, NodeId, ReplicaState, ResourceKind, ResourceName,
-};
+use kernel_api::{Assignment, Deployment, ReplicaState, ResourceKind, ResourceName};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, WatchCursor,
     WatchStart,
 };
 use runtime::{
     AddressLease, AddressRequest, EventCursor, EventRequest, NetworkHandle, NetworkProvider,
-    NetworkSpec, RuntimeError, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
+    RuntimeError, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 use tokio::sync::watch;
 
@@ -27,6 +25,7 @@ use crate::assignment_restart::{
 use crate::assignment_status::{
     AssignmentOutcome, ConvergeFailure, desired_status, runtime_status_message,
 };
+use crate::assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport, earliest};
 
 const ASSIGNMENT_KIND: &str = "Assignment";
 const DEPLOYMENT_KIND: &str = "Deployment";
@@ -34,38 +33,6 @@ const REPLICA_STATE_KIND: &str = "ReplicaState";
 const RUNTIME_RETRY_REASON: &str = "RuntimeRetry";
 const RUNTIME_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MAX_CAS_ATTEMPTS: usize = 16;
-
-/// Node-scoped assignment reconciliation settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssignmentAgentSettings {
-    /// Cluster whose assignment and runtime ownership labels are reconciled.
-    pub cluster_id: ClusterId,
-    /// Local node; assignments for other nodes are never mutated.
-    pub node_id: NodeId,
-    /// Node-local runtime bridge and exact host-owned IPAM range.
-    pub network: NetworkSpec,
-    /// Graceful workload shutdown deadline before forced termination.
-    pub stop_timeout: Duration,
-    /// Level-triggered full reconciliation interval.
-    pub resync_interval: Duration,
-}
-
-/// Results of one complete desired/runtime-state comparison.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AssignmentReconcileReport {
-    /// Active local assignments observed in the store snapshot.
-    pub desired: usize,
-    /// Assignments confirmed running after reconciliation.
-    pub running: usize,
-    /// Exited workloads restored using a durably accounted restart attempt.
-    pub restarted: usize,
-    /// Assignments left pending or failed with a status condition.
-    pub unresolved: usize,
-    /// Runtime workloads removed because no active local assignment owned them.
-    pub garbage_collected: usize,
-    /// Malformed resources skipped without crashing the agent loop.
-    pub malformed_resources: usize,
-}
 
 /// Level-triggered node reconciler for assignment lifecycle, adoption, and garbage collection.
 pub struct AssignmentAgent {
@@ -91,7 +58,11 @@ impl AssignmentAgent {
         monotonic_clock: Arc<dyn Clock>,
         status_clock: Arc<dyn StatusClock>,
     ) -> Result<Self, AssignmentAgentError> {
-        if settings.stop_timeout.is_zero() || settings.resync_interval.is_zero() {
+        if settings.stop_timeout.is_zero()
+            || settings.resync_interval.is_zero()
+            || settings.restart_backoff_base.is_zero()
+            || settings.restart_backoff_max < settings.restart_backoff_base
+        {
             return Err(AssignmentAgentError::ZeroDeadline);
         }
         Ok(Self {
@@ -128,7 +99,10 @@ impl AssignmentAgent {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let (_report, cursor) = self.reconcile_with_cursor().await?;
+            let (report, cursor) = self.reconcile_with_cursor().await?;
+            let retry_at = report
+                .requeue_at
+                .map(|deadline| self.monotonic_deadline(deadline));
             let mut events = self
                 .store
                 .watch(self.keyspace.resources(), WatchStart::After(cursor))?;
@@ -187,6 +161,14 @@ impl AssignmentAgent {
                         }
                     }
                     () = self.monotonic_clock.sleep_until(runtime_reconnect_at), if runtime_stream_ended => {
+                        break;
+                    }
+                    () = async {
+                        match retry_at {
+                            Some(retry_at) => self.monotonic_clock.sleep_until(retry_at).await,
+                            None => std::future::pending().await,
+                        }
+                    }, if retry_at.is_some() => {
                         break;
                     }
                     () = self.monotonic_clock.sleep_until(resync_at) => {
@@ -264,6 +246,7 @@ impl AssignmentAgent {
                     }
                 }
                 Err(failure) => {
+                    report.requeue_at = earliest(report.requeue_at, failure.retry_at());
                     self.update_status(assignment, AssignmentOutcome::Unresolved(&failure))
                         .await?;
                     report.unresolved = report.unresolved.saturating_add(1);
@@ -340,18 +323,29 @@ impl AssignmentAgent {
                     replica,
                     &assignment.meta.id,
                     deployment.spec.service.max_restarts,
+                    self.settings.restart_backoff_base,
+                    self.settings.restart_backoff_max,
                     self.status_clock.now(),
                 )
                 .await
                 .map_err(restart_failure)?
                 {
-                    RestartReservation::Reserved => self.runtime.start(&handle).await?,
-                    RestartReservation::Exhausted => {
+                    RestartReservation::Reserved { not_before }
+                        if self.status_clock.now() < not_before =>
+                    {
+                        return Err(ConvergeFailure::pending_at(
+                            "RestartBackoff",
+                            format!("runtime restart is delayed until {}", not_before.0),
+                            not_before,
+                        ));
+                    }
+                    RestartReservation::Reserved { .. } => self.runtime.start(&handle).await?,
+                    RestartReservation::Exhausted { maximum } => {
                         return Err(ConvergeFailure::failed(
                             "RestartLimitReached",
                             format!(
                                 "workload exhausted its restart limit of {} attempts",
-                                deployment.spec.service.max_restarts.unwrap_or(u32::MAX)
+                                maximum
                             ),
                         ));
                     }
@@ -474,6 +468,12 @@ impl AssignmentAgent {
         Err(AssignmentAgentError::Contention {
             assignment_id: assignment.meta.id.to_string(),
         })
+    }
+
+    fn monotonic_deadline(&self, deadline: kernel_api::Timestamp) -> kernel_store::MonotonicTime {
+        let remaining = deadline.0.saturating_sub(self.status_clock.now().0);
+        let delay = Duration::from_millis(u64::try_from(remaining).unwrap_or_default());
+        self.monotonic_clock.now().saturating_add(delay)
     }
 }
 

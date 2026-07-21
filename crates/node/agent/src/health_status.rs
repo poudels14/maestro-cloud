@@ -80,6 +80,7 @@ pub(crate) fn desired_health_status(
         healthcheck_failures: failures,
         restart_attempts: replica.status.restart_attempts,
         restart_pending_attempt: replica.status.restart_pending_attempt,
+        restart_not_before: replica.status.restart_not_before,
         conditions,
     }
 }

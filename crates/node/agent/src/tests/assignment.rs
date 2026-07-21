@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ use runtime::{
     FakeRuntime, FakeRuntimeOperation, NetworkCidr, NetworkProvider, RuntimeError, ShutdownRequest,
     WorkloadRuntime,
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::{AssignmentAgent, AssignmentAgentSettings, StatusClock};
 
@@ -114,9 +115,21 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
 
     let interrupted = world.agent().reconcile_once().await?;
     assert_eq!(interrupted.unresolved, 1);
+    assert_eq!(interrupted.requeue_at, Some(Timestamp(1_750_000_005_000)));
     let reserved = world.load_replica().await?;
     assert_eq!(reserved.status.restart_attempts, 1);
     assert_eq!(reserved.status.restart_pending_attempt, Some(1));
+    assert_eq!(
+        reserved.status.restart_not_before,
+        Some(Timestamp(1_750_000_005_000))
+    );
+
+    world.status_clock.advance(Duration::from_secs(5));
+    let failed_start = world.agent().reconcile_once().await?;
+    assert_eq!(failed_start.unresolved, 1);
+    let still_reserved = world.load_replica().await?;
+    assert_eq!(still_reserved.status.restart_attempts, 1);
+    assert_eq!(still_reserved.status.restart_pending_attempt, Some(1));
 
     let recovered = world.agent().reconcile_once().await?;
     assert_eq!(recovered.running, 1);
@@ -124,6 +137,7 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
     let finished = world.load_replica().await?;
     assert_eq!(finished.status.restart_attempts, 1);
     assert_eq!(finished.status.restart_pending_attempt, None);
+    assert_eq!(finished.status.restart_not_before, None);
     assert_eq!(
         finished
             .status
@@ -156,6 +170,9 @@ async fn assignment_reconcile_stops_after_restart_budget_is_exhausted()
         timeout: Duration::from_secs(5),
     };
     world.runtime.stop(&handle, stop).await?;
+    let delayed = world.agent().reconcile_once().await?;
+    assert_eq!(delayed.unresolved, 1);
+    world.status_clock.advance(Duration::from_secs(5));
     assert_eq!(world.agent().reconcile_once().await?.restarted, 1);
     world.runtime.stop(&handle, stop).await?;
 
@@ -223,6 +240,18 @@ async fn assignment_run_restarts_an_exit_delivered_after_event_subscription()
             },
         )
         .await?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let replica = world.load_replica().await.unwrap();
+            if replica.status.restart_pending_attempt == Some(1) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    world.status_clock.advance(Duration::from_secs(5));
+    world.monotonic_clock.advance(Duration::from_secs(5));
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let replica = world.load_replica().await.unwrap();
@@ -423,14 +452,19 @@ struct World {
     store: Arc<InMemoryStore>,
     runtime: Arc<FakeRuntime>,
     network: Arc<FakeNetworkProvider>,
+    monotonic_clock: Arc<TestMonotonicClock>,
+    status_clock: Arc<TestStatusClock>,
 }
 
 impl World {
     fn new() -> Self {
+        let monotonic_clock = Arc::new(TestMonotonicClock::default());
         Self {
-            store: Arc::new(InMemoryStore::new(Arc::new(TestMonotonicClock))),
+            store: Arc::new(InMemoryStore::new(monotonic_clock.clone())),
             runtime: Arc::new(FakeRuntime::new()),
             network: Arc::new(FakeNetworkProvider::default()),
+            monotonic_clock,
+            status_clock: Arc::new(TestStatusClock::new(1_750_000_000_000)),
         }
     }
 
@@ -451,9 +485,11 @@ impl World {
                 },
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),
+                restart_backoff_base: Duration::from_secs(5),
+                restart_backoff_max: Duration::from_secs(60),
             },
-            Arc::new(TestMonotonicClock),
-            Arc::new(FixedStatusClock),
+            self.monotonic_clock.clone(),
+            self.status_clock.clone(),
         )
         .unwrap()
     }
@@ -545,6 +581,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             healthcheck_failures: 0,
             restart_attempts: 0,
             restart_pending_attempt: None,
+            restart_not_before: None,
             conditions: Vec::new(),
         },
     }
@@ -566,23 +603,54 @@ async fn put_resource(
     Ok(())
 }
 
-struct TestMonotonicClock;
+#[derive(Default)]
+struct TestMonotonicClock {
+    milliseconds: AtomicU64,
+    changed: Notify,
+}
+
+impl TestMonotonicClock {
+    fn advance(&self, duration: Duration) {
+        let milliseconds = u64::try_from(duration.as_millis()).unwrap();
+        self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        self.changed.notify_waiters();
+    }
+}
 
 #[async_trait]
 impl Clock for TestMonotonicClock {
     fn now(&self) -> MonotonicTime {
-        MonotonicTime::from_duration(Duration::ZERO)
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.milliseconds.load(Ordering::SeqCst),
+        ))
     }
 
-    async fn sleep_until(&self, _deadline: MonotonicTime) {
-        std::future::pending::<()>().await;
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        loop {
+            let changed = self.changed.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            changed.await;
+        }
     }
 }
 
-struct FixedStatusClock;
+struct TestStatusClock(AtomicI64);
 
-impl StatusClock for FixedStatusClock {
+impl TestStatusClock {
+    fn new(milliseconds: i64) -> Self {
+        Self(AtomicI64::new(milliseconds))
+    }
+
+    fn advance(&self, duration: Duration) {
+        let milliseconds = i64::try_from(duration.as_millis()).unwrap();
+        self.0.fetch_add(milliseconds, Ordering::SeqCst);
+    }
+}
+
+impl StatusClock for TestStatusClock {
     fn now(&self) -> Timestamp {
-        Timestamp(1_750_000_000_000)
+        Timestamp(self.0.load(Ordering::SeqCst))
     }
 }

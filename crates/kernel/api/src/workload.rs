@@ -402,6 +402,9 @@ pub struct ReplicaStateStatus {
     /// Attempt durably reserved before a runtime restart and cleared after it is observed running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_pending_attempt: Option<u32>,
+    /// Earliest UTC time at which the pending restart may be attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_not_before: Option<Timestamp>,
     /// Generic health and exhaustion evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

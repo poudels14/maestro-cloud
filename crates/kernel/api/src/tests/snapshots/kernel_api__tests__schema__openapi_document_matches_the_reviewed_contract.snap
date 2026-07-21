@@ -3492,6 +3492,20 @@ expression: openapi_document()
             "minimum": 0,
             "type": "integer"
           },
+          "restartNotBefore": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Earliest UTC time at which the pending restart may be attempted."
+          },
           "restartPendingAttempt": {
             "description": "Attempt durably reserved before a runtime restart and cleared after it is observed running.",
             "format": "uint32",
