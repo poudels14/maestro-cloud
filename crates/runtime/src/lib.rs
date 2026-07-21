@@ -24,6 +24,10 @@ mod containerd_image;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_io;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_network;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_network_linux;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_settings;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_support;

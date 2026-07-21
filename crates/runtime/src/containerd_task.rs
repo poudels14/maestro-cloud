@@ -38,7 +38,7 @@ impl ContainerdRuntime {
         &self,
         handle: &WorkloadHandle,
         container_id: &str,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<u32, RuntimeError> {
         let mounts = containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
             self.channel.clone(),
         )
@@ -54,20 +54,31 @@ impl ContainerdRuntime {
         .into_inner()
         .mounts;
         let paths = prepare_task_files(&self.settings.state_root, handle.workload_id()).await?;
-        containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
-            .create(namespaced(
-                CreateTaskRequest {
-                    container_id: container_id.to_owned(),
-                    rootfs: mounts,
-                    stdout: path_text(&paths.stdout)?,
-                    stderr: path_text(&paths.stderr)?,
-                    ..Default::default()
-                },
-                &self.settings.namespace,
-            )?)
-            .await
-            .map_err(|error| runtime_status(error, handle.workload_id()))?;
-        Ok(())
+        let response =
+            containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
+                .create(namespaced(
+                    CreateTaskRequest {
+                        container_id: container_id.to_owned(),
+                        rootfs: mounts,
+                        stdout: path_text(&paths.stdout)?,
+                        stderr: path_text(&paths.stderr)?,
+                        ..Default::default()
+                    },
+                    &self.settings.namespace,
+                )?)
+                .await
+                .map_err(|error| runtime_status(error, handle.workload_id()))?
+                .into_inner();
+        if response.pid == 0 {
+            Err(RuntimeError::Unavailable {
+                message: format!(
+                    "containerd created task for workload `{}` without a process id",
+                    handle.workload_id()
+                ),
+            })
+        } else {
+            Ok(response.pid)
+        }
     }
 
     pub(crate) async fn start_task(

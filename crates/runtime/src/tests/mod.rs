@@ -12,6 +12,8 @@ mod containerd_fixture;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_image;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_network;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_settings;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_support;

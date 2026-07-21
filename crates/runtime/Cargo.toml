@@ -36,3 +36,8 @@ containerd = ["dep:containerd"]
 tempfile = "=3.27.0"
 test-util = { version = "=0.12.5", package = "parking_lot" }
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-route = "=0.30.0"
+nix = { version = "=0.30.1", features = ["sched"] }
+rtnetlink = "=0.21.0"

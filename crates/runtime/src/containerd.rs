@@ -17,6 +17,7 @@ use crate::containerd_event::ContainerdEventStream;
 use crate::containerd_exec::start_exec;
 use crate::containerd_image::load_image;
 use crate::containerd_io::task_paths;
+use crate::containerd_network::ContainerdNetworkState;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{
     CLUSTER_LABEL, NODE_LABEL, container_id, container_name, is_already_exists, is_not_found,
@@ -36,6 +37,7 @@ pub struct ContainerdRuntime {
     pub(crate) settings: Arc<ContainerdRuntimeSettings>,
     pub(crate) clock: Arc<dyn RuntimeClock>,
     next_exec: Arc<AtomicU64>,
+    pub(crate) network_state: Arc<tokio::sync::Mutex<ContainerdNetworkState>>,
 }
 
 impl ContainerdRuntime {
@@ -68,6 +70,7 @@ impl ContainerdRuntime {
             settings: Arc::new(settings),
             clock,
             next_exec: Arc::new(AtomicU64::new(1)),
+            network_state: Arc::new(tokio::sync::Mutex::new(ContainerdNetworkState::default())),
         })
     }
 
@@ -99,7 +102,11 @@ impl ContainerdRuntime {
 #[async_trait]
 impl WorkloadRuntime for ContainerdRuntime {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::new([RuntimeCapability::Exec, RuntimeCapability::InteractiveExec])
+        Capabilities::new([
+            RuntimeCapability::Exec,
+            RuntimeCapability::InteractiveExec,
+            RuntimeCapability::DynamicNetwork,
+        ])
     }
 
     async fn create(&self, spec: &WorkloadSpec) -> Result<WorkloadHandle, RuntimeError> {
