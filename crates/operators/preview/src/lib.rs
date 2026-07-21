@@ -5,6 +5,7 @@
 //! composition remain outside the derivation core.
 
 mod github;
+mod github_client;
 mod reconciler;
 mod repository;
 mod resource;
@@ -16,6 +17,7 @@ mod source_writer;
 mod writer;
 
 pub use github::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
+pub use github_client::{GithubClientError, GithubPullRequestClient};
 pub use reconciler::{PreviewError, PreviewReconciler, PreviewSettings};
 pub use source_plan::{
     PreviewFeedback, PreviewFeedbackKind, PreviewSourceDiagnostic, PreviewSourcePlan,
