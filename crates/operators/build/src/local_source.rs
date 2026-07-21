@@ -21,29 +21,18 @@ use crate::{BuildRevisionResolver, BuildSourceError, BuildSourceProvider, Prepar
 pub struct LocalBuildSourceProvider {
     workspace_root: PathBuf,
     archive_root: PathBuf,
-    github_token: Option<SecretValue>,
     runner: Arc<dyn GitRunner>,
 }
 
 impl LocalBuildSourceProvider {
     /// Creates a provider with disjoint absolute roots owned by Maestro.
-    pub fn new(
-        workspace_root: PathBuf,
-        archive_root: PathBuf,
-        github_token: Option<SecretValue>,
-    ) -> Result<Self, BuildSourceError> {
-        Self::with_runner(
-            workspace_root,
-            archive_root,
-            github_token,
-            Arc::new(ProcessGitRunner),
-        )
+    pub fn new(workspace_root: PathBuf, archive_root: PathBuf) -> Result<Self, BuildSourceError> {
+        Self::with_runner(workspace_root, archive_root, Arc::new(ProcessGitRunner))
     }
 
     fn with_runner(
         workspace_root: PathBuf,
         archive_root: PathBuf,
-        github_token: Option<SecretValue>,
         runner: Arc<dyn GitRunner>,
     ) -> Result<Self, BuildSourceError> {
         validate_root("build workspace", &workspace_root)?;
@@ -56,7 +45,6 @@ impl LocalBuildSourceProvider {
         Ok(Self {
             workspace_root,
             archive_root,
-            github_token,
             runner,
         })
     }
@@ -67,13 +55,14 @@ impl LocalBuildSourceProvider {
         repository: &str,
         requested_revision: &str,
         resolved_revision: Option<&str>,
+        github_token: Option<&SecretValue>,
     ) -> Result<PreparedBuildSource, BuildSourceError> {
         validate_requested_revision(requested_revision)?;
         let repository = normalize_repository(repository)?;
         let root = ensure_root(&self.workspace_root).await?;
         let workspace = root.join(build_id.as_str());
         let state = validate_workspace(&workspace).await?;
-        let environment = git_environment(&repository, self.github_token.as_ref())?;
+        let environment = git_environment(&repository, github_token)?;
         if matches!(state, WorkspaceState::Incomplete) {
             tokio::fs::remove_dir_all(&workspace)
                 .await
@@ -238,14 +227,21 @@ impl BuildSourceProvider for LocalBuildSourceProvider {
         build_id: &BuildId,
         source: &BuildSource,
         resolved_revision: Option<&str>,
+        github_token: Option<&SecretValue>,
     ) -> Result<PreparedBuildSource, BuildSourceError> {
         match source {
             BuildSource::Git {
                 repository,
                 revision,
             } => {
-                self.prepare_git(build_id, repository, revision, resolved_revision)
-                    .await
+                self.prepare_git(
+                    build_id,
+                    repository,
+                    revision,
+                    resolved_revision,
+                    github_token,
+                )
+                .await
             }
             BuildSource::Tarball { archive_id } => {
                 self.prepare_archive(archive_id, resolved_revision).await
@@ -275,6 +271,7 @@ impl BuildRevisionResolver for LocalBuildSourceProvider {
     async fn resolve_revision(
         &self,
         source: &BuildSource,
+        github_token: Option<&SecretValue>,
     ) -> Result<Option<String>, BuildSourceError> {
         let BuildSource::Git {
             repository,
@@ -286,7 +283,7 @@ impl BuildRevisionResolver for LocalBuildSourceProvider {
         validate_requested_revision(revision)?;
         let repository = normalize_repository(repository)?;
         let reference = format!("refs/heads/{revision}");
-        let environment = git_environment(&repository, self.github_token.as_ref())?;
+        let environment = git_environment(&repository, github_token)?;
         let output = self
             .run_network(
                 GitInvocation::new([

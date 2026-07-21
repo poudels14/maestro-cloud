@@ -222,7 +222,10 @@ fn service_spec(revision: &str) -> ServiceSpec {
                 dockerfile: "Dockerfile".to_string(),
                 watch: true,
                 environment: BTreeMap::new(),
-                secrets: BTreeMap::new(),
+                secrets: BTreeMap::from([(
+                    "GH_TOKEN".to_owned(),
+                    kernel_api::SecretValue::new("github-watch-secret"),
+                )]),
             },
         },
         command: None,
@@ -256,6 +259,7 @@ fn metadata<Id>(id: Id, generation: Generation) -> ObjectMeta<Id> {
 pub(super) struct FakeRevisionResolver {
     results: Mutex<VecDeque<Result<Option<String>, BuildSourceError>>>,
     calls: Mutex<Vec<BuildSource>>,
+    github_tokens: Mutex<Vec<Option<String>>>,
 }
 
 impl FakeRevisionResolver {
@@ -263,6 +267,7 @@ impl FakeRevisionResolver {
         Self {
             results: Mutex::new(results.into()),
             calls: Mutex::new(Vec::new()),
+            github_tokens: Mutex::new(Vec::new()),
         }
     }
 
@@ -273,6 +278,10 @@ impl FakeRevisionResolver {
     pub(super) fn calls(&self) -> Vec<BuildSource> {
         lock(&self.calls).clone()
     }
+
+    pub(super) fn github_tokens(&self) -> Vec<Option<String>> {
+        lock(&self.github_tokens).clone()
+    }
 }
 
 #[async_trait]
@@ -280,8 +289,10 @@ impl BuildRevisionResolver for FakeRevisionResolver {
     async fn resolve_revision(
         &self,
         source: &BuildSource,
+        github_token: Option<&kernel_api::SecretValue>,
     ) -> Result<Option<String>, BuildSourceError> {
         lock(&self.calls).push(source.clone());
+        lock(&self.github_tokens).push(github_token.map(|token| token.expose().to_owned()));
         let mut results = lock(&self.results);
         if results.len() > 1 {
             match results.pop_front() {

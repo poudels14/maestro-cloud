@@ -18,10 +18,11 @@ use kernel_store::{
 };
 use node_agent::{FirewallBackend, FirewallBackendError, NodeFirewallAgent, StatusClock};
 
+use super::build_backend::FakeBuildBackend;
 use super::orchestration_fixture::{
     ManualTimestampClock, NoopClock, network, node, ready_replica, route, service, settings,
 };
-use crate::{OperatorBackends, OperatorSuite};
+use crate::OperatorSuite;
 
 pub(super) type HarnessResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
@@ -173,6 +174,8 @@ impl RolloutWorld {
 
         let ingress = Arc::new(RecordingIngress::default());
         let timestamp = Arc::new(ManualTimestampClock::new(10_000));
+        let (operator_backends, _build_backend) =
+            FakeBuildBackend::operator_backends(ingress.clone());
         let mut operator_settings = settings()?;
         if !seed_service {
             operator_settings.scheduler.replacement_grace = Duration::from_secs(1);
@@ -186,9 +189,7 @@ impl RolloutWorld {
             monotonic,
             timestamp.clone(),
             operator_settings,
-            OperatorBackends {
-                ingress: ingress.clone(),
-            },
+            operator_backends,
         )?;
         Ok(Self {
             keys,

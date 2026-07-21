@@ -175,10 +175,16 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                 dockerfile: dockerfile.to_string(),
                 watch: false,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
-                secrets: BTreeMap::from([(
-                    "TOKEN".to_string(),
-                    kernel_api::SecretValue::new("secret-value"),
-                )]),
+                secrets: BTreeMap::from([
+                    (
+                        "GH_TOKEN".to_string(),
+                        kernel_api::SecretValue::new("github-secret"),
+                    ),
+                    (
+                        "TOKEN".to_string(),
+                        kernel_api::SecretValue::new("secret-value"),
+                    ),
+                ]),
             },
         },
         status: BuildStatus {
@@ -193,6 +199,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
 pub(super) struct RecordingSource {
     results: Mutex<VecDeque<Result<PreparedBuildSource, BuildSourceError>>>,
     calls: Mutex<Vec<Option<String>>>,
+    github_tokens: Mutex<Vec<Option<String>>>,
     cleanup_calls: Mutex<Vec<BuildId>>,
 }
 
@@ -205,6 +212,7 @@ impl RecordingSource {
         Self {
             results: Mutex::new(results.into()),
             calls: Mutex::new(Vec::new()),
+            github_tokens: Mutex::new(Vec::new()),
             cleanup_calls: Mutex::new(Vec::new()),
         }
     }
@@ -216,6 +224,10 @@ impl RecordingSource {
     pub(super) fn cleanup_calls(&self) -> Vec<BuildId> {
         lock(&self.cleanup_calls).clone()
     }
+
+    pub(super) fn github_tokens(&self) -> Vec<Option<String>> {
+        lock(&self.github_tokens).clone()
+    }
 }
 
 #[async_trait]
@@ -225,8 +237,10 @@ impl BuildSourceProvider for RecordingSource {
         _build_id: &BuildId,
         _source: &BuildSource,
         resolved_revision: Option<&str>,
+        github_token: Option<&kernel_api::SecretValue>,
     ) -> Result<PreparedBuildSource, BuildSourceError> {
         lock(&self.calls).push(resolved_revision.map(str::to_string));
+        lock(&self.github_tokens).push(github_token.map(|token| token.expose().to_owned()));
         let mut results = lock(&self.results);
         if results.len() > 1 {
             match results.pop_front() {

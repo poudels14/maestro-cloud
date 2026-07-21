@@ -38,8 +38,8 @@ pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
 pub use operators::{
-    OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload, OperatorSettings,
-    OperatorSuite, OperatorSuiteError,
+    BuildOperatorBackends, OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload,
+    OperatorSettings, OperatorSuite, OperatorSuiteError,
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};

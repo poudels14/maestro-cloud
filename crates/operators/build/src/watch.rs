@@ -97,7 +97,7 @@ impl BuildWatchReconciler {
         mut service: Service,
         context: &ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        let Some(source) = watched_source(&service)? else {
+        let Some((source, github_token)) = watched_source(&service)? else {
             return Ok(Action::Done);
         };
         let requeue = Action::Requeue(self.settings.poll_interval);
@@ -131,7 +131,7 @@ impl BuildWatchReconciler {
         };
         let remote = self
             .resolver
-            .resolve_revision(source)
+            .resolve_revision(source, github_token)
             .await
             .map_err(retry_source)?
             .ok_or_else(|| ReconcileError::Terminal {
@@ -221,7 +221,9 @@ impl Reconciler for BuildWatchReconciler {
     }
 }
 
-fn watched_source(service: &Service) -> Result<Option<&BuildSource>, ReconcileError> {
+fn watched_source(
+    service: &Service,
+) -> Result<Option<(&BuildSource, Option<&kernel_api::SecretValue>)>, ReconcileError> {
     let ArtifactTemplate::Build { template } = &service.spec.artifact else {
         return Ok(None);
     };
@@ -229,7 +231,7 @@ fn watched_source(service: &Service) -> Result<Option<&BuildSource>, ReconcileEr
         return Ok(None);
     }
     match &template.source {
-        source @ BuildSource::Git { .. } => Ok(Some(source)),
+        source @ BuildSource::Git { .. } => Ok(Some((source, template.secrets.get("GH_TOKEN")))),
         BuildSource::Tarball { .. } => Err(ReconcileError::Terminal {
             reason: "UnsupportedBuildWatchSource".to_string(),
             message: "build watch requires a Git source".to_string(),

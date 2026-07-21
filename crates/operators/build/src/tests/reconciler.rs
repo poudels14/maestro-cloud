@@ -41,6 +41,13 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
     assert_eq!(condition.reason.0, "BuildSucceeded");
     assert_eq!(condition.last_transition_time.0, 12_345);
     assert_eq!(source.calls(), [None, Some("commit-abc".to_string())]);
+    assert_eq!(
+        source.github_tokens(),
+        [
+            Some("github-secret".to_owned()),
+            Some("github-secret".to_owned())
+        ]
+    );
 
     let requests = artifacts.calls();
     assert_eq!(requests.len(), 1);
@@ -52,6 +59,13 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
     assert_eq!(
         request.secrets.get("TOKEN").map(|secret| secret.expose()),
         Some("secret-value")
+    );
+    assert_eq!(
+        request
+            .secrets
+            .get("GH_TOKEN")
+            .map(|secret| secret.expose()),
+        Some("github-secret")
     );
     assert!(request.tags.is_empty());
     assert_eq!(

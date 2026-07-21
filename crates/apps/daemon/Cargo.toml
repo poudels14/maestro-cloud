@@ -20,6 +20,7 @@ base64 = "=0.22.1"
 chrono.workspace = true
 clap.workspace = true
 cluster = { version = "0.1.0", path = "../../cluster" }
+build = { version = "0.1.0", path = "../../operators/build" }
 deployment = { version = "0.1.0", path = "../../operators/deployment" }
 dns = { version = "0.1.0", path = "../../operators/dns" }
 firewall = { version = "0.1.0", path = "../../operators/firewall" }

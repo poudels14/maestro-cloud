@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use build::LocalBuildSourceProvider;
 use cluster::{
     ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle,
     StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
@@ -22,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::log_backup_config::configure_log_maintenance;
 use crate::{
-    AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    DatadogLaunchConfig, LogBackupLaunchConfig, OperatorLeaderWorkload, OperatorSettings,
-    RunningDaemon,
+    AgentStore, BuildOperatorBackends, Daemon, DaemonPlan, DaemonRoleDependencies,
+    DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig, LogBackupLaunchConfig,
+    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -225,11 +226,21 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         None => generate_instance_id()?,
     };
     let timestamp_clock = Arc::new(SystemTimestampClock);
+    let build_root = data_directory.join("build");
+    let build_source = Arc::new(LocalBuildSourceProvider::new(
+        build_root.join("workspaces"),
+        build_root.join("archives"),
+    )?);
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
         timestamp_clock.clone(),
         OperatorSettings::production(&cluster)?,
+        BuildOperatorBackends {
+            source: build_source.clone(),
+            revisions: build_source,
+            artifacts: containerd.clone(),
+        },
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
@@ -469,6 +480,9 @@ pub enum DaemonLaunchError {
     /// Static operator views could not be constructed from cluster settings.
     #[error(transparent)]
     OperatorSettings(#[from] crate::OperatorSuiteError),
+    /// Build source roots or Git integration settings were invalid.
+    #[error(transparent)]
+    BuildSource(#[from] build::BuildSourceError),
     /// Role planning, startup, or rollback failed.
     #[error(transparent)]
     Daemon(#[from] crate::DaemonError),

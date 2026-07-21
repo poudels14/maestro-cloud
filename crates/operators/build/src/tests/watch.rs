@@ -44,6 +44,10 @@ async fn watcher_persists_a_new_remote_revision() -> WatchTestResult {
 
     assert_eq!(desired_revision(&world.service().await?), Some(REVISION_B));
     assert_eq!(resolver.calls().len(), 1);
+    assert_eq!(
+        resolver.github_tokens(),
+        [Some("github-watch-secret".to_owned())]
+    );
     Ok(())
 }
 
@@ -185,6 +189,7 @@ impl crate::BuildRevisionResolver for RacingResolver {
     async fn resolve_revision(
         &self,
         _source: &BuildSource,
+        _github_token: Option<&kernel_api::SecretValue>,
     ) -> Result<Option<String>, BuildSourceError> {
         let stored = self
             .store

@@ -6,10 +6,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
-    ArtifactTemplate, ClusterId, Deployment, ExecPolicy, Generation, NodeApiAccess, NodeFirewall,
-    NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus,
-    NodeRole, Object, ObjectMeta, PlacementConstraint, ResourceKind, ResourceName,
-    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
+    ArtifactTemplate, Build, BuildId, BuildPhase, BuildSource, BuildSpec, BuildStatus,
+    BuildTemplate, ClusterId, Deployment, DeploymentId, ExecPolicy, Generation, NodeApiAccess,
+    NodeFirewall, NodeId, NodeInstanceId, NodeNetwork, NodeNetworkId, NodeNetworkSpec,
+    NodeNetworkStatus, NodeRole, Object, ObjectMeta, PlacementConstraint, ResourceKind,
+    ResourceName, ResourceRevision, RolloutState, SecretValue, Service, ServiceId, ServiceSpec,
+    ServiceStatus, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -18,9 +20,11 @@ use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
     SessionBinding, Store,
 };
+use tokio::sync::watch;
 
-use crate::{OperatorBackends, OperatorSettings, OperatorSuite};
+use crate::{OperatorSettings, OperatorSuite};
 
+use super::build_backend::FakeBuildBackend;
 use super::cluster_with_nodes;
 
 #[tokio::test]
@@ -58,21 +62,22 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     ));
     put(&store, &keys, "Service", &service()?).await?;
     put(&store, &keys, "NodeNetwork", &network()?).await?;
+    put(&store, &keys, "Build", &queued_build()?).await?;
     let ingress = Arc::new(RecordingIngress::default());
+    let (backends, build_backend) = FakeBuildBackend::operator_backends(ingress.clone());
     let suite = OperatorSuite::new(
         cluster_id,
         fenced,
         monotonic,
         Arc::new(FixedTimestampClock),
         settings()?,
-        OperatorBackends {
-            ingress: ingress.clone(),
-        },
+        backends,
     )?;
 
     let first = suite.reconcile_snapshot().await?;
     assert_eq!(first.firewall_baselines, 1);
     assert_eq!(first.deployment, 0);
+    assert_eq!(first.build_watch, 1);
     let stored = one::<Service>(&store, &keys, "Service").await?;
     assert_eq!(stored.meta.finalizers.len(), 4);
 
@@ -93,16 +98,35 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     );
     let desired_firewall = one::<NodeFirewall>(&store, &keys, "NodeFirewall").await?;
     assert!(desired_firewall.spec.script.contains("tcp dport 53 accept"));
-    let ingress_changes = ingress
-        .changes
-        .lock()
-        .map_err(|_| "ingress change lock poisoned")?;
-    assert_eq!(ingress_changes.len(), 1);
-    assert!(
-        ingress_changes
-            .first()
-            .is_some_and(|change| change.active.is_none())
+    {
+        let ingress_changes = ingress
+            .changes
+            .lock()
+            .map_err(|_| "ingress change lock poisoned")?;
+        assert_eq!(ingress_changes.len(), 1);
+        assert!(
+            ingress_changes
+                .first()
+                .is_some_and(|change| change.active.is_none())
+        );
+    }
+
+    assert_eq!(suite.reconcile_snapshot().await?.builds, 1);
+    assert_eq!(suite.reconcile_snapshot().await?.builds, 1);
+    let build_pass = suite.reconcile_snapshot().await?;
+    assert_eq!(build_pass.builds, 1);
+    let stored_build = one::<Build>(&store, &keys, "Build").await?;
+    assert_eq!(stored_build.status.phase, BuildPhase::Succeeded);
+    assert_eq!(build_backend.builds().len(), 1);
+    assert_eq!(
+        build_backend.source_tokens(),
+        [
+            Some("github-token".to_owned()),
+            Some("github-token".to_owned())
+        ]
     );
+    let (_shutdown_tx, shutdown) = watch::channel(true);
+    suite.run(shutdown).await?;
     Ok(())
 }
 
@@ -200,6 +224,9 @@ fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
             control_allow_cidrs: vec!["10.0.0.0/8".to_string()],
             system_services: BTreeSet::new(),
         },
+        build_watch: build::BuildWatchSettings {
+            poll_interval: Duration::from_secs(60),
+        },
     })
 }
 
@@ -246,6 +273,35 @@ fn network() -> Result<NodeNetwork, kernel_api::InvalidIdentifier> {
         },
         status: NodeNetworkStatus {
             applied_generation: Generation(1),
+            conditions: Vec::new(),
+        },
+    })
+}
+
+fn queued_build() -> Result<Build, kernel_api::InvalidIdentifier> {
+    Ok(Object {
+        meta: metadata(BuildId::new("build-1")?),
+        spec: BuildSpec {
+            service_id: ServiceId::new("api")?,
+            deployment_id: DeploymentId::new("deployment-build-1")?,
+            template: BuildTemplate {
+                source: BuildSource::Git {
+                    repository: "https://github.com/acme/api.git".to_owned(),
+                    revision: "main".to_owned(),
+                },
+                dockerfile: "Dockerfile".to_owned(),
+                watch: false,
+                environment: BTreeMap::new(),
+                secrets: BTreeMap::from([(
+                    "GH_TOKEN".to_owned(),
+                    SecretValue::new("github-token"),
+                )]),
+            },
+        },
+        status: BuildStatus {
+            phase: BuildPhase::Queued,
+            image_digest: None,
+            source_revision: None,
             conditions: Vec::new(),
         },
     })

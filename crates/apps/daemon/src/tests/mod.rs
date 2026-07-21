@@ -1,3 +1,4 @@
+mod build_backend;
 mod control_plane;
 mod control_plane_resources;
 mod control_plane_store;

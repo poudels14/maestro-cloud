@@ -13,16 +13,18 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestResult {
     let paths = TestPaths::new()?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
+    let github_token = SecretValue::new("github-secret");
     let provider = LocalBuildSourceProvider::with_runner(
         paths.workspaces.clone(),
         paths.archives.clone(),
-        Some(SecretValue::new("github-secret")),
         runner.clone(),
     )?;
     let build_id = BuildId::new("build-1")?;
     let source = git_source("git@github.com:acme/api.git", "main");
 
-    let prepared = provider.prepare(&build_id, &source, None).await?;
+    let prepared = provider
+        .prepare(&build_id, &source, None, Some(&github_token))
+        .await?;
     assert_eq!(prepared.revision, TEST_REVISION);
     assert_eq!(
         prepared.artifact_source,
@@ -32,7 +34,7 @@ async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestRes
         }
     );
     provider
-        .prepare(&build_id, &source, Some(TEST_REVISION))
+        .prepare(&build_id, &source, Some(TEST_REVISION), Some(&github_token))
         .await?;
 
     let calls = runner.calls();
@@ -74,15 +76,15 @@ async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestRes
 async fn remote_revision_resolves_only_the_exact_branch_head() -> TestResult {
     let paths = TestPaths::new()?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
-    let provider = LocalBuildSourceProvider::with_runner(
-        paths.workspaces,
-        paths.archives,
-        Some(SecretValue::new("github-secret")),
-        runner.clone(),
-    )?;
+    let github_token = SecretValue::new("github-secret");
+    let provider =
+        LocalBuildSourceProvider::with_runner(paths.workspaces, paths.archives, runner.clone())?;
 
     let revision = provider
-        .resolve_revision(&git_source("https://github.com/acme/api.git", "main"))
+        .resolve_revision(
+            &git_source("https://github.com/acme/api.git", "main"),
+            Some(&github_token),
+        )
         .await?;
 
     assert_eq!(revision.as_deref(), Some(TEST_REVISION));
@@ -105,18 +107,14 @@ async fn archive_source_hashes_content_and_rejects_mutation() -> TestResult {
     let archive = paths.archives.join(archive_id.as_str());
     tokio::fs::write(&archive, b"first archive").await?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
-    let provider = LocalBuildSourceProvider::with_runner(
-        paths.workspaces,
-        paths.archives,
-        None,
-        runner.clone(),
-    )?;
+    let provider =
+        LocalBuildSourceProvider::with_runner(paths.workspaces, paths.archives, runner.clone())?;
     let source = BuildSource::Tarball {
         archive_id: archive_id.clone(),
     };
 
     let prepared = provider
-        .prepare(&BuildId::new("build-1")?, &source, None)
+        .prepare(&BuildId::new("build-1")?, &source, None, None)
         .await?;
     assert!(prepared.revision.starts_with("sha256:"));
     assert_eq!(
@@ -127,13 +125,23 @@ async fn archive_source_hashes_content_and_rejects_mutation() -> TestResult {
         }
     );
     provider
-        .prepare(&BuildId::new("build-1")?, &source, Some(&prepared.revision))
+        .prepare(
+            &BuildId::new("build-1")?,
+            &source,
+            Some(&prepared.revision),
+            None,
+        )
         .await?;
     tokio::fs::write(&archive, b"changed archive").await?;
 
     let error = expect_source_error(
         provider
-            .prepare(&BuildId::new("build-1")?, &source, Some(&prepared.revision))
+            .prepare(
+                &BuildId::new("build-1")?,
+                &source,
+                Some(&prepared.revision),
+                None,
+            )
             .await,
         "archive mutation must fail",
     )?;
@@ -153,7 +161,6 @@ async fn cleanup_removes_only_the_build_workspace() -> TestResult {
     let provider = LocalBuildSourceProvider::with_runner(
         paths.workspaces,
         paths.archives,
-        None,
         Arc::new(FakeGitRunner::new(FakeGitMode::Success)),
     )?;
 
@@ -169,12 +176,8 @@ async fn cleanup_removes_only_the_build_workspace() -> TestResult {
 async fn git_source_rejects_credential_urls_and_option_revisions_before_spawn() -> TestResult {
     let paths = TestPaths::new()?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
-    let provider = LocalBuildSourceProvider::with_runner(
-        paths.workspaces,
-        paths.archives,
-        None,
-        runner.clone(),
-    )?;
+    let provider =
+        LocalBuildSourceProvider::with_runner(paths.workspaces, paths.archives, runner.clone())?;
     let build_id = BuildId::new("build-1")?;
 
     let credential_error = expect_source_error(
@@ -182,6 +185,7 @@ async fn git_source_rejects_credential_urls_and_option_revisions_before_spawn() 
             .prepare(
                 &build_id,
                 &git_source("https://user@github.com/acme/api.git", "main"),
+                None,
                 None,
             )
             .await,
@@ -192,6 +196,7 @@ async fn git_source_rejects_credential_urls_and_option_revisions_before_spawn() 
             .prepare(
                 &build_id,
                 &git_source("https://github.com/acme/api.git", "--upload-pack=bad"),
+                None,
                 None,
             )
             .await,
@@ -211,18 +216,15 @@ async fn git_source_rejects_credential_urls_and_option_revisions_before_spawn() 
 async fn git_transport_failure_is_retryable_and_does_not_create_checkout() -> TestResult {
     let paths = TestPaths::new()?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Unavailable));
-    let provider = LocalBuildSourceProvider::with_runner(
-        paths.workspaces.clone(),
-        paths.archives,
-        None,
-        runner,
-    )?;
+    let provider =
+        LocalBuildSourceProvider::with_runner(paths.workspaces.clone(), paths.archives, runner)?;
 
     let error = expect_source_error(
         provider
             .prepare(
                 &BuildId::new("build-1")?,
                 &git_source("https://github.com/acme/api.git", "main"),
+                None,
                 None,
             )
             .await,
@@ -241,17 +243,14 @@ async fn incomplete_checkout_is_removed_and_cloned_again() -> TestResult {
     tokio::fs::create_dir_all(&workspace).await?;
     tokio::fs::write(workspace.join("partial"), b"clone interrupted").await?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Success));
-    let provider = LocalBuildSourceProvider::with_runner(
-        paths.workspaces,
-        paths.archives,
-        None,
-        runner.clone(),
-    )?;
+    let provider =
+        LocalBuildSourceProvider::with_runner(paths.workspaces, paths.archives, runner.clone())?;
 
     provider
         .prepare(
             &BuildId::new("build-1")?,
             &git_source("https://github.com/acme/api.git", "main"),
+            None,
             None,
         )
         .await?;
@@ -412,7 +411,6 @@ async fn cleanup_refuses_a_symlinked_workspace() -> TestResult {
     let provider = LocalBuildSourceProvider::with_runner(
         paths.workspaces.clone(),
         paths.archives,
-        None,
         Arc::new(FakeGitRunner::new(FakeGitMode::Success)),
     )?;
 

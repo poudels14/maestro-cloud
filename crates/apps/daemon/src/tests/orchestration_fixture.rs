@@ -46,6 +46,9 @@ pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error +
             control_allow_cidrs: vec!["10.0.0.0/8".to_string()],
             system_services: BTreeSet::new(),
         },
+        build_watch: build::BuildWatchSettings {
+            poll_interval: Duration::from_secs(60),
+        },
     })
 }
 

@@ -97,7 +97,12 @@ impl BuildReconciler {
         }
         match self
             .source
-            .prepare(&build.meta.id, &build.spec.template.source, None)
+            .prepare(
+                &build.meta.id,
+                &build.spec.template.source,
+                None,
+                github_token(&build),
+            )
             .await
         {
             Ok(prepared) => {
@@ -143,7 +148,12 @@ impl BuildReconciler {
         };
         let prepared = match self
             .source
-            .prepare(&build.meta.id, &build.spec.template.source, Some(&revision))
+            .prepare(
+                &build.meta.id,
+                &build.spec.template.source,
+                Some(&revision),
+                github_token(&build),
+            )
             .await
         {
             Ok(prepared) => prepared,
@@ -268,6 +278,10 @@ impl BuildReconciler {
             .retain(|existing| existing.condition_type.0 != READY_CONDITION);
         build.status.conditions.push(condition);
     }
+}
+
+fn github_token(build: &Build) -> Option<&kernel_api::SecretValue> {
+    build.spec.template.secrets.get("GH_TOKEN")
 }
 
 #[async_trait]
