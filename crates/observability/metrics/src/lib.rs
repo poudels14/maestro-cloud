@@ -30,7 +30,8 @@ pub use fake::{InMemoryMetricStore, InMemoryMetricStoreRuntime, RecordingMetricS
 #[cfg(any(test, feature = "test-util"))]
 pub use host_fake::InMemoryHostMetricStore;
 pub use host_model::{
-    HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostResourceMetricPoint,
+    HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostMetricValidationError,
+    HostResourceMetricPoint,
 };
 pub use host_pipeline::HostMetricPipeline;
 pub use host_store::HostMetricStore;

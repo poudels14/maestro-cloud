@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use kernel_api::{NodeId, WorkloadId};
 
 use crate::{
-    MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId,
-    MetricSequence, MetricSink, MetricSinkError, MetricSinkId, MetricStore, MetricStoreError,
-    MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
+    HostMetricStore, InMemoryHostMetricStore, MetricAppendReport, MetricDeliveryStore,
+    MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSink, MetricSinkError,
+    MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
+    SequencedMetricPoint, WorkloadMetricPoint,
 };
 
 /// Deterministic idempotent metric store for pipeline and composition tests.
@@ -180,6 +181,7 @@ impl MetricDeliveryStore for InMemoryMetricStore {
 /// No-op lifecycle owner for an in-memory metric store used by composition tests.
 pub struct InMemoryMetricStoreRuntime {
     store: Arc<InMemoryMetricStore>,
+    host_store: Arc<InMemoryHostMetricStore>,
 }
 
 impl InMemoryMetricStoreRuntime {
@@ -187,12 +189,18 @@ impl InMemoryMetricStoreRuntime {
     pub fn new() -> Self {
         Self {
             store: Arc::new(InMemoryMetricStore::new()),
+            host_store: Arc::new(InMemoryHostMetricStore::new()),
         }
     }
 
     /// Returns a typed handle for inspecting committed points.
     pub fn store_handle(&self) -> Arc<InMemoryMetricStore> {
         self.store.clone()
+    }
+
+    /// Returns a typed handle for inspecting committed host points.
+    pub fn host_store_handle(&self) -> Arc<InMemoryHostMetricStore> {
+        self.host_store.clone()
     }
 }
 
@@ -210,6 +218,10 @@ impl MetricStoreRuntime for InMemoryMetricStoreRuntime {
 
     fn delivery_store(&self) -> Arc<dyn MetricDeliveryStore> {
         self.store.clone()
+    }
+
+    fn host_store(&self) -> Arc<dyn HostMetricStore> {
+        self.host_store.clone()
     }
 
     async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {

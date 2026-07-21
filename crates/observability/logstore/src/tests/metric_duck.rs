@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use metrics::{
-    MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId, MetricStore,
-    WorkloadMetricPoint,
+    HostMetricStore, MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId,
+    MetricStore, WorkloadMetricPoint,
 };
 use runtime::WorkloadMetadata;
 
@@ -19,6 +19,7 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     )?)
     .await?;
     metrics::conformance::check_metric_store(runtime.store().as_ref()).await?;
+    metrics::conformance::check_host_metric_store(runtime.store().as_ref()).await?;
     runtime.shutdown().await?;
 
     let delivery = DuckMetricStoreRuntime::open(DuckStoreSettings::new(
@@ -47,6 +48,7 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
     next.network_receive_bytes = Some(150);
     next.network_transmit_bytes = Some(275);
     let runtime = DuckMetricStoreRuntime::open(settings.clone()).await?;
+    let host = metrics::conformance::host_metric_point("node-1", 1, 1_024)?;
     assert_eq!(
         runtime
             .store()
@@ -54,6 +56,14 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
             .await?
             .committed,
         2
+    );
+    assert_eq!(
+        runtime
+            .store()
+            .append_host_metrics(std::slice::from_ref(&host))
+            .await?
+            .committed,
+        1
     );
     runtime
         .store()
@@ -66,6 +76,14 @@ async fn duck_metric_store_replays_persisted_points_after_restart()
         restarted
             .store()
             .append(std::slice::from_ref(&next))
+            .await?
+            .deduplicated,
+        1
+    );
+    assert_eq!(
+        restarted
+            .store()
+            .append_host_metrics(std::slice::from_ref(&host))
             .await?
             .deduplicated,
         1
@@ -129,6 +147,15 @@ async fn duck_metric_store_migrates_v1_points_into_stable_delivery_order()
     drop(connection);
 
     let runtime = DuckMetricStoreRuntime::open(DuckStoreSettings::new(path, 8)?).await?;
+    let host = metrics::conformance::host_metric_point("node-1", 1, 1_024)?;
+    assert_eq!(
+        runtime
+            .store()
+            .append_host_metrics(&[host])
+            .await?
+            .committed,
+        1
+    );
     let migrated = runtime.store().read_after(None, 8).await?;
 
     assert_eq!(migrated.len(), 1);

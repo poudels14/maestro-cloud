@@ -35,7 +35,11 @@ impl HostMetricStore for InMemoryHostMetricStore {
         let mut pending = BTreeMap::<HostMetricRecordId, HostMetricPoint>::new();
         let mut deduplicated = 0_usize;
         for point in points {
-            validate(point)?;
+            point
+                .validate()
+                .map_err(|error| MetricStoreError::Rejected {
+                    message: error.to_string(),
+                })?;
             let existing = pending.get(&point.id).or_else(|| committed.get(&point.id));
             match existing {
                 Some(existing) if existing == point => {
@@ -63,44 +67,10 @@ impl HostMetricStore for InMemoryHostMetricStore {
     }
 }
 
-fn validate(point: &HostMetricPoint) -> Result<(), MetricStoreError> {
-    if point.resources.is_none() && point.disks.is_none() {
-        return Err(rejected("host metric point has no collected telemetry"));
-    }
-    if point.resources.is_some_and(|resources| {
-        resources.cpu_idle_ticks > resources.cpu_total_ticks
-            || resources.memory_used_bytes > resources.memory_total_bytes
-    }) {
-        return Err(rejected(
-            "host resource values exceed their corresponding totals",
-        ));
-    }
-    let mut mounts = BTreeMap::new();
-    if point.disks.as_ref().is_some_and(|disks| {
-        disks.iter().any(|disk| {
-            disk.mount_point.is_empty()
-                || !disk.mount_point.starts_with('/')
-                || disk.name.is_empty()
-                || disk.file_system.is_empty()
-                || disk.available_bytes > disk.total_bytes
-                || mounts.insert(&disk.mount_point, ()).is_some()
-        })
-    }) {
-        return Err(rejected("host disk inventory contains invalid values"));
-    }
-    Ok(())
-}
-
 fn lock(
     points: &Mutex<BTreeMap<HostMetricRecordId, HostMetricPoint>>,
 ) -> Result<MutexGuard<'_, BTreeMap<HostMetricRecordId, HostMetricPoint>>, MetricStoreError> {
     points.lock().map_err(|_| MetricStoreError::Unavailable {
         message: "in-memory host metric store lock was poisoned".to_owned(),
     })
-}
-
-fn rejected(message: impl Into<String>) -> MetricStoreError {
-    MetricStoreError::Rejected {
-        message: message.into(),
-    }
 }

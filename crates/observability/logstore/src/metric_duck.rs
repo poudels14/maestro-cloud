@@ -3,9 +3,9 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use metrics::{
-    MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError, MetricSequence,
-    MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
-    SequencedMetricPoint, WorkloadMetricPoint,
+    HostMetricPoint, HostMetricStore, MetricAppendReport, MetricDeliveryStore,
+    MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
+    MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -15,6 +15,10 @@ use crate::{DuckStoreError, DuckStoreSettings};
 enum Command {
     Append {
         points: Vec<WorkloadMetricPoint>,
+        response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
+    },
+    AppendHost {
+        points: Vec<HostMetricPoint>,
         response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
     },
     ReadAfter {
@@ -139,6 +143,28 @@ impl MetricStore for DuckMetricStore {
 }
 
 #[async_trait]
+impl HostMetricStore for DuckMetricStore {
+    async fn append_host_metrics(
+        &self,
+        points: &[HostMetricPoint],
+    ) -> Result<MetricAppendReport, MetricStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::AppendHost {
+                points: points.to_vec(),
+                response,
+            })
+            .await
+            .map_err(|_| MetricStoreError::Unavailable {
+                message: "DuckDB metric writer stopped before accepting host append".to_owned(),
+            })?;
+        result.await.map_err(|_| MetricStoreError::Unavailable {
+            message: "DuckDB metric writer stopped before completing host append".to_owned(),
+        })?
+    }
+}
+
+#[async_trait]
 impl MetricDeliveryStore for DuckMetricStore {
     async fn read_after(
         &self,
@@ -206,6 +232,10 @@ impl MetricStoreRuntime for DuckMetricStoreRuntime {
         self.store.clone()
     }
 
+    fn host_store(&self) -> Arc<dyn HostMetricStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {
         DuckMetricStoreRuntime::shutdown(*self)
             .await
@@ -236,6 +266,9 @@ fn run_worker(
         match command {
             Command::Append { points, response } => {
                 let _ignored = response.send(metric_schema::append(&mut connection, &points));
+            }
+            Command::AppendHost { points, response } => {
+                let _ignored = response.send(metric_schema::append_host(&mut connection, &points));
             }
             Command::ReadAfter {
                 cursor,
