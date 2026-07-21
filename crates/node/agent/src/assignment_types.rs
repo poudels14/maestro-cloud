@@ -39,6 +39,8 @@ pub struct AssignmentReconcileReport {
     pub running: usize,
     /// Exited workloads restored using a durably accounted restart attempt.
     pub restarted: usize,
+    /// Missing ReplicaState resources created for scheduler-owned assignments.
+    pub replica_states_created: usize,
     /// Earliest wall-clock deadline at which pending work should be retried.
     pub requeue_at: Option<Timestamp>,
     /// Assignments left pending or failed with a status condition.

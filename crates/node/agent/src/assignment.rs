@@ -20,6 +20,7 @@ use crate::assignment_node_api::{active_node_api_workloads, mount_node_api};
 #[cfg(not(unix))]
 use crate::assignment_plan::node_api_user;
 use crate::assignment_plan::{workload_id, workload_spec};
+use crate::assignment_replica::ensure_replica;
 use crate::assignment_resource::{
     decode_assignment, decode_assignments, decode_deployments, decode_replicas,
 };
@@ -248,13 +249,27 @@ impl AssignmentAgent {
         for assignment in &active {
             let outcome = match deployments.get(&assignment.spec.deployment_id) {
                 Some(deployment) => {
-                    self.converge_assignment(
-                        assignment,
-                        deployment,
-                        replicas.get(&assignment.meta.id),
-                        &network,
-                    )
-                    .await
+                    let replica = match replicas.get(&assignment.meta.id) {
+                        Some(replica) => Some(replica.clone()),
+                        None if malformed_replicas == 0 => {
+                            let ensured = ensure_replica(
+                                self.store.as_ref(),
+                                &self.keyspace,
+                                &self.assignment_kind,
+                                &self.replica_kind,
+                                assignment,
+                            )
+                            .await?;
+                            if ensured.created {
+                                report.replica_states_created =
+                                    report.replica_states_created.saturating_add(1);
+                            }
+                            Some(ensured.replica)
+                        }
+                        None => None,
+                    };
+                    self.converge_assignment(assignment, deployment, replica.as_ref(), &network)
+                        .await
                 }
                 None => Err(ConvergeFailure::pending(
                     "DeploymentMissing",

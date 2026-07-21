@@ -39,6 +39,18 @@ pub enum AssignmentAgentError {
     /// A stored assignment could not be decoded for its conditional status write.
     #[error("malformed Assignment resource at `{key}`: {message}")]
     MalformedAssignment { key: String, message: String },
+    /// A stored ReplicaState could not be decoded after a create conflict.
+    #[error("malformed ReplicaState resource at `{key}`: {message}")]
+    MalformedReplica { key: String, message: String },
+    /// A ReplicaState disappeared immediately after its create conflicted.
+    #[error("ReplicaState `{replica_id}` disappeared after create conflict")]
+    ReplicaDisappeared { replica_id: String },
+    /// A stable ReplicaState identity was already bound to another assignment spec.
+    #[error("ReplicaState `{replica_id}` does not match Assignment `{assignment_id}`")]
+    ReplicaIdentityCollision {
+        replica_id: String,
+        assignment_id: String,
+    },
     /// A status-bearing assignment could not be encoded.
     #[error("failed to serialize Assignment resource: {message}")]
     SerializeResource { message: String },

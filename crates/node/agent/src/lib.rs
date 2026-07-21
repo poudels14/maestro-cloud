@@ -9,6 +9,7 @@ mod assignment_error;
 #[cfg(unix)]
 mod assignment_node_api;
 mod assignment_plan;
+mod assignment_replica;
 mod assignment_resource;
 mod assignment_restart;
 mod assignment_status;

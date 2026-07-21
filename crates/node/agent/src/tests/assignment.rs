@@ -58,6 +58,32 @@ async fn assignment_reconcile_runs_and_re_adopts_one_exactly_addressed_workload(
 }
 
 #[tokio::test]
+async fn assignment_reconcile_creates_and_reuses_missing_replica_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let assignment = assignment();
+    world
+        .seed_without_replica(&deployment(), &assignment)
+        .await?;
+
+    let first = world.agent().reconcile_once().await?;
+    assert_eq!(first.replica_states_created, 1);
+    let key = Keyspace::new(&cluster_id()).resource(
+        &ResourceKind::new("ReplicaState")?,
+        &ResourceName::new(assignment.meta.id.as_str())?,
+    );
+    let stored = world.store.get(&key).await?.ok_or("replica missing")?;
+    let replica: ReplicaState = serde_json::from_slice(&stored.value)?;
+    assert_eq!(replica.spec.assignment_id, assignment.meta.id);
+    assert_eq!(replica.status.phase, DeploymentPhase::PendingReady);
+    assert_eq!(replica.status.node_id, Some(node_id("node-1")));
+
+    let second = world.agent().reconcile_once().await?;
+    assert_eq!(second.replica_states_created, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_status()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
@@ -548,6 +574,20 @@ impl World {
         deployment: &Deployment,
         assignment: &Assignment,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.seed_without_replica(deployment, assignment).await?;
+        put_resource(
+            self.store.as_ref(),
+            self.replica_key(),
+            serde_json::to_vec(&replica(assignment))?,
+        )
+        .await
+    }
+
+    async fn seed_without_replica(
+        &self,
+        deployment: &Deployment,
+        assignment: &Assignment,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let keyspace = Keyspace::new(&cluster_id());
         put_resource(
             self.store.as_ref(),
@@ -562,12 +602,6 @@ impl World {
             self.store.as_ref(),
             self.assignment_key(),
             serde_json::to_vec(assignment)?,
-        )
-        .await?;
-        put_resource(
-            self.store.as_ref(),
-            self.replica_key(),
-            serde_json::to_vec(&replica(assignment))?,
         )
         .await
     }
