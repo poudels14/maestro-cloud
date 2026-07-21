@@ -18,7 +18,9 @@ use node_agent::{
     AuthoritativeDnsResolver, CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats,
     CgroupProcessStats, CgroupStats, CgroupStatsError, CgroupStatsReader, DnsQueryType,
     DnsServerBinder, DnsServerError, DnsServerRuntime, DnsServerSettings, FirewallBackend,
-    FirewallBackendError, HealthProbeError, HealthProbeTarget, HealthProber, MeshBackend,
+    FirewallBackendError, HealthProbeError, HealthProbeTarget, HealthProber, HostCpuStats,
+    HostDiskError, HostDiskReader, HostDiskReport, HostDiskStats, HostMemoryStats,
+    HostNetworkStats, HostResourceStats, HostStatsError, HostStatsReader, MeshBackend,
     MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock, WorkloadBridge,
     WorkloadBridgeBackend, WorkloadBridgeBackendError, WorkloadNetworkStats,
     WorkloadNetworkStatsError, WorkloadNetworkStatsReader,
@@ -58,6 +60,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let delivery_sink = Arc::new(RecordingLogSink::new(LogSinkId::new("test-delivery")?, []));
     let metric_store_runtime = InMemoryMetricStoreRuntime::new();
     let metric_store = metric_store_runtime.store_handle();
+    let host_metric_store = metric_store_runtime.host_store_handle();
     let metric_delivery_sink = Arc::new(RecordingMetricSink::new(
         MetricSinkId::new("test-metrics")?,
         [],
@@ -103,6 +106,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             metric_sinks: vec![metric_delivery_sink.clone()],
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
+            host_stats_reader: Arc::new(FixedHostStatsReader),
+            host_disk_reader: Arc::new(FixedHostDiskReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: health_targets.clone(),
@@ -121,6 +126,18 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     .with_leader_workload(workload.clone());
 
     let running = Daemon::new(plan, factory).start().await?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if host_metric_store
+                .points()
+                .is_ok_and(|points| points.len() == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     tokio::time::timeout(Duration::from_secs(1), workload.started.notified()).await?;
     {
         let applied = applications
@@ -344,6 +361,8 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             metric_sinks: Vec::new(),
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
+            host_stats_reader: Arc::new(FixedHostStatsReader),
+            host_disk_reader: Arc::new(FixedHostDiskReader),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),
@@ -502,6 +521,46 @@ impl WorkloadNetworkStatsReader for FixedNetworkStatsReader {
             receive_bytes: 100,
             transmit_bytes: 200,
         }))
+    }
+}
+
+struct FixedHostStatsReader;
+
+#[async_trait]
+impl HostStatsReader for FixedHostStatsReader {
+    async fn read(&self) -> Result<HostResourceStats, HostStatsError> {
+        Ok(HostResourceStats {
+            cpu: HostCpuStats {
+                total_ticks: 1_000,
+                idle_ticks: 250,
+            },
+            memory: HostMemoryStats {
+                used_bytes: 3_000,
+                total_bytes: 4_000,
+            },
+            network: HostNetworkStats {
+                receive_bytes: 5_000,
+                transmit_bytes: 6_000,
+            },
+        })
+    }
+}
+
+struct FixedHostDiskReader;
+
+#[async_trait]
+impl HostDiskReader for FixedHostDiskReader {
+    async fn read(&self) -> Result<HostDiskReport, HostDiskError> {
+        Ok(HostDiskReport {
+            disks: vec![HostDiskStats {
+                name: "/dev/test".to_owned(),
+                mount_point: "/".to_owned(),
+                total_bytes: 10_000,
+                available_bytes: 4_000,
+                file_system: "ext4".to_owned(),
+            }],
+            failures: Vec::new(),
+        })
     }
 }
 

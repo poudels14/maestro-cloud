@@ -12,9 +12,9 @@ use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreError, DuckStoreSettings};
 use node_agent::{
-    CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxMeshBackend,
-    LinuxWorkloadBridgeBackend, MeshIdentity, NetworkHealthProber, NftablesFirewallBackend,
-    SystemStatusClock,
+    CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxHostDiskReader,
+    LinuxHostStatsReader, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
+    NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
@@ -241,6 +241,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(CgroupV2StatsReader),
             network_stats_reader,
+            host_stats_reader: Arc::new(LinuxHostStatsReader::production()),
+            host_disk_reader: Arc::new(LinuxHostDiskReader::production()),
             network_provider: containerd,
             health_prober,
             volatile_root,

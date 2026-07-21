@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use kernel_store::Store;
 use logs::{LogStore, RuntimeLogPipeline};
-use metrics::{MetricStore, WorkloadMetricPipeline};
+use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
 use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
-    HealthAgentSettings, RuntimeLogAgent, RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME,
-    WorkloadStatsAgent, WorkloadStatsSettings,
+    HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, RuntimeLogAgent,
+    RuntimeLogAgentSettings, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 
@@ -125,4 +125,29 @@ pub(crate) fn build_stats_agent<MeshBackendType, FirewallBackendType, BridgeBack
         factory.monotonic_clock.clone(),
     )
     .map_err(|error| role_error("construct workload stats agent", error))
+}
+
+pub(crate) fn build_host_telemetry_agent<
+    MeshBackendType,
+    FirewallBackendType,
+    BridgeBackendType,
+>(
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn HostMetricStore>,
+) -> Result<HostTelemetryAgent, RoleError> {
+    HostTelemetryAgent::new(
+        factory.host_stats_reader.clone(),
+        factory.host_disk_reader.clone(),
+        Arc::new(HostMetricPipeline::new(store)),
+        HostTelemetrySettings {
+            cluster_id: plan.cluster().cluster_id.clone(),
+            node_id: spec.node_id.clone(),
+            poll_interval: factory.settings.host_telemetry_poll_interval,
+        },
+        factory.status_clock.clone(),
+        factory.monotonic_clock.clone(),
+    )
+    .map_err(|error| role_error("construct host telemetry agent", error))
 }

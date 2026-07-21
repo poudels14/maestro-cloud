@@ -15,7 +15,8 @@ use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::build_metric_sink_workers;
 use crate::workload_agents::{
-    build_assignment_agent, build_health_agent, build_log_agent, build_stats_agent,
+    build_assignment_agent, build_health_agent, build_host_telemetry_agent, build_log_agent,
+    build_stats_agent,
 };
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
@@ -167,6 +168,11 @@ where
     } else {
         None
     };
+    let host_telemetry_agent =
+        match build_host_telemetry_agent(factory, plan, spec, runtimes.host_metric_store()) {
+            Ok(agent) => agent,
+            Err(error) => return runtimes.fail(error).await,
+        };
     if let Err(error) = bridge_agent.reconcile_once().await {
         return runtimes
             .fail(role_error("establish workload bridge", error))
@@ -240,7 +246,6 @@ where
             ))
             .await;
     }
-
     let publish_store_error = {
         match factory.store.lock() {
             Ok(mut shared_store) => {
@@ -262,6 +267,7 @@ where
     let health_shutdown = bridge_shutdown.clone();
     let log_shutdown = bridge_shutdown.clone();
     let stats_shutdown = bridge_shutdown.clone();
+    let host_telemetry_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -331,6 +337,12 @@ where
                 .map_err(|error| role_error("run workload stats agent", error))
         }));
     }
+    tasks.push(tokio::spawn(async move {
+        host_telemetry_agent
+            .run(host_telemetry_shutdown)
+            .await
+            .map_err(|error| role_error("run host telemetry agent", error))
+    }));
     for worker in sink_workers {
         let sink_shutdown = shutdown.subscribe();
         tasks.push(tokio::spawn(async move {

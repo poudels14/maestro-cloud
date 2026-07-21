@@ -10,8 +10,9 @@ use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkWorkerSettings};
 use metrics::{MetricSink, MetricSinkWorkerSettings, MetricStoreRuntime};
 use node_agent::{
-    CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity,
-    StatusClock, WorkloadBridgeBackend, WorkloadNetworkStatsReader,
+    CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, HostDiskReader,
+    HostStatsReader, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
+    WorkloadNetworkStatsReader,
 };
 use runtime::{NetworkProvider, WorkloadRuntime};
 use tokio::sync::watch;
@@ -55,6 +56,7 @@ pub struct DaemonRoleSettings {
     pub(crate) assignment_resync_interval: Duration,
     pub(crate) health_poll_interval: Duration,
     pub(crate) stats_poll_interval: Duration,
+    pub(crate) host_telemetry_poll_interval: Duration,
     pub(crate) log_poll_interval: Duration,
     pub(crate) max_log_frames_per_workload: usize,
     pub(crate) sink_worker_settings: SinkWorkerSettings,
@@ -110,6 +112,7 @@ impl DaemonRoleSettings {
             assignment_resync_interval: Duration::from_secs(30),
             health_poll_interval,
             stats_poll_interval,
+            host_telemetry_poll_interval: Duration::from_secs(15),
             log_poll_interval,
             max_log_frames_per_workload,
             sink_worker_settings: SinkWorkerSettings::default(),
@@ -135,6 +138,7 @@ impl Default for DaemonRoleSettings {
             assignment_resync_interval: Duration::from_secs(30),
             health_poll_interval: Duration::from_secs(5),
             stats_poll_interval: Duration::from_secs(5),
+            host_telemetry_poll_interval: Duration::from_secs(15),
             log_poll_interval: Duration::from_secs(1),
             max_log_frames_per_workload: 1_000,
             sink_worker_settings: SinkWorkerSettings::default(),
@@ -200,6 +204,10 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub stats_reader: Arc<dyn CgroupStatsReader>,
     /// Runtime-aware reader for optional cumulative workload network counters.
     pub network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
+    /// Direct aggregate host CPU, memory, and network reader.
+    pub host_stats_reader: Arc<dyn HostStatsReader>,
+    /// Direct host mount identity and capacity reader.
+    pub host_disk_reader: Arc<dyn HostDiskReader>,
     /// Host-owned workload address allocator and attachment backend.
     pub network_provider: Arc<dyn NetworkProvider>,
     /// Bounded HTTP and TCP probe adapter for local workload readiness.
@@ -230,6 +238,8 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
     pub(crate) network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
+    pub(crate) host_stats_reader: Arc<dyn HostStatsReader>,
+    pub(crate) host_disk_reader: Arc<dyn HostDiskReader>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
     pub(crate) health_prober: Arc<dyn HealthProber>,
     pub(crate) volatile_root: PathBuf,
@@ -267,6 +277,8 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             metric_sinks: dependencies.metric_sinks,
             stats_reader: dependencies.stats_reader,
             network_stats_reader: dependencies.network_stats_reader,
+            host_stats_reader: dependencies.host_stats_reader,
+            host_disk_reader: dependencies.host_disk_reader,
             network_provider: dependencies.network_provider,
             health_prober: dependencies.health_prober,
             volatile_root: dependencies.volatile_root,
