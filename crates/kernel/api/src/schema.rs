@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    Assignment, Build, Deployment, DnsRecord, FirewallPolicy, IngressRoute, Node, NodeNetwork,
-    Preview, ReplicaState, ResourceKind, Service, TrafficGeneration, UpgradeRun, Webhook,
+    Assignment, Build, Deployment, DnsRecord, FirewallPolicy, IngressRoute, Node, NodeFirewall,
+    NodeNetwork, Preview, ReplicaState, ResourceKind, Service, TrafficGeneration, UpgradeRun,
+    Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -22,6 +23,8 @@ pub enum BuiltinKind {
     Node,
     /// A node mesh publication.
     NodeNetwork,
+    /// A node's desired and applied firewall ruleset.
+    NodeFirewall,
     /// A deployable service.
     Service,
     /// An immutable deployment.
@@ -50,7 +53,7 @@ pub enum BuiltinKind {
 
 impl BuiltinKind {
     /// Built-in kinds in deterministic schema and snapshot order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Node,
         Self::NodeNetwork,
         Self::Service,
@@ -65,6 +68,7 @@ impl BuiltinKind {
         Self::Preview,
         Self::UpgradeRun,
         Self::Webhook,
+        Self::NodeFirewall,
     ];
 
     /// Stable PascalCase component and registry name.
@@ -72,6 +76,7 @@ impl BuiltinKind {
         match self {
             Self::Node => "Node",
             Self::NodeNetwork => "NodeNetwork",
+            Self::NodeFirewall => "NodeFirewall",
             Self::Service => "Service",
             Self::Deployment => "Deployment",
             Self::Assignment => "Assignment",
@@ -101,6 +106,7 @@ impl TryFrom<&ResourceKind> for BuiltinKind {
         match kind.as_str() {
             "Node" => Ok(Self::Node),
             "NodeNetwork" => Ok(Self::NodeNetwork),
+            "NodeFirewall" => Ok(Self::NodeFirewall),
             "Service" => Ok(Self::Service),
             "Deployment" => Ok(Self::Deployment),
             "Assignment" => Ok(Self::Assignment),
@@ -126,6 +132,8 @@ pub enum BuiltinResource {
     Node(Node),
     /// A node mesh publication.
     NodeNetwork(NodeNetwork),
+    /// A node's desired and applied firewall ruleset.
+    NodeFirewall(NodeFirewall),
     /// A deployable service.
     Service(Service),
     /// An immutable deployment.
@@ -158,6 +166,7 @@ impl BuiltinResource {
         match self {
             Self::Node(_) => BuiltinKind::Node,
             Self::NodeNetwork(_) => BuiltinKind::NodeNetwork,
+            Self::NodeFirewall(_) => BuiltinKind::NodeFirewall,
             Self::Service(_) => BuiltinKind::Service,
             Self::Deployment(_) => BuiltinKind::Deployment,
             Self::Assignment(_) => BuiltinKind::Assignment,
@@ -207,6 +216,9 @@ pub fn decode_builtin(
     let decoded = match kind {
         BuiltinKind::Node => serde_json::from_value(value).map(BuiltinResource::Node),
         BuiltinKind::NodeNetwork => serde_json::from_value(value).map(BuiltinResource::NodeNetwork),
+        BuiltinKind::NodeFirewall => {
+            serde_json::from_value(value).map(BuiltinResource::NodeFirewall)
+        }
         BuiltinKind::Service => serde_json::from_value(value).map(BuiltinResource::Service),
         BuiltinKind::Deployment => serde_json::from_value(value).map(BuiltinResource::Deployment),
         BuiltinKind::Assignment => serde_json::from_value(value).map(BuiltinResource::Assignment),
@@ -254,6 +266,7 @@ pub fn openapi_document() -> Value {
     register_schema::<Preview>(&mut generator, BuiltinKind::Preview);
     register_schema::<UpgradeRun>(&mut generator, BuiltinKind::UpgradeRun);
     register_schema::<Webhook>(&mut generator, BuiltinKind::Webhook);
+    register_schema::<NodeFirewall>(&mut generator, BuiltinKind::NodeFirewall);
 
     let schemas = generator.take_definitions(true);
     json!({

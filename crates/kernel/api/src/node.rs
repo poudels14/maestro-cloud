@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Condition, NodeId, NodeInstanceId, NodeNetworkId, Object, Timestamp};
+use crate::{Condition, NodeFirewallId, NodeId, NodeInstanceId, NodeNetworkId, Object, Timestamp};
 
 /// Scheduling and control-plane capability assigned to a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -92,3 +92,34 @@ pub struct NodeNetworkStatus {
 
 /// A node network resource.
 pub type NodeNetwork = Object<NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus>;
+
+/// Complete generated nftables input desired on one node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeFirewallSpec {
+    /// Node whose host and forwarding hooks own this ruleset.
+    pub node_id: NodeId,
+    /// Owned nftables table replaced by the script.
+    pub table_name: String,
+    /// Complete input applied in one atomic `nft -f` transaction.
+    pub script: String,
+    /// SHA-256 digest of the exact script bytes.
+    pub digest: String,
+}
+
+/// Node-local application evidence for one desired firewall generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeFirewallStatus {
+    /// Desired generation most recently applied by the node agent.
+    pub applied_generation: crate::Generation,
+    /// Digest of the exact script accepted by the backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied_digest: Option<String>,
+    /// Generic validation and application evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+}
+
+/// Desired and observed firewall state for one node.
+pub type NodeFirewall = Object<NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus>;

@@ -22,9 +22,9 @@ pub use automation::{
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,
-    FirewallPolicyId, IngressRouteId, InvalidIdentifier, NodeId, NodeInstanceId, NodeNetworkId,
-    PreviewId, ReplicaStateId, RequestId, ResourceId, ResourceKind, ResourceName, ServiceId,
-    TrafficGenerationId, UpgradeRunId, WebhookId, WorkloadId,
+    FirewallPolicyId, IngressRouteId, InvalidIdentifier, NodeFirewallId, NodeId, NodeInstanceId,
+    NodeNetworkId, PreviewId, ReplicaStateId, RequestId, ResourceId, ResourceKind, ResourceName,
+    ServiceId, TrafficGenerationId, UpgradeRunId, WebhookId, WorkloadId,
 };
 pub use metadata::{
     AnnotationKey, FinalizerName, Generation, LabelKey, ObjectMeta, OwnerReference, Ownership,
@@ -38,7 +38,8 @@ pub use network::{
     TrafficRoute, TrafficTarget, TransportProtocol,
 };
 pub use node::{
-    Node, NodeNetwork, NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
+    Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork, NodeNetworkSpec,
+    NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
 };
 pub use resource::Object;
 pub use schema::{

@@ -1440,6 +1440,74 @@ expression: openapi_document()
           }
         ]
       },
+      "NodeFirewall": {
+        "$ref": "#/components/schemas/Object15"
+      },
+      "NodeFirewallId": {
+        "description": "Stable identity of a node's desired firewall ruleset.",
+        "type": "string"
+      },
+      "NodeFirewallSpec": {
+        "description": "Complete generated nftables input desired on one node.",
+        "properties": {
+          "digest": {
+            "description": "SHA-256 digest of the exact script bytes.",
+            "type": "string"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node whose host and forwarding hooks own this ruleset."
+          },
+          "script": {
+            "description": "Complete input applied in one atomic `nft -f` transaction.",
+            "type": "string"
+          },
+          "tableName": {
+            "description": "Owned nftables table replaced by the script.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "tableName",
+          "script",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "NodeFirewallStatus": {
+        "description": "Node-local application evidence for one desired firewall generation.",
+        "properties": {
+          "appliedDigest": {
+            "description": "Digest of the exact script accepted by the backend.",
+            "nullable": true,
+            "type": "string"
+          },
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently applied by the node agent."
+          },
+          "conditions": {
+            "description": "Generic validation and application evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
       "NodeId": {
         "description": "Stable identity of a cluster node.",
         "type": "string"
@@ -1870,6 +1938,41 @@ expression: openapi_document()
             "allOf": [
               {
                 "$ref": "#/components/schemas/WebhookStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object15": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta15"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2596,6 +2699,84 @@ expression: openapi_document()
             "allOf": [
               {
                 "$ref": "#/components/schemas/WebhookId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta15": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeFirewallId"
               }
             ],
             "description": "Kind-specific stable resource identity."

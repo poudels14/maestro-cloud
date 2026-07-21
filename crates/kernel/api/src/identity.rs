@@ -92,6 +92,10 @@ identifier!(
     NodeNetworkId,
     "Stable identity of a node's published network configuration."
 );
+identifier!(
+    NodeFirewallId,
+    "Stable identity of a node's desired firewall ruleset."
+);
 identifier!(ServiceId, "Stable identity of a deployable service.");
 identifier!(
     DeploymentId,
@@ -177,6 +181,7 @@ macro_rules! resource_name_from {
 resource_name_from!(
     NodeId,
     NodeNetworkId,
+    NodeFirewallId,
     ServiceId,
     DeploymentId,
     AssignmentId,
