@@ -4,6 +4,7 @@ mod backend;
 mod conditions;
 mod error;
 mod model;
+mod nixos;
 mod plan;
 mod reconciler;
 mod snapshot;
@@ -14,6 +15,10 @@ pub use error::UpgradePlanError;
 pub use model::{
     NodeUpgradeRequest, NodeUpgradeTarget, UpgradeDispatchOutcome, UpgradeInput, UpgradePlan,
     UpgradePlanAction, UpgradeSettings, UpgradeSettingsError,
+};
+pub use nixos::{
+    NixosUpgradeSource, NixosUpgradeStager, NixosUpgradeStagerSettings, NixosUpgradeStagingError,
+    ProcessNixosUpgradeStager,
 };
 pub use plan::{plan_upgrade, record_dispatch_outcome};
 pub use reconciler::{UpgradeError, UpgradeReconciler};

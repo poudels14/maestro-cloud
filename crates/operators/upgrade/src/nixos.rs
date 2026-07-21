@@ -1,0 +1,487 @@
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use semver::Version;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+
+const MAX_MANIFEST_BYTES: u64 = 64 * 1_024;
+const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1_024;
+
+/// Validated source selected by a staged NixOS boot generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NixosUpgradeSource {
+    path: PathBuf,
+    version: Version,
+}
+
+impl NixosUpgradeSource {
+    /// Returns the immutable source path evaluated from the updated flake.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the Maestro version declared by the evaluated source.
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+}
+
+/// Node-local boundary that prepares, but does not activate, a NixOS upgrade.
+///
+/// Successful calls guarantee that a boot generation was built from a source
+/// newer than the running daemon and no older than the requested version.
+/// Replays converge on the currently selected flake state without activating
+/// it. Cancellation kills an active child process.
+#[async_trait]
+pub trait NixosUpgradeStager: Send + Sync {
+    /// Updates the configured flake, validates its Maestro source, and builds it for boot.
+    async fn stage(
+        &self,
+        minimum_version: &Version,
+    ) -> Result<NixosUpgradeSource, NixosUpgradeStagingError>;
+}
+
+/// Static paths and version policy for the production NixOS staging adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NixosUpgradeStagerSettings {
+    flake: PathBuf,
+    configuration: String,
+    manifest_relative_path: PathBuf,
+    running_version: Version,
+    nix_binary: PathBuf,
+    nixos_rebuild_binary: PathBuf,
+}
+
+impl NixosUpgradeStagerSettings {
+    /// Validates one flake selection and the manifest used to verify source versions.
+    pub fn new(
+        flake: impl Into<PathBuf>,
+        configuration: impl Into<String>,
+        manifest_relative_path: impl Into<PathBuf>,
+        running_version: Version,
+    ) -> Result<Self, NixosUpgradeStagingError> {
+        let settings = Self {
+            flake: flake.into(),
+            configuration: configuration.into(),
+            manifest_relative_path: manifest_relative_path.into(),
+            running_version,
+            nix_binary: PathBuf::from("nix"),
+            nixos_rebuild_binary: PathBuf::from("nixos-rebuild"),
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// Selects the standard Maestro NixOS flake and rewritten daemon manifest.
+    pub fn production(running_version: Version) -> Result<Self, NixosUpgradeStagingError> {
+        Self::new(
+            "/etc/maestro",
+            "default",
+            "crates/apps/daemon/Cargo.toml",
+            running_version,
+        )
+    }
+
+    /// Replaces process paths for hermetic packaging without changing arguments.
+    pub fn with_binaries(
+        mut self,
+        nix_binary: impl Into<PathBuf>,
+        nixos_rebuild_binary: impl Into<PathBuf>,
+    ) -> Result<Self, NixosUpgradeStagingError> {
+        self.nix_binary = nix_binary.into();
+        self.nixos_rebuild_binary = nixos_rebuild_binary.into();
+        self.validate()?;
+        Ok(self)
+    }
+
+    fn validate(&self) -> Result<(), NixosUpgradeStagingError> {
+        if !self.flake.is_absolute() {
+            return Err(rejected("NixOS upgrade flake path must be absolute"));
+        }
+        if self.flake.to_str().is_none() {
+            return Err(rejected("NixOS upgrade flake path must be valid UTF-8"));
+        }
+        if self.configuration.is_empty()
+            || !self.configuration.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Err(rejected(
+                "NixOS configuration must contain only ASCII letters, digits, '-' or '_'",
+            ));
+        }
+        if self.manifest_relative_path.as_os_str().is_empty()
+            || !self
+                .manifest_relative_path
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        {
+            return Err(rejected(
+                "NixOS source manifest must be a non-empty relative path without traversal",
+            ));
+        }
+        if self.nix_binary.as_os_str().is_empty()
+            || self.nixos_rebuild_binary.as_os_str().is_empty()
+        {
+            return Err(rejected("NixOS command paths must not be empty"));
+        }
+        Ok(())
+    }
+
+    fn source_attribute(&self) -> OsString {
+        format!(
+            "{}#nixosConfigurations.{}.config.services.maestro.source",
+            self.flake.display(),
+            self.configuration
+        )
+        .into()
+    }
+
+    fn configuration_selector(&self) -> OsString {
+        format!("{}#{}", self.flake.display(), self.configuration).into()
+    }
+}
+
+/// Production NixOS stager using bounded, kill-on-cancel child processes.
+pub struct ProcessNixosUpgradeStager {
+    settings: NixosUpgradeStagerSettings,
+    runner: Arc<dyn NixosCommandRunner>,
+}
+
+impl ProcessNixosUpgradeStager {
+    /// Builds a process adapter from validated static settings.
+    pub fn new(settings: NixosUpgradeStagerSettings) -> Self {
+        Self::with_runner(settings, Arc::new(ProcessNixosCommandRunner))
+    }
+
+    pub(crate) fn with_runner(
+        settings: NixosUpgradeStagerSettings,
+        runner: Arc<dyn NixosCommandRunner>,
+    ) -> Self {
+        Self { settings, runner }
+    }
+}
+
+#[async_trait]
+impl NixosUpgradeStager for ProcessNixosUpgradeStager {
+    async fn stage(
+        &self,
+        minimum_version: &Version,
+    ) -> Result<NixosUpgradeSource, NixosUpgradeStagingError> {
+        self.runner
+            .run(NixosCommand::new(
+                self.settings.nix_binary.clone(),
+                [
+                    OsString::from("flake"),
+                    OsString::from("update"),
+                    OsString::from("--flake"),
+                    self.settings.flake.clone().into_os_string(),
+                ],
+            ))
+            .await
+            .map_err(|error| unavailable("update NixOS flake", error))?;
+        let evaluated = self
+            .runner
+            .run(NixosCommand::new(
+                self.settings.nix_binary.clone(),
+                [
+                    OsString::from("eval"),
+                    OsString::from("--raw"),
+                    self.settings.source_attribute(),
+                ],
+            ))
+            .await
+            .map_err(|error| unavailable("evaluate updated Maestro source", error))?;
+        let source = source_path(&evaluated.stdout)?;
+        let manifest = read_manifest(&source.join(&self.settings.manifest_relative_path)).await?;
+        let source_version = parse_package_version(&manifest)?;
+        validate_source_version(
+            &source_version,
+            &self.settings.running_version,
+            minimum_version,
+        )?;
+        self.runner
+            .run(NixosCommand::new(
+                self.settings.nixos_rebuild_binary.clone(),
+                [
+                    OsString::from("boot"),
+                    OsString::from("--flake"),
+                    self.settings.configuration_selector(),
+                ],
+            ))
+            .await
+            .map_err(|error| unavailable("build NixOS boot generation", error))?;
+        Ok(NixosUpgradeSource {
+            path: source,
+            version: source_version,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NixosCommand {
+    pub(crate) executable: PathBuf,
+    pub(crate) arguments: Vec<OsString>,
+}
+
+impl NixosCommand {
+    fn new(executable: PathBuf, arguments: impl IntoIterator<Item = OsString>) -> Self {
+        Self {
+            executable,
+            arguments: arguments.into_iter().collect(),
+        }
+    }
+}
+
+pub(crate) struct NixosCommandOutput {
+    pub(crate) stdout: Vec<u8>,
+}
+
+#[async_trait]
+pub(crate) trait NixosCommandRunner: Send + Sync {
+    async fn run(&self, command: NixosCommand) -> Result<NixosCommandOutput, NixosCommandError>;
+}
+
+struct ProcessNixosCommandRunner;
+
+#[async_trait]
+impl NixosCommandRunner for ProcessNixosCommandRunner {
+    async fn run(&self, invocation: NixosCommand) -> Result<NixosCommandOutput, NixosCommandError> {
+        let mut command = Command::new(&invocation.executable);
+        command
+            .args(&invocation.arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(|error| NixosCommandError::Spawn {
+            executable: invocation.executable.clone(),
+            message: error.to_string(),
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(NixosCommandError::MissingPipe { stream: "stdout" })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(NixosCommandError::MissingPipe { stream: "stderr" })?;
+        let output = tokio::try_join!(
+            child.wait(),
+            read_bounded(stdout, MAX_COMMAND_OUTPUT_BYTES),
+            read_bounded(stderr, MAX_COMMAND_OUTPUT_BYTES),
+        );
+        let (status, stdout, stderr) = match output {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(NixosCommandError::Output {
+                    message: error.to_string(),
+                });
+            }
+        };
+        if !status.success() {
+            return Err(NixosCommandError::Exit {
+                status: status.to_string(),
+                stderr: safe_output(&stderr),
+            });
+        }
+        Ok(NixosCommandOutput { stdout })
+    }
+}
+
+async fn read_bounded(
+    mut reader: impl AsyncRead + Unpin,
+    maximum: usize,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8 * 1_024];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(count) > maximum {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("command output exceeded {maximum} bytes"),
+            ));
+        }
+        let bytes = buffer.get(..count).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "command returned an invalid read length",
+            )
+        })?;
+        output.extend_from_slice(bytes);
+    }
+}
+
+async fn read_manifest(path: &Path) -> Result<String, NixosUpgradeStagingError> {
+    let path_metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        unavailable(
+            format!("inspect source manifest `{}`", path.display()),
+            error,
+        )
+    })?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(rejected(format!(
+            "updated Maestro source manifest `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    let file = tokio::fs::File::open(path).await.map_err(|error| {
+        unavailable(format!("open source manifest `{}`", path.display()), error)
+    })?;
+    let metadata = file.metadata().await.map_err(|error| {
+        unavailable(
+            format!("inspect open source manifest `{}`", path.display()),
+            error,
+        )
+    })?;
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        return Err(rejected(format!(
+            "updated Maestro source manifest `{}` exceeds {MAX_MANIFEST_BYTES} bytes",
+            path.display()
+        )));
+    }
+    let mut manifest = Vec::new();
+    file.take(MAX_MANIFEST_BYTES.saturating_add(1))
+        .read_to_end(&mut manifest)
+        .await
+        .map_err(|error| {
+            unavailable(format!("read source manifest `{}`", path.display()), error)
+        })?;
+    if manifest.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(rejected(format!(
+            "updated Maestro source manifest `{}` exceeds {MAX_MANIFEST_BYTES} bytes",
+            path.display()
+        )));
+    }
+    String::from_utf8(manifest).map_err(|_| {
+        rejected(format!(
+            "updated Maestro source manifest `{}` is not valid UTF-8",
+            path.display()
+        ))
+    })
+}
+
+fn source_path(output: &[u8]) -> Result<PathBuf, NixosUpgradeStagingError> {
+    let value = std::str::from_utf8(output)
+        .map_err(|_| rejected("updated services.maestro.source is not valid UTF-8"))?
+        .trim();
+    let path = PathBuf::from(value);
+    if value.is_empty() || !path.is_absolute() {
+        return Err(rejected(format!(
+            "updated services.maestro.source must be an absolute path, got `{value}`"
+        )));
+    }
+    Ok(path)
+}
+
+fn parse_package_version(manifest: &str) -> Result<Version, NixosUpgradeStagingError> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line == "[package]" {
+            in_package = true;
+            continue;
+        }
+        if in_package && line.starts_with('[') {
+            break;
+        }
+        if in_package
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "version"
+        {
+            let value = value.trim().trim_matches('"');
+            return Version::parse(value).map_err(|error| {
+                rejected(format!(
+                    "invalid Maestro package version `{value}`: {error}"
+                ))
+            });
+        }
+    }
+    Err(rejected("Maestro Cargo manifest has no package.version"))
+}
+
+fn validate_source_version(
+    source: &Version,
+    running: &Version,
+    minimum: &Version,
+) -> Result<(), NixosUpgradeStagingError> {
+    if source <= running {
+        return Err(rejected(format!(
+            "updated Maestro source {source} is not newer than running version {running}"
+        )));
+    }
+    if source < minimum {
+        return Err(rejected(format!(
+            "updated Maestro source {source} is older than requested minimum {minimum}"
+        )));
+    }
+    Ok(())
+}
+
+fn safe_output(output: &[u8]) -> String {
+    let message = String::from_utf8_lossy(output)
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if message.trim().is_empty() {
+        "command exited unsuccessfully".to_string()
+    } else {
+        message.trim().to_string()
+    }
+}
+
+fn unavailable(
+    action: impl std::fmt::Display,
+    error: impl std::fmt::Display,
+) -> NixosUpgradeStagingError {
+    NixosUpgradeStagingError::Unavailable {
+        message: format!("failed to {action}: {error}"),
+    }
+}
+
+fn rejected(message: impl Into<String>) -> NixosUpgradeStagingError {
+    NixosUpgradeStagingError::Rejected {
+        message: message.into(),
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NixosCommandError {
+    #[error("could not execute `{}`: {message}", executable.display())]
+    Spawn {
+        executable: PathBuf,
+        message: String,
+    },
+    #[error("child process did not expose its {stream} pipe")]
+    MissingPipe { stream: &'static str },
+    #[error("child process output failed: {message}")]
+    Output { message: String },
+    #[error("child process exited with {status}: {stderr}")]
+    Exit { status: String, stderr: String },
+}
+
+/// Matchable source policy or process failure while preparing a NixOS boot generation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NixosUpgradeStagingError {
+    /// Process or filesystem availability prevented a conclusive staging result.
+    #[error("NixOS upgrade staging is unavailable: {message}")]
+    Unavailable { message: String },
+    /// The selected source or static policy cannot satisfy the requested upgrade.
+    #[error("NixOS upgrade staging rejected the source: {message}")]
+    Rejected { message: String },
+}
