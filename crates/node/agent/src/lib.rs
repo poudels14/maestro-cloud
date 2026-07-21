@@ -104,7 +104,8 @@ pub use secret_mount::SecretMountError;
 #[cfg(target_os = "linux")]
 pub use stats::{
     WorkloadStatsAgent, WorkloadStatsAgentError, WorkloadStatsFailure, WorkloadStatsFailureStage,
-    WorkloadStatsReport, WorkloadStatsSample, WorkloadStatsSettings,
+    WorkloadStatsReport, WorkloadStatsSample, WorkloadStatsSettings, WorkloadStatsSink,
+    WorkloadStatsSinkError,
 };
 pub use workload_bridge::{
     WORKLOAD_BRIDGE_NAME, WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,

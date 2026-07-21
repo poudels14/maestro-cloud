@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, Timestamp, WorkloadId};
+use kernel_store::{Clock, MonotonicTime};
 use runtime::{
     CgroupPath, FakeRuntime, FakeRuntimeOperation, ProcessWorkload, RuntimeError, ShutdownRequest,
     WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
@@ -11,8 +14,10 @@ use runtime::{
 use crate::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
     CgroupStats, CgroupStatsError, CgroupStatsReader, StatusClock, WorkloadStatsAgent,
-    WorkloadStatsFailureStage, WorkloadStatsSettings,
+    WorkloadStatsFailureStage, WorkloadStatsSample, WorkloadStatsSettings, WorkloadStatsSink,
+    WorkloadStatsSinkError,
 };
+use tokio::sync::{Mutex, Notify, watch};
 
 #[tokio::test]
 async fn stats_agent_collects_running_workloads_and_isolates_reader_failures()
@@ -33,17 +38,22 @@ async fn stats_agent_collects_running_workloads_and_isolates_reader_failures()
         rejected: Some(workload_id("workload-2")),
     });
     let runtime_trait: Arc<dyn WorkloadRuntime> = runtime.clone();
+    let sink = Arc::new(RecordingSink::default());
     let agent = WorkloadStatsAgent::new(
         runtime_trait,
         reader,
+        sink.clone(),
         settings(),
         Arc::new(FixedClock(Timestamp(1_750_000_000_000))),
-    );
+        Arc::new(ManualClock::default()),
+    )?;
 
     let report = agent.collect().await?;
 
     assert_eq!(report.observed, 2);
     assert_eq!(report.samples.len(), 1);
+    assert_eq!(report.delivered, 1);
+    assert_eq!(sink.batches.lock().await.len(), 1);
     let collected = report.samples.first().expect("one collected sample");
     assert_eq!(collected.metadata.workload_id, workload_id("workload-1"));
     assert_eq!(collected.collected_at, Timestamp(1_750_000_000_000));
@@ -71,9 +81,11 @@ async fn stats_agent_isolates_handle_failures_but_not_snapshot_failures()
     let agent = WorkloadStatsAgent::new(
         runtime_trait,
         Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(RecordingSink::default()),
         settings(),
         Arc::new(FixedClock(Timestamp(1))),
-    );
+        Arc::new(ManualClock::default()),
+    )?;
 
     let report = agent.collect().await?;
     assert!(report.samples.is_empty());
@@ -89,6 +101,139 @@ async fn stats_agent_isolates_handle_failures_but_not_snapshot_failures()
     )?;
     assert!(agent.collect().await.is_err());
     Ok(())
+}
+
+#[tokio::test]
+async fn stats_agent_isolates_sink_failure_and_retries_on_the_next_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    let sink = Arc::new(RecordingSink::default());
+    sink.fail_next.store(true, Ordering::Release);
+    let agent = WorkloadStatsAgent::new(
+        runtime,
+        Arc::new(SelectiveReader { rejected: None }),
+        sink.clone(),
+        settings(),
+        Arc::new(FixedClock(Timestamp(1))),
+        Arc::new(ManualClock::default()),
+    )?;
+
+    let failed = agent.collect().await?;
+    assert_eq!(failed.delivered, 0);
+    assert!(matches!(
+        failed.delivery_failure,
+        Some(WorkloadStatsSinkError::Unavailable { .. })
+    ));
+    assert!(sink.batches.lock().await.is_empty());
+
+    let recovered = agent.collect().await?;
+    assert_eq!(recovered.delivered, 1);
+    assert!(recovered.delivery_failure.is_none());
+    assert_eq!(sink.batches.lock().await.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stats_agent_runs_immediately_then_on_each_injected_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    let sink = Arc::new(RecordingSink::default());
+    let clock = Arc::new(ManualClock::default());
+    let agent = WorkloadStatsAgent::new(
+        runtime,
+        Arc::new(SelectiveReader { rejected: None }),
+        sink.clone(),
+        settings(),
+        Arc::new(FixedClock(Timestamp(1))),
+        clock.clone(),
+    )?;
+    let (shutdown, shutdown_receiver) = watch::channel(false);
+    let first_delivery = sink.delivered.notified();
+    let task = tokio::spawn(async move { agent.run(shutdown_receiver).await });
+
+    first_delivery.await;
+    assert_eq!(sink.batches.lock().await.len(), 1);
+    let second_delivery = sink.delivered.notified();
+    clock.advance(Duration::from_secs(5));
+    second_delivery.await;
+    assert_eq!(sink.batches.lock().await.len(), 2);
+
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
+
+#[test]
+fn stats_agent_rejects_a_zero_poll_interval() {
+    let mut settings = settings();
+    settings.poll_interval = Duration::ZERO;
+    assert!(
+        WorkloadStatsAgent::new(
+            Arc::new(FakeRuntime::new()),
+            Arc::new(SelectiveReader { rejected: None }),
+            Arc::new(RecordingSink::default()),
+            settings,
+            Arc::new(FixedClock(Timestamp(1))),
+            Arc::new(ManualClock::default()),
+        )
+        .is_err()
+    );
+}
+
+#[derive(Default)]
+struct RecordingSink {
+    batches: Mutex<Vec<Vec<WorkloadStatsSample>>>,
+    delivered: Notify,
+    fail_next: AtomicBool,
+}
+
+#[async_trait]
+impl WorkloadStatsSink for RecordingSink {
+    async fn ingest(&self, samples: &[WorkloadStatsSample]) -> Result<(), WorkloadStatsSinkError> {
+        if self.fail_next.swap(false, Ordering::AcqRel) {
+            return Err(WorkloadStatsSinkError::Unavailable {
+                message: "injected sink outage".to_owned(),
+            });
+        }
+        self.batches.lock().await.push(samples.to_vec());
+        self.delivered.notify_one();
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ManualClock {
+    now_millis: AtomicU64,
+    advanced: Notify,
+}
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.now_millis.fetch_add(millis, Ordering::AcqRel);
+        self.advanced.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl Clock for ManualClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.now_millis.load(Ordering::Acquire),
+        ))
+    }
+
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        loop {
+            let advanced = self.advanced.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            advanced.await;
+        }
+    }
 }
 
 struct SelectiveReader {
@@ -192,6 +337,7 @@ fn settings() -> WorkloadStatsSettings {
     WorkloadStatsSettings {
         cluster_id: cluster_id(),
         node_id: node_id(),
+        poll_interval: Duration::from_secs(5),
     }
 }
 
