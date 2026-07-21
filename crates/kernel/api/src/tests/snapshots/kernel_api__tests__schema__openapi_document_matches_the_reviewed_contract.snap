@@ -169,6 +169,15 @@ expression: openapi_document()
             "minimum": 0,
             "type": "integer"
           },
+          "restartGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "default": 1,
+            "description": "Deployment workload generation this assignment realizes."
+          },
           "serviceId": {
             "allOf": [
               {
@@ -682,6 +691,15 @@ expression: openapi_document()
             ],
             "default": "run",
             "description": "User-requested lifecycle outcome reconciled by the deployment operator."
+          },
+          "restartGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "default": 1,
+            "description": "Desired workload generation, incremented to restart this deployment in place."
           },
           "service": {
             "allOf": [

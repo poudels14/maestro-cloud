@@ -156,6 +156,7 @@ pub fn assignment() -> Assignment {
         spec: AssignmentSpec {
             service_id: ServiceId::new("api").unwrap(),
             deployment_id: DeploymentId::new("deployment-1").unwrap(),
+            restart_generation: Generation(1),
             replica_index: 0,
             node_id: node_id(),
             placement_epoch: 1,
@@ -185,6 +186,7 @@ fn deployment() -> Deployment {
         spec: DeploymentSpec {
             service_id: ServiceId::new("api").unwrap(),
             service_generation: Generation(1),
+            restart_generation: Generation(1),
             goal: kernel_api::DeploymentGoal::Run,
             service: ServiceSpec {
                 name: "API".to_owned(),

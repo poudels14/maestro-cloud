@@ -39,6 +39,7 @@ pub(crate) fn new_deployment(
         spec: DeploymentSpec {
             service_id: service.meta.id.clone(),
             service_generation: service.meta.generation,
+            restart_generation: Generation(1),
             service: service.spec.clone(),
             goal: DeploymentGoal::Run,
             build_id,

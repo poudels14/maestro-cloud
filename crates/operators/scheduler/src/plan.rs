@@ -167,10 +167,11 @@ fn plan_service<'a>(
                 })
             });
             let existing_is_eligible = existing.is_some_and(|assignment| {
-                input.held.contains(&assignment.meta.id)
-                    || candidates
-                        .iter()
-                        .any(|candidate| candidate.node_id == assignment.spec.node_id)
+                assignment.spec.restart_generation == group.restart_generation
+                    && (input.held.contains(&assignment.meta.id)
+                        || candidates
+                            .iter()
+                            .any(|candidate| candidate.node_id == assignment.spec.node_id))
             });
             if let Some(existing) = existing
                 && existing_is_eligible
@@ -227,6 +228,7 @@ fn plan_service<'a>(
                     placement_epoch,
                     service.service_id.clone(),
                     group.deployment_id.clone(),
+                    group.restart_generation,
                     replica_index,
                     node.node_id.clone(),
                     existing.map(|assignment| assignment.meta.id.clone()),
@@ -384,6 +386,7 @@ pub(crate) struct PlannedAssignment {
     placement_epoch: u64,
     pub(crate) service_id: kernel_api::ServiceId,
     pub(crate) deployment_id: kernel_api::DeploymentId,
+    restart_generation: Generation,
     pub(crate) replica_index: u32,
     pub(crate) node_id: NodeId,
     pub(crate) workload_address: Option<Ipv4Addr>,
@@ -398,6 +401,7 @@ impl PlannedAssignment {
         placement_epoch: u64,
         service_id: kernel_api::ServiceId,
         deployment_id: kernel_api::DeploymentId,
+        restart_generation: Generation,
         replica_index: u32,
         node_id: NodeId,
         replaces_assignment_id: Option<AssignmentId>,
@@ -407,6 +411,7 @@ impl PlannedAssignment {
             placement_epoch,
             service_id,
             deployment_id,
+            restart_generation,
             replica_index,
             node_id,
             workload_address: None,
@@ -421,6 +426,7 @@ impl PlannedAssignment {
             placement_epoch: resource.spec.placement_epoch,
             service_id: resource.spec.service_id.clone(),
             deployment_id: resource.spec.deployment_id.clone(),
+            restart_generation: resource.spec.restart_generation,
             replica_index: resource.spec.replica_index,
             node_id: resource.spec.node_id.clone(),
             workload_address: match resource.spec.workload_address {
@@ -451,6 +457,7 @@ impl PlannedAssignment {
             spec: AssignmentSpec {
                 service_id: self.service_id,
                 deployment_id: self.deployment_id,
+                restart_generation: self.restart_generation,
                 replica_index: self.replica_index,
                 node_id: self.node_id,
                 placement_epoch: self.placement_epoch,

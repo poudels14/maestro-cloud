@@ -192,6 +192,7 @@ fn assignment(
         spec: AssignmentSpec {
             service_id: service_id.clone(),
             deployment_id: deployment_id.clone(),
+            restart_generation: Generation(1),
             replica_index,
             node_id: NodeId::new(format!("node-{replica_index}")).unwrap(),
             placement_epoch: 1,

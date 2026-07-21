@@ -265,6 +265,7 @@ fn assignment(id: &str, node: &str, address: [u8; 4]) -> Assignment {
         spec: AssignmentSpec {
             service_id: ServiceId::new("api").unwrap(),
             deployment_id: kernel_api::DeploymentId::new("deployment-1").unwrap(),
+            restart_generation: Generation(1),
             replica_index: 0,
             node_id: NodeId::new(node).unwrap(),
             placement_epoch: 1,

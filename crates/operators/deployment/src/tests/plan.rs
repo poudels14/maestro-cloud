@@ -451,6 +451,7 @@ fn deployment_generation(
         spec: kernel_api::DeploymentSpec {
             service_id: service.meta.id.clone(),
             service_generation: generation,
+            restart_generation: Generation(1),
             service: service.spec.clone(),
             goal: kernel_api::DeploymentGoal::Run,
             build_id: matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
@@ -482,6 +483,7 @@ fn assignment_slot(
         spec: AssignmentSpec {
             service_id: deployment.spec.service_id.clone(),
             deployment_id: deployment.meta.id.clone(),
+            restart_generation: deployment.spec.restart_generation,
             replica_index,
             node_id: NodeId::new("node-1").unwrap(),
             placement_epoch: epoch,

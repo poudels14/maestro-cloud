@@ -360,6 +360,10 @@ pub struct DeploymentSpec {
     pub service_id: ServiceId,
     /// Service generation captured when the deployment was queued.
     pub service_generation: Generation,
+    /// Desired workload generation, incremented to restart this deployment in place.
+    #[serde(default = "initial_restart_generation")]
+    #[schemars(default = "initial_restart_generation")]
+    pub restart_generation: Generation,
     /// Immutable service configuration used for every replica.
     pub service: ServiceSpec,
     /// User-requested lifecycle outcome reconciled by the deployment operator.
@@ -403,6 +407,10 @@ pub struct AssignmentSpec {
     pub service_id: ServiceId,
     /// Immutable deployment being placed.
     pub deployment_id: DeploymentId,
+    /// Deployment workload generation this assignment realizes.
+    #[serde(default = "initial_restart_generation")]
+    #[schemars(default = "initial_restart_generation")]
+    pub restart_generation: Generation,
     /// Zero-based replica slot within the deployment.
     pub replica_index: u32,
     /// Node selected by the scheduler.
@@ -448,6 +456,10 @@ pub struct AssignmentStatus {
 
 /// A scheduled workload assignment resource.
 pub type Assignment = Object<AssignmentId, AssignmentSpec, AssignmentStatus>;
+
+fn initial_restart_generation() -> Generation {
+    Generation(1)
+}
 
 /// Desired identity of one observable deployment replica slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

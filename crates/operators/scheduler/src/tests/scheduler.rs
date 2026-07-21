@@ -414,6 +414,7 @@ fn deployment() -> Deployment {
         spec: DeploymentSpec {
             service_id: service_id(),
             service_generation: Generation(1),
+            restart_generation: Generation(1),
             service: service(1).spec,
             goal: kernel_api::DeploymentGoal::Run,
             build_id: None,

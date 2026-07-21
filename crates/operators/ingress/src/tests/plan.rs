@@ -291,6 +291,7 @@ impl World {
             spec: DeploymentSpec {
                 service_id: service_id.clone(),
                 service_generation: Generation(1),
+                restart_generation: Generation(1),
                 service: service.spec.clone(),
                 goal: kernel_api::DeploymentGoal::Run,
                 build_id: None,
@@ -325,6 +326,7 @@ impl World {
             spec: AssignmentSpec {
                 service_id: service_id.clone(),
                 deployment_id: deployment_id.clone(),
+                restart_generation: Generation(1),
                 replica_index: 0,
                 node_id: NodeId::new("node-1").unwrap(),
                 placement_epoch: 1,

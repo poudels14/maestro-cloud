@@ -72,6 +72,7 @@ fn rollout_groups_prefer_the_same_node_for_each_replica_slot() {
     let mut rollout = input(2);
     rollout.services[0].groups.push(DeploymentGroup {
         deployment_id: deployment_id("dep-2"),
+        restart_generation: Generation(1),
         replicas: 2,
     });
     let output = plan(rollout);
@@ -85,6 +86,29 @@ fn rollout_groups_prefer_the_same_node_for_each_replica_slot() {
             .collect::<BTreeSet<_>>();
         assert_eq!(nodes.len(), 1);
     }
+}
+
+#[test]
+fn restart_generation_replaces_the_assignment_in_place() {
+    let baseline = plan(input(1));
+    let previous = baseline.assignments.first().unwrap().clone();
+    let mut restarted = input(1);
+    restarted.current = vec![previous.clone()];
+    restarted.services[0].groups[0].restart_generation = Generation(2);
+
+    let output = plan(restarted);
+    let replacement = output.assignments.first().unwrap();
+
+    assert_eq!(output.assignments.len(), 1);
+    assert_ne!(replacement.meta.id, previous.meta.id);
+    assert_eq!(replacement.spec.deployment_id, previous.spec.deployment_id);
+    assert_eq!(replacement.spec.node_id, previous.spec.node_id);
+    assert_eq!(replacement.spec.restart_generation, Generation(2));
+    assert_eq!(replacement.spec.placement_epoch, 2);
+    assert_eq!(
+        replacement.spec.replaces_assignment_id.as_ref(),
+        Some(&previous.meta.id)
+    );
 }
 
 #[test]
@@ -252,6 +276,7 @@ fn input(replicas: u32) -> ScheduleInput {
             service_id: service_id("web"),
             groups: vec![DeploymentGroup {
                 deployment_id: deployment_id("dep-1"),
+                restart_generation: Generation(1),
                 replicas,
             }],
             placement: PlacementConstraint::default(),
@@ -299,6 +324,7 @@ fn assignment(
         spec: AssignmentSpec {
             service_id: service_id("web"),
             deployment_id: deployment_id(deployment),
+            restart_generation: Generation(1),
             replica_index,
             node_id: node_id(node),
             placement_epoch,

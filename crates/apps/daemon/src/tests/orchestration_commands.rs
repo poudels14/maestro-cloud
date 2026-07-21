@@ -6,7 +6,7 @@ use kernel_api::{
 use super::orchestration::RolloutWorld;
 
 #[tokio::test]
-async fn cancel_queued_restart_preserves_the_serving_deployment()
+async fn cancel_queued_same_spec_redeploy_preserves_the_serving_deployment()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
@@ -14,14 +14,14 @@ async fn cancel_queued_restart_preserves_the_serving_deployment()
         let active_id = active_service_deployment(&world).await?;
 
         world.set_rollout_state(RolloutState::Frozen).await?;
-        world.restart_service().await?;
+        world.redeploy_service().await?;
         world.converge().await?;
         let queued = world
             .list::<Deployment>("Deployment")
             .await?
             .into_iter()
             .find(|deployment| deployment.status.phase == DeploymentPhase::Queued)
-            .ok_or("queued restart missing")?;
+            .ok_or("queued same-spec redeploy missing")?;
 
         world
             .request_deployment_goal(&queued.meta.id, DeploymentGoal::Cancel)
@@ -44,7 +44,7 @@ async fn cancel_queued_restart_preserves_the_serving_deployment()
 }
 
 #[tokio::test]
-async fn remove_active_deployment_drains_then_same_spec_restart_recovers()
+async fn remove_active_deployment_drains_then_same_spec_redeploy_recovers()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for node_count in [1_u8, 3_u8] {
         let world = RolloutWorld::new(node_count).await?;
@@ -82,7 +82,7 @@ async fn remove_active_deployment_drains_then_same_spec_restart_recovers()
                 })
         );
 
-        world.restart_service().await?;
+        world.redeploy_service().await?;
         world.converge().await?;
         let restarted_id = active_service_deployment(&world).await?;
         assert_ne!(restarted_id, removed_id);
@@ -94,6 +94,48 @@ async fn remove_active_deployment_drains_then_same_spec_restart_recovers()
             active_traffic(&world).await?.spec.deployment_id,
             restarted_id
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_replaces_workloads_under_the_same_deployment()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    for node_count in [1_u8, 3_u8] {
+        let world = RolloutWorld::new(node_count).await?;
+        world.converge().await?;
+        let deployment_id = active_service_deployment(&world).await?;
+        let previous = world
+            .list::<Assignment>("Assignment")
+            .await?
+            .into_iter()
+            .map(|assignment| assignment.meta.id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        world.restart_deployment(&deployment_id).await?;
+        world.converge().await?;
+
+        let deployments = world.list::<Deployment>("Deployment").await?;
+        assert_eq!(deployments.len(), 1);
+        assert_eq!(
+            deployments.first().ok_or("deployment missing")?.meta.id,
+            deployment_id
+        );
+        assert_eq!(active_service_deployment(&world).await?, deployment_id);
+        let current = world.list::<Assignment>("Assignment").await?;
+        assert_eq!(current.len(), usize::from(node_count));
+        assert!(current.iter().all(|assignment| {
+            assignment.spec.deployment_id == deployment_id
+                && assignment.spec.restart_generation == kernel_api::Generation(2)
+                && !previous.contains(&assignment.meta.id)
+        }));
+        let traffic = active_traffic(&world).await?;
+        assert_eq!(traffic.spec.deployment_id, deployment_id);
+        assert!(traffic.spec.targets.iter().all(|target| {
+            current
+                .iter()
+                .any(|assignment| assignment.meta.id == target.assignment_id)
+        }));
     }
     Ok(())
 }

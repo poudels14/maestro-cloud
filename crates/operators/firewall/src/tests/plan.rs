@@ -314,6 +314,7 @@ fn assignment(id: &str, service: &Service, node_id: &str, address: &str) -> Assi
         spec: AssignmentSpec {
             service_id: service.meta.id.clone(),
             deployment_id: DeploymentId::new(format!("deployment-{}", service.meta.id)).unwrap(),
+            restart_generation: Generation(1),
             replica_index: 0,
             node_id: NodeId::new(node_id).unwrap(),
             placement_epoch: 1,

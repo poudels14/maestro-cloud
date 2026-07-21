@@ -10,6 +10,8 @@ use kernel_api::{
 pub struct DeploymentGroup {
     /// Immutable deployment identity.
     pub deployment_id: DeploymentId,
+    /// Desired workload generation for every assignment in the group.
+    pub restart_generation: kernel_api::Generation,
     /// Desired slots for this deployment.
     pub replicas: u32,
 }

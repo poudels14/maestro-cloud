@@ -273,6 +273,7 @@ fn schedule_services(
             .iter()
             .map(|deployment| DeploymentGroup {
                 deployment_id: deployment.meta.id.clone(),
+                restart_generation: deployment.spec.restart_generation,
                 replicas,
             })
             .collect::<Vec<_>>();
