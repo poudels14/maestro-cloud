@@ -227,6 +227,10 @@ impl ManualTimestampClock {
     pub(super) fn set(&self, millis: i64) {
         self.0.store(millis, Ordering::SeqCst);
     }
+
+    pub(super) fn advance(&self, millis: i64) {
+        self.0.fetch_add(millis, Ordering::SeqCst);
+    }
 }
 
 impl TimestampClock for ManualTimestampClock {

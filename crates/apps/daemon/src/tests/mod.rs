@@ -22,6 +22,8 @@ mod orchestration_node;
 mod orchestration_preview_acceptance;
 mod orchestration_scale;
 mod orchestration_service;
+mod orchestration_upgrade_acceptance;
+mod orchestration_upgrade_backend;
 mod plan;
 mod runtime;
 mod s3_backup;
