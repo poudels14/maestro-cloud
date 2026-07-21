@@ -4174,6 +4174,37 @@
         ],
         "type": "object"
       },
+      "ServiceWriteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision",
+            "description": "Required current revision; omit only when creating"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ServiceSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceWriteResponse": {
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/Generation"
+          },
+          "serviceId": {
+            "$ref": "#/components/schemas/ServiceId"
+          }
+        },
+        "required": [
+          "serviceId",
+          "generation"
+        ],
+        "type": "object"
+      },
       "SessionAffinity": {
         "description": "Optional header-based affinity applied by ingress.",
         "properties": {
@@ -4963,6 +4994,63 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "putService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceWriteResponse"
+                }
+              }
+            },
+            "description": "Desired state accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid service request"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the service limit"
           }
         },
         "security": [

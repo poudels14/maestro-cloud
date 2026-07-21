@@ -19,6 +19,7 @@ use axum::Router;
 use axum_server::Handle;
 use axum_server::tls_rustls::{RustlsConfig, from_tcp_rustls};
 use kernel_api::ClusterId;
+use kernel_controller::RequestDeduplicator;
 use kernel_store::Store;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -35,6 +36,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 pub(crate) struct AppState {
     pub(crate) store: Arc<dyn Store>,
     pub(crate) cluster_id: ClusterId,
+    pub(crate) requests: RequestDeduplicator,
 }
 
 /// Validated API application that has not yet claimed its listener.
@@ -51,7 +53,11 @@ impl ApiServer {
         settings: ServerSettings,
     ) -> Result<Self, ServerError> {
         let settings = settings.validate()?;
-        let state = AppState { store, cluster_id };
+        let state = AppState {
+            requests: RequestDeduplicator::new(store.clone()),
+            store,
+            cluster_id,
+        };
         let router = routes::router(state, AuthPolicy::new(settings.jwt_secret_key.clone()));
         Ok(Self { settings, router })
     }

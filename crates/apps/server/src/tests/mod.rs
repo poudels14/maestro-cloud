@@ -21,6 +21,8 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
+mod services;
+
 #[test]
 fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -183,6 +185,11 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(document.pointer("/paths/~1api~1services/get").is_some());
     assert!(
         document
+            .pointer("/paths/~1api~1services~1{serviceId}/put")
+            .is_some()
+    );
+    assert!(
+        document
             .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}/get")
             .is_some()
     );
@@ -241,7 +248,7 @@ fn node() -> Result<Node, kernel_api::InvalidIdentifier> {
     })
 }
 
-fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
+pub(super) fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(ServiceId::new("api")?),
         spec: ServiceSpec {
@@ -292,7 +299,7 @@ fn metadata<Id>(id: Id) -> ObjectMeta<Id> {
     }
 }
 
-async fn request(
+pub(super) async fn request(
     server: &ApiServer,
     uri: &str,
     token: Option<&str>,

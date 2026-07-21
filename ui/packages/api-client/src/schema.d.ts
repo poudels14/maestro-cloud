@@ -60,7 +60,7 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getService"];
-        put?: never;
+        put: operations["putService"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1305,6 +1305,15 @@ export interface components {
             /** @description Whether new rollouts may begin. */
             rollout: components["schemas"]["RolloutState"];
         };
+        ServiceWriteRequest: {
+            /** @description Required current revision; omit only when creating */
+            expectedRevision?: components["schemas"]["ResourceRevision"];
+            spec: components["schemas"]["ServiceSpec"];
+        };
+        ServiceWriteResponse: {
+            generation: components["schemas"]["Generation"];
+            serviceId: components["schemas"]["ServiceId"];
+        };
         /** @description Optional header-based affinity applied by ingress. */
         SessionAffinity: {
             /** @description HTTP header carrying the opaque affinity token. */
@@ -1569,6 +1578,55 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putService: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Desired state accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceWriteResponse"];
+                };
+            };
+            /** @description Invalid service request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the service limit */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

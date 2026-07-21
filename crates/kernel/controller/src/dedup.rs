@@ -52,6 +52,15 @@ impl RequestDeduplicator {
         Self { store }
     }
 
+    /// Returns the committed response for a matching prior request, when present.
+    pub async fn replay(
+        &self,
+        claim_key: &StoreKey,
+        fingerprint: RequestFingerprint,
+    ) -> Result<Option<Vec<u8>>, ControllerError> {
+        replay_claim(self.store.as_ref(), claim_key, fingerprint).await
+    }
+
     /// Applies a resource write without requiring this API node to be leader.
     pub async fn deduplicate(
         &self,
@@ -145,24 +154,35 @@ async fn resolve_outcome(
                 })
             }
         }
-        TransactionOutcome::Conflict => match store.get(&claim_key).await? {
-            Some(stored) => {
-                let existing: RequestClaim =
-                    serde_json::from_slice(&stored.value).map_err(|error| {
-                        ControllerError::MalformedRequestClaim {
-                            message: error.to_string(),
-                        }
-                    })?;
-                if existing.fingerprint == fingerprint.0 {
-                    Ok(DedupOutcome::Duplicate {
-                        response: existing.response,
-                    })
-                } else {
-                    Err(ControllerError::RequestCollision)
-                }
-            }
+        TransactionOutcome::Conflict => match replay_claim(store, &claim_key, fingerprint).await? {
+            Some(response) => Ok(DedupOutcome::Duplicate { response }),
             None => Ok(DedupOutcome::MutationConflict),
         },
+    }
+}
+
+async fn replay_claim(
+    store: &dyn Store,
+    claim_key: &StoreKey,
+    fingerprint: RequestFingerprint,
+) -> Result<Option<Vec<u8>>, ControllerError> {
+    let Some(stored) = store.get(claim_key).await? else {
+        return Ok(None);
+    };
+    let existing: RequestClaim = serde_json::from_slice(&stored.value).map_err(|error| {
+        ControllerError::MalformedRequestClaim {
+            message: error.to_string(),
+        }
+    })?;
+    if existing.response.len() > MAXIMUM_CLAIM_RESPONSE_BYTES {
+        return Err(ControllerError::MalformedRequestClaim {
+            message: "stored response exceeds the request-claim limit".to_string(),
+        });
+    }
+    if existing.fingerprint == fingerprint.0 {
+        Ok(Some(existing.response))
+    } else {
+        Err(ControllerError::RequestCollision)
     }
 }
 

@@ -39,6 +39,14 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, "notFound", message)
     }
 
+    pub(crate) fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message)
+    }
+
+    pub(crate) fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payloadTooLarge", message)
+    }
+
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }

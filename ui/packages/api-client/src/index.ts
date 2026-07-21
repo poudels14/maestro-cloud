@@ -96,6 +96,12 @@ export interface MaestroApiClient {
   getNode(nodeId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Node"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
+  putService(
+    serviceId: string,
+    request: ApiSchemas["ServiceWriteRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceWriteResponse"]>;
 }
 
 export function createApiClient(transport: ApiTransport): MaestroApiClient {
@@ -114,12 +120,41 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     return transport.request(request);
   }
 
+  function put<Response, Body>(
+    path: string,
+    body: Body,
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<Response> {
+    const request: TransportRequest<Response, Body> = {
+      method: "PUT",
+      path,
+      body,
+      headers: {
+        ...options?.headers,
+        "Idempotency-Key": idempotencyKey
+      },
+      decode: decodeJson
+    };
+    if (options?.signal !== undefined) {
+      request.signal = options.signal;
+    }
+    return transport.request(request);
+  }
+
   return {
     listNodes: (options) => get("/api/cluster/nodes", options),
     getNode: (nodeId, options) =>
       get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
-      get(`/api/services/${encodeURIComponent(serviceId)}`, options)
+      get(`/api/services/${encodeURIComponent(serviceId)}`, options),
+    putService: (serviceId, request, idempotencyKey, options) =>
+      put(
+        `/api/services/${encodeURIComponent(serviceId)}`,
+        request,
+        idempotencyKey,
+        options
+      )
   };
 }

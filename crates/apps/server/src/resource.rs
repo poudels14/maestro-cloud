@@ -55,7 +55,7 @@ where
     decode(&stored, &keys, &resource_kind, kind)
 }
 
-fn decode<Id, Spec, Status>(
+pub(crate) fn decode<Id, Spec, Status>(
     stored: &StoredValue,
     keys: &Keyspace,
     resource_kind: &kernel_api::ResourceKind,

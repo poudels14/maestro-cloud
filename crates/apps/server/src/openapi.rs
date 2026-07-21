@@ -16,10 +16,7 @@ pub fn openapi_document() -> Value {
             "/api/services".to_string(),
             list_operation("listServices", "Service"),
         ),
-        (
-            "/api/services/{serviceId}".to_string(),
-            get_operation("getService", "serviceId", "Service"),
-        ),
+        ("/api/services/{serviceId}".to_string(), service_operation()),
         ("/healthz".to_string(), health_operation()),
         ("/openapi.json".to_string(), openapi_operation()),
     ]));
@@ -35,9 +32,87 @@ pub fn openapi_document() -> Value {
         root.insert("paths".to_string(), paths);
         if let Some(components) = root.get_mut("components").and_then(Value::as_object_mut) {
             components.insert("securitySchemes".to_string(), security_schemes);
+            if let Some(schemas) = components.get_mut("schemas").and_then(Value::as_object_mut) {
+                schemas.insert(
+                    "ServiceWriteRequest".to_string(),
+                    json!({
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["spec"],
+                        "properties": {
+                            "expectedRevision": {
+                                "$ref": "#/components/schemas/ResourceRevision",
+                                "description": "Required current revision; omit only when creating"
+                            },
+                            "spec": {"$ref": "#/components/schemas/ServiceSpec"}
+                        }
+                    }),
+                );
+                schemas.insert(
+                    "ServiceWriteResponse".to_string(),
+                    json!({
+                        "type": "object",
+                        "required": ["serviceId", "generation"],
+                        "properties": {
+                            "serviceId": {"$ref": "#/components/schemas/ServiceId"},
+                            "generation": {"$ref": "#/components/schemas/Generation"}
+                        }
+                    }),
+                );
+            }
         }
     }
     document
+}
+
+fn service_operation() -> Value {
+    let mut operation = get_operation("getService", "serviceId", "Service");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert("put".to_string(), put_service_operation());
+    }
+    operation
+}
+
+fn put_service_operation() -> Value {
+    json!({
+        "operationId": "putService",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+            {
+                "name": "serviceId",
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            },
+            {
+                "name": "Idempotency-Key",
+                "in": "header",
+                "required": true,
+                "schema": {"type": "string"}
+            }
+        ],
+        "requestBody": {
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/ServiceWriteRequest"}
+                }
+            }
+        },
+        "responses": {
+            "202": {
+                "description": "Desired state accepted for reconciliation",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ServiceWriteResponse"}
+                    }
+                }
+            },
+            "400": {"description": "Invalid service request"},
+            "409": {"description": "Revision or idempotency conflict"},
+            "413": {"description": "Request body exceeds the service limit"}
+        }
+    })
 }
 
 fn list_operation(operation_id: &str, schema: &str) -> Value {
