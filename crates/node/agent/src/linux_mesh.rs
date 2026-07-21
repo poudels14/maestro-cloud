@@ -271,16 +271,16 @@ fn backend_error(action: &str, error: impl std::fmt::Display) -> MeshBackendErro
     MeshBackendError::new(format!("failed to {action}: {error}"))
 }
 
-struct AbortOnDrop<Output> {
+pub(crate) struct AbortOnDrop<Output> {
     handle: JoinHandle<Output>,
 }
 
 impl<Output> AbortOnDrop<Output> {
-    fn new(handle: JoinHandle<Output>) -> Self {
+    pub(crate) fn new(handle: JoinHandle<Output>) -> Self {
         Self { handle }
     }
 
-    async fn abort_and_wait(&mut self) {
+    pub(crate) async fn abort_and_wait(&mut self) {
         self.handle.abort();
         let _result = (&mut self.handle).await;
     }

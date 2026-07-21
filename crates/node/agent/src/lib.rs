@@ -25,6 +25,8 @@ mod health;
 mod health_probe;
 mod health_status;
 #[cfg(target_os = "linux")]
+mod linux_bridge;
+#[cfg(target_os = "linux")]
 mod linux_firewall;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
@@ -44,7 +46,10 @@ mod node_api_mount;
 mod secret_mount;
 #[cfg(target_os = "linux")]
 mod stats;
+mod workload_bridge;
 
+#[cfg(target_os = "linux")]
+pub use linux_bridge::LinuxWorkloadBridgeBackend;
 #[cfg(target_os = "linux")]
 pub use linux_firewall::NftablesFirewallBackend;
 #[cfg(target_os = "linux")]
@@ -97,6 +102,10 @@ pub use secret_mount::SecretMountError;
 pub use stats::{
     WorkloadStatsAgent, WorkloadStatsAgentError, WorkloadStatsFailure, WorkloadStatsFailureStage,
     WorkloadStatsReport, WorkloadStatsSample, WorkloadStatsSettings,
+};
+pub use workload_bridge::{
+    WORKLOAD_BRIDGE_NAME, WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
+    WorkloadBridgeBackendError, WorkloadBridgeError,
 };
 
 #[cfg(test)]

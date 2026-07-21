@@ -14,6 +14,8 @@ mod fake_network;
 mod firewall;
 mod health;
 #[cfg(target_os = "linux")]
+mod linux_bridge;
+#[cfg(target_os = "linux")]
 mod linux_firewall;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
@@ -33,3 +35,4 @@ mod node_api_support;
 mod secret_mount;
 #[cfg(target_os = "linux")]
 mod stats;
+mod workload_bridge;
