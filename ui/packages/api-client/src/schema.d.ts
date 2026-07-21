@@ -68,6 +68,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/upgrades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUpgrades"];
+        put?: never;
+        post: operations["startUpgrade"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster/upgrades/{upgradeRunId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getUpgrade"];
+        put?: never;
+        post?: never;
+        delete: operations["cancelUpgrade"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -1688,6 +1720,16 @@ export interface components {
         };
         /** @description Transport protocol selected by a firewall rule. */
         TransportProtocol: "tcp" | "udp" | "any";
+        UpgradeCommandResponse: {
+            deletionTimestamp?: components["schemas"]["Timestamp"];
+            generation: components["schemas"]["Generation"];
+            phase: components["schemas"]["UpgradePhase"];
+            upgradeRunId: components["schemas"]["UpgradeRunId"];
+        };
+        UpgradeCreateRequest: {
+            spec: components["schemas"]["UpgradeRunSpec"];
+            upgradeRunId: components["schemas"]["UpgradeRunId"];
+        };
         /** @description Node batching strategy for one cluster upgrade run. */
         UpgradeMode: "rolling" | "allNodes";
         /** @description Persisted lifecycle shared by rolling and all-node upgrade modes. */
@@ -1917,6 +1959,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeCommandResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listUpgrades: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered resource list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeRun"][];
+                };
+            };
+        };
+    };
+    startUpgrade: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle command accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeCommandResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUpgrade: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upgradeRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeRun"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancelUpgrade: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                upgradeRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle command accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeCommandResponse"];
                 };
             };
             /** @description Invalid command request */

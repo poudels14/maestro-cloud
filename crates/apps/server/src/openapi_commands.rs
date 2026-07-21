@@ -72,6 +72,31 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "UpgradeCreateRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["upgradeRunId", "spec"],
+            "properties": {
+                "upgradeRunId": {"$ref": "#/components/schemas/UpgradeRunId"},
+                "spec": {"$ref": "#/components/schemas/UpgradeRunSpec"}
+            }
+        }),
+    );
+    schemas.insert(
+        "UpgradeCommandResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["upgradeRunId", "generation", "phase"],
+            "properties": {
+                "upgradeRunId": {"$ref": "#/components/schemas/UpgradeRunId"},
+                "generation": {"$ref": "#/components/schemas/Generation"},
+                "phase": {"$ref": "#/components/schemas/UpgradePhase"},
+                "deletionTimestamp": {"$ref": "#/components/schemas/Timestamp"}
+            }
+        }),
+    );
 }
 
 pub(crate) fn deployment_command_path(operation_id: &str) -> Value {

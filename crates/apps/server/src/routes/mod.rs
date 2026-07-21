@@ -6,6 +6,7 @@ mod observations;
 mod service_commands;
 mod services;
 mod system;
+mod upgrades;
 
 use axum::Router;
 use axum::middleware;
@@ -22,6 +23,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(observations::router())
         .merge(service_commands::router())
         .merge(services::router())
+        .merge(upgrades::router())
         .route_layer(middleware::from_fn_with_state(auth, require_operator));
     Router::new()
         .merge(system::router())

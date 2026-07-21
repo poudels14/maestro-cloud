@@ -4581,6 +4581,44 @@
           }
         ]
       },
+      "UpgradeCommandResponse": {
+        "properties": {
+          "deletionTimestamp": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/Generation"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/UpgradePhase"
+          },
+          "upgradeRunId": {
+            "$ref": "#/components/schemas/UpgradeRunId"
+          }
+        },
+        "required": [
+          "upgradeRunId",
+          "generation",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "UpgradeCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/UpgradeRunSpec"
+          },
+          "upgradeRunId": {
+            "$ref": "#/components/schemas/UpgradeRunId"
+          }
+        },
+        "required": [
+          "upgradeRunId",
+          "spec"
+        ],
+        "type": "object"
+      },
       "UpgradeMode": {
         "description": "Node batching strategy for one cluster upgrade run.",
         "oneOf": [
@@ -5155,6 +5193,178 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/upgrades": {
+      "get": {
+        "operationId": "listUpgrades",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UpgradeRun"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Ordered resource list"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "startUpgrade",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/upgrades/{upgradeRunId}": {
+      "delete": {
+        "operationId": "cancelUpgrade",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upgradeRunId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getUpgrade",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upgradeRunId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRun"
+                }
+              }
+            },
+            "description": "Requested resource"
+          },
+          "404": {
+            "description": "Resource not found"
           }
         },
         "security": [

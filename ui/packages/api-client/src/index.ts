@@ -106,6 +106,22 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["NodeCommandResponse"]>;
+  listUpgrades(options?: ApiRequestOptions): Promise<ApiSchemas["UpgradeRun"][]>;
+  getUpgrade(
+    upgradeRunId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["UpgradeRun"]>;
+  startUpgrade(
+    request: ApiSchemas["UpgradeCreateRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["UpgradeCommandResponse"]>;
+  cancelUpgrade(
+    upgradeRunId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["UpgradeCommandResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -262,6 +278,19 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       mutate(
         "POST",
         `/api/cluster/nodes/${encodeURIComponent(nodeId)}/restore`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    listUpgrades: (options) => get("/api/cluster/upgrades", options),
+    getUpgrade: (upgradeRunId, options) =>
+      get(`/api/cluster/upgrades/${encodeURIComponent(upgradeRunId)}`, options),
+    startUpgrade: (request, idempotencyKey, options) =>
+      mutate("POST", "/api/cluster/upgrades", request, idempotencyKey, options),
+    cancelUpgrade: (upgradeRunId, request, idempotencyKey, options) =>
+      mutate(
+        "DELETE",
+        `/api/cluster/upgrades/${encodeURIComponent(upgradeRunId)}`,
         request,
         idempotencyKey,
         options

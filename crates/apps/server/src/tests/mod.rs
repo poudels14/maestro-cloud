@@ -27,6 +27,7 @@ mod node_commands;
 mod observations;
 mod service_commands;
 mod services;
+mod upgrades;
 
 #[test]
 fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
@@ -245,6 +246,11 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}~1drain/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1upgrades/post")
             .is_some()
     );
     assert_eq!(

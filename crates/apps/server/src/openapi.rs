@@ -37,6 +37,14 @@ pub fn openapi_document() -> Value {
             ),
         ),
         (
+            "/api/cluster/upgrades".to_string(),
+            upgrade_collection_operation(),
+        ),
+        (
+            "/api/cluster/upgrades/{upgradeRunId}".to_string(),
+            upgrade_operation(),
+        ),
+        (
             "/api/services".to_string(),
             list_operation("listServices", "Service"),
         ),
@@ -189,6 +197,38 @@ pub fn openapi_document() -> Value {
         }
     }
     document
+}
+
+fn upgrade_collection_operation() -> Value {
+    let mut operation = list_operation("listUpgrades", "UpgradeRun");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert(
+            "post".to_string(),
+            command_operation(
+                "startUpgrade",
+                &[],
+                "UpgradeCreateRequest",
+                "UpgradeCommandResponse",
+            ),
+        );
+    }
+    operation
+}
+
+fn upgrade_operation() -> Value {
+    let mut operation = get_operation("getUpgrade", "upgradeRunId", "UpgradeRun");
+    if let Some(item) = operation.as_object_mut() {
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "cancelUpgrade",
+                &["upgradeRunId"],
+                "CommandRequest",
+                "UpgradeCommandResponse",
+            ),
+        );
+    }
+    operation
 }
 
 fn service_operation() -> Value {
