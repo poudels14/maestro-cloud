@@ -1,0 +1,60 @@
+use async_trait::async_trait;
+use kernel_api::BuildSource;
+use runtime::ArtifactSource;
+
+/// Materialized source tree and the immutable revision it represents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedBuildSource {
+    /// Directory or archive ready for the artifact backend.
+    pub artifact_source: ArtifactSource,
+    /// Immutable source identity resolved by the source backend.
+    pub revision: String,
+}
+
+/// Matchable source preparation failure.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BuildSourceError {
+    /// Source storage or source control is temporarily unavailable.
+    #[error("build source is temporarily unavailable: {message}")]
+    Unavailable {
+        /// Detail safe to persist in a status condition.
+        message: String,
+    },
+    /// The requested source cannot produce a valid build on retry.
+    #[error("build source was rejected: {message}")]
+    Rejected {
+        /// Detail safe to persist in a status condition.
+        message: String,
+    },
+}
+
+impl BuildSourceError {
+    /// Constructs a transient source error with status-safe detail.
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::Unavailable {
+            message: message.into(),
+        }
+    }
+
+    /// Constructs a permanent source error with status-safe detail.
+    pub fn rejected(message: impl Into<String>) -> Self {
+        Self::Rejected {
+            message: message.into(),
+        }
+    }
+}
+
+/// Source-control and uploaded-archive materialization boundary.
+#[async_trait]
+pub trait BuildSourceProvider: Send + Sync {
+    /// Materializes source, resolving the requested revision on the first call.
+    ///
+    /// Once `resolved_revision` is present, the returned source must represent
+    /// that exact immutable revision. This makes retries immune to a moving
+    /// branch or tag.
+    async fn prepare(
+        &self,
+        source: &BuildSource,
+        resolved_revision: Option<&str>,
+    ) -> Result<PreparedBuildSource, BuildSourceError>;
+}
