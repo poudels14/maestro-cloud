@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kernel_api::{Timestamp, WorkloadId};
+use kernel_api::{NodeId, Timestamp, WorkloadId};
 
 use crate::{
-    DatadogMetricSink, DatadogMetricSinkSettings, MetricHttpRequest, MetricHttpResponse,
-    MetricHttpTransport, MetricHttpTransportError, MetricSequence, MetricSink, MetricSinkError,
-    SequencedMetricPoint,
+    DatadogMetricSink, DatadogMetricSinkSettings, HostMetricSequence, HostMetricSink,
+    MetricHttpRequest, MetricHttpResponse, MetricHttpTransport, MetricHttpTransportError,
+    MetricSequence, MetricSink, MetricSinkError, SequencedHostMetricPoint, SequencedMetricPoint,
 };
 
 #[tokio::test]
@@ -135,6 +135,136 @@ async fn datadog_rejects_mismatched_baselines_before_transport()
 }
 
 #[tokio::test]
+async fn datadog_host_request_preserves_legacy_gauges_rates_and_tags()
+-> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(RecordingTransport::new([]));
+    let sink = DatadogMetricSink::new(settings()?, transport.clone());
+    let points = host_points()?;
+
+    sink.send_host_metrics(&points).await?;
+    sink.send_host_metrics(&points).await?;
+
+    let requests = transport.requests()?;
+    assert_eq!(requests.len(), 2);
+    let first = requests.first().ok_or("Datadog host request missing")?;
+    let second = requests.get(1).ok_or("replayed host request missing")?;
+    assert!(first == second);
+    let tags = serde_json::json!(["cluster:prod", "host:node-one", "env:test"]);
+    let disk_tags = serde_json::json!(["cluster:prod", "host:node-one", "env:test", "mount:/"]);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&first.body)?,
+        serde_json::json!({
+            "series": [
+                {
+                    "metric": "maestro.node.cpu.percent",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 70.0}],
+                    "tags": tags,
+                    "unit": "percent"
+                },
+                {
+                    "metric": "maestro.node.memory.bytes",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 2048.0}],
+                    "tags": tags,
+                    "unit": "byte"
+                },
+                {
+                    "metric": "maestro.node.network.rx.bytes_per_sec",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 200.0}],
+                    "tags": tags,
+                    "unit": "byte"
+                },
+                {
+                    "metric": "maestro.node.network.tx.bytes_per_sec",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 300.0}],
+                    "tags": tags,
+                    "unit": "byte"
+                },
+                {
+                    "metric": "maestro.node.disk.used.bytes",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 6000.0}],
+                    "tags": disk_tags,
+                    "unit": "byte"
+                },
+                {
+                    "metric": "maestro.node.disk.total.bytes",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 10000.0}],
+                    "tags": disk_tags,
+                    "unit": "byte"
+                },
+                {
+                    "metric": "maestro.node.disk.usage.percent",
+                    "type": 3,
+                    "points": [{"timestamp": 1_750_000_001, "value": 60.0}],
+                    "tags": disk_tags,
+                    "unit": "percent"
+                }
+            ]
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn datadog_host_counter_resets_emit_zero_rates() -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(RecordingTransport::new([]));
+    let sink = DatadogMetricSink::new(settings()?, transport.clone());
+    let mut points = host_points()?;
+    let resources = points
+        .first_mut()
+        .and_then(|point| point.point.resources.as_mut())
+        .ok_or("host resources missing")?;
+    resources.cpu_total_ticks = 10;
+    resources.cpu_idle_ticks = 5;
+    resources.network_receive_bytes = 1;
+    resources.network_transmit_bytes = 1;
+
+    sink.send_host_metrics(&points).await?;
+
+    let requests = transport.requests()?;
+    let request = requests.first().ok_or("Datadog host request missing")?;
+    let document = serde_json::from_slice::<serde_json::Value>(&request.body)?;
+    let values = document
+        .get("series")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Datadog host series missing")?
+        .iter()
+        .filter_map(|series| series.get("points")?.get(0)?.get("value")?.as_f64())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![0.0, 2_048.0, 0.0, 0.0, 6_000.0, 10_000.0, 60.0]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn datadog_rejects_mismatched_host_baselines_before_transport()
+-> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(RecordingTransport::new([]));
+    let sink = DatadogMetricSink::new(settings()?, transport.clone());
+    let mut points = host_points()?;
+    points
+        .first_mut()
+        .and_then(|point| point.previous_resources.as_mut())
+        .ok_or("host rate baseline missing")?
+        .id
+        .node_id = NodeId::new("another-node")?;
+
+    assert!(matches!(
+        sink.send_host_metrics(&points).await,
+        Err(MetricSinkError::Rejected { .. })
+    ));
+    assert!(transport.requests()?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn datadog_classifies_operational_and_permanent_http_failures()
 -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(RecordingTransport::new([
@@ -224,6 +354,25 @@ fn points() -> Result<Vec<SequencedMetricPoint>, kernel_api::InvalidIdentifier> 
             previous: Some(first),
         },
     ])
+}
+
+fn host_points() -> Result<Vec<SequencedHostMetricPoint>, kernel_api::InvalidIdentifier> {
+    let mut previous = crate::conformance::host_metric_point("node-one", 1_750_000_000_000, 1_024)?;
+    let previous_resources = previous.resources.as_mut().expect("test host resources");
+    previous_resources.memory_total_bytes = 4_096;
+    let mut current = previous.clone();
+    current.id.collected_at = Timestamp(1_750_000_001_000);
+    let current_resources = current.resources.as_mut().expect("test host resources");
+    current_resources.cpu_total_ticks = 300;
+    current_resources.cpu_idle_ticks = 100;
+    current_resources.memory_used_bytes = 2_048;
+    current_resources.network_receive_bytes = 300;
+    current_resources.network_transmit_bytes = 500;
+    Ok(vec![SequencedHostMetricPoint {
+        sequence: HostMetricSequence(2),
+        point: current,
+        previous_resources: Some(previous),
+    }])
 }
 
 #[derive(Clone, PartialEq, Eq)]

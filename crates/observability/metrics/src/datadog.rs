@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 use crate::{
-    MetricHttpRequest, MetricHttpTransport, MetricSink, MetricSinkError, MetricSinkId,
-    SequencedMetricPoint, WorkloadMetricPoint,
+    HostMetricPoint, HostMetricSink, MetricHttpRequest, MetricHttpTransport, MetricSink,
+    MetricSinkError, MetricSinkId, SequencedHostMetricPoint, SequencedMetricPoint,
+    WorkloadMetricPoint,
 };
 
 const DATADOG_GAUGE: u8 = 3;
@@ -189,10 +190,7 @@ impl DatadogMetricSink {
     }
 
     fn tags(&self, point: &WorkloadMetricPoint) -> Vec<String> {
-        let mut tags = Vec::with_capacity(self.settings.global_tags.len().saturating_add(5));
-        tags.push(format!("cluster:{}", self.settings.cluster_name));
-        tags.push(format!("host:{}", self.settings.hostname));
-        tags.extend(self.settings.global_tags.iter().cloned());
+        let mut tags = self.host_tags();
         tags.push(format!("service:{}", point.metadata.service_id));
         tags.push(format!("deployment:{}", point.metadata.deployment_id));
         if let Some(replica) = point.metadata.labels.get(REPLICA_INDEX_LABEL) {
@@ -200,16 +198,113 @@ impl DatadogMetricSink {
         }
         tags
     }
-}
 
-#[async_trait]
-impl MetricSink for DatadogMetricSink {
-    fn id(&self) -> &MetricSinkId {
-        &self.id
+    fn host_tags(&self) -> Vec<String> {
+        let mut tags = Vec::with_capacity(self.settings.global_tags.len().saturating_add(2));
+        tags.push(format!("cluster:{}", self.settings.cluster_name));
+        tags.push(format!("host:{}", self.settings.hostname));
+        tags.extend(self.settings.global_tags.iter().cloned());
+        tags
     }
 
-    async fn send(&self, points: &[SequencedMetricPoint]) -> Result<(), MetricSinkError> {
-        let series = self.build_series(points)?;
+    fn build_host_series(
+        &self,
+        points: &[SequencedHostMetricPoint],
+    ) -> Result<Vec<DatadogSeries>, MetricSinkError> {
+        let mut series = Vec::with_capacity(points.len().saturating_mul(7));
+        for sequenced in points {
+            validate_host_baseline(sequenced)?;
+            self.append_host_point_series(sequenced, &mut series);
+        }
+        Ok(series)
+    }
+
+    fn append_host_point_series(
+        &self,
+        sequenced: &SequencedHostMetricPoint,
+        out: &mut Vec<DatadogSeries>,
+    ) {
+        let point = &sequenced.point;
+        let timestamp = point.id.collected_at.0.div_euclid(1_000);
+        let tags = self.host_tags();
+        if let Some(resources) = point.resources {
+            let baseline = sequenced
+                .previous_resources
+                .as_ref()
+                .and_then(|previous| {
+                    host_elapsed_seconds(previous, point).map(|elapsed| (previous, elapsed))
+                })
+                .and_then(|(previous, elapsed)| {
+                    previous.resources.map(|resources| (resources, elapsed))
+                });
+            if let Some((previous, _elapsed)) = baseline {
+                out.push(gauge(
+                    "maestro.node.cpu.percent",
+                    timestamp,
+                    host_cpu_percent(previous, resources),
+                    tags.clone(),
+                    Some("percent"),
+                ));
+            }
+            out.push(gauge(
+                "maestro.node.memory.bytes",
+                timestamp,
+                resources.memory_used_bytes as f64,
+                tags.clone(),
+                Some("byte"),
+            ));
+            if let Some((previous, elapsed)) = baseline {
+                out.push(gauge(
+                    "maestro.node.network.rx.bytes_per_sec",
+                    timestamp,
+                    resources
+                        .network_receive_bytes
+                        .saturating_sub(previous.network_receive_bytes) as f64
+                        / elapsed,
+                    tags.clone(),
+                    Some("byte"),
+                ));
+                out.push(gauge(
+                    "maestro.node.network.tx.bytes_per_sec",
+                    timestamp,
+                    resources
+                        .network_transmit_bytes
+                        .saturating_sub(previous.network_transmit_bytes) as f64
+                        / elapsed,
+                    tags.clone(),
+                    Some("byte"),
+                ));
+            }
+        }
+        for disk in point.disks.iter().flatten() {
+            let mut disk_tags = tags.clone();
+            disk_tags.push(format!("mount:{}", disk.mount_point));
+            let used = disk.total_bytes.saturating_sub(disk.available_bytes);
+            out.push(gauge(
+                "maestro.node.disk.used.bytes",
+                timestamp,
+                used as f64,
+                disk_tags.clone(),
+                Some("byte"),
+            ));
+            out.push(gauge(
+                "maestro.node.disk.total.bytes",
+                timestamp,
+                disk.total_bytes as f64,
+                disk_tags.clone(),
+                Some("byte"),
+            ));
+            out.push(gauge(
+                "maestro.node.disk.usage.percent",
+                timestamp,
+                used as f64 / disk.total_bytes as f64 * 100.0,
+                disk_tags,
+                Some("percent"),
+            ));
+        }
+    }
+
+    async fn send_series(&self, series: Vec<DatadogSeries>) -> Result<(), MetricSinkError> {
         if series.is_empty() {
             return Ok(());
         }
@@ -252,6 +347,33 @@ impl MetricSink for DatadogMetricSink {
                 ),
             })
         }
+    }
+}
+
+#[async_trait]
+impl MetricSink for DatadogMetricSink {
+    fn id(&self) -> &MetricSinkId {
+        &self.id
+    }
+
+    async fn send(&self, points: &[SequencedMetricPoint]) -> Result<(), MetricSinkError> {
+        let series = self.build_series(points)?;
+        self.send_series(series).await
+    }
+}
+
+#[async_trait]
+impl HostMetricSink for DatadogMetricSink {
+    fn id(&self) -> &MetricSinkId {
+        &self.id
+    }
+
+    async fn send_host_metrics(
+        &self,
+        points: &[SequencedHostMetricPoint],
+    ) -> Result<(), MetricSinkError> {
+        let series = self.build_host_series(points)?;
+        self.send_series(series).await
     }
 }
 
@@ -303,6 +425,34 @@ fn elapsed_seconds(previous: &WorkloadMetricPoint, current: &WorkloadMetricPoint
     (elapsed_millis != 0).then(|| Duration::from_millis(elapsed_millis).as_secs_f64())
 }
 
+fn host_elapsed_seconds(previous: &HostMetricPoint, current: &HostMetricPoint) -> Option<f64> {
+    let elapsed_millis = current
+        .id
+        .collected_at
+        .0
+        .checked_sub(previous.id.collected_at.0)
+        .and_then(|elapsed| u64::try_from(elapsed).ok())?;
+    (elapsed_millis != 0).then(|| Duration::from_millis(elapsed_millis).as_secs_f64())
+}
+
+fn host_cpu_percent(
+    previous: crate::HostResourceMetricPoint,
+    current: crate::HostResourceMetricPoint,
+) -> f64 {
+    if current.cpu_total_ticks < previous.cpu_total_ticks
+        || current.cpu_idle_ticks < previous.cpu_idle_ticks
+    {
+        return 0.0;
+    }
+    let total = current.cpu_total_ticks - previous.cpu_total_ticks;
+    let idle = current.cpu_idle_ticks - previous.cpu_idle_ticks;
+    if total == 0 {
+        0.0
+    } else {
+        total.saturating_sub(idle) as f64 / total as f64 * 100.0
+    }
+}
+
 fn validate_baseline(point: &SequencedMetricPoint) -> Result<(), MetricSinkError> {
     let Some(previous) = &point.previous else {
         return Ok(());
@@ -312,6 +462,24 @@ fn validate_baseline(point: &SequencedMetricPoint) -> Result<(), MetricSinkError
     {
         return Err(MetricSinkError::Rejected {
             message: "metric rate baseline belongs to a different workload".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_host_baseline(point: &SequencedHostMetricPoint) -> Result<(), MetricSinkError> {
+    let Some(previous) = &point.previous_resources else {
+        return Ok(());
+    };
+    if previous.id.cluster_id != point.point.id.cluster_id
+        || previous.id.node_id != point.point.id.node_id
+        || previous.resources.is_none()
+        || point.point.resources.is_none()
+        || previous.id.collected_at.0 >= point.point.id.collected_at.0
+    {
+        return Err(MetricSinkError::Rejected {
+            message: "host metric rate baseline is not a prior resource point for this node"
+                .to_owned(),
         });
     }
     Ok(())
