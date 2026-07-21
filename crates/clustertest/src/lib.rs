@@ -14,6 +14,7 @@ mod error;
 mod formation;
 mod lifecycle;
 mod model;
+mod preview;
 mod quorum;
 mod restart;
 mod rollout;
@@ -52,6 +53,9 @@ pub use model::{
     ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot,
     ResourceAvailability, RolloutFailure, ScheduledAssignment, SchedulingSnapshot, ServiceFixture,
     ServiceSnapshot,
+};
+pub use preview::{
+    PreviewCluster, PreviewCompletion, PreviewRolloutSnapshot, PreviewServiceFixture,
 };
 pub use quorum::QuorumRecoveryCluster;
 pub use restart::RestartCluster;

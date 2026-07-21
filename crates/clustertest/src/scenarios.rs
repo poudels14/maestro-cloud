@@ -11,6 +11,7 @@ mod lifecycle_control;
 mod lifecycle_faults;
 mod lifecycle_sequence;
 mod lifecycle_stress;
+mod preview;
 mod quorum;
 mod restart;
 mod rollout;
@@ -56,6 +57,7 @@ pub use lifecycle_stress::{
     replica_override_respects_configured_floor, replica_override_scales_up,
     sequential_redeploys_supersede_history,
 };
+pub use preview::pull_request_preview_completes_full_lifecycle;
 pub use quorum::all_voter_restart_waits_for_quorum_and_preserves_state;
 pub use restart::serial_node_restarts_preserve_quorum_and_routing;
 pub use rollout::readiness_gated_cutover_preserves_traffic_and_inflight_requests;

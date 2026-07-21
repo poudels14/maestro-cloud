@@ -9,6 +9,7 @@ mod lifecycle;
 mod lifecycle_control;
 mod lifecycle_sequence;
 mod lifecycle_stress;
+mod preview;
 mod quorum;
 mod restart;
 mod rollout;

@@ -19,6 +19,7 @@ mod orchestration_egress_acceptance;
 mod orchestration_fixture;
 mod orchestration_freeze;
 mod orchestration_node;
+mod orchestration_preview_acceptance;
 mod orchestration_scale;
 mod orchestration_service;
 mod plan;

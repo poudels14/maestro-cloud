@@ -111,14 +111,25 @@ pub(super) struct RolloutWorld {
 
 impl RolloutWorld {
     pub(super) async fn new(node_count: u8) -> HarnessResult<Self> {
-        Self::build(node_count, true).await
+        Self::build(node_count, true, None).await
     }
 
     pub(super) async fn new_empty(node_count: u8) -> HarnessResult<Self> {
-        Self::build(node_count, false).await
+        Self::build(node_count, false, None).await
     }
 
-    async fn build(node_count: u8, seed_service: bool) -> HarnessResult<Self> {
+    pub(super) async fn new_empty_with_previews(
+        node_count: u8,
+        pull_requests: Arc<dyn preview::PullRequestApi>,
+    ) -> HarnessResult<Self> {
+        Self::build(node_count, false, Some(pull_requests)).await
+    }
+
+    async fn build(
+        node_count: u8,
+        seed_service: bool,
+        pull_requests: Option<Arc<dyn preview::PullRequestApi>>,
+    ) -> HarnessResult<Self> {
         let cluster_id = ClusterId::new(format!("rollout-{node_count}"))?;
         let keys = Keyspace::new(&cluster_id);
         let monotonic: Arc<dyn Clock> = Arc::new(NoopClock);
@@ -175,7 +186,7 @@ impl RolloutWorld {
 
         let ingress = Arc::new(RecordingIngress::default());
         let timestamp = Arc::new(ManualTimestampClock::new(10_000));
-        let (operator_backends, build_backend) =
+        let (mut operator_backends, build_backend) =
             FakeBuildBackend::operator_backends(ingress.clone());
         let mut operator_settings = settings()?;
         if !seed_service {
@@ -183,6 +194,18 @@ impl RolloutWorld {
             operator_settings.scheduler.deployment_drain_grace = Duration::from_secs(1);
             operator_settings.deployment.drain_grace = Duration::from_secs(1);
             operator_settings.ingress.retirement_grace = Duration::from_secs(1);
+        }
+        if let Some(pull_requests) = pull_requests {
+            operator_settings.preview = Some(crate::PreviewOperatorSettings {
+                source: preview::PreviewSourceSettings {
+                    poll_interval: Duration::from_secs(1),
+                    max_concurrent_previews: 10,
+                    initial_backoff: Duration::from_millis(10),
+                    max_backoff: Duration::from_secs(1),
+                },
+                derivation: preview::PreviewSettings::new("preview.example.test")?,
+            });
+            operator_backends.pull_requests = Some(pull_requests);
         }
         let suite = OperatorSuite::new(
             cluster_id.clone(),
