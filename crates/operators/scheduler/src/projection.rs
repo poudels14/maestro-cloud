@@ -172,13 +172,12 @@ fn schedule_nodes(
         } else {
             NodeSchedulingState::Unavailable
         };
-        if explicitly_unschedulable
-            || (state == NodeSchedulingState::Unavailable
-                && within_grace(
-                    now,
-                    unavailable_since(node.status.last_seen, network),
-                    replacement_grace,
-                ))
+        if state == NodeSchedulingState::Unavailable
+            && within_grace(
+                now,
+                unavailable_since(node.status.last_seen, network),
+                replacement_grace,
+            )
         {
             held_nodes.insert(node.meta.id.clone());
         }
