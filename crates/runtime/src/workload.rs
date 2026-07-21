@@ -90,6 +90,9 @@ pub struct WorkloadConfiguration {
     pub mounts: Vec<WorkloadMount>,
     /// Cluster-routable address allocated by host-owned IPAM.
     pub workload_address: Option<IpAddr>,
+    /// Runtime-visible DNS server, normally the node workload-bridge gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_server: Option<IpAddr>,
     /// Runtime user, or the backend's isolated default when absent.
     pub user: Option<WorkloadUser>,
 }

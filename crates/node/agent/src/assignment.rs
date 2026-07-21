@@ -373,6 +373,7 @@ impl AssignmentAgent {
             &self.settings.cluster_id,
             assignment,
             deployment,
+            self.settings.network.gateway,
             additional_mounts,
         )?;
         let handle = self.runtime.create(&spec).await?;

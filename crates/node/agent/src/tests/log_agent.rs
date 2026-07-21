@@ -280,6 +280,7 @@ fn process_spec(id: &str) -> WorkloadSpec {
             environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
+            dns_server: None,
             user: None,
         },
         command: CommandSpec {

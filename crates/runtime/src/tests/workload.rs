@@ -23,6 +23,7 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
             environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
+            dns_server: None,
             user: None,
         },
         command: kernel_api::CommandSpec {

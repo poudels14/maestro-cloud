@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use kernel_api::{
@@ -15,6 +16,7 @@ pub(crate) fn workload_spec(
     cluster_id: &ClusterId,
     assignment: &Assignment,
     deployment: &Deployment,
+    dns_server: IpAddr,
     additional_mounts: Vec<WorkloadMount>,
 ) -> Result<WorkloadSpec, WorkloadPlanError> {
     if assignment.spec.deployment_id != deployment.meta.id
@@ -46,6 +48,7 @@ pub(crate) fn workload_spec(
             environment: deployment.spec.service.environment.clone(),
             mounts,
             workload_address: Some(assignment.spec.workload_address),
+            dns_server: Some(dns_server),
             user: deployment.spec.service.user.map(|user| WorkloadUser {
                 user_id: user.user_id,
                 group_id: user.group_id,

@@ -18,6 +18,7 @@ use crate::containerd_exec::start_exec;
 use crate::containerd_image::load_image;
 use crate::containerd_io::task_paths;
 use crate::containerd_network::ContainerdNetworkState;
+use crate::containerd_resolver::prepare_resolver_file;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{
     CLUSTER_LABEL, NODE_LABEL, container_id, container_name, is_already_exists, is_not_found,
@@ -121,12 +122,17 @@ impl WorkloadRuntime for ContainerdRuntime {
         let existing = self.container(&container_id, workload_id).await;
         match existing {
             Ok(container) => {
-                return validate_existing(
+                let handle = validate_existing(
                     &container,
                     workload_id,
                     &fingerprint,
                     &self.settings.namespace,
-                );
+                )?;
+                if let Some(dns_server) = workload.configuration.dns_server {
+                    prepare_resolver_file(&self.settings.state_root, workload_id, dns_server)
+                        .await?;
+                }
+                return Ok(handle);
             }
             Err(RuntimeError::NotFound { .. }) => {}
             Err(error) => return Err(error),
@@ -168,6 +174,9 @@ impl WorkloadRuntime for ContainerdRuntime {
             snapshot_key,
             fingerprint.clone(),
         )?;
+        if let Some(dns_server) = workload.configuration.dns_server {
+            prepare_resolver_file(&self.settings.state_root, workload_id, dns_server).await?;
+        }
         let result = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),
         )

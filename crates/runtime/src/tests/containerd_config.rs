@@ -62,8 +62,16 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
         "/maestro/workload-1"
     );
     let mounts = oci.get("mounts").unwrap().as_array().unwrap();
-    assert_eq!(mounts.len(), 8);
+    assert_eq!(mounts.len(), 9);
     assert_eq!(mounts.get(7).unwrap().pointer("/options/2").unwrap(), "ro");
+    assert_eq!(
+        mounts.get(8).unwrap().get("destination").unwrap(),
+        "/etc/resolv.conf"
+    );
+    assert_eq!(
+        mounts.get(8).unwrap().get("source").unwrap(),
+        "/var/lib/maestro/runtime/containerd/workloads/workload-1/resolv.conf"
+    );
 }
 
 #[test]
@@ -104,6 +112,26 @@ fn container_record_uses_image_defaults_and_rejects_unsupported_inputs() {
         source: MountSource::ManagedVolume("data".to_owned()),
         target: "/data".into(),
         access: crate::MountAccess::ReadWrite,
+    });
+    assert!(matches!(
+        container_record(
+            &spec,
+            &image,
+            &ContainerdRuntimeSettings::default(),
+            "snapshot".to_owned(),
+            fingerprint(&spec).unwrap(),
+        ),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.configuration.mounts.clear();
+    workload.configuration.mounts.push(crate::WorkloadMount {
+        source: MountSource::HostPath("/tmp/resolv.conf".into()),
+        target: "/etc/resolv.conf".into(),
+        access: crate::MountAccess::ReadOnly,
     });
     assert!(matches!(
         container_record(

@@ -30,6 +30,7 @@ fn docker_config_preserves_identity_and_disables_runtime_restarts() {
 
     let host = config.body.host_config.unwrap();
     assert_eq!(host.network_mode.as_deref(), Some("none"));
+    assert_eq!(host.dns, Some(vec!["10.42.0.1".to_owned()]));
     assert_eq!(
         host.restart_policy.unwrap().name,
         Some(RestartPolicyNameEnum::NO)
@@ -61,6 +62,17 @@ fn docker_config_rejects_other_workload_kinds_and_relative_mounts() {
     };
     container.configuration.mounts.first_mut().unwrap().source =
         MountSource::HostPath("relative".into());
+    assert!(matches!(
+        container_config(&spec),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let WorkloadSpec::Container(container) = &mut spec else {
+        unreachable!();
+    };
+    container.configuration.mounts.first_mut().unwrap().source =
+        MountSource::HostPath("/tmp/resolv.conf".into());
+    container.configuration.mounts.first_mut().unwrap().target = "/etc/resolv.conf".into();
     assert!(matches!(
         container_config(&spec),
         Err(RuntimeError::InvalidSpec { .. })

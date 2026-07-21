@@ -49,6 +49,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             environment: BTreeMap::new(),
             mounts: Vec::new(),
             workload_address: None,
+            dns_server: None,
             user: None,
         },
         image: ArtifactReference::new(image).unwrap(),

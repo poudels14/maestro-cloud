@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::containerd_image::ContainerdImageConfiguration;
+use crate::containerd_resolver::resolver_path;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{container_name, metadata_labels};
 use crate::{
@@ -45,11 +46,11 @@ pub(crate) fn container_record(
         }),
         spec: Some(Any {
             type_url: OCI_SPEC_TYPE.to_owned(),
-            value: serde_json::to_vec(&oci_spec(workload, image, &settings.namespace)?).map_err(
-                |error| RuntimeError::InvalidSpec {
+            value: serde_json::to_vec(&oci_spec(workload, image, settings)?).map_err(|error| {
+                RuntimeError::InvalidSpec {
                     message: format!("failed to encode containerd OCI specification: {error}"),
-                },
-            )?,
+                }
+            })?,
         }),
         snapshotter: settings.snapshotter.clone(),
         snapshot_key,
@@ -60,7 +61,7 @@ pub(crate) fn container_record(
 fn oci_spec(
     workload: &ContainerWorkload,
     image: &ContainerdImageConfiguration,
-    namespace: &str,
+    settings: &ContainerdRuntimeSettings,
 ) -> Result<Value, RuntimeError> {
     let command = workload
         .command
@@ -83,6 +84,26 @@ fn oci_spec(
             .map(oci_mount)
             .collect::<Result<Vec<_>, _>>()?,
     );
+    if workload.configuration.dns_server.is_some() {
+        if workload
+            .configuration
+            .mounts
+            .iter()
+            .any(|mount| mount.target == std::path::Path::new("/etc/resolv.conf"))
+        {
+            return Err(RuntimeError::InvalidSpec {
+                message: "containerd workload DNS owns `/etc/resolv.conf`".to_owned(),
+            });
+        }
+        mounts.push(oci_mount(&WorkloadMount {
+            source: MountSource::HostPath(resolver_path(
+                &settings.state_root,
+                &workload.configuration.metadata.workload_id,
+            )),
+            target: "/etc/resolv.conf".into(),
+            access: MountAccess::ReadOnly,
+        })?);
+    }
     Ok(json!({
         "ociVersion": "1.0.2",
         "process": {
@@ -97,7 +118,7 @@ fn oci_spec(
         "hostname": workload.configuration.hostname,
         "mounts": mounts,
         "linux": {
-            "cgroupsPath": format!("/{namespace}/{}", workload.configuration.metadata.workload_id),
+            "cgroupsPath": format!("/{}/{}", settings.namespace, workload.configuration.metadata.workload_id),
             "resources": { "devices": [{ "allow": false, "access": "rwm" }] },
             "namespaces": [
                 { "type": "pid" },

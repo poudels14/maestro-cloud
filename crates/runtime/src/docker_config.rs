@@ -74,6 +74,16 @@ fn validate_configuration(configuration: &WorkloadConfiguration) -> Result<(), R
     for mount in &configuration.mounts {
         validate_mount(mount)?;
     }
+    if configuration.dns_server.is_some()
+        && configuration
+            .mounts
+            .iter()
+            .any(|mount| mount.target == std::path::Path::new("/etc/resolv.conf"))
+    {
+        return Err(RuntimeError::InvalidSpec {
+            message: "docker workload DNS owns `/etc/resolv.conf`".to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -133,6 +143,10 @@ fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HostConfig {
         network_mode: Some("none".to_owned()),
+        dns: container
+            .configuration
+            .dns_server
+            .map(|server| vec![server.to_string()]),
         restart_policy: Some(RestartPolicy {
             name: Some(RestartPolicyNameEnum::NO),
             maximum_retry_count: Some(0),

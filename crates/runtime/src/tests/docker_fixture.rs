@@ -28,6 +28,7 @@ pub(crate) fn container_spec() -> WorkloadSpec {
                 },
             ],
             workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 8))),
+            dns_server: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1))),
             user: Some(WorkloadUser {
                 user_id: 1000,
                 group_id: 1001,

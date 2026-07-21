@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use kernel_api::{VolumeSource, WorkloadUserSpec};
 use runtime::{MountAccess, MountSource, WorkloadSpec, WorkloadUser};
 
@@ -10,8 +12,13 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
 -> Result<(), Box<dyn std::error::Error>> {
     let assignment = assignment();
     let deployment = deployment();
-    let WorkloadSpec::Container(workload) =
-        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new())?
+    let WorkloadSpec::Container(workload) = workload_spec(
+        &cluster_id(),
+        &assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
     else {
         return Err("assignment did not produce a container workload".into());
     };
@@ -27,6 +34,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         workload.configuration.workload_address,
         Some(assignment.spec.workload_address)
     );
+    assert_eq!(workload.configuration.dns_server, Some(dns_server()));
     assert_eq!(workload.image.as_str(), "registry.test/api@sha256:abc");
     assert_eq!(workload.configuration.hostname, "api-0");
     assert_eq!(
@@ -60,8 +68,13 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
         group_id: 1_001,
     });
 
-    let WorkloadSpec::Container(workload) =
-        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new())?
+    let WorkloadSpec::Container(workload) = workload_spec(
+        &cluster_id(),
+        &assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
     else {
         return Err("assignment did not produce a container workload".into());
     };
@@ -101,8 +114,18 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
         node_id: kernel_api::NodeId::new("node-2").unwrap(),
     };
     assert!(matches!(
-        workload_spec(&cluster_id(), &assignment, &deployment, Vec::new()),
+        workload_spec(
+            &cluster_id(),
+            &assignment,
+            &deployment,
+            dns_server(),
+            Vec::new(),
+        ),
         Err(WorkloadPlanError::HostVolumeNodeMismatch { .. })
     ));
     assert_ne!(assignment.spec.node_id, node_id("node-2"));
+}
+
+fn dns_server() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))
 }
