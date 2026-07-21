@@ -53,6 +53,19 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(
         Cli::try_parse_from(["maestro-next", "services", "cancel", "api", "deployment-1",]).is_ok()
     );
+    for command in ["restart", "remove"] {
+        assert!(
+            Cli::try_parse_from(["maestro-next", "services", command, "api", "deployment-1",])
+                .is_ok()
+        );
+    }
+    for command in ["freeze", "unfreeze", "delete"] {
+        assert!(Cli::try_parse_from(["maestro-next", "services", command, "api",]).is_ok());
+    }
+    assert!(
+        Cli::try_parse_from(["maestro-next", "services", "replicas", "set", "api", "3",]).is_ok()
+    );
+    assert!(Cli::try_parse_from(["maestro-next", "services", "replicas", "clear", "api",]).is_ok());
 }
 
 #[tokio::test]

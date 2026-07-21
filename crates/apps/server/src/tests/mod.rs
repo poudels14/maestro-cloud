@@ -214,6 +214,20 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .pointer("/paths/~1api~1services~1{serviceId}~1replicas/put")
             .is_some()
     );
+    assert_eq!(
+        document.pointer(
+            "/paths/~1api~1services~1{serviceId}~1replicas/put/requestBody/content/application~1json/schema/$ref"
+        ),
+        Some(&serde_json::json!(
+            "#/components/schemas/ServiceReplicaOverrideRequest"
+        )),
+    );
+    assert_eq!(
+        document.pointer(
+            "/components/schemas/ServiceReplicaOverrideRequest/properties/replicas/nullable"
+        ),
+        Some(&serde_json::json!(true)),
+    );
     assert!(
         document
             .pointer("/paths/~1api~1services~1{serviceId}~1deployments/get")

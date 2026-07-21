@@ -3,14 +3,14 @@ use std::sync::Mutex;
 use kernel_api::{
     CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId, Generation, RequestId,
     Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffStatus, ServiceId,
-    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
-    ServiceRolloutResponse,
+    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest, ServiceRolloutResponse,
 };
 
 use crate::CliError;
 use crate::config_source::ConfigSourceReader;
 use crate::rollout::run;
-use crate::services::ServiceApi;
+use crate::services::{DeploymentLifecycleAction, ServiceApi, ServiceLifecycleAction};
 
 struct MemoryReader {
     document: String,
@@ -44,22 +44,33 @@ impl ServiceApi for RecordingApi {
         Err(unexpected())
     }
 
-    async fn redeploy_service(
+    async fn command_service(
         &self,
         _service_id: &ServiceId,
         _request_id: &RequestId,
+        _action: ServiceLifecycleAction,
         _request: CommandRequest,
     ) -> Result<ServiceCommandResponse, CliError> {
         Err(unexpected())
     }
 
-    async fn cancel_deployment(
+    async fn command_deployment(
         &self,
         _service_id: &ServiceId,
         _deployment_id: &DeploymentId,
         _request_id: &RequestId,
+        _action: DeploymentLifecycleAction,
         _request: CommandRequest,
     ) -> Result<DeploymentCommandResponse, CliError> {
+        Err(unexpected())
+    }
+
+    async fn set_service_replicas(
+        &self,
+        _service_id: &ServiceId,
+        _request_id: &RequestId,
+        _request: ServiceReplicaOverrideRequest,
+    ) -> Result<ServiceCommandResponse, CliError> {
         Err(unexpected())
     }
 

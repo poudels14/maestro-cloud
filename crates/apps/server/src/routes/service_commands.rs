@@ -5,10 +5,10 @@ use axum::routing::{delete, post, put};
 use axum::{Json, Router};
 use kernel_api::{
     BuiltinKind, CommandRequest, Generation, ResourceKind, ResourceRevision, RolloutState, Service,
-    ServiceCommandResponse, ServiceId, Timestamp,
+    ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest, Timestamp,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
@@ -85,7 +85,7 @@ async fn set_replicas(
     Path(service_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<ReplicaOverrideRequest>, JsonRejection>,
+    payload: Result<Json<ServiceReplicaOverrideRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceCommandResponse>), ApiError> {
     let payload = payload
         .map_err(|rejection| mutation::json_rejection(rejection, "service command"))?
@@ -270,23 +270,6 @@ fn parse(payload: Result<Json<CommandRequest>, JsonRejection>) -> Result<Command
     Ok(payload
         .map_err(|rejection| mutation::json_rejection(rejection, "service command"))?
         .0)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReplicaOverrideRequest {
-    expected_revision: ResourceRevision,
-    #[serde(deserialize_with = "required_nullable_replicas")]
-    replicas: Option<u32>,
-}
-
-fn required_nullable_replicas<'de, Deserializer>(
-    deserializer: Deserializer,
-) -> Result<Option<u32>, Deserializer::Error>
-where
-    Deserializer: serde::Deserializer<'de>,
-{
-    Option::<u32>::deserialize(deserializer)
 }
 
 fn command_response(service: &Service) -> ServiceCommandResponse {

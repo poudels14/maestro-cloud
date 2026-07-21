@@ -8,9 +8,10 @@ use crate::{
     Assignment, Build, CommandRequest, Deployment, DeploymentCommandResponse, DnsRecord,
     FirewallPolicy, IngressRoute, Node, NodeFirewall, NodeNetwork, Preview, ReplicaState,
     ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceDiffStatus, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
-    ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec,
-    ServiceWriteRequest, ServiceWriteResponse, TrafficGeneration, UpgradeRun, Webhook,
+    ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
+    ServiceWriteResponse, TrafficGeneration, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -271,6 +272,10 @@ pub fn openapi_document() -> Value {
     register_schema::<Webhook>(&mut generator, BuiltinKind::Webhook);
     register_schema::<NodeFirewall>(&mut generator, BuiltinKind::NodeFirewall);
     register_named_schema::<CommandRequest>(&mut generator, "CommandRequest");
+    register_named_schema::<ServiceReplicaOverrideRequest>(
+        &mut generator,
+        "ServiceReplicaOverrideRequest",
+    );
     register_named_schema::<ServiceCommandResponse>(&mut generator, "ServiceCommandResponse");
     register_named_schema::<DeploymentCommandResponse>(&mut generator, "DeploymentCommandResponse");
     register_named_schema::<ServiceWriteRequest>(&mut generator, "ServiceWriteRequest");

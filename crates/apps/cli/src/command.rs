@@ -86,12 +86,83 @@ enum ServiceCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// Restart workload instances without replacing their deployment.
+    Restart {
+        /// Owning service identity.
+        service_id: String,
+        /// Deployment identity.
+        deployment_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// Cancel a queued or building deployment.
     Cancel {
         /// Owning service identity.
         service_id: String,
         /// Deployment identity.
         deployment_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Drain and remove a deployment.
+    Remove {
+        /// Owning service identity.
+        service_id: String,
+        /// Deployment identity.
+        deployment_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Pause automatic rollout activity for a service.
+    Freeze {
+        /// Service identity.
+        service_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Resume automatic rollout activity for a service.
+    Unfreeze {
+        /// Service identity.
+        service_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Set or clear a temporary replica override.
+    Replicas {
+        #[command(subcommand)]
+        command: ReplicaCommand,
+    },
+    /// Request cascading deletion of a service.
+    Delete {
+        /// Service identity.
+        service_id: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReplicaCommand {
+    /// Set a temporary replica count.
+    Set {
+        /// Service identity.
+        service_id: String,
+        /// Temporary replica count, including zero.
+        replicas: u32,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Return to the replica count in desired service state.
+    Clear {
+        /// Service identity.
+        service_id: String,
         /// Stable key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
@@ -234,19 +305,124 @@ pub async fn run(
                     service_id,
                     idempotency_key,
                 } => {
-                    services::redeploy(&client, service_id, request_id(idempotency_key)?, output)
-                        .await
+                    services::service_lifecycle(
+                        &client,
+                        service_id,
+                        request_id(idempotency_key)?,
+                        services::ServiceLifecycleAction::Redeploy,
+                        output,
+                    )
+                    .await
+                }
+                ServiceCommand::Restart {
+                    service_id,
+                    deployment_id,
+                    idempotency_key,
+                } => {
+                    services::deployment_lifecycle(
+                        &client,
+                        service_id,
+                        deployment_id,
+                        request_id(idempotency_key)?,
+                        services::DeploymentLifecycleAction::Restart,
+                        output,
+                    )
+                    .await
                 }
                 ServiceCommand::Cancel {
                     service_id,
                     deployment_id,
                     idempotency_key,
                 } => {
-                    services::cancel(
+                    services::deployment_lifecycle(
                         &client,
                         service_id,
                         deployment_id,
                         request_id(idempotency_key)?,
+                        services::DeploymentLifecycleAction::Cancel,
+                        output,
+                    )
+                    .await
+                }
+                ServiceCommand::Remove {
+                    service_id,
+                    deployment_id,
+                    idempotency_key,
+                } => {
+                    services::deployment_lifecycle(
+                        &client,
+                        service_id,
+                        deployment_id,
+                        request_id(idempotency_key)?,
+                        services::DeploymentLifecycleAction::Remove,
+                        output,
+                    )
+                    .await
+                }
+                ServiceCommand::Freeze {
+                    service_id,
+                    idempotency_key,
+                } => {
+                    services::service_lifecycle(
+                        &client,
+                        service_id,
+                        request_id(idempotency_key)?,
+                        services::ServiceLifecycleAction::Freeze,
+                        output,
+                    )
+                    .await
+                }
+                ServiceCommand::Unfreeze {
+                    service_id,
+                    idempotency_key,
+                } => {
+                    services::service_lifecycle(
+                        &client,
+                        service_id,
+                        request_id(idempotency_key)?,
+                        services::ServiceLifecycleAction::Unfreeze,
+                        output,
+                    )
+                    .await
+                }
+                ServiceCommand::Replicas { command } => match command {
+                    ReplicaCommand::Set {
+                        service_id,
+                        replicas,
+                        idempotency_key,
+                    } => {
+                        services::set_replicas(
+                            &client,
+                            service_id,
+                            request_id(idempotency_key)?,
+                            services::ReplicaOverride::Set(replicas),
+                            output,
+                        )
+                        .await
+                    }
+                    ReplicaCommand::Clear {
+                        service_id,
+                        idempotency_key,
+                    } => {
+                        services::set_replicas(
+                            &client,
+                            service_id,
+                            request_id(idempotency_key)?,
+                            services::ReplicaOverride::Clear,
+                            output,
+                        )
+                        .await
+                    }
+                },
+                ServiceCommand::Delete {
+                    service_id,
+                    idempotency_key,
+                } => {
+                    services::service_lifecycle(
+                        &client,
+                        service_id,
+                        request_id(idempotency_key)?,
+                        services::ServiceLifecycleAction::Delete,
                         output,
                     )
                     .await

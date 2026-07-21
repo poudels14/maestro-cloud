@@ -15,7 +15,7 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
         }),
     );
     schemas.insert(
-        "ReplicaOverrideRequest".to_string(),
+        "ServiceReplicaOverrideRequest".to_string(),
         json!({
             "type": "object",
             "additionalProperties": false,

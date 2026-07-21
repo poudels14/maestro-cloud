@@ -23,9 +23,10 @@ pub use automation::{
 };
 pub use command::{
     CommandRequest, DeploymentCommandResponse, ServiceCommandResponse, ServiceDiffChange,
-    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceRolloutDiffRequest,
-    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
-    ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest, ServiceWriteResponse,
+    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
+    ServiceWriteResponse,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{

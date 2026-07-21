@@ -151,7 +151,7 @@ pub fn openapi_document() -> Value {
                 "put",
                 "setServiceReplicas",
                 &["serviceId"],
-                "ReplicaOverrideRequest",
+                "ServiceReplicaOverrideRequest",
                 "ServiceCommandResponse",
             ),
         ),

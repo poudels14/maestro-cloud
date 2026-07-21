@@ -2,8 +2,9 @@ use std::io::Write;
 
 use kernel_api::{
     ArtifactTemplate, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId,
-    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId, ServiceRolloutDiffRequest,
-    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
+    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest, ServiceRolloutResponse,
 };
 
 use crate::CliError;
@@ -14,19 +15,63 @@ pub(crate) async fn list(client: &impl ServiceApi, output: &mut dyn Write) -> Re
     write_services(services, output)
 }
 
-pub(crate) async fn redeploy(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceLifecycleAction {
+    Redeploy,
+    Freeze,
+    Unfreeze,
+    Delete,
+}
+
+impl ServiceLifecycleAction {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Redeploy => "redeploy",
+            Self::Freeze => "freeze",
+            Self::Unfreeze => "unfreeze",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeploymentLifecycleAction {
+    Restart,
+    Cancel,
+    Remove,
+}
+
+impl DeploymentLifecycleAction {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::Cancel => "cancel",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplicaOverride {
+    Set(u32),
+    Clear,
+}
+
+pub(crate) async fn service_lifecycle(
     client: &impl ServiceApi,
     service_id: String,
     request_id: RequestId,
+    action: ServiceLifecycleAction,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     let service_id =
         ServiceId::new(service_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
     let service = client.get_service(&service_id).await?;
     let response = client
-        .redeploy_service(
+        .command_service(
             &service_id,
             &request_id,
+            action,
             CommandRequest {
                 expected_revision: service.meta.revision,
             },
@@ -34,17 +79,20 @@ pub(crate) async fn redeploy(
         .await?;
     writeln!(
         output,
-        "[maestro]: redeploy accepted for `{}` at generation {}",
-        response.service_id, response.generation.0
+        "[maestro]: {} accepted for `{}` at generation {}",
+        action.verb(),
+        response.service_id,
+        response.generation.0
     )
     .map_err(|source| CliError::io("failed to write command output", source))
 }
 
-pub(crate) async fn cancel(
+pub(crate) async fn deployment_lifecycle(
     client: &impl ServiceApi,
     service_id: String,
     deployment_id: String,
     request_id: RequestId,
+    action: DeploymentLifecycleAction,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     let service_id =
@@ -53,10 +101,11 @@ pub(crate) async fn cancel(
         .map_err(|error| CliError::invalid_input(error.to_string()))?;
     let deployment = client.get_deployment(&service_id, &deployment_id).await?;
     let response = client
-        .cancel_deployment(
+        .command_deployment(
             &service_id,
             &deployment_id,
             &request_id,
+            action,
             CommandRequest {
                 expected_revision: deployment.meta.revision,
             },
@@ -64,8 +113,46 @@ pub(crate) async fn cancel(
         .await?;
     writeln!(
         output,
-        "[maestro]: cancel accepted for deployment `{}`",
-        response.deployment_id
+        "[maestro]: {} accepted for deployment `{}` at generation {}",
+        action.verb(),
+        response.deployment_id,
+        response.generation.0
+    )
+    .map_err(|source| CliError::io("failed to write command output", source))
+}
+
+pub(crate) async fn set_replicas(
+    client: &impl ServiceApi,
+    service_id: String,
+    request_id: RequestId,
+    replicas: ReplicaOverride,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let service_id =
+        ServiceId::new(service_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
+    let service = client.get_service(&service_id).await?;
+    let replicas = match replicas {
+        ReplicaOverride::Set(replicas) => Some(replicas),
+        ReplicaOverride::Clear => None,
+    };
+    let response = client
+        .set_service_replicas(
+            &service_id,
+            &request_id,
+            ServiceReplicaOverrideRequest {
+                expected_revision: service.meta.revision,
+                replicas,
+            },
+        )
+        .await?;
+    let replica_description = response
+        .replica_override
+        .map(|replicas| replicas.to_string())
+        .unwrap_or_else(|| "cleared".to_string());
+    writeln!(
+        output,
+        "[maestro]: replica override accepted for `{}`: {replica_description}",
+        response.service_id
     )
     .map_err(|source| CliError::io("failed to write command output", source))
 }
@@ -81,20 +168,29 @@ pub(crate) trait ServiceApi {
         deployment_id: &DeploymentId,
     ) -> Result<Deployment, CliError>;
 
-    async fn redeploy_service(
+    async fn command_service(
         &self,
         service_id: &ServiceId,
         request_id: &RequestId,
+        action: ServiceLifecycleAction,
         request: CommandRequest,
     ) -> Result<ServiceCommandResponse, CliError>;
 
-    async fn cancel_deployment(
+    async fn command_deployment(
         &self,
         service_id: &ServiceId,
         deployment_id: &DeploymentId,
         request_id: &RequestId,
+        action: DeploymentLifecycleAction,
         request: CommandRequest,
     ) -> Result<DeploymentCommandResponse, CliError>;
+
+    async fn set_service_replicas(
+        &self,
+        service_id: &ServiceId,
+        request_id: &RequestId,
+        request: ServiceReplicaOverrideRequest,
+    ) -> Result<ServiceCommandResponse, CliError>;
 
     async fn diff_rollout(
         &self,
@@ -130,29 +226,52 @@ impl ServiceApi for ApiClient {
         .await
     }
 
-    async fn redeploy_service(
+    async fn command_service(
         &self,
         service_id: &ServiceId,
         request_id: &RequestId,
+        action: ServiceLifecycleAction,
         request: CommandRequest,
     ) -> Result<ServiceCommandResponse, CliError> {
+        let path = match action {
+            ServiceLifecycleAction::Redeploy => format!("/api/services/{service_id}/redeploy"),
+            ServiceLifecycleAction::Freeze => format!("/api/services/{service_id}/freeze"),
+            ServiceLifecycleAction::Unfreeze => format!("/api/services/{service_id}/unfreeze"),
+            ServiceLifecycleAction::Delete => format!("/api/services/{service_id}"),
+        };
+        match action {
+            ServiceLifecycleAction::Delete => self.delete(&path, request_id, &request).await,
+            ServiceLifecycleAction::Redeploy
+            | ServiceLifecycleAction::Freeze
+            | ServiceLifecycleAction::Unfreeze => self.post(&path, request_id, &request).await,
+        }
+    }
+
+    async fn command_deployment(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+        request_id: &RequestId,
+        action: DeploymentLifecycleAction,
+        request: CommandRequest,
+    ) -> Result<DeploymentCommandResponse, CliError> {
+        let action = action.verb();
         self.post(
-            &format!("/api/services/{service_id}/redeploy"),
+            &format!("/api/services/{service_id}/deployments/{deployment_id}/{action}"),
             request_id,
             &request,
         )
         .await
     }
 
-    async fn cancel_deployment(
+    async fn set_service_replicas(
         &self,
         service_id: &ServiceId,
-        deployment_id: &DeploymentId,
         request_id: &RequestId,
-        request: CommandRequest,
-    ) -> Result<DeploymentCommandResponse, CliError> {
-        self.post(
-            &format!("/api/services/{service_id}/deployments/{deployment_id}/cancel"),
+        request: ServiceReplicaOverrideRequest,
+    ) -> Result<ServiceCommandResponse, CliError> {
+        self.put(
+            &format!("/api/services/{service_id}/replicas"),
             request_id,
             &request,
         )

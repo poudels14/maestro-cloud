@@ -1,4 +1,6 @@
-use schemars::JsonSchema;
+use std::borrow::Cow;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -12,6 +14,43 @@ use crate::{
 pub struct CommandRequest {
     /// Revision the operator observed before choosing the mutation.
     pub expected_revision: ResourceRevision,
+}
+
+/// Optimistic temporary replica override for one service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceReplicaOverrideRequest {
+    /// Revision the operator observed before choosing the mutation.
+    pub expected_revision: ResourceRevision,
+    /// Temporary replica count, or null to clear the override.
+    #[serde(deserialize_with = "required_nullable_replicas")]
+    #[schemars(with = "RequiredNullableU32")]
+    pub replicas: Option<u32>,
+}
+
+struct RequiredNullableU32;
+
+impl JsonSchema for RequiredNullableU32 {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "RequiredNullableU32".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<u32>::json_schema(generator)
+    }
+}
+
+fn required_nullable_replicas<'de, Deserializer>(
+    deserializer: Deserializer,
+) -> Result<Option<u32>, Deserializer::Error>
+where
+    Deserializer: serde::Deserializer<'de>,
+{
+    Option::<u32>::deserialize(deserializer)
 }
 
 /// Optimistic desired-state replacement for one service.

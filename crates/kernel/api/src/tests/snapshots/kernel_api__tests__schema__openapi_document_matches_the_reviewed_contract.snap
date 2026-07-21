@@ -4203,6 +4203,32 @@ expression: openapi_document()
         "description": "Stable identity of a deployable service.",
         "type": "string"
       },
+      "ServiceReplicaOverrideRequest": {
+        "additionalProperties": false,
+        "description": "Optimistic temporary replica override for one service.",
+        "properties": {
+          "expectedRevision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Revision the operator observed before choosing the mutation."
+          },
+          "replicas": {
+            "description": "Temporary replica count, or null to clear the override.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "replicas"
+        ],
+        "type": "object"
+      },
       "ServiceRolloutDiffRequest": {
         "additionalProperties": false,
         "description": "Read-only comparison of a complete declarative service resource set.",
