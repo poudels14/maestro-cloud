@@ -20,9 +20,11 @@ use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use serde::{Deserialize, Serialize};
 
 use crate::datadog::{build_datadog_sinks, configure_datadog};
+use crate::log_backup_config::configure_log_maintenance;
 use crate::{
     AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    DatadogLaunchConfig, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    DatadogLaunchConfig, LogBackupLaunchConfig, OperatorLeaderWorkload, OperatorSettings,
+    RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -73,6 +75,9 @@ pub struct DaemonLaunchConfig {
     /// Optional node-local Datadog log delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub datadog: Option<DatadogLaunchConfig>,
+    /// Optional node-local S3 log backup and retention target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_backup: Option<LogBackupLaunchConfig>,
 }
 
 impl DaemonLaunchConfig {
@@ -81,6 +86,9 @@ impl DaemonLaunchConfig {
         self.cluster.preflight()?;
         if let Some(datadog) = &self.datadog {
             datadog.validate()?;
+        }
+        if let Some(log_backup) = &self.log_backup {
+            log_backup.validate(&self.cluster.name, &self.node_id)?;
         }
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));
@@ -158,6 +166,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         security,
         instance_id,
         datadog,
+        log_backup,
     } = config;
     let known_members = control_plane_members(&cluster);
     let clock = Arc::new(TokioClock::new());
@@ -215,16 +224,26 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         Some(instance_id) => instance_id,
         None => generate_instance_id()?,
     };
+    let timestamp_clock = Arc::new(SystemTimestampClock);
     let operator_workload = Arc::new(OperatorLeaderWorkload::new(
         cluster.cluster_id.clone(),
         clock.clone(),
-        Arc::new(SystemTimestampClock),
+        timestamp_clock.clone(),
         OperatorSettings::production(&cluster)?,
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
+    let log_maintenance = configure_log_maintenance(
+        log_backup.as_ref(),
+        &plan.cluster().name,
+        plan.node_id(),
+        log_store_runtime.store(),
+        clock.clone(),
+        timestamp_clock,
+    )
+    .await?;
     let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     let network_stats_reader = Arc::new(HostNetworkStatsReader::production(containerd.clone()));
     let factory = DaemonRoleFactory::new(
@@ -254,6 +273,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         },
         DaemonRoleSettings::default(),
     )
+    .with_log_maintenance(log_maintenance)
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
 }
@@ -400,6 +420,15 @@ pub enum DaemonLaunchError {
     /// Datadog metric delivery configuration was unsafe or incomplete.
     #[error(transparent)]
     DatadogMetricSettings(#[from] metrics::DatadogMetricSinkSettingsError),
+    /// Log backup namespace or KMS settings were invalid.
+    #[error(transparent)]
+    LogBackupSettings(#[from] logstore::LogBackupError),
+    /// Production S3 backup adapter settings were invalid.
+    #[error(transparent)]
+    S3Backup(#[from] crate::S3BackupObjectStoreError),
+    /// Scheduled log rollover, backup, or retention could not be initialized.
+    #[error(transparent)]
+    LogMaintenance(#[from] crate::LogMaintenanceError),
     /// The bounded production sink HTTP adapter could not be constructed.
     #[error(transparent)]
     HttpTransport(#[from] logs::ReqwestHttpTransportError),

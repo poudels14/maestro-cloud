@@ -6,6 +6,10 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "=0.1.89"
+aws-config = { version = "=1.9.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
 aws-sdk-s3 = { version = "=1.138.0", default-features = false, features = [
   "default-https-client",
   "http-1x",

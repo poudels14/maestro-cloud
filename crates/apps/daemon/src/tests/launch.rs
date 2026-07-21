@@ -5,7 +5,7 @@ use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    StoreLaunchMode, load_launch_config,
+    LogBackupLaunchConfig, StoreLaunchMode, load_launch_config,
 };
 
 use super::cluster_with_nodes;
@@ -116,6 +116,37 @@ fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[test]
+fn log_backup_launch_config_validates_s3_kms_prefix_and_retention()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.log_backup = Some(LogBackupLaunchConfig {
+        bucket: "maestro-production-logs".to_owned(),
+        kms_key_id: "alias/maestro-logs".to_owned(),
+        region: Some("us-west-2".to_owned()),
+        prefix: Some("clusters/production".to_owned()),
+        retention_days: Some(30),
+    });
+    launch.validate()?;
+    let encoded = serde_json::to_value(&launch)?;
+    assert_eq!(
+        encoded
+            .get("logBackup")
+            .and_then(|backup| backup.get("retentionDays"))
+            .and_then(serde_json::Value::as_u64),
+        Some(30)
+    );
+
+    let backup = launch.log_backup.as_mut().ok_or("backup config missing")?;
+    backup.retention_days = Some(0);
+    assert!(launch.validate().is_err());
+    let backup = launch.log_backup.as_mut().ok_or("backup config missing")?;
+    backup.retention_days = Some(30);
+    backup.prefix = Some("../escape".to_owned());
+    assert!(launch.validate().is_err());
+    Ok(())
+}
+
 fn config(
     node_id: &str,
     role: NodeRole,
@@ -136,5 +167,6 @@ fn config(
         },
         instance_id: Some(NodeInstanceId::new("instance-1")?),
         datadog: None,
+        log_backup: None,
     })
 }

@@ -20,7 +20,9 @@ use tokio::task::JoinHandle;
 
 use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
-use crate::{DaemonPlan, DaemonRole, RoleError, RoleFactory, RoleRuntime, RoleSpec};
+use crate::{
+    DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory, RoleRuntime, RoleSpec,
+};
 
 /// Store access owned by an agent role, with local-process lifetime kept explicit.
 pub enum AgentStore {
@@ -237,6 +239,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) sink_runtime: SinkRuntimeRegistry,
+    pub(crate) log_maintenance: Mutex<Option<LogMaintenanceWorker>>,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
     pub(crate) host_metric_sinks: Vec<Arc<dyn HostMetricSink>>,
@@ -278,6 +281,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,
             sink_runtime: SinkRuntimeRegistry::default(),
+            log_maintenance: Mutex::new(None),
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             metric_sinks: dependencies.metric_sinks,
             host_metric_sinks: dependencies.host_metric_sinks,
@@ -301,6 +305,12 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
     /// Attaches the workload started for each successfully fenced leadership term.
     pub fn with_leader_workload(mut self, workload: Arc<dyn LeaderWorkload>) -> Self {
         self.leader_workload = Some(workload);
+        self
+    }
+
+    /// Attaches node-local log rollover, backup, and retention to the agent lifetime.
+    pub fn with_log_maintenance(mut self, worker: LogMaintenanceWorker) -> Self {
+        self.log_maintenance = Mutex::new(Some(worker));
         self
     }
 

@@ -280,6 +280,7 @@ impl RealProcessCluster {
                     .map_err(RealClusterError::from_display)?,
             ),
             datadog: None,
+            log_backup: None,
         };
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;

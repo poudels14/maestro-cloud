@@ -60,6 +60,11 @@ where
         .map_err(|_| RoleError::new("metric-store runtime lock was poisoned"))?
         .take()
         .ok_or_else(|| RoleError::new("agent role was already started"))?;
+    let log_maintenance = factory
+        .log_maintenance
+        .lock()
+        .map_err(|_| RoleError::new("log-maintenance lock was poisoned"))?
+        .take();
     let (store, store_runtime) = match &factory.agent_store {
         AgentStore::Managed {
             provider,
@@ -370,6 +375,13 @@ where
         let sink_shutdown = shutdown.subscribe();
         tasks.push(tokio::spawn(async move {
             worker.run(sink_shutdown).await;
+            Ok(())
+        }));
+    }
+    if let Some(worker) = log_maintenance {
+        let maintenance_shutdown = shutdown.subscribe();
+        tasks.push(tokio::spawn(async move {
+            worker.run(maintenance_shutdown).await;
             Ok(())
         }));
     }

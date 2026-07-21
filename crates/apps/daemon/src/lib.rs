@@ -12,6 +12,7 @@ mod dead_letter_admin;
 mod error;
 mod launch;
 mod leadership;
+mod log_backup_config;
 mod log_delivery;
 mod log_maintenance;
 mod metric_delivery;
@@ -32,6 +33,7 @@ pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_daemon, load_launch_config,
 };
+pub use log_backup_config::LogBackupLaunchConfig;
 pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
