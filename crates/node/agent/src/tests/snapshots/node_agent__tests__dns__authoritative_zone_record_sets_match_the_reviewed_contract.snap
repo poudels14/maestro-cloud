@@ -1,0 +1,148 @@
+---
+source: crates/node/agent/src/tests/dns.rs
+expression: lookups
+---
+{
+  "aliasA": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "alias.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "cname",
+          "value": "api.maestro.internal."
+        }
+      },
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.11"
+        }
+      },
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.12"
+        }
+      }
+    ]
+  },
+  "apiA": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.11"
+        }
+      },
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.12"
+        }
+      }
+    ]
+  },
+  "apiAaaa": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "aaaa",
+          "value": "fd00:42::11"
+        }
+      }
+    ]
+  },
+  "apiAny": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.11"
+        }
+      },
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "a",
+          "value": "10.42.1.12"
+        }
+      },
+      {
+        "name": "api.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "aaaa",
+          "value": "fd00:42::11"
+        }
+      }
+    ]
+  },
+  "metadataTxt": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "metadata.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "txt",
+          "value": "environment=production"
+        }
+      }
+    ]
+  },
+  "serviceSrv": {
+    "authoritative": true,
+    "responseCode": "noError",
+    "answers": [
+      {
+        "name": "_http._tcp.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "srv",
+          "value": {
+            "priority": 10,
+            "weight": 10,
+            "port": 8080,
+            "target": "api.maestro.internal."
+          }
+        }
+      },
+      {
+        "name": "_http._tcp.maestro.internal.",
+        "ttlSecs": 30,
+        "value": {
+          "type": "srv",
+          "value": {
+            "priority": 10,
+            "weight": 20,
+            "port": 8081,
+            "target": "api.maestro.internal."
+          }
+        }
+      }
+    ]
+  }
+}

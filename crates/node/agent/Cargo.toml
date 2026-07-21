@@ -8,6 +8,7 @@ rust-version.workspace = true
 async-trait = "=0.1.89"
 base64 = "=0.22.1"
 getrandom = "=0.4.3"
+hickory-server = { version = "=0.26.1", default-features = false }
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 node-fabric = { version = "0.1.0", path = "../fabric" }
@@ -26,6 +27,7 @@ zeroize = { version = "=1.9.0", features = ["alloc"] }
 workspace = true
 
 [dev-dependencies]
+insta = { version = "=1.48.0", features = ["json"] }
 runtime = { path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 

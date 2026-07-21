@@ -15,6 +15,7 @@ mod assignment_status;
 mod assignment_types;
 #[cfg(target_os = "linux")]
 mod cgroup_stats;
+mod dns;
 mod exec;
 mod health;
 mod health_probe;
@@ -56,6 +57,10 @@ pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};
 pub use cgroup_stats::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
     CgroupStats, CgroupStatsError, CgroupStatsReader, CgroupV2StatsReader,
+};
+pub use dns::{
+    AuthoritativeDnsResolver, DnsAnswer, DnsLookup, DnsQueryType, DnsResolverError,
+    DnsResponseCode, DnsZoneSummary, MAESTRO_DNS_ZONE,
 };
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
