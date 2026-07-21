@@ -4,9 +4,82 @@ use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Times
 use runtime::WorkloadMetadata;
 
 use crate::{
-    MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId,
-    MetricSequence, MetricSinkId, MetricStore, MetricStoreError, WorkloadMetricPoint,
+    HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostMetricStore,
+    HostResourceMetricPoint, MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError,
+    MetricRecordId, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
+    WorkloadMetricPoint,
 };
+
+/// Runs the reusable append, replay, collision, validation, and atomicity battery on a host store.
+pub async fn check_host_metric_store(
+    store: &dyn HostMetricStore,
+) -> Result<(), MetricStoreConformanceError> {
+    let first = host_metric_point("node-1", 1, 10)?;
+    require_report(
+        "initial host append",
+        store
+            .append_host_metrics(std::slice::from_ref(&first))
+            .await?,
+        MetricAppendReport {
+            committed: 1,
+            deduplicated: 0,
+        },
+    )?;
+    require_report(
+        "exact host replay",
+        store
+            .append_host_metrics(std::slice::from_ref(&first))
+            .await?,
+        MetricAppendReport {
+            committed: 0,
+            deduplicated: 1,
+        },
+    )?;
+
+    let mut collision = first;
+    collision
+        .resources
+        .as_mut()
+        .ok_or(MetricStoreConformanceError::UnexpectedHostPoint)?
+        .memory_used_bytes = 11;
+    if !matches!(
+        store
+            .append_host_metrics(std::slice::from_ref(&collision))
+            .await,
+        Err(MetricStoreError::Rejected { .. })
+    ) {
+        return Err(MetricStoreConformanceError::CollisionAccepted);
+    }
+
+    let second = host_metric_point("node-2", 1, 20)?;
+    if !matches!(
+        store
+            .append_host_metrics(&[second.clone(), collision])
+            .await,
+        Err(MetricStoreError::Rejected { .. })
+    ) {
+        return Err(MetricStoreConformanceError::CollisionAccepted);
+    }
+    require_report(
+        "host append after rejected batch",
+        store.append_host_metrics(&[second]).await?,
+        MetricAppendReport {
+            committed: 1,
+            deduplicated: 0,
+        },
+    )?;
+
+    let mut empty = host_metric_point("node-3", 1, 30)?;
+    empty.resources = None;
+    empty.disks = None;
+    if !matches!(
+        store.append_host_metrics(&[empty]).await,
+        Err(MetricStoreError::Rejected { .. })
+    ) {
+        return Err(MetricStoreConformanceError::InvalidHostPointAccepted);
+    }
+    Ok(())
+}
 
 /// Runs the reusable append, replay, collision, and atomicity battery on a fresh store.
 pub async fn check_metric_store(
@@ -181,6 +254,36 @@ pub fn metric_point(
     })
 }
 
+/// Builds one normalized host point for cross-backend conformance tests.
+pub fn host_metric_point(
+    node: &str,
+    timestamp: i64,
+    memory_used_bytes: u64,
+) -> Result<HostMetricPoint, kernel_api::InvalidIdentifier> {
+    Ok(HostMetricPoint {
+        id: HostMetricRecordId {
+            cluster_id: ClusterId::new("metric-store-conformance")?,
+            node_id: NodeId::new(node)?,
+            collected_at: Timestamp(timestamp),
+        },
+        resources: Some(HostResourceMetricPoint {
+            cpu_total_ticks: 100,
+            cpu_idle_ticks: 40,
+            memory_used_bytes,
+            memory_total_bytes: 1_024,
+            network_receive_bytes: 100,
+            network_transmit_bytes: 200,
+        }),
+        disks: Some(vec![HostDiskMetricPoint {
+            name: "/dev/vda".to_owned(),
+            mount_point: "/".to_owned(),
+            total_bytes: 10_000,
+            available_bytes: 4_000,
+            file_system: "ext4".to_owned(),
+        }]),
+    })
+}
+
 /// A store violated behavior required by the normalized-metric contract.
 #[derive(Debug, thiserror::Error)]
 pub enum MetricStoreConformanceError {
@@ -202,6 +305,12 @@ pub enum MetricStoreConformanceError {
     /// Delivery ordering, pagination, or a stable baseline differed from the contract.
     #[error("metric delivery store returned an unexpected ordered view")]
     UnexpectedDelivery,
+    /// A valid host fixture unexpectedly lacked its resource values.
+    #[error("host metric conformance fixture was unexpectedly incomplete")]
+    UnexpectedHostPoint,
+    /// An empty or internally inconsistent host point was accepted.
+    #[error("host metric store accepted an invalid point")]
+    InvalidHostPointAccepted,
     /// A zero bound, unknown cursor, or cursor regression was accepted.
     #[error("metric delivery store accepted an invalid operation")]
     InvalidDeliveryAccepted,

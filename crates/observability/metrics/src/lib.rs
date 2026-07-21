@@ -9,6 +9,11 @@ mod datadog;
 mod delivery;
 #[cfg(any(test, feature = "test-util"))]
 mod fake;
+#[cfg(any(test, feature = "test-util"))]
+mod host_fake;
+mod host_model;
+mod host_pipeline;
+mod host_store;
 mod http;
 mod model;
 mod pipeline;
@@ -22,6 +27,13 @@ pub use delivery::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{InMemoryMetricStore, InMemoryMetricStoreRuntime, RecordingMetricSink};
+#[cfg(any(test, feature = "test-util"))]
+pub use host_fake::InMemoryHostMetricStore;
+pub use host_model::{
+    HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostResourceMetricPoint,
+};
+pub use host_pipeline::HostMetricPipeline;
+pub use host_store::HostMetricStore;
 pub use http::{
     MetricHttpRequest, MetricHttpResponse, MetricHttpTransport, MetricHttpTransportError,
     ReqwestMetricHttpTransport, ReqwestMetricHttpTransportError,
