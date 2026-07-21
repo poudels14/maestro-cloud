@@ -3,7 +3,8 @@ source: crates/operators/firewall/src/tests/plan.rs
 expression: artifact
 ---
 node: node-1
-digest: 8567c1fa851c307ca12f4ce532b5a45fc92de908c12538de92dc5a21d4742ece
+digest: 187fd8f77127bd089999e59d00239e817db98ff1060fc8e97ad4b4d3f77cb910
+destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
         type ipv4_addr
@@ -105,7 +106,8 @@ table inet maestro_firewall {
 }
 
 node: node-2
-digest: 2d4e732ffe06efcf3c724ce4fb279800f131bb175c93180854706b370fd1c31b
+digest: 1ff317de8e8bc7053f167b795e4133323835fc660b712ed26e53f3cbf6b6e804
+destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
         type ipv4_addr

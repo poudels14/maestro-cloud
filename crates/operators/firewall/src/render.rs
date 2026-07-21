@@ -307,7 +307,10 @@ impl Renderer {
     }
 
     fn finish(self) -> String {
-        let mut script = format!("table inet {} {{\n", self.table_name);
+        let mut script = format!(
+            "destroy table inet {}\ntable inet {} {{\n",
+            self.table_name, self.table_name
+        );
         for (name, set) in self.sets {
             script.push_str(&format!(
                 "    set {name} {{\n        type {}\n        flags interval\n        elements = {{ {} }}\n    }}\n\n",

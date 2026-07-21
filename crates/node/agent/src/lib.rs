@@ -20,9 +20,12 @@ mod dns;
 mod dns_resource;
 mod dns_server;
 mod exec;
+mod firewall;
 mod health;
 mod health_probe;
 mod health_status;
+#[cfg(target_os = "linux")]
+mod linux_firewall;
 #[cfg(target_os = "linux")]
 mod linux_mesh;
 #[cfg(unix)]
@@ -42,6 +45,8 @@ mod secret_mount;
 #[cfg(target_os = "linux")]
 mod stats;
 
+#[cfg(target_os = "linux")]
+pub use linux_firewall::NftablesFirewallBackend;
 #[cfg(target_os = "linux")]
 pub use linux_mesh::LinuxMeshBackend;
 #[cfg(unix)]
@@ -68,6 +73,10 @@ pub use dns::{
 pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
 pub use dns_server::{BoundDnsServer, DnsServerError, DnsServerSettings};
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
+pub use firewall::{
+    FirewallAgentError, FirewallBackend, FirewallBackendError, FirewallReconcileReport,
+    NodeFirewallAgent,
+};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
 pub use mesh::{
