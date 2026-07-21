@@ -3472,6 +3472,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "maestro-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "jsonwebtoken",
+ "kernel-api",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
