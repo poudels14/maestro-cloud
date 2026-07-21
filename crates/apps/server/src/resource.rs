@@ -70,6 +70,30 @@ where
     decode(&stored, &keys, &resource_kind, kind)
 }
 
+pub(crate) async fn get_optional<Id, Spec, Status>(
+    state: &AppState,
+    kind: BuiltinKind,
+    id: Id,
+) -> Result<Option<Object<Id, Spec, Status>>, ApiError>
+where
+    Id: Clone + Display + Into<ResourceName> + DeserializeOwned,
+    Spec: DeserializeOwned,
+    Status: DeserializeOwned,
+{
+    let keys = Keyspace::new(&state.cluster_id);
+    let resource_kind = kernel_api::ResourceKind::new(kind.as_str())
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let key = keys.resource(&resource_kind, &id.clone().into());
+    state
+        .store
+        .get(&key)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read {kind} `{id}`: {error}")))?
+        .as_ref()
+        .map(|stored| decode(stored, &keys, &resource_kind, kind))
+        .transpose()
+}
+
 pub(crate) fn decode<Id, Spec, Status>(
     stored: &StoredValue,
     keys: &Keyspace,

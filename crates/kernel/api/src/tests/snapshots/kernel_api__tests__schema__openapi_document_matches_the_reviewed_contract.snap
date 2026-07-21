@@ -1,6 +1,5 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
-assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -462,6 +461,24 @@ expression: openapi_document()
         ],
         "type": "object"
       },
+      "CommandRequest": {
+        "additionalProperties": false,
+        "description": "Optimistic lifecycle command targeting one exact resource revision.",
+        "properties": {
+          "expectedRevision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Revision the operator observed before choosing the mutation."
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
       "CommandSpec": {
         "description": "Executable and argument vector passed without shell reinterpretation.",
         "properties": {
@@ -576,6 +593,50 @@ expression: openapi_document()
       },
       "Deployment": {
         "$ref": "#/components/schemas/Object4"
+      },
+      "DeploymentCommandResponse": {
+        "description": "Result of an accepted immutable-deployment lifecycle command.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Mutated deployment identity."
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired deployment generation after the command."
+          },
+          "goal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentGoal"
+              }
+            ],
+            "description": "Desired lifecycle goal after the command."
+          },
+          "restartGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Workload restart generation after the command."
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "restartGeneration",
+          "goal"
+        ],
+        "type": "object"
       },
       "DeploymentGoal": {
         "description": "Desired lifecycle outcome for one deployment.",
@@ -3968,6 +4029,176 @@ expression: openapi_document()
       "Service": {
         "$ref": "#/components/schemas/Object3"
       },
+      "ServiceCommandResponse": {
+        "description": "Result of an accepted service lifecycle command.",
+        "properties": {
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Deletion request time, when deletion was accepted."
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation after the command."
+          },
+          "replicaOverride": {
+            "description": "Effective temporary replica override, when configured.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "rollout": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RolloutState"
+              }
+            ],
+            "description": "Rollout gate after the command."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Mutated service identity."
+          }
+        },
+        "required": [
+          "serviceId",
+          "generation",
+          "rollout"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffChange": {
+        "description": "One masked, operator-facing field change.",
+        "properties": {
+          "field": {
+            "description": "Stable dotted path within the service spec.",
+            "type": "string"
+          },
+          "from": {
+            "description": "Previous display value, absent when adding a field.",
+            "nullable": true,
+            "type": "string"
+          },
+          "to": {
+            "description": "Desired display value, absent when removing a field.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffRequest": {
+        "additionalProperties": false,
+        "description": "Read-only desired-state comparison for one service.",
+        "properties": {
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Complete desired service state to compare without persisting it."
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffResponse": {
+        "description": "Masked comparison result and exact revision safe to submit on apply.",
+        "properties": {
+          "changes": {
+            "description": "Ordered masked field changes.",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDiffChange"
+            },
+            "type": "array"
+          },
+          "expectedRevision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current revision, or absence when the service is new."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Compared service identity."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceDiffStatus"
+              }
+            ],
+            "description": "Overall comparison classification."
+          }
+        },
+        "required": [
+          "serviceId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffStatus": {
+        "description": "Classification of one declarative service comparison.",
+        "oneOf": [
+          {
+            "description": "The service does not exist yet.",
+            "enum": [
+              "new"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Desired state is equivalent after typed decoding.",
+            "enum": [
+              "unchanged"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "At least one desired field differs.",
+            "enum": [
+              "changed"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "ServiceId": {
         "description": "Stable identity of a deployable service.",
         "type": "string"
@@ -4176,6 +4407,64 @@ expression: openapi_document()
         },
         "required": [
           "rollout"
+        ],
+        "type": "object"
+      },
+      "ServiceWriteRequest": {
+        "additionalProperties": false,
+        "description": "Optimistic desired-state replacement for one service.",
+        "properties": {
+          "expectedRevision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Revision observed by the caller, or absence when creating the service."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Complete desired service state."
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceWriteResponse": {
+        "description": "Accepted service desired-state generation.",
+        "properties": {
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation after the write."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service whose desired state was accepted."
+          }
+        },
+        "required": [
+          "serviceId",
+          "generation"
         ],
         "type": "object"
       },

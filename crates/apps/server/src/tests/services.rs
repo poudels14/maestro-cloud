@@ -103,6 +103,53 @@ async fn service_put_requires_idempotency_and_semantically_valid_specs()
     Ok(())
 }
 
+#[tokio::test]
+async fn service_diff_returns_exact_revision_and_masks_changed_values()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let server = ApiServer::new(
+        store,
+        ClusterId::new("service-diff")?,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+    let mut spec = serde_json::to_value(service()?.spec)?;
+    assert_eq!(
+        put(&server, "diff-create", &json!({"spec": spec.clone()}))
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    let unchanged = diff(&server, &json!({"spec": spec.clone()})).await?;
+    assert_eq!(required(&unchanged, "status")?, "unchanged");
+    assert!(required(&unchanged, "expectedRevision")?.is_number());
+    assert!(unchanged.get("changes").is_none());
+
+    let spec_object = spec
+        .as_object_mut()
+        .ok_or_else(|| std::io::Error::other("Service spec is not an object"))?;
+    spec_object.insert(
+        "environment".to_string(),
+        json!({"DATABASE_URL": "postgres://replacement"}),
+    );
+    spec_object.insert(
+        "secrets".to_string(),
+        json!({
+            "mountPath": "/run/secrets/service.env",
+            "items": {"DATABASE_PASSWORD": "replacement-password"}
+        }),
+    );
+    let changed = diff(&server, &json!({"spec": spec})).await?;
+    assert_eq!(required(&changed, "status")?, "changed");
+    let encoded = changed.to_string();
+    assert!(encoded.contains("environment.DATABASE_URL"));
+    assert!(encoded.contains("secrets.items.DATABASE_PASSWORD"));
+    assert!(encoded.contains("••••ment"));
+    assert!(encoded.contains("••••word"));
+    assert!(!encoded.contains("postgres://replacement"));
+    assert!(!encoded.contains("replacement-password"));
+    Ok(())
+}
+
 async fn put(
     server: &ApiServer,
     idempotency_key: &str,
@@ -127,6 +174,21 @@ async fn put_optional(
         .router()
         .oneshot(request.body(Body::from(serde_json::to_vec(payload)?))?)
         .await?)
+}
+
+async fn diff(server: &ApiServer, payload: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    let response = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/services/new-api/diff")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(payload)?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    decode(response).await
 }
 
 async fn decode(response: axum::response::Response) -> Result<Value, Box<dyn std::error::Error>> {

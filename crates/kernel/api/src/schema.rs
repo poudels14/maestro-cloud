@@ -5,9 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    Assignment, Build, Deployment, DnsRecord, FirewallPolicy, IngressRoute, Node, NodeFirewall,
-    NodeNetwork, Preview, ReplicaState, ResourceKind, Service, TrafficGeneration, UpgradeRun,
-    Webhook,
+    Assignment, Build, CommandRequest, Deployment, DeploymentCommandResponse, DnsRecord,
+    FirewallPolicy, IngressRoute, Node, NodeFirewall, NodeNetwork, Preview, ReplicaState,
+    ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
+    ServiceDiffResponse, ServiceDiffStatus, ServiceWriteRequest, ServiceWriteResponse,
+    TrafficGeneration, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -267,6 +269,15 @@ pub fn openapi_document() -> Value {
     register_schema::<UpgradeRun>(&mut generator, BuiltinKind::UpgradeRun);
     register_schema::<Webhook>(&mut generator, BuiltinKind::Webhook);
     register_schema::<NodeFirewall>(&mut generator, BuiltinKind::NodeFirewall);
+    register_named_schema::<CommandRequest>(&mut generator, "CommandRequest");
+    register_named_schema::<ServiceCommandResponse>(&mut generator, "ServiceCommandResponse");
+    register_named_schema::<DeploymentCommandResponse>(&mut generator, "DeploymentCommandResponse");
+    register_named_schema::<ServiceWriteRequest>(&mut generator, "ServiceWriteRequest");
+    register_named_schema::<ServiceWriteResponse>(&mut generator, "ServiceWriteResponse");
+    register_named_schema::<ServiceDiffRequest>(&mut generator, "ServiceDiffRequest");
+    register_named_schema::<ServiceDiffResponse>(&mut generator, "ServiceDiffResponse");
+    register_named_schema::<ServiceDiffStatus>(&mut generator, "ServiceDiffStatus");
+    register_named_schema::<ServiceDiffChange>(&mut generator, "ServiceDiffChange");
 
     let schemas = generator.take_definitions(true);
     json!({
@@ -290,4 +301,12 @@ where
     generator
         .definitions_mut()
         .insert(kind.as_str().to_string(), schema);
+}
+
+fn register_named_schema<Schema>(generator: &mut SchemaGenerator, name: &str)
+where
+    Schema: JsonSchema,
+{
+    let _ = generator.subschema_for::<Schema>();
+    debug_assert!(generator.definitions().contains_key(name));
 }

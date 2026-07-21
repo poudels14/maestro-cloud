@@ -8,6 +8,7 @@ mod firewall_policies;
 mod network_observations;
 mod observations;
 mod service_commands;
+mod service_diff;
 mod services;
 mod system;
 mod upgrades;

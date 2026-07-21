@@ -3,16 +3,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use kernel_api::{
     BuiltinKind, Generation, Object, ObjectMeta, ResourceKind, ResourceRevision, RolloutState,
-    Service, ServiceId, ServiceSpec, ServiceStatus,
+    Service, ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceId, ServiceSpec,
+    ServiceStatus, ServiceWriteRequest, ServiceWriteResponse,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
-use serde::{Deserialize, Serialize};
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
+use crate::routes::service_diff;
 use crate::{ApiError, AppState, OperatorIdentity, mask, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
@@ -22,6 +23,7 @@ pub(super) fn router() -> Router<AppState> {
             "/api/services/{service_id}",
             get(get_service).put(put_service),
         )
+        .route("/api/services/{service_id}/diff", post(diff_service))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
 }
 
@@ -164,21 +166,6 @@ fn new_service(service_id: ServiceId, spec: ServiceSpec) -> Service {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ServiceWriteRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    expected_revision: Option<ResourceRevision>,
-    spec: ServiceSpec,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ServiceWriteResponse {
-    service_id: ServiceId,
-    generation: Generation,
-}
-
 async fn list_services(State(state): State<AppState>) -> Result<Json<Vec<Service>>, ApiError> {
     let services = resource::list(&state, BuiltinKind::Service)
         .await?
@@ -186,6 +173,42 @@ async fn list_services(State(state): State<AppState>) -> Result<Json<Vec<Service
         .map(mask::service)
         .collect();
     Ok(Json(services))
+}
+
+async fn diff_service(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    payload: Result<Json<ServiceDiffRequest>, JsonRejection>,
+) -> Result<Json<ServiceDiffResponse>, ApiError> {
+    let service_id =
+        ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let desired = payload
+        .map_err(|rejection| mutation::json_rejection(rejection, "service diff"))?
+        .0
+        .spec;
+    desired
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let current: Option<Service> =
+        resource::get_optional(&state, BuiltinKind::Service, service_id.clone()).await?;
+    Ok(Json(match current {
+        None => ServiceDiffResponse {
+            service_id,
+            expected_revision: None,
+            status: ServiceDiffStatus::New,
+            changes: Vec::new(),
+        },
+        Some(current) => ServiceDiffResponse {
+            service_id,
+            expected_revision: Some(current.meta.revision),
+            status: if current.spec == desired {
+                ServiceDiffStatus::Unchanged
+            } else {
+                ServiceDiffStatus::Changed
+            },
+            changes: service_diff::changes(&current.spec, &desired)?,
+        },
+    }))
 }
 
 async fn get_service(

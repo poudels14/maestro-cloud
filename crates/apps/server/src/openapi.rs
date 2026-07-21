@@ -104,6 +104,10 @@ pub fn openapi_document() -> Value {
         ),
         ("/api/services/{serviceId}".to_string(), service_operation()),
         (
+            "/api/services/{serviceId}/diff".to_string(),
+            service_diff_operation(),
+        ),
+        (
             "/api/services/{serviceId}/redeploy".to_string(),
             command_path(
                 "post",
@@ -244,32 +248,6 @@ pub fn openapi_document() -> Value {
         if let Some(components) = root.get_mut("components").and_then(Value::as_object_mut) {
             components.insert("securitySchemes".to_string(), security_schemes);
             if let Some(schemas) = components.get_mut("schemas").and_then(Value::as_object_mut) {
-                schemas.insert(
-                    "ServiceWriteRequest".to_string(),
-                    json!({
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["spec"],
-                        "properties": {
-                            "expectedRevision": {
-                                "$ref": "#/components/schemas/ResourceRevision",
-                                "description": "Required current revision; omit only when creating"
-                            },
-                            "spec": {"$ref": "#/components/schemas/ServiceSpec"}
-                        }
-                    }),
-                );
-                schemas.insert(
-                    "ServiceWriteResponse".to_string(),
-                    json!({
-                        "type": "object",
-                        "required": ["serviceId", "generation"],
-                        "properties": {
-                            "serviceId": {"$ref": "#/components/schemas/ServiceId"},
-                            "generation": {"$ref": "#/components/schemas/Generation"}
-                        }
-                    }),
-                );
                 insert_command_schemas(schemas);
             }
         }
@@ -364,6 +342,41 @@ fn put_service_operation() -> Value {
             "400": {"description": "Invalid service request"},
             "409": {"description": "Revision or idempotency conflict"},
             "413": {"description": "Request body exceeds the service limit"}
+        }
+    })
+}
+
+fn service_diff_operation() -> Value {
+    json!({
+        "post": {
+            "operationId": "diffService",
+            "security": [{"bearerAuth": []}],
+            "parameters": [{
+                "name": "serviceId",
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            }],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ServiceDiffRequest"}
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Masked desired-state comparison",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ServiceDiffResponse"}
+                        }
+                    }
+                },
+                "400": {"description": "Invalid service request"},
+                "413": {"description": "Request body exceeds the service limit"}
+            }
         }
     })
 }
