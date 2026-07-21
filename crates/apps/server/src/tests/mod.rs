@@ -23,6 +23,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 mod deployment_commands;
 mod deployments;
+mod node_commands;
 mod observations;
 mod service_commands;
 mod services;
@@ -239,6 +240,11 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}~1drain/post")
             .is_some()
     );
     assert_eq!(

@@ -94,6 +94,18 @@ export interface ApiRequestOptions {
 export interface MaestroApiClient {
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
   getNode(nodeId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Node"]>;
+  drainNode(
+    nodeId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["NodeCommandResponse"]>;
+  restoreNode(
+    nodeId: string,
+    request: ApiSchemas["CommandRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["NodeCommandResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
   listDeployments(
@@ -238,6 +250,22 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     listNodes: (options) => get("/api/cluster/nodes", options),
     getNode: (nodeId, options) =>
       get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
+    drainNode: (nodeId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/cluster/nodes/${encodeURIComponent(nodeId)}/drain`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    restoreNode: (nodeId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/cluster/nodes/${encodeURIComponent(nodeId)}/restore`,
+        request,
+        idempotencyKey,
+        options
+      ),
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}`, options),

@@ -1,4 +1,5 @@
 mod cluster;
+mod cluster_commands;
 mod deployment_commands;
 mod deployments;
 mod observations;
@@ -15,6 +16,7 @@ use crate::auth::{AuthPolicy, require_operator};
 pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
     let protected = Router::new()
         .merge(cluster::router())
+        .merge(cluster_commands::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
         .merge(observations::router())

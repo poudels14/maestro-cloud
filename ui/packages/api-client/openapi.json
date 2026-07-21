@@ -1479,6 +1479,21 @@
           }
         ]
       },
+      "NodeCommandResponse": {
+        "properties": {
+          "draining": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          }
+        },
+        "required": [
+          "nodeId",
+          "draining"
+        ],
+        "type": "object"
+      },
       "NodeFirewall": {
         "$ref": "#/components/schemas/Object15"
       },
@@ -5016,6 +5031,130 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/nodes/{nodeId}/drain": {
+      "post": {
+        "operationId": "drainNode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/nodes/{nodeId}/restore": {
+      "post": {
+        "operationId": "restoreNode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeCommandResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
           }
         },
         "security": [

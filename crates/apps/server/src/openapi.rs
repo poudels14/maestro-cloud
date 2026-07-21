@@ -1,5 +1,9 @@
 use serde_json::{Map, Value, json};
 
+use crate::openapi_commands::{
+    command_operation, command_path, deployment_command_path, insert_command_schemas,
+};
+
 /// Composes server path operations over the canonical kernel component schemas.
 pub fn openapi_document() -> Value {
     let mut document = kernel_api::openapi_document();
@@ -11,6 +15,26 @@ pub fn openapi_document() -> Value {
         (
             "/api/cluster/nodes/{nodeId}".to_string(),
             get_operation("getNode", "nodeId", "Node"),
+        ),
+        (
+            "/api/cluster/nodes/{nodeId}/drain".to_string(),
+            command_path(
+                "post",
+                "drainNode",
+                &["nodeId"],
+                "CommandRequest",
+                "NodeCommandResponse",
+            ),
+        ),
+        (
+            "/api/cluster/nodes/{nodeId}/restore".to_string(),
+            command_path(
+                "post",
+                "restoreNode",
+                &["nodeId"],
+                "CommandRequest",
+                "NodeCommandResponse",
+            ),
         ),
         (
             "/api/services".to_string(),
@@ -182,137 +206,6 @@ fn service_operation() -> Value {
         );
     }
     operation
-}
-
-fn insert_command_schemas(schemas: &mut Map<String, Value>) {
-    schemas.insert(
-        "CommandRequest".to_string(),
-        json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["expectedRevision"],
-            "properties": {
-                "expectedRevision": {"$ref": "#/components/schemas/ResourceRevision"}
-            }
-        }),
-    );
-    schemas.insert(
-        "ReplicaOverrideRequest".to_string(),
-        json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["expectedRevision", "replicas"],
-            "properties": {
-                "expectedRevision": {"$ref": "#/components/schemas/ResourceRevision"},
-                "replicas": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "minimum": 0,
-                    "nullable": true,
-                    "description": "Temporary replica count, or null to clear the override"
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "ServiceCommandResponse".to_string(),
-        json!({
-            "type": "object",
-            "required": ["serviceId", "generation", "rollout"],
-            "properties": {
-                "serviceId": {"$ref": "#/components/schemas/ServiceId"},
-                "generation": {"$ref": "#/components/schemas/Generation"},
-                "rollout": {"$ref": "#/components/schemas/RolloutState"},
-                "replicaOverride": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "minimum": 0
-                },
-                "deletionTimestamp": {"$ref": "#/components/schemas/Timestamp"}
-            }
-        }),
-    );
-    schemas.insert(
-        "DeploymentCommandResponse".to_string(),
-        json!({
-            "type": "object",
-            "required": ["deploymentId", "generation", "restartGeneration", "goal"],
-            "properties": {
-                "deploymentId": {"$ref": "#/components/schemas/DeploymentId"},
-                "generation": {"$ref": "#/components/schemas/Generation"},
-                "restartGeneration": {"$ref": "#/components/schemas/Generation"},
-                "goal": {"$ref": "#/components/schemas/DeploymentGoal"}
-            }
-        }),
-    );
-}
-
-fn deployment_command_path(operation_id: &str) -> Value {
-    command_path(
-        "post",
-        operation_id,
-        &["serviceId", "deploymentId"],
-        "CommandRequest",
-        "DeploymentCommandResponse",
-    )
-}
-
-fn command_path(
-    method: &str,
-    operation_id: &str,
-    parameters: &[&str],
-    request_schema: &str,
-    response_schema: &str,
-) -> Value {
-    Value::Object(Map::from_iter([(
-        method.to_string(),
-        command_operation(operation_id, parameters, request_schema, response_schema),
-    )]))
-}
-
-fn command_operation(
-    operation_id: &str,
-    parameters: &[&str],
-    request_schema: &str,
-    response_schema: &str,
-) -> Value {
-    let mut parameters = path_parameters(parameters)
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    parameters.push(json!({
-        "name": "Idempotency-Key",
-        "in": "header",
-        "required": true,
-        "schema": {"type": "string"}
-    }));
-    json!({
-        "operationId": operation_id,
-        "security": [{"bearerAuth": []}],
-        "parameters": parameters,
-        "requestBody": {
-            "required": true,
-            "content": {
-                "application/json": {
-                    "schema": {"$ref": format!("#/components/schemas/{request_schema}")}
-                }
-            }
-        },
-        "responses": {
-            "202": {
-                "description": "Lifecycle command accepted for reconciliation",
-                "content": {
-                    "application/json": {
-                        "schema": {"$ref": format!("#/components/schemas/{response_schema}")}
-                    }
-                }
-            },
-            "400": {"description": "Invalid command request"},
-            "404": {"description": "Resource not found"},
-            "409": {"description": "Revision, idempotency, or lifecycle conflict"},
-            "413": {"description": "Request body exceeds the command limit"}
-        }
-    })
 }
 
 fn put_service_operation() -> Value {

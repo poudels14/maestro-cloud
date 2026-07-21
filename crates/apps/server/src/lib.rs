@@ -9,6 +9,7 @@ mod error;
 mod mask;
 mod mutation;
 mod openapi;
+mod openapi_commands;
 mod resource;
 mod routes;
 mod settings;
