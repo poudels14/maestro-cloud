@@ -104,6 +104,7 @@ pub(super) struct RolloutWorld {
     suite: OperatorSuite,
     firewall_agents: Vec<NodeFirewallAgent<RecordingNodeFirewallBackend>>,
     ingress: Arc<RecordingIngress>,
+    pub(super) build_backend: Arc<FakeBuildBackend>,
     timestamp: Arc<ManualTimestampClock>,
     _session: Box<dyn Session>,
 }
@@ -174,7 +175,7 @@ impl RolloutWorld {
 
         let ingress = Arc::new(RecordingIngress::default());
         let timestamp = Arc::new(ManualTimestampClock::new(10_000));
-        let (operator_backends, _build_backend) =
+        let (operator_backends, build_backend) =
             FakeBuildBackend::operator_backends(ingress.clone());
         let mut operator_settings = settings()?;
         if !seed_service {
@@ -197,6 +198,7 @@ impl RolloutWorld {
             suite,
             firewall_agents,
             ingress,
+            build_backend,
             timestamp,
             _session: session,
         })

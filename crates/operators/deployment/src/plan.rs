@@ -42,8 +42,9 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             .values()
             .filter(|deployment| deployment.spec.service_id == service.meta.id)
             .collect::<Vec<_>>();
-        if service.meta.deletion_timestamp.is_none() {
+        let desired_deployment_id = if service.meta.deletion_timestamp.is_none() {
             let desired = new_deployment(&input.cluster_id, service, input.now)?;
+            let desired_id = desired.meta.id.clone();
             let watched_revision = desired.spec.service != service.spec;
             let exists = if watched_revision {
                 deployments.contains_key(&desired.meta.id)
@@ -55,7 +56,10 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             if !exists {
                 output.create_deployments.push(desired);
             }
-        }
+            Some(desired_id)
+        } else {
+            None
+        };
 
         for deployment in &related {
             if service.meta.deletion_timestamp.is_some()
@@ -84,6 +88,7 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 &related,
                 &input.traffic_generations,
                 input.now,
+                desired_deployment_id.as_ref(),
                 &mut desired_statuses,
                 &mut output.service_updates,
             );
@@ -293,24 +298,35 @@ fn coordinate_active_deployment(
     deployments: &[&Deployment],
     traffic: &[kernel_api::TrafficGeneration],
     now: Timestamp,
+    desired_deployment_id: Option<&DeploymentId>,
     desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
     service_updates: &mut Vec<ResourceStatusUpdate<ServiceId, kernel_api::ServiceStatus>>,
 ) {
-    let candidate = deployments
-        .iter()
-        .filter(|deployment| {
-            desired_statuses
-                .get(&deployment.meta.id)
-                .is_some_and(|status| status.phase == DeploymentPhase::Ready)
+    let desired_candidate = desired_deployment_id.and_then(|desired_id| {
+        deployments.iter().find(|deployment| {
+            deployment.meta.id == *desired_id
+                && desired_statuses
+                    .get(&deployment.meta.id)
+                    .is_some_and(|status| status.phase == DeploymentPhase::Ready)
         })
-        .max_by(|left, right| {
-            left.spec
-                .service_generation
-                .cmp(&right.spec.service_generation)
-                .then_with(|| left.status.created_at.cmp(&right.status.created_at))
-                .then_with(|| left.meta.id.cmp(&right.meta.id))
-        })
-        .copied();
+    });
+    let candidate = desired_candidate.copied().or_else(|| {
+        deployments
+            .iter()
+            .filter(|deployment| {
+                desired_statuses
+                    .get(&deployment.meta.id)
+                    .is_some_and(|status| status.phase == DeploymentPhase::Ready)
+            })
+            .max_by(|left, right| {
+                left.spec
+                    .service_generation
+                    .cmp(&right.spec.service_generation)
+                    .then_with(|| left.status.created_at.cmp(&right.status.created_at))
+                    .then_with(|| left.meta.id.cmp(&right.meta.id))
+            })
+            .copied()
+    });
     let active_deployment = service
         .status
         .active_deployment_id
@@ -322,7 +338,9 @@ fn coordinate_active_deployment(
         })
         .copied();
     let should_activate = candidate.is_some_and(|candidate| {
-        active_deployment.is_none_or(|active| rollout_order(candidate, active).is_gt())
+        (desired_deployment_id == Some(&candidate.meta.id)
+            && active_deployment.is_none_or(|active| active.meta.id != candidate.meta.id))
+            || active_deployment.is_none_or(|active| rollout_order(candidate, active).is_gt())
     });
     let mut desired_service = service.status.clone();
     if should_activate {
@@ -366,8 +384,12 @@ fn coordinate_active_deployment(
     if !cutover_acknowledged {
         return;
     }
+    let active_is_desired = desired_deployment_id == Some(&active_id);
     for deployment in deployments {
-        if !rollout_order(deployment, active_deployment).is_lt() {
+        if deployment.meta.id == active_id
+            || desired_deployment_id == Some(&deployment.meta.id)
+            || (!active_is_desired && !rollout_order(deployment, active_deployment).is_lt())
+        {
             continue;
         }
         let Some(status) = desired_statuses.get_mut(&deployment.meta.id) else {

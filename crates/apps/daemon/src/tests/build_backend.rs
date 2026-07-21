@@ -14,11 +14,22 @@ use crate::OperatorBackends;
 
 const SOURCE_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
-#[derive(Default)]
 pub(super) struct FakeBuildBackend {
     builds: Mutex<Vec<ArtifactBuildRequest>>,
     source_tokens: Mutex<Vec<Option<String>>>,
     revision_tokens: Mutex<Vec<Option<String>>>,
+    revision: Mutex<String>,
+}
+
+impl Default for FakeBuildBackend {
+    fn default() -> Self {
+        Self {
+            builds: Mutex::new(Vec::new()),
+            source_tokens: Mutex::new(Vec::new()),
+            revision_tokens: Mutex::new(Vec::new()),
+            revision: Mutex::new(SOURCE_REVISION.to_string()),
+        }
+    }
 }
 
 impl FakeBuildBackend {
@@ -44,6 +55,10 @@ impl FakeBuildBackend {
     pub(super) fn source_tokens(&self) -> Vec<Option<String>> {
         lock(&self.source_tokens).clone()
     }
+
+    pub(super) fn set_revision(&self, revision: impl Into<String>) {
+        *lock(&self.revision) = revision.into();
+    }
 }
 
 #[async_trait]
@@ -52,16 +67,19 @@ impl BuildSourceProvider for FakeBuildBackend {
         &self,
         _build_id: &BuildId,
         _source: &BuildSource,
-        _resolved_revision: Option<&str>,
+        resolved_revision: Option<&str>,
         github_token: Option<&SecretValue>,
     ) -> Result<PreparedBuildSource, BuildSourceError> {
         lock(&self.source_tokens).push(github_token.map(|token| token.expose().to_owned()));
+        let revision = resolved_revision
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| lock(&self.revision).clone());
         Ok(PreparedBuildSource {
             artifact_source: ArtifactSource::Directory {
                 root: PathBuf::from("/var/lib/maestro/test-build"),
                 definition: PathBuf::new(),
             },
-            revision: SOURCE_REVISION.to_owned(),
+            revision,
         })
     }
 
@@ -78,7 +96,7 @@ impl BuildRevisionResolver for FakeBuildBackend {
         github_token: Option<&SecretValue>,
     ) -> Result<Option<String>, BuildSourceError> {
         lock(&self.revision_tokens).push(github_token.map(|token| token.expose().to_owned()));
-        Ok(Some(SOURCE_REVISION.to_owned()))
+        Ok(Some(lock(&self.revision).clone()))
     }
 }
 

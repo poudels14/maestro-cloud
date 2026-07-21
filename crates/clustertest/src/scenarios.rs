@@ -1,6 +1,7 @@
 //! Shared acceptance scenarios that every Maestro implementation must pass.
 
 mod affinity;
+mod build;
 mod cluster_setup;
 mod egress;
 mod election;
@@ -20,6 +21,9 @@ mod smoke;
 mod upgrade;
 
 pub use affinity::affinity_is_opaque_sticky_and_overridable;
+pub use build::{
+    git_build_rolls_out_an_immutable_artifact, watched_git_revision_rolls_out_once_per_change,
+};
 pub use cluster_setup::cluster_bootstraps_joins_meshes_and_recovers;
 pub use egress::egress_policy_applies_and_deletes_atomically;
 pub use election::leader_failover_fences_stale_writes;

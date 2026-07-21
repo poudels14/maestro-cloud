@@ -5,6 +5,7 @@
 //! production crate so each implementation is tested through the same seam.
 
 mod affinity;
+mod build;
 mod cluster;
 mod cluster_setup;
 mod egress;
@@ -24,6 +25,10 @@ mod smoke;
 mod upgrade;
 
 pub use affinity::AffinityCluster;
+pub use build::{
+    ArtifactBuildSnapshot, BuildCluster, BuildCompletion, BuildRolloutSnapshot,
+    BuildServiceFixture, BuildSnapshot, FixtureSourceRevision,
+};
 pub use cluster::{AcceptanceCluster, FaultInjectableCluster, LifecycleFaultCluster};
 pub use cluster_setup::ClusterSetupCluster;
 pub use egress::{EgressCluster, EgressPolicyFixture, EgressRulesetSnapshot, EgressSnapshot};

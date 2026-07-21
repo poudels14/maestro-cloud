@@ -63,6 +63,54 @@ fn watched_commit_creates_a_pinned_deployment_in_the_same_service_generation() {
 }
 
 #[test]
+fn existing_watched_commit_advances_without_recreating_its_deployment() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let ArtifactTemplate::Build { template } = &mut service.spec.artifact else {
+        return;
+    };
+    template.watch = true;
+    let mut initial = plan(input(service.clone(), Vec::new()))
+        .expect("initial deployment")
+        .create_deployments
+        .remove(0);
+    initial.status.phase = DeploymentPhase::Ready;
+    service.status.active_deployment_id = Some(initial.meta.id.clone());
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_WATCH_REVISION_ANNOTATION.to_string()),
+        "0123456789abcdef0123456789abcdef01234567".to_string(),
+    );
+    let mut watched = plan(input(service.clone(), vec![initial.clone()]))
+        .expect("watched deployment")
+        .create_deployments
+        .remove(0);
+
+    let next = plan(input(
+        service.clone(),
+        vec![initial.clone(), watched.clone()],
+    ))
+    .expect("advance watched deployment");
+
+    assert!(next.create_deployments.is_empty());
+    assert_eq!(next.create_builds.len(), 1);
+    assert_eq!(next.deployment_updates.len(), 1);
+    assert_eq!(next.deployment_updates[0].id, watched.meta.id);
+    assert_eq!(
+        next.deployment_updates[0].status.phase,
+        DeploymentPhase::Building
+    );
+
+    watched.status.phase = DeploymentPhase::Ready;
+    let activated =
+        plan(input(service, vec![initial, watched.clone()])).expect("activate watched deployment");
+    assert_eq!(activated.service_updates.len(), 1);
+    assert_eq!(
+        activated.service_updates[0].status.active_deployment_id,
+        Some(watched.meta.id)
+    );
+}
+
+#[test]
 fn frozen_build_stays_queued_then_unfreeze_creates_its_build() {
     let mut frozen = service(Generation(1), RolloutState::Frozen);
     frozen.spec.artifact = build_artifact();

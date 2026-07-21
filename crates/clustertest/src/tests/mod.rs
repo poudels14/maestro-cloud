@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod affinity;
+mod build;
 mod cluster_setup;
 mod election;
 mod formation;

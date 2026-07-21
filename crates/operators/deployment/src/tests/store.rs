@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ArtifactTemplate, AssignmentId, Build, BuildId, BuildSource, BuildTemplate, ClusterId,
-    Deployment, DeploymentId, DeploymentPhase, ExecPolicy, Generation, NodeApiAccess, NodeId,
-    NodeInstanceId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
+    ArtifactTemplate, AssignmentId, Build, BuildId, BuildPhase, BuildSource, BuildTemplate,
+    ClusterId, Deployment, DeploymentId, DeploymentPhase, ExecPolicy, Generation, NodeApiAccess,
+    NodeId, NodeInstanceId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
     ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, ResourceRevision,
     RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
 };
@@ -77,6 +77,65 @@ async fn atomic_writer_conflict_creates_no_partial_lifecycle_generation()
     let report = writer.apply(&world.fenced, &snapshot, &desired).await?;
     assert!(report.conflict);
     assert!(world.list::<Deployment>("Deployment").await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn store_backed_watched_commit_advances_after_pinned_deployment_exists()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut watched_service = build_service();
+    let ArtifactTemplate::Build { template } = &mut watched_service.spec.artifact else {
+        return Ok(());
+    };
+    template.watch = true;
+    let world = World::new(watched_service).await?;
+    world.reconcile(Timestamp(1_000)).await?;
+    world.reconcile(Timestamp(2_000)).await?;
+    let initial_deployment = world.one::<Deployment>("Deployment").await?;
+    world
+        .update::<Build>(
+            "Build",
+            initial_deployment
+                .spec
+                .build_id
+                .as_ref()
+                .ok_or("build id")?
+                .as_str(),
+            |build| {
+                build.status.phase = BuildPhase::Succeeded;
+                build.status.source_revision = Some("initial-revision".to_string());
+                build.status.image_digest = Some("example.test/api@sha256:initial".to_string());
+            },
+        )
+        .await?;
+    world
+        .update::<Deployment>(
+            "Deployment",
+            initial_deployment.meta.id.as_str(),
+            |deployment| {
+                deployment.status.phase = DeploymentPhase::Ready;
+                deployment.status.image_digest =
+                    Some("example.test/api@sha256:initial".to_string());
+            },
+        )
+        .await?;
+    world
+        .update::<Service>("Service", "api", |service| {
+            service.status.active_deployment_id = Some(initial_deployment.meta.id.clone());
+            service.meta.annotations.insert(
+                kernel_api::AnnotationKey(kernel_api::BUILD_WATCH_REVISION_ANNOTATION.to_string()),
+                "updated-revision".to_string(),
+            );
+        })
+        .await?;
+
+    let created = world.reconcile(Timestamp(3_000)).await?;
+    assert_eq!(created.created_deployments, 1);
+    let advanced = world.reconcile(Timestamp(4_000)).await?;
+
+    assert!(!advanced.conflict);
+    assert_eq!(advanced.created_builds, 1);
+    assert_eq!(advanced.updated_deployments, 1);
     Ok(())
 }
 
