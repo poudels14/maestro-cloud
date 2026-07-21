@@ -1,0 +1,23 @@
+[package]
+name = "logs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+test-util = []
+
+[dependencies]
+async-trait.workspace = true
+kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+node-agent = { version = "0.1.0", path = "../../node/agent" }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true
