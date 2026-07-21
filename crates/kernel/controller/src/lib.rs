@@ -18,7 +18,7 @@ mod runtime;
 mod timestamp;
 
 pub use backoff::{Backoff, BackoffError};
-pub use dedup::{DedupOutcome, RequestFingerprint};
+pub use dedup::{DedupOutcome, RequestDeduplicator, RequestFingerprint};
 pub use elector::StoreLeaderElector;
 pub use error::ControllerError;
 pub use fencing::FencedStore;
