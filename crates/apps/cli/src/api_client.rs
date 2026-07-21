@@ -71,12 +71,64 @@ impl ApiClient {
         Request: Serialize,
         Response: DeserializeOwned,
     {
+        self.mutate(reqwest::Method::POST, path, request_id, body)
+            .await
+    }
+
+    pub(crate) async fn put<Request, Response>(
+        &self,
+        path: &str,
+        request_id: &RequestId,
+        body: &Request,
+    ) -> Result<Response, CliError>
+    where
+        Request: Serialize,
+        Response: DeserializeOwned,
+    {
+        self.mutate(reqwest::Method::PUT, path, request_id, body)
+            .await
+    }
+
+    pub(crate) async fn post_query<Request, Response>(
+        &self,
+        path: &str,
+        body: &Request,
+    ) -> Result<Response, CliError>
+    where
+        Request: Serialize,
+        Response: DeserializeOwned,
+    {
         let endpoint = self.endpoint(path)?;
         let encoded = serde_json::to_vec(body)
             .map_err(|source| CliError::json("failed to encode API request", source))?;
         let response = self
             .client
             .post(endpoint)
+            .header(CONTENT_TYPE, "application/json")
+            .body(encoded)
+            .send()
+            .await
+            .map_err(|source| CliError::transport("API query failed", source))?;
+        decode_response(response).await
+    }
+
+    async fn mutate<Request, Response>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        request_id: &RequestId,
+        body: &Request,
+    ) -> Result<Response, CliError>
+    where
+        Request: Serialize,
+        Response: DeserializeOwned,
+    {
+        let endpoint = self.endpoint(path)?;
+        let encoded = serde_json::to_vec(body)
+            .map_err(|source| CliError::json("failed to encode API request", source))?;
+        let response = self
+            .client
+            .request(method, endpoint)
             .header(CONTENT_TYPE, "application/json")
             .header("Idempotency-Key", request_id.as_str())
             .body(encoded)

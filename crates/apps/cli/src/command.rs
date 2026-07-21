@@ -7,6 +7,7 @@ use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
 use crate::contexts::ContextStore;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
+use crate::rollout;
 use crate::services;
 
 /// Rewritten Maestro operator command-line client.
@@ -35,6 +36,24 @@ enum Command {
 enum ServiceCommand {
     /// List services from the active Maestro API context.
     Ls,
+    /// Preview or apply services from maestro.services.jsonc.
+    Rollout {
+        /// Local, file://, or aws-secret:// services config source.
+        #[arg(long, default_value = "maestro.services.jsonc")]
+        config: String,
+        /// Persist the previewed desired state.
+        #[arg(long)]
+        apply: bool,
+        /// Limit the rollout to one or more service IDs.
+        #[arg(long = "service")]
+        services: Vec<String>,
+        /// Apply without an interactive confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Stable key for a single-service apply retry.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// Trigger a new deployment generation for a service.
     Redeploy {
         /// Service identity.
@@ -142,6 +161,26 @@ pub async fn run(
             let client = ApiClient::new(contexts.active()?)?;
             match command {
                 ServiceCommand::Ls => services::list(&client, output).await,
+                ServiceCommand::Rollout {
+                    config,
+                    apply,
+                    services,
+                    yes,
+                    idempotency_key,
+                } => {
+                    rollout::run(
+                        &client,
+                        &config,
+                        &services,
+                        apply,
+                        yes,
+                        idempotency_key,
+                        input,
+                        output,
+                        &crate::config_source::SystemConfigSourceReader,
+                    )
+                    .await
+                }
                 ServiceCommand::Redeploy {
                     service_id,
                     idempotency_key,

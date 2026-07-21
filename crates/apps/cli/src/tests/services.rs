@@ -2,7 +2,8 @@ use std::sync::Mutex;
 
 use kernel_api::{
     CommandRequest, Deployment, DeploymentCommandResponse, DeploymentGoal, DeploymentId,
-    Generation, RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    Generation, RequestId, RolloutState, Service, ServiceCommandResponse, ServiceDiffRequest,
+    ServiceDiffResponse, ServiceId, ServiceWriteRequest, ServiceWriteResponse,
 };
 use serde_json::json;
 
@@ -145,6 +146,23 @@ impl ServiceApi for RecordingServiceApi {
             restart_generation: Generation(1),
             goal: DeploymentGoal::Cancel,
         })
+    }
+
+    async fn diff_service(
+        &self,
+        _service_id: &ServiceId,
+        _request: ServiceDiffRequest,
+    ) -> Result<ServiceDiffResponse, CliError> {
+        Err(CliError::invalid_input("unexpected diff request"))
+    }
+
+    async fn put_service(
+        &self,
+        _service_id: &ServiceId,
+        _request_id: &RequestId,
+        _request: ServiceWriteRequest,
+    ) -> Result<ServiceWriteResponse, CliError> {
+        Err(CliError::invalid_input("unexpected service write"))
     }
 }
 

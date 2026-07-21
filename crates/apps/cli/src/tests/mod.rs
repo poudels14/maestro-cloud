@@ -2,6 +2,9 @@
 
 mod api_client;
 mod command;
+mod config_source;
 mod contexts;
 mod login;
+mod rollout;
+mod service_config;
 mod services;

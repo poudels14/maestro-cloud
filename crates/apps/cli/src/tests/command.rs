@@ -16,6 +16,20 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro-next",
             "services",
+            "rollout",
+            "--config",
+            "services.jsonc",
+            "--service",
+            "api",
+            "--apply",
+            "-y",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "services",
             "redeploy",
             "api",
             "--idempotency-key",

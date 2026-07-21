@@ -2,7 +2,8 @@ use std::io::Write;
 
 use kernel_api::{
     ArtifactTemplate, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId,
-    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceDiffRequest,
+    ServiceDiffResponse, ServiceId, ServiceWriteRequest, ServiceWriteResponse,
 };
 
 use crate::CliError;
@@ -94,6 +95,19 @@ pub(crate) trait ServiceApi {
         request_id: &RequestId,
         request: CommandRequest,
     ) -> Result<DeploymentCommandResponse, CliError>;
+
+    async fn diff_service(
+        &self,
+        service_id: &ServiceId,
+        request: ServiceDiffRequest,
+    ) -> Result<ServiceDiffResponse, CliError>;
+
+    async fn put_service(
+        &self,
+        service_id: &ServiceId,
+        request_id: &RequestId,
+        request: ServiceWriteRequest,
+    ) -> Result<ServiceWriteResponse, CliError>;
 }
 
 impl ServiceApi for ApiClient {
@@ -143,6 +157,25 @@ impl ServiceApi for ApiClient {
             &request,
         )
         .await
+    }
+
+    async fn diff_service(
+        &self,
+        service_id: &ServiceId,
+        request: ServiceDiffRequest,
+    ) -> Result<ServiceDiffResponse, CliError> {
+        self.post_query(&format!("/api/services/{service_id}/diff"), &request)
+            .await
+    }
+
+    async fn put_service(
+        &self,
+        service_id: &ServiceId,
+        request_id: &RequestId,
+        request: ServiceWriteRequest,
+    ) -> Result<ServiceWriteResponse, CliError> {
+        self.put(&format!("/api/services/{service_id}"), request_id, &request)
+            .await
     }
 }
 

@@ -5,9 +5,13 @@
 
 mod api_client;
 mod command;
+mod config_source;
 mod contexts;
 mod error;
 mod login;
+mod rollout;
+mod service_config;
+mod service_config_convert;
 mod services;
 
 pub use command::{Cli, run};
