@@ -1,7 +1,9 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
+use kernel_api::Timestamp;
 use logs::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
     LogDeliveryStoreError, LogSequence, LogSinkId, LogSpoolStats, LogStatsStore,
@@ -11,9 +13,10 @@ use logs::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::duck_worker::{
-    dead_worker_stopped, delivery_worker_stopped, run_worker, stats_worker_stopped,
+    archive_worker_stopped, dead_worker_stopped, delivery_worker_stopped, run_worker,
+    stats_worker_stopped,
 };
-use crate::{DuckStoreError, DuckStoreSettings};
+use crate::{DuckStoreError, DuckStoreSettings, LogArchiveError, LogRolloverReport};
 
 pub(crate) enum Command {
     Append {
@@ -57,6 +60,10 @@ pub(crate) enum Command {
         sink_ids: Vec<LogSinkId>,
         response: oneshot::Sender<Result<LogSpoolStats, LogStatsStoreError>>,
     },
+    Rollover {
+        before: Timestamp,
+        response: oneshot::Sender<Result<LogRolloverReport, LogArchiveError>>,
+    },
     Shutdown {
         response: oneshot::Sender<()>,
     },
@@ -65,6 +72,7 @@ pub(crate) enum Command {
 /// Async append handle applying bounded backpressure to one DuckDB owner thread.
 pub struct DuckLogStore {
     commands: mpsc::Sender<Command>,
+    cold_root: PathBuf,
 }
 
 /// Explicit lifetime owner for the blocking DuckDB writer thread.
@@ -79,14 +87,21 @@ impl DuckLogStoreRuntime {
         let (commands, receiver) = mpsc::channel(settings.queue_capacity);
         let (initialized, initialization) = oneshot::channel();
         let path = settings.path.clone();
+        let cold_root = path.with_extension("parts");
         let worker_path = path.clone();
+        let worker_cold_root = cold_root.clone();
         let worker = std::thread::Builder::new()
             .name("maestro-logstore".to_owned())
-            .spawn(move || run_worker(&worker_path, receiver, initialized))
+            .spawn(move || {
+                run_worker(&worker_path, &worker_cold_root, receiver, initialized);
+            })
             .map_err(|source| DuckStoreError::Spawn { path, source })?;
         match initialization.await {
             Ok(Ok(())) => Ok(Self {
-                store: Arc::new(DuckLogStore { commands }),
+                store: Arc::new(DuckLogStore {
+                    commands,
+                    cold_root,
+                }),
                 worker: Some(worker),
             }),
             Ok(Err(message)) => {
@@ -130,6 +145,28 @@ impl DuckLogStoreRuntime {
             join(worker).await?;
         }
         lifecycle
+    }
+}
+
+impl DuckLogStore {
+    /// Returns the node-local root containing hive-partitioned Parquet objects.
+    pub fn cold_root(&self) -> &Path {
+        &self.cold_root
+    }
+
+    /// Seals every complete UTC hour before `before` into verified ZSTD Parquet.
+    pub async fn rollover_before(
+        &self,
+        before: Timestamp,
+    ) -> Result<LogRolloverReport, LogArchiveError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::Rollover { before, response })
+            .await
+            .map_err(|_| archive_worker_stopped("accepting rollover"))?;
+        result
+            .await
+            .map_err(|_| archive_worker_stopped("completing rollover"))?
     }
 }
 

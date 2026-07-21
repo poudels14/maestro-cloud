@@ -4,13 +4,18 @@ use logs::{DeadLetterStoreError, LogDeliveryStoreError, LogStatsStoreError};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::duck::Command;
-use crate::{delivery_schema, schema};
+use crate::{LogArchiveError, delivery_schema, log_archive, schema};
 
 pub(crate) fn run_worker(
     path: &Path,
+    cold_root: &Path,
     mut commands: mpsc::Receiver<Command>,
     initialized: oneshot::Sender<Result<(), String>>,
 ) {
+    if let Err(error) = log_archive::prepare(cold_root) {
+        let _ignored = initialized.send(Err(error.to_string()));
+        return;
+    }
     let mut connection = match schema::open(path) {
         Ok(connection) => {
             if initialized.send(Ok(())).is_err() {
@@ -94,12 +99,25 @@ pub(crate) fn run_worker(
                     &sink_ids,
                 ));
             }
+            Command::Rollover { before, response } => {
+                let _ignored = response.send(log_archive::rollover_before(
+                    &mut connection,
+                    cold_root,
+                    before,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
                 return;
             }
         }
+    }
+}
+
+pub(crate) fn archive_worker_stopped(action: &'static str) -> LogArchiveError {
+    LogArchiveError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
     }
 }
 

@@ -10,6 +10,7 @@ mod error;
 mod host_metric_delivery_schema;
 mod host_metric_duck;
 mod host_metric_schema;
+mod log_archive;
 mod metric_delivery_schema;
 mod metric_duck;
 mod metric_schema;
@@ -18,7 +19,8 @@ mod settings;
 mod workload_metric_schema;
 
 pub use duck::{DuckLogStore, DuckLogStoreRuntime};
-pub use error::DuckStoreError;
+pub use error::{DuckStoreError, LogArchiveError};
+pub use log_archive::{ColdPartitionManifest, ColdPartitionManifestPart, LogRolloverReport};
 pub use metric_duck::{DuckMetricStore, DuckMetricStoreRuntime};
 pub use settings::DuckStoreSettings;
 

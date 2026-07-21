@@ -36,3 +36,20 @@ pub enum DuckStoreError {
     #[error("DuckDB store worker panicked")]
     WorkerPanicked,
 }
+
+/// Hourly hot-to-cold log archival could not complete safely.
+#[derive(Debug, thiserror::Error)]
+pub enum LogArchiveError {
+    /// The cutoff or persisted archive state was invalid.
+    #[error("log archive rejected operation: {message}")]
+    Rejected {
+        /// Stable validation detail.
+        message: String,
+    },
+    /// DuckDB or the cold-tier filesystem was unavailable.
+    #[error("log archive is unavailable: {message}")]
+    Unavailable {
+        /// Safe storage diagnostic.
+        message: String,
+    },
+}
