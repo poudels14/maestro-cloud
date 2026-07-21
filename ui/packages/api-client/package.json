@@ -8,7 +8,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "test": "pnpm typecheck",
-    "generate": "cargo run --manifest-path ../../../Cargo.toml -p kernel-api --example export_openapi -- openapi.json && openapi-typescript openapi.json -o src/schema.d.ts",
+    "generate": "cargo run --manifest-path ../../../Cargo.toml -p server --example export_openapi -- openapi.json && openapi-typescript openapi.json -o src/schema.d.ts",
     "typecheck": "tsc -p tsconfig.json",
     "check:drift": "pnpm generate && git diff --exit-code -- openapi.json src/schema.d.ts"
   },

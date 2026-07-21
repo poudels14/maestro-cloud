@@ -62,6 +62,10 @@
                   "build"
                 ],
                 "type": "string"
+              },
+              "watch": {
+                "description": "Poll the configured Git ref and roll out newly resolved commits.",
+                "type": "boolean"
               }
             },
             "required": [
@@ -441,6 +445,10 @@
               }
             ],
             "description": "Source material to build."
+          },
+          "watch": {
+            "description": "Poll the configured Git ref and roll out newly resolved commits.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1676,6 +1684,11 @@
               }
             ],
             "description": "Last time the node renewed its liveness session."
+          },
+          "version": {
+            "default": "",
+            "description": "Semantic version reported by the currently running daemon.",
+            "type": "string"
           }
         },
         "required": [
@@ -1727,6 +1740,20 @@
               }
             ],
             "description": "Process identity observed before restart."
+          },
+          "retryAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Earliest time another idempotent upgrade dispatch may be attempted."
           }
         },
         "required": [
@@ -3581,6 +3608,42 @@
           }
         ]
       },
+      "PreviewPolicy": {
+        "description": "Declarative pull-request preview policy for a base service.",
+        "properties": {
+          "closeGracePeriodSecs": {
+            "description": "Grace period retained after a pull request closes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "environment": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Runtime environment overlaid on the derived service.",
+            "type": "object"
+          },
+          "lifetimeSecs": {
+            "description": "Maximum lifetime measured from pull-request creation.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replicas": {
+            "description": "Replica count assigned to each derived preview service.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "closeGracePeriodSecs",
+          "lifetimeSecs",
+          "replicas"
+        ],
+        "type": "object"
+      },
       "PreviewSpec": {
         "description": "Desired pull-request preview derivation and teardown policy.",
         "properties": {
@@ -3996,6 +4059,20 @@
             ],
             "default": {},
             "description": "Hard scheduling constraints."
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewPolicy"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Pull-request preview policy; absence disables preview discovery."
           },
           "replicas": {
             "description": "Configured replica floor before a temporary override.",
@@ -4759,6 +4836,14 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "HS256 token with a non-empty subject and the operator scope",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -4766,5 +4851,146 @@
     "version": "0.1.0"
   },
   "openapi": "3.0.4",
-  "paths": {}
+  "paths": {
+    "/api/cluster/nodes": {
+      "get": {
+        "operationId": "listNodes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Node"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Ordered resource list"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/nodes/{nodeId}": {
+      "get": {
+        "operationId": "getNode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            },
+            "description": "Requested resource"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services": {
+      "get": {
+        "operationId": "listServices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Service"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Ordered resource list"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}": {
+      "get": {
+        "operationId": "getService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Service"
+                }
+              }
+            },
+            "description": "Requested resource"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Server is accepting requests"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "description": "Canonical OpenAPI document"
+          }
+        }
+      }
+    }
+  }
 }

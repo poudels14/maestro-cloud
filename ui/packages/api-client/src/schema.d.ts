@@ -3,7 +3,104 @@
  * Do not make direct changes to the file.
  */
 
-export type paths = Record<string, never>;
+export interface paths {
+    "/api/cluster/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster/nodes/{nodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listServices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openapi.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getOpenApi"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
@@ -30,6 +127,8 @@ export interface components {
             source: components["schemas"]["BuildSource"];
             /** @enum {string} */
             type: "build";
+            /** @description Poll the configured Git ref and roll out newly resolved commits. */
+            watch?: boolean;
         };
         Assignment: components["schemas"]["Object5"];
         /** @description Stable identity of a scheduled workload assignment. */
@@ -129,6 +228,8 @@ export interface components {
             };
             /** @description Source material to build. */
             source: components["schemas"]["BuildSource"];
+            /** @description Poll the configured Git ref and roll out newly resolved commits. */
+            watch?: boolean;
         };
         /** @description Executable and argument vector passed without shell reinterpretation. */
         CommandSpec: {
@@ -470,6 +571,11 @@ export interface components {
             instanceId: components["schemas"]["NodeInstanceId"];
             /** @description Last time the node renewed its liveness session. */
             lastSeen: components["schemas"]["Timestamp"];
+            /**
+             * @description Semantic version reported by the currently running daemon.
+             * @default
+             */
+            version: string;
         };
         /** @description Per-node progress retained across leader changes and daemon restarts. */
         NodeUpgradeStatus: {
@@ -486,6 +592,8 @@ export interface components {
             phase: components["schemas"]["UpgradePhase"];
             /** @description Process identity observed before restart. */
             previousInstanceId?: components["schemas"]["NodeInstanceId"] | (null);
+            /** @description Earliest time another idempotent upgrade dispatch may be attempted. */
+            retryAt?: components["schemas"]["Timestamp"] | (null);
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object: {
@@ -1003,6 +1111,28 @@ export interface components {
         PreviewId: string;
         /** @description Persisted lifecycle of a pull-request preview. */
         PreviewPhase: "pending" | "active" | "closing" | "expired" | "failed" | "canceled";
+        /** @description Declarative pull-request preview policy for a base service. */
+        PreviewPolicy: {
+            /**
+             * Format: uint64
+             * @description Grace period retained after a pull request closes.
+             */
+            closeGracePeriodSecs: number;
+            /** @description Runtime environment overlaid on the derived service. */
+            environment?: {
+                [key: string]: string;
+            };
+            /**
+             * Format: uint64
+             * @description Maximum lifetime measured from pull-request creation.
+             */
+            lifetimeSecs: number;
+            /**
+             * Format: uint32
+             * @description Replica count assigned to each derived preview service.
+             */
+            replicas: number;
+        };
         /** @description Desired pull-request preview derivation and teardown policy. */
         PreviewSpec: {
             /** @description Base service copied into the isolated preview service. */
@@ -1145,6 +1275,8 @@ export interface components {
              * @default {}
              */
             placement: components["schemas"]["PlacementConstraint"];
+            /** @description Pull-request preview policy; absence disables preview discovery. */
+            preview?: components["schemas"]["PreviewPolicy"] | (null);
             /**
              * Format: uint32
              * @description Configured replica floor before a temporary override.
@@ -1345,4 +1477,139 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
-export type operations = Record<string, never>;
+export interface operations {
+    listNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered resource list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Node"][];
+                };
+            };
+        };
+    };
+    getNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Node"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered resource list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"][];
+                };
+            };
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requested resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    health: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server is accepting requests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getOpenApi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical OpenAPI document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+}

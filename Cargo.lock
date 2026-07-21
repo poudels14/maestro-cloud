@@ -5320,6 +5320,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "jsonwebtoken",
+ "kernel-api",
+ "kernel-store",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
