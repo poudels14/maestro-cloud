@@ -43,6 +43,10 @@ impl LogSinkId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn built_in(value: &'static str) -> Self {
+        Self(value.to_owned())
+    }
 }
 
 /// A sink identifier was empty, oversized, or contained unsafe characters.

@@ -5,6 +5,7 @@
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod conformance;
+mod datadog;
 mod dead_letter;
 mod delivery;
 #[cfg(any(test, feature = "test-util"))]
@@ -12,6 +13,7 @@ mod fake;
 #[cfg(any(test, feature = "test-util"))]
 mod fake_delivery;
 mod filter;
+mod http;
 mod model;
 #[cfg(unix)]
 mod otlp;
@@ -21,6 +23,7 @@ mod pipeline;
 mod sink_worker;
 mod store;
 
+pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
 pub use dead_letter::{DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterStats};
 pub use delivery::{
     LogDeliveryStore, LogDeliveryStoreError, LogSequence, LogSink, LogSinkError, LogSinkId,
@@ -33,6 +36,10 @@ pub use fake_delivery::{InMemoryDeadLetterStore, InMemoryLogDeliveryStore, Recor
 pub use filter::{
     LogFilter, LogFilterChain, LogFilterKind, SuccessfulHealthcheckFilter, TailscaleNoiseFilter,
     standard_ingest_filters,
+};
+pub use http::{
+    HttpRequest, HttpResponse, HttpTransport, HttpTransportError, ReqwestHttpTransport,
+    ReqwestHttpTransportError,
 };
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,

@@ -10,10 +10,12 @@ test-util = []
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+flate2.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
 node-fabric = { version = "0.1.0", path = "../../node/fabric" }
 prost = "=0.14.4"
+reqwest.workspace = true
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 serde.workspace = true
 serde_json.workspace = true

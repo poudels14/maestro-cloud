@@ -3388,11 +3388,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "flate2",
  "kernel-api",
  "node-agent",
  "node-fabric",
  "proptest",
  "prost",
+ "reqwest",
  "runtime",
  "serde",
  "serde_json",
