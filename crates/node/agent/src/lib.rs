@@ -20,6 +20,8 @@ mod linux_mesh;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
+#[cfg(unix)]
+mod node_api;
 mod secret_mount;
 
 #[cfg(target_os = "linux")]
@@ -37,6 +39,11 @@ pub use mesh::{
 };
 pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
 pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
+#[cfg(unix)]
+pub use node_api::{
+    BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeControlHandler,
+    NodeTelemetryHandler,
+};
 pub use secret_mount::SecretMountError;
 
 #[cfg(test)]

@@ -6,11 +6,13 @@
 //! or applications.
 
 mod auth;
+mod contract;
 mod generated;
 
 pub use auth::{
     AuthorizationError, SocketPeer, WorkloadAuthorization, WorkloadClaims, WorkloadToken,
 };
+pub use contract::{WORKLOAD_NODE_SOCKET_PATH, WORKLOAD_NODE_TOKEN_PATH, WORKLOAD_TOKEN_HEADER};
 pub use generated::{otlp, proto};
 
 #[cfg(test)]

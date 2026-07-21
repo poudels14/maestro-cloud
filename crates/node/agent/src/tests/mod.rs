@@ -12,4 +12,6 @@ mod linux_mesh;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
+#[cfg(unix)]
+mod node_api;
 mod secret_mount;
