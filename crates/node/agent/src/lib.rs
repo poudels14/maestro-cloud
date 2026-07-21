@@ -13,6 +13,8 @@ mod assignment_resource;
 mod assignment_restart;
 mod assignment_status;
 mod assignment_types;
+#[cfg(target_os = "linux")]
+mod cgroup_stats;
 mod exec;
 mod health;
 mod health_probe;
@@ -29,6 +31,8 @@ mod node_api_files;
 #[cfg(unix)]
 mod node_api_mount;
 mod secret_mount;
+#[cfg(target_os = "linux")]
+mod stats;
 
 #[cfg(target_os = "linux")]
 pub use linux_mesh::LinuxMeshBackend;
@@ -36,6 +40,11 @@ pub use linux_mesh::LinuxMeshBackend;
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
 pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};
+#[cfg(target_os = "linux")]
+pub use cgroup_stats::{
+    CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
+    CgroupStats, CgroupStatsError, CgroupStatsReader, CgroupV2StatsReader,
+};
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use health::{HealthAgent, HealthAgentError, HealthAgentSettings, HealthReconcileReport};
 pub use health_probe::{HealthProbeError, HealthProbeTarget, HealthProber, NetworkHealthProber};
@@ -53,6 +62,11 @@ pub use node_api::{
 #[cfg(unix)]
 pub use node_api_files::NodeApiMountError;
 pub use secret_mount::SecretMountError;
+#[cfg(target_os = "linux")]
+pub use stats::{
+    WorkloadStatsAgent, WorkloadStatsAgentError, WorkloadStatsFailure, WorkloadStatsFailureStage,
+    WorkloadStatsReport, WorkloadStatsSample, WorkloadStatsSettings,
+};
 
 #[cfg(test)]
 mod tests;
