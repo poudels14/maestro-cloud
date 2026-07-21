@@ -3,7 +3,8 @@ use std::thread::JoinHandle;
 
 use async_trait::async_trait;
 use metrics::{
-    HostMetricPoint, HostMetricStore, MetricAppendReport, MetricDeliveryStore,
+    HostMetricPoint, HostMetricQuery, HostMetricQueryStore, HostMetricQueryStoreError,
+    HostMetricStore, LatestHostMetricQuery, MetricAppendReport, MetricDeliveryStore,
     MetricDeliveryStoreError, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
     MetricStoreRuntime, MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
 };
@@ -20,6 +21,14 @@ enum Command {
     AppendHost {
         points: Vec<HostMetricPoint>,
         response: oneshot::Sender<Result<MetricAppendReport, MetricStoreError>>,
+    },
+    QueryHost {
+        query: HostMetricQuery,
+        response: oneshot::Sender<Result<Vec<HostMetricPoint>, HostMetricQueryStoreError>>,
+    },
+    LatestHost {
+        query: LatestHostMetricQuery,
+        response: oneshot::Sender<Result<Vec<HostMetricPoint>, HostMetricQueryStoreError>>,
     },
     ReadAfter {
         cursor: Option<MetricSequence>,
@@ -165,6 +174,43 @@ impl HostMetricStore for DuckMetricStore {
 }
 
 #[async_trait]
+impl HostMetricQueryStore for DuckMetricStore {
+    async fn query_host_metrics(
+        &self,
+        query: &HostMetricQuery,
+    ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::QueryHost {
+                query: query.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| host_query_worker_stopped("accepting host history query"))?;
+        result
+            .await
+            .map_err(|_| host_query_worker_stopped("completing host history query"))?
+    }
+
+    async fn latest_host_metrics(
+        &self,
+        query: &LatestHostMetricQuery,
+    ) -> Result<Vec<HostMetricPoint>, HostMetricQueryStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::LatestHost {
+                query: query.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| host_query_worker_stopped("accepting latest host query"))?;
+        result
+            .await
+            .map_err(|_| host_query_worker_stopped("completing latest host query"))?
+    }
+}
+
+#[async_trait]
 impl MetricDeliveryStore for DuckMetricStore {
     async fn read_after(
         &self,
@@ -236,6 +282,10 @@ impl MetricStoreRuntime for DuckMetricStoreRuntime {
         self.store.clone()
     }
 
+    fn host_query_store(&self) -> Arc<dyn HostMetricQueryStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), MetricStoreRuntimeError> {
         DuckMetricStoreRuntime::shutdown(*self)
             .await
@@ -268,7 +318,15 @@ fn run_worker(
                 let _ignored = response.send(metric_schema::append(&mut connection, &points));
             }
             Command::AppendHost { points, response } => {
-                let _ignored = response.send(metric_schema::append_host(&mut connection, &points));
+                let _ignored =
+                    response.send(crate::host_metric_schema::append(&mut connection, &points));
+            }
+            Command::QueryHost { query, response } => {
+                let _ignored = response.send(crate::host_metric_schema::query(&connection, &query));
+            }
+            Command::LatestHost { query, response } => {
+                let _ignored =
+                    response.send(crate::host_metric_schema::latest(&connection, &query));
             }
             Command::ReadAfter {
                 cursor,
@@ -309,6 +367,12 @@ fn run_worker(
 
 fn delivery_worker_stopped(action: &'static str) -> MetricDeliveryStoreError {
     MetricDeliveryStoreError::Unavailable {
+        message: format!("DuckDB metric writer stopped before {action}"),
+    }
+}
+
+fn host_query_worker_stopped(action: &'static str) -> HostMetricQueryStoreError {
+    HostMetricQueryStoreError::Unavailable {
         message: format!("DuckDB metric writer stopped before {action}"),
     }
 }

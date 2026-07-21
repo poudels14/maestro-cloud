@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use metrics::{
-    HostMetricStore, MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId,
-    MetricStore, WorkloadMetricPoint,
+    HostMetricComponent, HostMetricQueryStore, HostMetricStore, LatestHostMetricQuery,
+    MetricDeliveryStore, MetricRecordId, MetricSequence, MetricSinkId, MetricStore,
+    WorkloadMetricPoint,
 };
 use runtime::WorkloadMetadata;
 
@@ -20,6 +21,11 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     .await?;
     metrics::conformance::check_metric_store(runtime.store().as_ref()).await?;
     metrics::conformance::check_host_metric_store(runtime.store().as_ref()).await?;
+    metrics::conformance::check_host_metric_query_store(
+        runtime.store().as_ref(),
+        runtime.store().as_ref(),
+    )
+    .await?;
     runtime.shutdown().await?;
 
     let delivery = DuckMetricStoreRuntime::open(DuckStoreSettings::new(
@@ -163,6 +169,61 @@ async fn duck_metric_store_migrates_v1_points_into_stable_delivery_order()
     assert_eq!(migrated.sequence, MetricSequence(1));
     assert_eq!(migrated.previous, None);
     assert_eq!(migrated.point, first);
+    runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_metric_store_migrates_v3_host_component_indexes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("metrics.duckdb");
+    let mut host = metrics::conformance::host_metric_point("node-1", 5, 512)?;
+    host.disks = None;
+    let connection = duckdb::Connection::open(&path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version BIGINT NOT NULL);
+         INSERT INTO schema_version VALUES (3);
+         CREATE TABLE host_metrics (
+             cluster_id VARCHAR NOT NULL,
+             node_id VARCHAR NOT NULL,
+             collected_at_ms BIGINT NOT NULL,
+             point_json VARCHAR NOT NULL,
+             PRIMARY KEY (cluster_id, node_id, collected_at_ms)
+         );
+         CREATE INDEX host_metrics_node_time
+             ON host_metrics (cluster_id, node_id, collected_at_ms);",
+    )?;
+    connection.execute(
+        "INSERT INTO host_metrics VALUES (?1, ?2, ?3, ?4)",
+        duckdb::params![
+            host.id.cluster_id.as_str(),
+            host.id.node_id.as_str(),
+            host.id.collected_at.0,
+            serde_json::to_string(&host)?,
+        ],
+    )?;
+    drop(connection);
+
+    let runtime = DuckMetricStoreRuntime::open(DuckStoreSettings::new(path, 8)?).await?;
+    let resources = runtime
+        .store()
+        .latest_host_metrics(&LatestHostMetricQuery::new(
+            host.id.cluster_id.clone(),
+            HostMetricComponent::Resources,
+            8,
+        )?)
+        .await?;
+    let disks = runtime
+        .store()
+        .latest_host_metrics(&LatestHostMetricQuery::new(
+            host.id.cluster_id.clone(),
+            HostMetricComponent::Disks,
+            8,
+        )?)
+        .await?;
+    assert_eq!(resources, [host]);
+    assert!(disks.is_empty());
     runtime.shutdown().await?;
     Ok(())
 }

@@ -4,11 +4,91 @@ use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Times
 use runtime::WorkloadMetadata;
 
 use crate::{
-    HostDiskMetricPoint, HostMetricPoint, HostMetricRecordId, HostMetricStore,
-    HostResourceMetricPoint, MetricAppendReport, MetricDeliveryStore, MetricDeliveryStoreError,
-    MetricRecordId, MetricSequence, MetricSinkId, MetricStore, MetricStoreError,
-    WorkloadMetricPoint,
+    HostDiskMetricPoint, HostMetricComponent, HostMetricPoint, HostMetricQuery,
+    HostMetricQueryError, HostMetricQueryStore, HostMetricQueryStoreError, HostMetricRecordId,
+    HostMetricStore, HostResourceMetricPoint, LatestHostMetricQuery, MetricAppendReport,
+    MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSinkId,
+    MetricStore, MetricStoreError, WorkloadMetricPoint,
 };
+
+/// Runs bounded history, component filtering, and latest-per-node checks on a host query store.
+pub async fn check_host_metric_query_store(
+    store: &dyn HostMetricStore,
+    queries: &dyn HostMetricQueryStore,
+) -> Result<(), MetricStoreConformanceError> {
+    let cluster_id = ClusterId::new("metric-query-conformance")?;
+    let mut node_one_resources = host_metric_point("node-1", 2, 200)?;
+    node_one_resources.id.cluster_id = cluster_id.clone();
+    node_one_resources.disks = None;
+    let mut node_one_disks = host_metric_point("node-1", 3, 300)?;
+    node_one_disks.id.cluster_id = cluster_id.clone();
+    node_one_disks.resources = None;
+    let mut node_two_both = host_metric_point("node-2", 1, 100)?;
+    node_two_both.id.cluster_id = cluster_id.clone();
+    let mut node_two_resources = host_metric_point("node-2", 4, 400)?;
+    node_two_resources.id.cluster_id = cluster_id.clone();
+    node_two_resources.disks = None;
+    store
+        .append_host_metrics(&[
+            node_two_both.clone(),
+            node_one_disks.clone(),
+            node_one_resources.clone(),
+            node_two_resources.clone(),
+        ])
+        .await?;
+
+    let history = queries
+        .query_host_metrics(&HostMetricQuery::new(
+            cluster_id.clone(),
+            None,
+            Timestamp(1),
+            Timestamp(4),
+            HostMetricComponent::Resources,
+            2,
+        )?)
+        .await?;
+    let latest_resources = queries
+        .latest_host_metrics(&LatestHostMetricQuery::new(
+            cluster_id.clone(),
+            HostMetricComponent::Resources,
+            8,
+        )?)
+        .await?;
+    let latest_disks = queries
+        .latest_host_metrics(&LatestHostMetricQuery::new(
+            cluster_id,
+            HostMetricComponent::Disks,
+            8,
+        )?)
+        .await?;
+    if history != [node_one_resources.clone(), node_two_both.clone()]
+        || latest_resources != [node_one_resources, node_two_resources]
+        || latest_disks != [node_one_disks, node_two_both]
+    {
+        return Err(MetricStoreConformanceError::UnexpectedHostQuery);
+    }
+    if !matches!(
+        HostMetricQuery::new(
+            ClusterId::new("metric-query-conformance")?,
+            None,
+            Timestamp(2),
+            Timestamp(1),
+            HostMetricComponent::Any,
+            1,
+        ),
+        Err(HostMetricQueryError::InvertedTimeRange)
+    ) || !matches!(
+        LatestHostMetricQuery::new(
+            ClusterId::new("metric-query-conformance")?,
+            HostMetricComponent::Any,
+            0,
+        ),
+        Err(HostMetricQueryError::InvalidLimit { .. })
+    ) {
+        return Err(MetricStoreConformanceError::InvalidHostQueryAccepted);
+    }
+    Ok(())
+}
 
 /// Runs the reusable append, replay, collision, validation, and atomicity battery on a host store.
 pub async fn check_host_metric_store(
@@ -293,6 +373,12 @@ pub enum MetricStoreConformanceError {
     /// The delivery view failed while processing valid conformance input.
     #[error(transparent)]
     Delivery(#[from] MetricDeliveryStoreError),
+    /// The host query view failed while processing valid conformance input.
+    #[error(transparent)]
+    HostQueryStore(#[from] HostMetricQueryStoreError),
+    /// A host query fixture unexpectedly violated the public bounds.
+    #[error(transparent)]
+    HostQuery(#[from] HostMetricQueryError),
     /// A sink identifier in the conformance fixture was unexpectedly invalid.
     #[error(transparent)]
     SinkId(#[from] crate::MetricSinkIdError),
@@ -311,6 +397,12 @@ pub enum MetricStoreConformanceError {
     /// An empty or internally inconsistent host point was accepted.
     #[error("host metric store accepted an invalid point")]
     InvalidHostPointAccepted,
+    /// Host history ordering, filtering, or latest selection differed from the contract.
+    #[error("host metric query store returned an unexpected view")]
+    UnexpectedHostQuery,
+    /// An inverted or unbounded host query was accepted.
+    #[error("host metric query accepted invalid bounds")]
+    InvalidHostQueryAccepted,
     /// A zero bound, unknown cursor, or cursor regression was accepted.
     #[error("metric delivery store accepted an invalid operation")]
     InvalidDeliveryAccepted,

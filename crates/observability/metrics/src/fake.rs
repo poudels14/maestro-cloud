@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use kernel_api::{NodeId, WorkloadId};
 
 use crate::{
-    HostMetricStore, InMemoryHostMetricStore, MetricAppendReport, MetricDeliveryStore,
-    MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSink, MetricSinkError,
-    MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime, MetricStoreRuntimeError,
-    SequencedMetricPoint, WorkloadMetricPoint,
+    HostMetricQueryStore, HostMetricStore, InMemoryHostMetricStore, MetricAppendReport,
+    MetricDeliveryStore, MetricDeliveryStoreError, MetricRecordId, MetricSequence, MetricSink,
+    MetricSinkError, MetricSinkId, MetricStore, MetricStoreError, MetricStoreRuntime,
+    MetricStoreRuntimeError, SequencedMetricPoint, WorkloadMetricPoint,
 };
 
 /// Deterministic idempotent metric store for pipeline and composition tests.
@@ -221,6 +221,10 @@ impl MetricStoreRuntime for InMemoryMetricStoreRuntime {
     }
 
     fn host_store(&self) -> Arc<dyn HostMetricStore> {
+        self.host_store.clone()
+    }
+
+    fn host_query_store(&self) -> Arc<dyn HostMetricQueryStore> {
         self.host_store.clone()
     }
 

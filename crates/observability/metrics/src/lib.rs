@@ -13,6 +13,7 @@ mod fake;
 mod host_fake;
 mod host_model;
 mod host_pipeline;
+mod host_query;
 mod host_store;
 mod http;
 mod model;
@@ -34,6 +35,10 @@ pub use host_model::{
     HostResourceMetricPoint,
 };
 pub use host_pipeline::HostMetricPipeline;
+pub use host_query::{
+    HostMetricComponent, HostMetricQuery, HostMetricQueryError, HostMetricQueryStore,
+    HostMetricQueryStoreError, LatestHostMetricQuery,
+};
 pub use host_store::HostMetricStore;
 pub use http::{
     MetricHttpRequest, MetricHttpResponse, MetricHttpTransport, MetricHttpTransportError,
