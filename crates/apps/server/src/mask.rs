@@ -1,4 +1,9 @@
-use kernel_api::{ArtifactTemplate, SecretValue, Service, ServiceSpec};
+use kernel_api::{ArtifactTemplate, Build, SecretValue, Service, ServiceSpec};
+
+pub(crate) fn build(mut build: Build) -> Build {
+    values(build.spec.template.secrets.values_mut());
+    build
+}
 
 pub(crate) fn service(mut service: Service) -> Service {
     service_spec(&mut service.spec);

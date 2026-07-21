@@ -1,6 +1,7 @@
 mod cluster;
 mod deployment_commands;
 mod deployments;
+mod observations;
 mod service_commands;
 mod services;
 mod system;
@@ -16,6 +17,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(cluster::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
+        .merge(observations::router())
         .merge(service_commands::router())
         .merge(services::router())
         .route_layer(middleware::from_fn_with_state(auth, require_operator));

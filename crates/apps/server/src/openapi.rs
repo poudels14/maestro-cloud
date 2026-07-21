@@ -59,11 +59,52 @@ pub fn openapi_document() -> Value {
         ),
         (
             "/api/services/{serviceId}/deployments".to_string(),
-            nested_list_operation("listDeployments", "serviceId", "Deployment"),
+            nested_list_operation("listDeployments", &["serviceId"], "Deployment"),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}".to_string(),
             deployment_operation(),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/assignments".to_string(),
+            nested_list_operation(
+                "listAssignments",
+                &["serviceId", "deploymentId"],
+                "Assignment",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/assignments/{assignmentId}"
+                .to_string(),
+            scoped_get_operation(
+                "getAssignment",
+                &["serviceId", "deploymentId", "assignmentId"],
+                "Assignment",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/replicas".to_string(),
+            nested_list_operation(
+                "listReplicas",
+                &["serviceId", "deploymentId"],
+                "ReplicaState",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/deployments/{deploymentId}/replicas/{replicaId}".to_string(),
+            scoped_get_operation(
+                "getReplica",
+                &["serviceId", "deploymentId", "replicaId"],
+                "ReplicaState",
+            ),
+        ),
+        (
+            "/api/services/{serviceId}/builds".to_string(),
+            nested_list_operation("listBuilds", &["serviceId"], "Build"),
+        ),
+        (
+            "/api/services/{serviceId}/builds/{buildId}".to_string(),
+            scoped_get_operation("getBuild", &["serviceId", "buildId"], "Build"),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}/restart".to_string(),
@@ -364,21 +405,27 @@ fn get_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
     })
 }
 
-fn nested_list_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {
+fn nested_list_operation(operation_id: &str, parameters: &[&str], schema: &str) -> Value {
     let mut operation = list_operation(operation_id, schema);
     if let Some(get) = operation.get_mut("get").and_then(Value::as_object_mut) {
-        get.insert("parameters".to_string(), path_parameters(&[parameter]));
+        get.insert("parameters".to_string(), path_parameters(parameters));
     }
     operation
 }
 
 fn deployment_operation() -> Value {
-    let mut operation = get_operation("getDeployment", "deploymentId", "Deployment");
+    scoped_get_operation(
+        "getDeployment",
+        &["serviceId", "deploymentId"],
+        "Deployment",
+    )
+}
+
+fn scoped_get_operation(operation_id: &str, parameters: &[&str], schema: &str) -> Value {
+    let parameter = parameters.last().copied().unwrap_or("resourceId");
+    let mut operation = get_operation(operation_id, parameter, schema);
     if let Some(get) = operation.get_mut("get").and_then(Value::as_object_mut) {
-        get.insert(
-            "parameters".to_string(),
-            path_parameters(&["serviceId", "deploymentId"]),
-        );
+        get.insert("parameters".to_string(), path_parameters(parameters));
     }
     operation
 }

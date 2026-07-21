@@ -39,25 +39,38 @@ async fn get_deployment(
 ) -> Result<Json<Deployment>, ApiError> {
     let service_id = parse_service_id(service_id)?;
     ensure_service(&state, service_id.clone()).await?;
+    Ok(Json(mask_deployment(
+        owned_deployment(&state, &service_id, deployment_id).await?,
+    )))
+}
+
+pub(super) fn parse_service_id(service_id: String) -> Result<ServiceId, ApiError> {
+    ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+pub(super) async fn ensure_service(
+    state: &AppState,
+    service_id: ServiceId,
+) -> Result<(), ApiError> {
+    let _: Service = resource::get(state, BuiltinKind::Service, service_id).await?;
+    Ok(())
+}
+
+pub(super) async fn owned_deployment(
+    state: &AppState,
+    service_id: &ServiceId,
+    deployment_id: String,
+) -> Result<Deployment, ApiError> {
     let deployment_id = DeploymentId::new(deployment_id)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let deployment: Deployment =
-        resource::get(&state, BuiltinKind::Deployment, deployment_id.clone()).await?;
-    if deployment.spec.service_id != service_id {
+        resource::get(state, BuiltinKind::Deployment, deployment_id.clone()).await?;
+    if deployment.spec.service_id != *service_id {
         return Err(ApiError::not_found(format!(
             "Deployment `{deployment_id}` does not exist for Service `{service_id}`"
         )));
     }
-    Ok(Json(mask_deployment(deployment)))
-}
-
-fn parse_service_id(service_id: String) -> Result<ServiceId, ApiError> {
-    ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))
-}
-
-async fn ensure_service(state: &AppState, service_id: ServiceId) -> Result<(), ApiError> {
-    let _: Service = resource::get(state, BuiltinKind::Service, service_id).await?;
-    Ok(())
+    Ok(deployment)
 }
 
 fn mask_deployment(mut deployment: Deployment) -> Deployment {

@@ -23,6 +23,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 mod deployment_commands;
 mod deployments;
+mod observations;
 mod service_commands;
 mod services;
 
@@ -216,6 +217,18 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .pointer(
                 "/paths/~1api~1services~1{serviceId}~1deployments~1{deploymentId}~1restart/post"
             )
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer(
+                "/paths/~1api~1services~1{serviceId}~1deployments~1{deploymentId}~1assignments/get"
+            )
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1builds/get")
             .is_some()
     );
     assert!(

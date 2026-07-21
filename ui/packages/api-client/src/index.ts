@@ -105,6 +105,37 @@ export interface MaestroApiClient {
     deploymentId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["Deployment"]>;
+  listAssignments(
+    serviceId: string,
+    deploymentId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Assignment"][]>;
+  getAssignment(
+    serviceId: string,
+    deploymentId: string,
+    assignmentId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Assignment"]>;
+  listReplicas(
+    serviceId: string,
+    deploymentId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ReplicaState"][]>;
+  getReplica(
+    serviceId: string,
+    deploymentId: string,
+    replicaId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ReplicaState"]>;
+  listBuilds(
+    serviceId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Build"][]>;
+  getBuild(
+    serviceId: string,
+    buildId: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["Build"]>;
   redeployService(
     serviceId: string,
     request: ApiSchemas["CommandRequest"],
@@ -215,6 +246,33 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     getDeployment: (serviceId, deploymentId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}`,
+        options
+      ),
+    listAssignments: (serviceId, deploymentId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/assignments`,
+        options
+      ),
+    getAssignment: (serviceId, deploymentId, assignmentId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/assignments/${encodeURIComponent(assignmentId)}`,
+        options
+      ),
+    listReplicas: (serviceId, deploymentId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/replicas`,
+        options
+      ),
+    getReplica: (serviceId, deploymentId, replicaId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/replicas/${encodeURIComponent(replicaId)}`,
+        options
+      ),
+    listBuilds: (serviceId, options) =>
+      get(`/api/services/${encodeURIComponent(serviceId)}/builds`, options),
+    getBuild: (serviceId, buildId, options) =>
+      get(
+        `/api/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}`,
         options
       ),
     redeployService: (serviceId, request, idempotencyKey, options) =>
