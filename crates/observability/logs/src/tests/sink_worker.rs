@@ -210,9 +210,16 @@ async fn dead_letters_are_idempotent_collision_safe_and_explicitly_purgeable()
     store.record(&first).await?;
     store.record(&second).await?;
 
+    let metadata = first.metadata();
+    assert_eq!(metadata.payload_bytes, 5);
+    assert_eq!(
+        metadata.payload_sha256,
+        "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e"
+    );
+
     assert_eq!(store.stats(&sink_id()?).await?.count, 2);
     assert_eq!(store.stats(&sink_id()?).await?.payload_bytes, 11);
-    assert_eq!(store.list(&sink_id()?, 1).await?, vec![first.clone()]);
+    assert_eq!(store.list(&sink_id()?, None, 1).await?, vec![first.clone()]);
 
     let mut collision = first;
     collision.payload = b"different".to_vec();

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use kernel_api::Timestamp;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{LogSequence, LogSinkId};
 
@@ -23,8 +24,45 @@ pub struct SinkDeadLetter {
     pub recorded_at: Timestamp,
 }
 
+impl SinkDeadLetter {
+    /// Returns operator-safe metadata without copying or exposing the retained payload.
+    pub fn metadata(&self) -> SinkDeadLetterMetadata {
+        SinkDeadLetterMetadata {
+            sink_id: self.sink_id.clone(),
+            source_sequence: self.source_sequence,
+            status_code: self.status_code,
+            reason: self.reason.clone(),
+            payload_sha256: hex(&Sha256::digest(&self.payload)),
+            payload_bytes: u64::try_from(self.payload.len()).unwrap_or(u64::MAX),
+            recorded_at: self.recorded_at,
+        }
+    }
+}
+
+/// Operator-safe dead-letter metadata used by list output and export manifests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SinkDeadLetterMetadata {
+    /// Sink whose destination rejected the payload.
+    pub sink_id: LogSinkId,
+    /// Source record sequence used as the durable quarantine key.
+    pub source_sequence: LogSequence,
+    /// Destination status code when one was available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    /// Bounded safe rejection description.
+    pub reason: String,
+    /// SHA-256 digest of the exact retained bytes.
+    pub payload_sha256: String,
+    /// Exact retained payload size.
+    pub payload_bytes: u64,
+    /// Time at which the payload entered quarantine.
+    pub recorded_at: Timestamp,
+}
+
 /// Aggregate retained dead-letter usage for one sink.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SinkDeadLetterStats {
     /// Retained poison records.
     pub count: u64,
@@ -38,10 +76,11 @@ pub trait DeadLetterStore: Send + Sync {
     /// Records a poison payload, deduplicating the same outbound payload on source replay.
     async fn record(&self, dead_letter: &SinkDeadLetter) -> Result<(), DeadLetterStoreError>;
 
-    /// Lists retained records for a sink in ascending source order.
+    /// Lists retained records after an optional exclusive sequence in ascending source order.
     async fn list(
         &self,
         sink_id: &LogSinkId,
+        after: Option<LogSequence>,
         limit: usize,
     ) -> Result<Vec<SinkDeadLetter>, DeadLetterStoreError>;
 
@@ -72,4 +111,12 @@ pub enum DeadLetterStoreError {
         /// Safe backend diagnostic.
         message: String,
     },
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .concat()
 }

@@ -136,7 +136,9 @@ pub async fn check_dead_letter_store(
     if stats.count != 2 || stats.payload_bytes != 11 {
         return Err(DeadLetterConformanceError::UnexpectedStats);
     }
-    if store.list(&sink_id, 8).await? != vec![first.clone(), second] {
+    if store.list(&sink_id, None, 8).await? != vec![first.clone(), second.clone()]
+        || store.list(&sink_id, Some(LogSequence(1)), 8).await? != vec![second]
+    {
         return Err(DeadLetterConformanceError::UnexpectedEntries);
     }
     let mut collision = first;

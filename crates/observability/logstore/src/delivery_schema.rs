@@ -167,6 +167,7 @@ pub(crate) fn record_dead_letter(
 pub(crate) fn list_dead_letters(
     connection: &Connection,
     sink_id: &LogSinkId,
+    after: Option<LogSequence>,
     limit: usize,
 ) -> Result<Vec<SinkDeadLetter>, DeadLetterStoreError> {
     if limit == 0 {
@@ -174,15 +175,17 @@ pub(crate) fn list_dead_letters(
     }
     let limit =
         i64::try_from(limit).map_err(|_| dead_rejected("dead-letter list limit is too large"))?;
+    let after = after.map(dead_sequence_to_i64).transpose()?;
     let mut statement = connection
         .prepare(
             "SELECT source_sequence, status_code, reason, payload, recorded_at_ms
-             FROM sink_dead_letters WHERE sink_id = ?1
-             ORDER BY source_sequence ASC LIMIT ?2",
+             FROM sink_dead_letters
+             WHERE sink_id = ?1 AND (?2 IS NULL OR source_sequence > ?2)
+             ORDER BY source_sequence ASC LIMIT ?3",
         )
         .map_err(dead_unavailable("prepare dead-letter list"))?;
     let rows = statement
-        .query_map(params![sink_id.as_str(), limit], |row| {
+        .query_map(params![sink_id.as_str(), after, limit], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, Option<i64>>(1)?,

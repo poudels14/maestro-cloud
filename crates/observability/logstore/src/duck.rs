@@ -37,6 +37,7 @@ enum Command {
     },
     ListDeadLetters {
         sink_id: LogSinkId,
+        after: Option<LogSequence>,
         limit: usize,
         response: oneshot::Sender<Result<Vec<SinkDeadLetter>, DeadLetterStoreError>>,
     },
@@ -230,12 +231,14 @@ impl DeadLetterStore for DuckLogStore {
     async fn list(
         &self,
         sink_id: &LogSinkId,
+        after: Option<LogSequence>,
         limit: usize,
     ) -> Result<Vec<SinkDeadLetter>, DeadLetterStoreError> {
         let (response, result) = oneshot::channel();
         self.commands
             .send(Command::ListDeadLetters {
                 sink_id: sink_id.clone(),
+                after,
                 limit,
                 response,
             })
@@ -361,12 +364,14 @@ fn run_worker(
             }
             Command::ListDeadLetters {
                 sink_id,
+                after,
                 limit,
                 response,
             } => {
                 let _ignored = response.send(delivery_schema::list_dead_letters(
                     &connection,
                     &sink_id,
+                    after,
                     limit,
                 ));
             }

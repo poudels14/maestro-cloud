@@ -148,7 +148,10 @@ async fn duck_store_persists_idempotent_dead_letters_and_explicit_purges()
 
     assert_eq!(store.stats(&first.sink_id).await?.count, 2);
     assert_eq!(store.stats(&first.sink_id).await?.payload_bytes, 11);
-    assert_eq!(store.list(&first.sink_id, 1).await?, vec![first.clone()]);
+    assert_eq!(
+        store.list(&first.sink_id, None, 1).await?,
+        vec![first.clone()]
+    );
     let mut collision = first.clone();
     collision.payload = b"different".to_vec();
     assert!(store.record(&collision).await.is_err());

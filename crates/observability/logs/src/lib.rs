@@ -24,7 +24,10 @@ mod sink_worker;
 mod store;
 
 pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
-pub use dead_letter::{DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterStats};
+pub use dead_letter::{
+    DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterMetadata,
+    SinkDeadLetterStats,
+};
 pub use delivery::{
     LogDeliveryStore, LogDeliveryStoreError, LogSequence, LogSink, LogSinkError, LogSinkId,
     LogSinkIdError, LogSinkOutcome, SequencedLogEntry,

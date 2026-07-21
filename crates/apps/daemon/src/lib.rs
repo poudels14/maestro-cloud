@@ -8,6 +8,7 @@ mod agent_lifecycle;
 mod agent_role;
 mod control_plane;
 mod datadog;
+mod dead_letter_admin;
 mod error;
 mod launch;
 mod leadership;
@@ -21,6 +22,9 @@ pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
 };
 pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig};
+pub use dead_letter_admin::{
+    DeadLetterAdminCommand, DeadLetterAdminError, DeadLetterAdminOutput, administer_dead_letters,
+};
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchError, StoreLaunchMode, launch_daemon, load_launch_config,

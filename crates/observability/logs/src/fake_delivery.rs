@@ -194,6 +194,7 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
     async fn list(
         &self,
         sink_id: &LogSinkId,
+        after: Option<LogSequence>,
         limit: usize,
     ) -> Result<Vec<SinkDeadLetter>, DeadLetterStoreError> {
         if limit == 0 {
@@ -203,7 +204,9 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
         }
         Ok(lock_dead_letters(&self.records)?
             .iter()
-            .filter(|((candidate, _), _)| candidate == sink_id)
+            .filter(|((candidate, sequence), _)| {
+                candidate == sink_id && after.is_none_or(|after| *sequence > after)
+            })
             .take(limit)
             .map(|(_, record)| record.clone())
             .collect())
