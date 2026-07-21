@@ -17,6 +17,7 @@ mod metric_delivery;
 mod operators;
 mod plan;
 mod runtime;
+mod s3_backup;
 mod workload_agents;
 
 pub use control_plane::{
@@ -36,6 +37,7 @@ pub use operators::{
 };
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};
+pub use s3_backup::{S3BackupObjectStore, S3BackupObjectStoreError};
 
 #[cfg(test)]
 mod tests;

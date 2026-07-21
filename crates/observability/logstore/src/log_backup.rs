@@ -218,7 +218,7 @@ async fn upload_partition(
         } else {
             BackupObjectBody::File(path.clone())
         };
-        let (size_bytes, sha256) = digest_body(&body)?;
+        let (size_bytes, sha256) = digest_body(&body).await?;
         let upload = BackupObjectUpload {
             key: object_key(store.cold_root(), path, settings)?,
             body,
@@ -295,9 +295,14 @@ fn remote_manifest(
         .map_err(|error| unavailable_message(format!("encode remote manifest: {error}")))
 }
 
-fn digest_body(body: &BackupObjectBody) -> Result<(u64, String), LogBackupError> {
+async fn digest_body(body: &BackupObjectBody) -> Result<(u64, String), LogBackupError> {
     match body {
-        BackupObjectBody::File(path) => digest_file(path),
+        BackupObjectBody::File(path) => {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || digest_file(&path))
+                .await
+                .map_err(|error| unavailable_message(format!("backup hash task failed: {error}")))?
+        }
         BackupObjectBody::Bytes(bytes) => Ok((
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             format!("{:x}", Sha256::digest(bytes)),
