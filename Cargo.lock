@@ -1982,6 +1982,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "kernel-api",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

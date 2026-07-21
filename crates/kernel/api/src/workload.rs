@@ -293,6 +293,14 @@ pub struct ServiceStatus {
 /// A deployable service resource.
 pub type Service = Object<ServiceId, ServiceSpec, ServiceStatus>;
 
+/// Returns the stable DNS-safe hostname assigned to one service replica slot.
+pub fn workload_hostname(service_id: &ServiceId, replica_index: u32) -> String {
+    let suffix = format!("-{replica_index}");
+    let mut service = service_id.as_str().replace(['_', '.'], "-");
+    service.truncate(63_usize.saturating_sub(suffix.len()));
+    format!("{service}{suffix}")
+}
+
 /// Persisted phase of an immutable deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

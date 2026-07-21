@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentPhase,
-    NodeId, VolumeSource,
+    NodeId, ServiceId, VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -23,6 +23,15 @@ fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
         serde_json::to_value(volume_source).expect("serialize volume source"),
         serde_json::json!({"type": "hostPath", "path": "/srv/data", "nodeId": "node-1"})
     );
+}
+
+#[test]
+fn workload_hostname_preserves_the_replica_slot_within_one_dns_label() {
+    let service_id = ServiceId::new(format!("api.{}", "a".repeat(70))).expect("service id");
+    let hostname = workload_hostname(&service_id, 42);
+    assert_eq!(hostname.len(), 63);
+    assert!(hostname.ends_with("-42"));
+    assert!(!hostname.contains('.'));
 }
 
 #[test]

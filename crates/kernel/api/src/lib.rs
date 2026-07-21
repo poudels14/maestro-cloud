@@ -52,7 +52,7 @@ pub use workload::{
     DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe,
     NodeApiAccess, PlacementConstraint, ReplicaState, ReplicaStateSpec, ReplicaStateStatus,
     RolloutState, SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess,
-    VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    VolumeMountSpec, VolumeSource, WorkloadUserSpec, workload_hostname,
 };
 
 #[cfg(test)]

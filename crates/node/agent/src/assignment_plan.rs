@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, ClusterId, Deployment, VolumeAccess, VolumeSource, WorkloadId,
+    workload_hostname,
 };
 use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
@@ -41,7 +42,7 @@ pub(crate) fn workload_spec(
                 workload_id,
                 labels,
             },
-            hostname: workload_hostname(assignment),
+            hostname: workload_hostname(&assignment.spec.service_id, assignment.spec.replica_index),
             environment: deployment.spec.service.environment.clone(),
             mounts,
             workload_address: Some(assignment.spec.workload_address),
@@ -163,16 +164,6 @@ fn workload_mount(
             VolumeAccess::ReadOnly => MountAccess::ReadOnly,
         },
     })
-}
-
-fn workload_hostname(assignment: &Assignment) -> String {
-    let mut hostname = format!(
-        "{}-{}",
-        assignment.spec.service_id, assignment.spec.replica_index
-    )
-    .replace(['_', '.'], "-");
-    hostname.truncate(63);
-    hostname
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

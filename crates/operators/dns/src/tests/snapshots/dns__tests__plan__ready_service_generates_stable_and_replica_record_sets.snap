@@ -1,0 +1,134 @@
+---
+source: crates/operators/dns/src/tests/plan.rs
+expression: output.create_records
+---
+[
+  {
+    "meta": {
+      "id": "dns-401646986f152fcbd682f561",
+      "annotations": {
+        "dns.maestro.dev/managed": "true"
+      },
+      "revision": 0,
+      "generation": 1,
+      "ownerRefs": [
+        {
+          "resource": {
+            "kind": "Service",
+            "id": "api"
+          },
+          "ownership": "controller"
+        }
+      ]
+    },
+    "spec": {
+      "name": "api-0.cluster-1.maestro.internal.",
+      "values": [
+        {
+          "type": "a",
+          "value": "10.42.1.10"
+        }
+      ],
+      "ttlSecs": 5
+    },
+    "status": {
+      "appliedGeneration": 0
+    }
+  },
+  {
+    "meta": {
+      "id": "dns-ff4eb11a22930dbfd1597535",
+      "annotations": {
+        "dns.maestro.dev/managed": "true"
+      },
+      "revision": 0,
+      "generation": 1,
+      "ownerRefs": [
+        {
+          "resource": {
+            "kind": "Service",
+            "id": "api"
+          },
+          "ownership": "controller"
+        }
+      ]
+    },
+    "spec": {
+      "name": "api-1.cluster-1.maestro.internal.",
+      "values": [
+        {
+          "type": "aaaa",
+          "value": "fd00:42::b"
+        }
+      ],
+      "ttlSecs": 5
+    },
+    "status": {
+      "appliedGeneration": 0
+    }
+  },
+  {
+    "meta": {
+      "id": "dns-c4bf4a9533bd19228f7e26b7",
+      "annotations": {
+        "dns.maestro.dev/managed": "true"
+      },
+      "revision": 0,
+      "generation": 1,
+      "ownerRefs": [
+        {
+          "resource": {
+            "kind": "Service",
+            "id": "api"
+          },
+          "ownership": "controller"
+        }
+      ]
+    },
+    "spec": {
+      "name": "api.cluster-1.maestro.internal.",
+      "values": [
+        {
+          "type": "a",
+          "value": "10.42.1.10"
+        }
+      ],
+      "ttlSecs": 5
+    },
+    "status": {
+      "appliedGeneration": 0
+    }
+  },
+  {
+    "meta": {
+      "id": "dns-f59771e5846b3b0679573f4d",
+      "annotations": {
+        "dns.maestro.dev/managed": "true"
+      },
+      "revision": 0,
+      "generation": 1,
+      "ownerRefs": [
+        {
+          "resource": {
+            "kind": "Service",
+            "id": "api"
+          },
+          "ownership": "controller"
+        }
+      ]
+    },
+    "spec": {
+      "name": "api.cluster-1.maestro.internal.",
+      "values": [
+        {
+          "type": "aaaa",
+          "value": "fd00:42::b"
+        }
+      ],
+      "ttlSecs": 5
+    },
+    "status": {
+      "appliedGeneration": 0
+    }
+  }
+]
