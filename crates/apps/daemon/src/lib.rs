@@ -12,6 +12,7 @@ mod leadership;
 mod operators;
 mod plan;
 mod runtime;
+mod workload_agents;
 
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,

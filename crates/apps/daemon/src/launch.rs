@@ -10,6 +10,7 @@ use cluster::{
 use kernel_api::{NodeId, NodeInstanceId, NodeRole};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
+use logstore::{DuckLogStoreError, DuckLogStoreRuntime, DuckLogStoreSettings};
 use node_agent::{
     HickoryDnsServerBinder, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
     NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
@@ -210,6 +211,12 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         OperatorSettings::production(&cluster)?,
     ));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
+    let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
+    let log_store_runtime = DuckLogStoreRuntime::open(DuckLogStoreSettings::new(
+        plan.data_directory().join("agent").join("logs.duckdb"),
+        1_024,
+    )?)
+    .await?;
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
@@ -218,8 +225,9 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             bridge_backend: LinuxWorkloadBridgeBackend::new(),
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: containerd.clone(),
+            log_store_runtime: Box::new(log_store_runtime),
             network_provider: containerd,
-            health_prober: Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?),
+            health_prober,
             volatile_root,
             mesh_identity,
             instance_id,
@@ -364,6 +372,9 @@ pub enum DaemonLaunchError {
     /// The native workload runtime could not be configured or reached.
     #[error(transparent)]
     Runtime(#[from] runtime::RuntimeError),
+    /// The node-local normalized log store could not be opened or initialized.
+    #[error(transparent)]
+    LogStore(#[from] DuckLogStoreError),
     /// A generated process identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),

@@ -7,6 +7,7 @@ use cluster::{StoreProvider, StoreStartMode};
 use kernel_api::NodeInstanceId;
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
+use logs::LogStoreRuntime;
 use node_agent::{
     DnsServerBinder, FirewallBackend, HealthProber, MeshBackend, MeshIdentity, StatusClock,
     WorkloadBridgeBackend,
@@ -52,6 +53,8 @@ pub struct DaemonRoleSettings {
     pub(crate) firewall_resync_interval: Duration,
     pub(crate) assignment_resync_interval: Duration,
     pub(crate) health_poll_interval: Duration,
+    pub(crate) log_poll_interval: Duration,
+    pub(crate) max_log_frames_per_workload: usize,
     pub(crate) workload_stop_timeout: Duration,
     pub(crate) restart_backoff_base: Duration,
     pub(crate) restart_backoff_max: Duration,
@@ -69,6 +72,8 @@ impl DaemonRoleSettings {
         dns_resync_interval: Duration,
         firewall_resync_interval: Duration,
         health_poll_interval: Duration,
+        log_poll_interval: Duration,
+        max_log_frames_per_workload: usize,
         leadership_ttl: Duration,
         leadership_keepalive_interval: Duration,
         campaign_retry_interval: Duration,
@@ -79,6 +84,8 @@ impl DaemonRoleSettings {
             || dns_resync_interval.is_zero()
             || firewall_resync_interval.is_zero()
             || health_poll_interval.is_zero()
+            || log_poll_interval.is_zero()
+            || max_log_frames_per_workload == 0
             || leadership_ttl.is_zero()
             || leadership_keepalive_interval.is_zero()
             || campaign_retry_interval.is_zero()
@@ -86,7 +93,7 @@ impl DaemonRoleSettings {
             || leadership_keepalive_interval >= leadership_ttl
         {
             return Err(RoleError::new(
-                "daemon intervals must be non-zero and leadership keepalive must precede TTL",
+                "daemon intervals and log frame bounds must be non-zero, and leadership keepalive must precede TTL",
             ));
         }
         Ok(Self {
@@ -96,6 +103,8 @@ impl DaemonRoleSettings {
             firewall_resync_interval,
             assignment_resync_interval: Duration::from_secs(30),
             health_poll_interval,
+            log_poll_interval,
+            max_log_frames_per_workload,
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -116,6 +125,8 @@ impl Default for DaemonRoleSettings {
             firewall_resync_interval: Duration::from_secs(30),
             assignment_resync_interval: Duration::from_secs(30),
             health_poll_interval: Duration::from_secs(5),
+            log_poll_interval: Duration::from_secs(1),
+            max_log_frames_per_workload: 1_000,
             workload_stop_timeout: Duration::from_secs(10),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
@@ -141,6 +152,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Native backend used for workload lifecycle, adoption, and events.
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
+    /// Owned normalized-log storage runtime for this node.
+    pub log_store_runtime: Box<dyn LogStoreRuntime>,
     /// Host-owned workload address allocator and attachment backend.
     pub network_provider: Arc<dyn NetworkProvider>,
     /// Bounded HTTP and TCP probe adapter for local workload readiness.
@@ -165,6 +178,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
+    pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
     pub(crate) health_prober: Arc<dyn HealthProber>,
     pub(crate) volatile_root: PathBuf,
@@ -196,6 +210,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
+            log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             network_provider: dependencies.network_provider,
             health_prober: dependencies.health_prober,
             volatile_root: dependencies.volatile_root,

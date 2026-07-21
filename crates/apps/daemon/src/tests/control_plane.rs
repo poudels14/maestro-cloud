@@ -9,13 +9,14 @@ use kernel_api::{
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
+use logs::{InMemoryLogStoreRuntime, LogBody, LogOrigin};
 use node_agent::{
     AuthoritativeDnsResolver, DnsQueryType, DnsServerBinder, DnsServerError, DnsServerRuntime,
     DnsServerSettings, FirewallBackend, FirewallBackendError, HealthProbeError, HealthProbeTarget,
     HealthProber, MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, StatusClock,
     WorkloadBridge, WorkloadBridgeBackend, WorkloadBridgeBackendError,
 };
-use runtime::{FakeNetworkProvider, FakeRuntime, WorkloadRuntime};
+use runtime::{FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -30,7 +31,7 @@ use super::control_plane_store::FakeProvider;
 #[tokio::test]
 async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
 -> Result<(), Box<dyn std::error::Error>> {
-    let clock: Arc<dyn Clock> = Arc::new(PausedClock);
+    let clock = Arc::new(PausedClock::new());
     let store = Arc::new(InMemoryStore::new(clock.clone()));
     let shutdowns = Arc::new(Mutex::new(0_u32));
     let provider = Arc::new(FakeProvider::new(store.clone(), shutdowns.clone()));
@@ -45,6 +46,8 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let workload_runtime = Arc::new(FakeRuntime::new());
     let network_provider = Arc::new(FakeNetworkProvider::default());
     let health_targets = Arc::new(Mutex::new(Vec::new()));
+    let log_store_runtime = InMemoryLogStoreRuntime::new();
+    let log_store = log_store_runtime.store_handle();
     let directory = tempfile::tempdir()?;
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let plan = DaemonPlan::new(
@@ -80,6 +83,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
                 bindings: dns_bindings.clone(),
             }),
             workload_runtime: workload_runtime.clone(),
+            log_store_runtime: Box::new(log_store_runtime),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: health_targets.clone(),
@@ -87,7 +91,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
-            monotonic_clock: clock,
+            monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
         },
         DaemonRoleSettings::default(),
@@ -151,6 +155,35 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     );
     assert_eq!(network_provider.lease_count(), 1);
     assert_eq!(network_provider.attachment_count(), 1);
+    let workload_id = load_assignment(&store, &cluster.cluster_id)
+        .await?
+        .status
+        .workload_id
+        .ok_or("running assignment has no workload identity")?;
+    workload_runtime.append_log(
+        &workload_id,
+        LogSource::Stdout,
+        br#"{"level":"info","message":"daemon log"}"#,
+    )?;
+    clock.advance(Duration::from_secs(1));
+    let entries = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let entries = log_store.entries()?;
+            if !entries.is_empty() {
+                return Ok::<_, logs::LogStoreError>(entries);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    assert_eq!(entries.len(), 1);
+    let entry = entries.first().ok_or("normalized runtime log is missing")?;
+    assert_eq!(entry.body, LogBody::Text("daemon log".to_owned()));
+    let LogOrigin::Workload { metadata } = &entry.origin else {
+        return Err("runtime log lost its workload ownership".into());
+    };
+    assert_eq!(metadata.service_id.as_str(), "api");
+    assert_eq!(metadata.deployment_id.as_str(), "deployment-1");
     assert_eq!(
         load_replica(&store, &cluster.cluster_id)
             .await?
@@ -210,7 +243,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
 #[tokio::test]
 async fn worker_agent_uses_remote_store_without_starting_a_controller()
 -> Result<(), Box<dyn std::error::Error>> {
-    let clock: Arc<dyn Clock> = Arc::new(PausedClock);
+    let clock = Arc::new(PausedClock::new());
     let store = Arc::new(InMemoryStore::new(clock.clone()));
     let cluster =
         cluster_with_nodes(&[("master", NodeRole::Master), ("worker", NodeRole::Worker)])?;
@@ -250,6 +283,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),
             workload_runtime: workload_runtime.clone(),
+            log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),
@@ -298,6 +332,8 @@ fn settings_reject_keepalive_at_or_after_leadership_ttl() {
             Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(5),
+            Duration::from_secs(1),
+            1_000,
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_secs(1),
@@ -307,16 +343,46 @@ fn settings_reject_keepalive_at_or_after_leadership_ttl() {
     );
 }
 
-struct PausedClock;
+struct PausedClock {
+    now: Mutex<MonotonicTime>,
+    advanced: Notify,
+}
+
+impl PausedClock {
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(MonotonicTime::from_duration(Duration::ZERO)),
+            advanced: Notify::new(),
+        }
+    }
+
+    fn advance(&self, duration: Duration) {
+        let mut now = self
+            .now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *now = now.saturating_add(duration);
+        self.advanced.notify_waiters();
+    }
+}
 
 #[async_trait]
 impl Clock for PausedClock {
     fn now(&self) -> MonotonicTime {
-        MonotonicTime::from_duration(Duration::ZERO)
+        *self
+            .now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    async fn sleep_until(&self, _deadline: MonotonicTime) {
-        std::future::pending::<()>().await;
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        loop {
+            let advanced = self.advanced.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            advanced.await;
+        }
     }
 }
 

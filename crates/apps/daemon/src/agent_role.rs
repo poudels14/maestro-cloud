@@ -5,17 +5,17 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cluster::{StoreRuntime, StoreShutdown, WIREGUARD_MTU_BYTES};
 use kernel_store::{Clock, Store};
+use logs::LogStoreRuntime;
 use node_agent::{
-    AUTHORITATIVE_DNS_PORT, AssignmentAgent, AssignmentAgentSettings, AuthoritativeDnsResolver,
-    DnsResourceAgent, DnsServerSettings, FirewallBackend, HealthAgent, HealthAgentSettings,
-    MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent, WORKLOAD_BRIDGE_NAME,
+    AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
+    FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
     WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
 };
-use runtime::{NetworkCidr, NetworkSpec};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::control_plane::{DaemonRoleFactory, role_error};
+use crate::workload_agents::{build_assignment_agent, build_health_agent, build_log_agent};
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
 
 pub(crate) async fn start_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -46,41 +46,50 @@ where
         .map_err(|_| RoleError::new("workload bridge backend lock was poisoned"))?
         .take()
         .ok_or_else(|| RoleError::new("agent role was already started"))?;
+    let log_store_runtime = factory
+        .log_store_runtime
+        .lock()
+        .map_err(|_| RoleError::new("log-store runtime lock was poisoned"))?
+        .take()
+        .ok_or_else(|| RoleError::new("agent role was already started"))?;
     let (store, store_runtime) = match &factory.agent_store {
         AgentStore::Managed {
             provider,
             start_mode,
         } => {
-            let runtime = provider
-                .start(start_mode.clone())
-                .await
-                .map_err(|error| role_error("start local store provider", error))?;
+            let runtime = match provider.start(start_mode.clone()).await {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    return AgentStartupRuntimes::new(None, log_store_runtime)
+                        .fail(role_error("start local store provider", error))
+                        .await;
+                }
+            };
             (runtime.store(), Some(runtime))
         }
         AgentStore::Remote(store) => (store.clone(), None),
     };
+    let runtimes = AgentStartupRuntimes::new(store_runtime, log_store_runtime);
 
     let bridge_agent = match build_bridge_agent(factory, plan, spec, bridge_backend) {
         Ok(agent) => agent,
-        Err(error) => return fail_after_store_start(store_runtime, error).await,
+        Err(error) => return runtimes.fail(error).await,
     };
     let mesh_agent = match build_mesh_agent(factory, plan, spec, store.clone(), mesh_backend) {
         Ok(agent) => agent,
-        Err(error) => return fail_after_store_start(store_runtime, error).await,
+        Err(error) => return runtimes.fail(error).await,
     };
     let firewall_agent =
         match build_firewall_agent(factory, plan, spec, store.clone(), firewall_backend) {
             Ok(agent) => agent,
-            Err(error) => return fail_after_store_start(store_runtime, error).await,
+            Err(error) => return runtimes.fail(error).await,
         };
     let resolver = match AuthoritativeDnsResolver::new() {
         Ok(resolver) => resolver,
         Err(error) => {
-            return fail_after_store_start(
-                store_runtime,
-                role_error("construct authoritative DNS resolver", error),
-            )
-            .await;
+            return runtimes
+                .fail(role_error("construct authoritative DNS resolver", error))
+                .await;
         }
     };
     let dns_agent = match DnsResourceAgent::new(
@@ -93,17 +102,15 @@ where
     ) {
         Ok(agent) => agent,
         Err(error) => {
-            return fail_after_store_start(
-                store_runtime,
-                role_error("construct DNS resource agent", error),
-            )
-            .await;
+            return runtimes
+                .fail(role_error("construct DNS resource agent", error))
+                .await;
         }
     };
     let assignment_agent = if spec.workload_enabled {
         match build_assignment_agent(factory, plan, spec, store.clone()) {
             Ok(agent) => Some(agent),
-            Err(error) => return fail_after_store_start(store_runtime, error).await,
+            Err(error) => return runtimes.fail(error).await,
         }
     } else {
         None
@@ -111,38 +118,38 @@ where
     let health_agent = if spec.workload_enabled {
         match build_health_agent(factory, plan, spec, store.clone()) {
             Ok(agent) => Some(agent),
-            Err(error) => return fail_after_store_start(store_runtime, error).await,
+            Err(error) => return runtimes.fail(error).await,
+        }
+    } else {
+        None
+    };
+    let log_agent = if spec.workload_enabled {
+        match build_log_agent(factory, plan, spec, runtimes.log_store()) {
+            Ok(agent) => Some(agent),
+            Err(error) => return runtimes.fail(error).await,
         }
     } else {
         None
     };
     if let Err(error) = bridge_agent.reconcile_once().await {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish workload bridge", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish workload bridge", error))
+            .await;
     }
     if let Err(error) = mesh_agent.reconcile_once().await {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish initial mesh snapshot", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish initial mesh snapshot", error))
+            .await;
     }
     if let Err(error) = dns_agent.reconcile_once().await {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish initial DNS snapshot", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish initial DNS snapshot", error))
+            .await;
     }
     if let Err(error) = firewall_agent.reconcile_once().await {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish initial firewall snapshot", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish initial firewall snapshot", error))
+            .await;
     }
     let dns_settings = match DnsServerSettings::new(SocketAddr::new(
         IpAddr::V4(bridge_agent.desired().gateway),
@@ -150,40 +157,42 @@ where
     )) {
         Ok(settings) => settings,
         Err(error) => {
-            return fail_after_store_start(
-                store_runtime,
-                role_error("validate authoritative DNS listener", error),
-            )
-            .await;
+            return runtimes
+                .fail(role_error("validate authoritative DNS listener", error))
+                .await;
         }
     };
     let dns_server = match factory.dns_server_binder.bind(dns_settings, resolver).await {
         Ok(server) => server,
         Err(error) => {
-            return fail_after_store_start(
-                store_runtime,
-                role_error("bind authoritative DNS listener", error),
-            )
-            .await;
+            return runtimes
+                .fail(role_error("bind authoritative DNS listener", error))
+                .await;
         }
     };
     if let Some(agent) = assignment_agent.as_ref()
         && let Err(error) = agent.reconcile_once().await
     {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish initial workload assignments", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish initial workload assignments", error))
+            .await;
     }
     if let Some(agent) = health_agent.as_ref()
         && let Err(error) = agent.reconcile_once().await
     {
-        return fail_after_store_start(
-            store_runtime,
-            role_error("establish initial workload health", error),
-        )
-        .await;
+        return runtimes
+            .fail(role_error("establish initial workload health", error))
+            .await;
+    }
+    if let Some(agent) = log_agent.as_ref()
+        && let Err(error) = agent.collect_once().await
+    {
+        return runtimes
+            .fail(role_error(
+                "establish initial runtime log collection",
+                error,
+            ))
+            .await;
     }
 
     let publish_store_error = {
@@ -196,7 +205,7 @@ where
         }
     };
     if let Some(error) = publish_store_error {
-        return fail_after_store_start(store_runtime, error).await;
+        return runtimes.fail(error).await;
     }
     let (shutdown, bridge_shutdown) = watch::channel(false);
     let mesh_shutdown = bridge_shutdown.clone();
@@ -205,6 +214,7 @@ where
     let dns_server_shutdown = bridge_shutdown.clone();
     let assignment_shutdown = bridge_shutdown.clone();
     let health_shutdown = bridge_shutdown.clone();
+    let log_shutdown = bridge_shutdown.clone();
     let bridge_task = tokio::spawn(async move {
         bridge_agent
             .run(bridge_shutdown)
@@ -258,10 +268,20 @@ where
                 .map_err(|error| role_error("run workload health agent", error))
         }));
     }
+    if let Some(agent) = log_agent {
+        tasks.push(tokio::spawn(async move {
+            agent
+                .run(log_shutdown)
+                .await
+                .map_err(|error| role_error("run runtime log agent", error))
+        }));
+    }
+    let (store_runtime, log_store_runtime) = runtimes.into_parts();
     Ok(Box::new(AgentRoleRuntime {
         shutdown,
         tasks,
         store_runtime,
+        log_store_runtime: Some(log_store_runtime),
         clock: factory.monotonic_clock.clone(),
         shutdown_grace: factory.settings.store_shutdown_grace,
     }))
@@ -360,86 +380,38 @@ where
     .map_err(|error| role_error("construct firewall resource agent", error))
 }
 
-fn build_assignment_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-) -> Result<AssignmentAgent, RoleError> {
-    let node = plan
-        .cluster()
-        .nodes
-        .get(&spec.node_id)
-        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
-    let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
-        RoleError::new("local workload subnet has no usable workload bridge gateway")
-    })?;
-    let network = NetworkSpec {
-        name: WORKLOAD_BRIDGE_NAME.to_owned(),
-        range: NetworkCidr::new(
-            IpAddr::V4(node.workload_subnet.network_address()),
-            node.workload_subnet.prefix(),
-        )
-        .map_err(|error| role_error("build workload network range", error))?,
-        gateway: IpAddr::V4(gateway),
-        mtu_bytes: WIREGUARD_MTU_BYTES,
-    };
-    AssignmentAgent::new(
-        store,
-        factory.workload_runtime.clone(),
-        factory.network_provider.clone(),
-        AssignmentAgentSettings {
-            cluster_id: plan.cluster().cluster_id.clone(),
-            node_id: spec.node_id.clone(),
-            network,
-            stop_timeout: factory.settings.workload_stop_timeout,
-            resync_interval: factory.settings.assignment_resync_interval,
-            restart_backoff_base: factory.settings.restart_backoff_base,
-            restart_backoff_max: factory.settings.restart_backoff_max,
-            secrets_root: factory.volatile_root.join("secrets"),
-            node_api_root: factory.volatile_root.join("node-api"),
-        },
-        #[cfg(unix)]
-        None,
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-    )
-    .map_err(|error| role_error("construct assignment agent", error))
+struct AgentStartupRuntimes {
+    store: Option<Box<dyn StoreRuntime>>,
+    logs: Box<dyn LogStoreRuntime>,
 }
 
-fn build_health_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-) -> Result<HealthAgent, RoleError> {
-    HealthAgent::new(
-        store,
-        factory.health_prober.clone(),
-        HealthAgentSettings {
-            cluster_id: plan.cluster().cluster_id.clone(),
-            node_id: spec.node_id.clone(),
-            poll_interval: factory.settings.health_poll_interval,
-        },
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-    )
-    .map_err(|error| role_error("construct workload health agent", error))
-}
+impl AgentStartupRuntimes {
+    fn new(store: Option<Box<dyn StoreRuntime>>, logs: Box<dyn LogStoreRuntime>) -> Self {
+        Self { store, logs }
+    }
 
-async fn fail_after_store_start<T>(
-    runtime: Option<Box<dyn StoreRuntime>>,
-    error: RoleError,
-) -> Result<T, RoleError> {
-    match runtime {
-        Some(runtime) => match runtime.shutdown(StoreShutdown::Immediate).await {
-            Ok(()) => Err(error),
-            Err(shutdown_error) => Err(RoleError::new(format!(
-                "{}; failed to roll back local store: {shutdown_error}",
-                error.detail()
-            ))),
-        },
-        None => Err(error),
+    fn log_store(&self) -> Arc<dyn logs::LogStore> {
+        self.logs.store()
+    }
+
+    fn into_parts(self) -> (Option<Box<dyn StoreRuntime>>, Box<dyn LogStoreRuntime>) {
+        (self.store, self.logs)
+    }
+
+    async fn fail<T>(self, error: RoleError) -> Result<T, RoleError> {
+        let Self { store, logs } = self;
+        let mut failures = vec![error.detail().to_owned()];
+        if let Err(shutdown_error) = logs.shutdown().await {
+            failures.push(format!(
+                "failed to roll back log-store runtime: {shutdown_error}"
+            ));
+        }
+        if let Some(runtime) = store
+            && let Err(shutdown_error) = runtime.shutdown(StoreShutdown::Immediate).await
+        {
+            failures.push(format!("failed to roll back local store: {shutdown_error}"));
+        }
+        Err(RoleError::new(failures.join("; ")))
     }
 }
 
@@ -447,6 +419,7 @@ struct AgentRoleRuntime {
     shutdown: watch::Sender<bool>,
     tasks: Vec<JoinHandle<Result<(), RoleError>>>,
     store_runtime: Option<Box<dyn StoreRuntime>>,
+    log_store_runtime: Option<Box<dyn LogStoreRuntime>>,
     clock: Arc<dyn Clock>,
     shutdown_grace: Duration,
 }
@@ -462,6 +435,11 @@ impl RoleRuntime for AgentRoleRuntime {
                 Ok(Err(error)) => failures.push(error.to_string()),
                 Err(error) => failures.push(format!("node agent task failed: {error}")),
             }
+        }
+        if let Some(runtime) = self.log_store_runtime.take()
+            && let Err(error) = runtime.shutdown().await
+        {
+            failures.push(format!("log-store shutdown failed: {error}"));
         }
         if let Some(runtime) = self.store_runtime.take() {
             let deadline = self.clock.now().saturating_add(self.shutdown_grace);

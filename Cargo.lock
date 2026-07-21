@@ -1846,6 +1846,8 @@ dependencies = [
  "kernel-api",
  "kernel-controller",
  "kernel-store",
+ "logs",
+ "logstore",
  "node-agent",
  "runtime",
  "scheduler",
