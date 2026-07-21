@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
-use logs::{IngestLogEntry, LogAppendReport, LogStore, LogStoreError};
+use logs::{
+    IngestLogEntry, LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::schema;
@@ -114,6 +116,21 @@ impl LogStore for DuckLogStore {
         result.await.map_err(|_| LogStoreError::Unavailable {
             message: "DuckDB writer stopped before completing append".to_owned(),
         })?
+    }
+}
+
+#[async_trait]
+impl LogStoreRuntime for DuckLogStoreRuntime {
+    fn store(&self) -> Arc<dyn LogStore> {
+        self.store.clone()
+    }
+
+    async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
+        DuckLogStoreRuntime::shutdown(*self)
+            .await
+            .map_err(|error| LogStoreRuntimeError {
+                message: error.to_string(),
+            })
     }
 }
 

@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::{IngestLogEntry, LogAppendReport, LogRecordId, LogStore, LogStoreError};
+use crate::{
+    IngestLogEntry, LogAppendReport, LogRecordId, LogStore, LogStoreError, LogStoreRuntime,
+    LogStoreRuntimeError,
+};
 
 /// Deterministic idempotent log store for pipeline and composition tests.
 #[derive(Default)]
@@ -65,5 +68,41 @@ impl LogStore for InMemoryLogStore {
             committed: committed_count,
             deduplicated,
         })
+    }
+}
+
+/// No-op lifecycle owner for an in-memory log store used by composition tests.
+pub struct InMemoryLogStoreRuntime {
+    store: Arc<InMemoryLogStore>,
+}
+
+impl InMemoryLogStoreRuntime {
+    /// Creates an empty in-memory runtime.
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(InMemoryLogStore::new()),
+        }
+    }
+
+    /// Returns a typed handle for inspecting committed entries.
+    pub fn store_handle(&self) -> Arc<InMemoryLogStore> {
+        self.store.clone()
+    }
+}
+
+impl Default for InMemoryLogStoreRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl LogStoreRuntime for InMemoryLogStoreRuntime {
+    fn store(&self) -> Arc<dyn LogStore> {
+        self.store.clone()
+    }
+
+    async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
+        Ok(())
     }
 }

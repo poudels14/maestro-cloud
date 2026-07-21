@@ -16,7 +16,7 @@ mod pipeline;
 mod store;
 
 #[cfg(any(test, feature = "test-util"))]
-pub use fake::InMemoryLogStore;
+pub use fake::{InMemoryLogStore, InMemoryLogStoreRuntime};
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,
 };
@@ -25,7 +25,7 @@ pub use otlp::OtlpLogHandler;
 pub use parser::{JsonLogParser, LogParser, ParsedLog, PlainTextLogParser, standard_parsers};
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
-pub use store::{LogAppendReport, LogStore, LogStoreError};
+pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};
 
 #[cfg(test)]
 mod tests;

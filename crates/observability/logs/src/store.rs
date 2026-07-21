@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::IngestLogEntry;
 
@@ -21,6 +22,16 @@ pub trait LogStore: Send + Sync {
     async fn append(&self, entries: &[IngestLogEntry]) -> Result<LogAppendReport, LogStoreError>;
 }
 
+/// Explicit lifetime owner for a log store and any workers behind it.
+#[async_trait]
+pub trait LogStoreRuntime: Send {
+    /// Returns the shared append boundary while retaining lifecycle ownership.
+    fn store(&self) -> Arc<dyn LogStore>;
+
+    /// Drains accepted writes and releases the store's owned resources.
+    async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError>;
+}
+
 /// A normalized batch could not cross the durable log boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum LogStoreError {
@@ -36,4 +47,12 @@ pub enum LogStoreError {
         /// Safe availability detail.
         message: String,
     },
+}
+
+/// Failure to stop an owned log-store runtime cleanly.
+#[derive(Debug, thiserror::Error)]
+#[error("log-store runtime shutdown failed: {message}")]
+pub struct LogStoreRuntimeError {
+    /// Stable backend-neutral shutdown detail.
+    pub message: String,
 }
