@@ -26,7 +26,6 @@
     fileset = pkgs.lib.fileset.unions [
       ../Cargo.lock
       ../Cargo.toml
-      ../controller
       ../crates
       ../rust-toolchain.toml
     ];
@@ -40,6 +39,11 @@
     cargoBuildFlags = packageFlags;
     cargoTestFlags = packageFlags ++ ["--all-targets"];
     doCheck = !static;
+    # Keep rollback code in the development workspace without making releases depend on it.
+    postPatch = ''
+      substituteInPlace Cargo.toml \
+        --replace-fail 'members = ["controller", ' 'members = ['
+    '';
     env = pkgs.lib.optionalAttrs static {
       RUSTFLAGS = "-C target-feature=+crt-static";
     };
