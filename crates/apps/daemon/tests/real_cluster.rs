@@ -1,11 +1,10 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -28,8 +27,17 @@ use kernel_api::{
 };
 use kernel_store::{
     CasOutcome, EtcdStore, EtcdTlsConfig, ExpectedVersion, Keyspace, PutRequest, Store, TokioClock,
+    derive_key,
 };
 use time::{Duration as TimeDuration, OffsetDateTime};
+
+#[path = "real_cluster/network.rs"]
+mod network;
+
+use network::{
+    RealNode, kill_namespace_processes, node_namespace_diagnostics, shortened_interface_name,
+    workload_namespace_diagnostics,
+};
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -42,7 +50,7 @@ const API_PORT: u16 = 35_000;
 static NEXT_NETWORK: AtomicU16 = AtomicU16::new(1);
 
 #[tokio::test]
-#[ignore = "requires root, iproute2, ping, WireGuard, MAESTRO_ETCD_BIN, and Linux network namespaces"]
+#[ignore = "requires root, containerd, iproute2, ping, nftables, WireGuard, MAESTRO_ETCD_BIN, MAESTRO_CONTAINERD_SOCKET, and Linux network namespaces"]
 async fn real_process_one_node_cluster_setup() -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster = RealProcessCluster::new(1)?;
     cluster_bootstraps_joins_meshes_and_recovers(&mut cluster).await?;
@@ -50,7 +58,7 @@ async fn real_process_one_node_cluster_setup() -> Result<(), Box<dyn std::error:
 }
 
 #[tokio::test]
-#[ignore = "requires root, iproute2, ping, WireGuard, MAESTRO_ETCD_BIN, and Linux network namespaces"]
+#[ignore = "requires root, containerd, iproute2, ping, nftables, WireGuard, MAESTRO_ETCD_BIN, MAESTRO_CONTAINERD_SOCKET, and Linux network namespaces"]
 async fn real_process_three_node_cluster_setup() -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster = RealProcessCluster::new(3)?;
     cluster_bootstraps_joins_meshes_and_recovers(&mut cluster).await?;
@@ -61,6 +69,7 @@ struct RealProcessCluster {
     root: tempfile::TempDir,
     daemon_binary: PathBuf,
     etcd_binary: PathBuf,
+    containerd_socket: PathBuf,
     bridge: String,
     cluster: ClusterConfig,
     authority: ClusterCertificateAuthority,
@@ -77,6 +86,7 @@ impl RealProcessCluster {
         require_command("ip")?;
         require_command("ping")?;
         let etcd_binary = PathBuf::from(std::env::var("MAESTRO_ETCD_BIN")?);
+        let containerd_socket = PathBuf::from(std::env::var("MAESTRO_CONTAINERD_SOCKET")?);
         let daemon_binary = PathBuf::from(env!("CARGO_BIN_EXE_daemon"));
         let root = tempfile::tempdir()?;
         let allocation = NEXT_NETWORK.fetch_add(1, Ordering::Relaxed);
@@ -119,9 +129,18 @@ impl RealProcessCluster {
                 fixture: FixtureNodeName::new(node_id.as_str()),
                 node_id: node_id.clone(),
                 namespace: format!("maestro-{token}-{index}"),
+                workload_namespace: format!("maestro-wl-{token}-{index}"),
                 host_veth: shortened_interface_name("mh", &token, index),
                 namespace_veth: format!("mn{index}"),
+                workload_host_veth: shortened_interface_name("mw", &token, index),
+                workload_peer_veth: shortened_interface_name("mx", &token, index),
                 host_address: node.endpoint.host_address,
+                workload_gateway: Ipv4Addr::new(
+                    node.workload_subnet.network_address().octets()[0],
+                    node.workload_subnet.network_address().octets()[1],
+                    node.workload_subnet.network_address().octets()[2],
+                    1,
+                ),
                 workload_address: Ipv4Addr::new(
                     node.workload_subnet.network_address().octets()[0],
                     node.workload_subnet.network_address().octets()[1],
@@ -139,6 +158,7 @@ impl RealProcessCluster {
             root,
             daemon_binary,
             etcd_binary,
+            containerd_socket,
             bridge,
             cluster,
             authority,
@@ -148,105 +168,6 @@ impl RealProcessCluster {
         };
         real.create_network(segment)?;
         Ok(real)
-    }
-
-    fn create_network(&mut self, segment: u8) -> Result<(), Box<dyn std::error::Error>> {
-        run_checked("ip", ["link", "add", &self.bridge, "type", "bridge"])?;
-        run_checked(
-            "ip",
-            [
-                "addr",
-                "add",
-                &format!("10.203.{segment}.1/24"),
-                "dev",
-                &self.bridge,
-            ],
-        )?;
-        run_checked("ip", ["link", "set", &self.bridge, "up"])?;
-        for node in &self.nodes {
-            run_checked("ip", ["netns", "add", &node.namespace])?;
-            run_checked(
-                "ip",
-                [
-                    "link",
-                    "add",
-                    &node.host_veth,
-                    "type",
-                    "veth",
-                    "peer",
-                    "name",
-                    &node.namespace_veth,
-                ],
-            )?;
-            run_checked(
-                "ip",
-                [
-                    "link",
-                    "set",
-                    &node.namespace_veth,
-                    "netns",
-                    &node.namespace,
-                ],
-            )?;
-            run_checked(
-                "ip",
-                ["link", "set", &node.host_veth, "master", &self.bridge],
-            )?;
-            run_checked("ip", ["link", "set", &node.host_veth, "up"])?;
-            run_checked("ip", ["-n", &node.namespace, "link", "set", "lo", "up"])?;
-            run_checked(
-                "ip",
-                [
-                    "-n",
-                    &node.namespace,
-                    "addr",
-                    "add",
-                    &format!("{}/24", node.host_address),
-                    "dev",
-                    &node.namespace_veth,
-                ],
-            )?;
-            run_checked(
-                "ip",
-                [
-                    "-n",
-                    &node.namespace,
-                    "link",
-                    "set",
-                    &node.namespace_veth,
-                    "up",
-                ],
-            )?;
-            run_checked(
-                "ip",
-                [
-                    "-n",
-                    &node.namespace,
-                    "link",
-                    "add",
-                    "workload0",
-                    "type",
-                    "dummy",
-                ],
-            )?;
-            run_checked(
-                "ip",
-                [
-                    "-n",
-                    &node.namespace,
-                    "addr",
-                    "add",
-                    &format!("{}/24", node.workload_address),
-                    "dev",
-                    "workload0",
-                ],
-            )?;
-            run_checked(
-                "ip",
-                ["-n", &node.namespace, "link", "set", "workload0", "up"],
-            )?;
-        }
-        Ok(())
     }
 
     async fn launch_node(
@@ -272,6 +193,7 @@ impl RealProcessCluster {
             cluster: self.cluster.clone(),
             node_id: node.node_id.clone(),
             data_directory: node.data_directory.clone(),
+            containerd_socket: self.containerd_socket.clone(),
             etcd_binary: Some(self.etcd_binary.clone()),
             store_mode,
             security,
@@ -349,12 +271,19 @@ impl RealProcessCluster {
                 .as_bytes()
                 .to_vec(),
         );
-        EtcdStore::connect_with_tls(
+        let encryption_key =
+            derive_key("real-cluster-store-secret-with-32-characters").map_err(|error| {
+                kernel_store::StoreError::Contract {
+                    message: format!("real-cluster encryption key is invalid: {error}"),
+                }
+            })?;
+        EtcdStore::connect_with_tls_and_encryption(
             [format!(
                 "https://{}:{}",
                 node.host_address, STORE_CLIENT_PORT
             )],
             tls,
+            encryption_key,
         )
         .await
     }
@@ -513,17 +442,11 @@ impl RealProcessCluster {
     }
 
     async fn stop_process(&mut self, index: usize) -> Result<(), RealClusterError> {
-        let node = self.node_mut(index)?;
-        let Some(mut child) = node.child.take() else {
+        let namespace = self.node(index)?.namespace.clone();
+        let Some(mut child) = self.node_mut(index)?.child.take() else {
             return Err(RealClusterError::new("node process is not running"));
         };
-        let status = Command::new("kill")
-            .args(["-TERM", &child.id().to_string()])
-            .status()
-            .map_err(RealClusterError::from_display)?;
-        if !status.success() {
-            return Err(RealClusterError::new("failed to signal daemon process"));
-        }
+        kill_namespace_processes(&namespace);
         let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
         loop {
             if child
@@ -537,7 +460,7 @@ impl RealProcessCluster {
                 child.kill().map_err(RealClusterError::from_display)?;
                 child.wait().map_err(RealClusterError::from_display)?;
                 return Err(RealClusterError::new(
-                    "daemon did not stop before the shutdown deadline",
+                    "node processes did not stop before the loss deadline",
                 ));
             }
             tokio::time::sleep(RETRY_DELAY).await;
@@ -590,6 +513,7 @@ impl ClusterSetupCluster for RealProcessCluster {
     async fn bootstrap_seed(&mut self) -> Result<(), Self::Error> {
         self.launch_node(0, StoreLaunchMode::Bootstrap).await?;
         self.wait_store().await?;
+        self.ensure_workload_ready(0).await?;
         Ok(())
     }
 
@@ -605,6 +529,7 @@ impl ClusterSetupCluster for RealProcessCluster {
         .await?;
         self.activate_member(&ticket).await?;
         self.wait_store().await?;
+        self.ensure_workload_ready(index).await?;
         Ok(())
     }
 
@@ -659,35 +584,44 @@ impl ClusterSetupCluster for RealProcessCluster {
     ) -> Result<(), Self::Error> {
         let source_index = self.index_for(source)?;
         let target_index = self.index_for(target)?;
-        let source_namespace = self.node(source_index)?.namespace.clone();
+        let source_node_namespace = self.node(source_index)?.namespace.clone();
+        let source_workload_namespace = self.node(source_index)?.workload_namespace.clone();
+        let source_address = self.node(source_index)?.workload_address;
+        let target_node_namespace = self.node(target_index)?.namespace.clone();
+        let target_workload_namespace = self.node(target_index)?.workload_namespace.clone();
         let target_address = self.node(target_index)?.workload_address;
         let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
         loop {
             self.ensure_children_running()?;
-            let status = Command::new("ip")
+            let output = Command::new("ip")
                 .args([
                     "netns",
                     "exec",
-                    &source_namespace,
+                    &source_workload_namespace,
                     "ping",
                     "-c",
                     "1",
                     "-W",
                     "1",
+                    "-I",
+                    &source_address.to_string(),
                 ])
                 .arg(target_address.to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+                .output()
                 .map_err(RealClusterError::from_display)?;
-            if status.success() {
+            if output.status.success() {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(RealClusterError::new(format!(
-                    "workload ping from `{}` to `{}` did not converge",
+                    "workload ping from `{}` to `{}` did not converge: {}; source node: {}; source workload: {}; target node: {}; target workload: {}",
                     source.as_str(),
                     target.as_str(),
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    node_namespace_diagnostics(&source_node_namespace),
+                    workload_namespace_diagnostics(&source_workload_namespace),
+                    node_namespace_diagnostics(&target_node_namespace),
+                    workload_namespace_diagnostics(&target_workload_namespace),
                 )));
             }
             tokio::time::sleep(RETRY_DELAY).await;
@@ -703,6 +637,7 @@ impl ClusterSetupCluster for RealProcessCluster {
         let index = self.index_for(node)?;
         self.launch_node(index, StoreLaunchMode::Restart).await?;
         self.wait_store().await?;
+        self.ensure_workload_ready(index).await?;
         Ok(())
     }
 
@@ -740,51 +675,6 @@ impl ClusterSetupCluster for RealProcessCluster {
             ))
         }
     }
-}
-
-impl Drop for RealProcessCluster {
-    fn drop(&mut self) {
-        for node in &mut self.nodes {
-            if let Some(mut child) = node.child.take() {
-                let _ = Command::new("kill")
-                    .args(["-TERM", &child.id().to_string()])
-                    .status();
-                for _attempt in 0..50 {
-                    if child.try_wait().ok().flatten().is_some() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                if child.try_wait().ok().flatten().is_none() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-            }
-            kill_namespace_processes(&node.namespace);
-            let _ = Command::new("ip")
-                .args(["netns", "delete", &node.namespace])
-                .status();
-        }
-        let _ = Command::new("ip")
-            .args(["link", "delete", &self.bridge])
-            .status();
-        let _root_path = self.root.path();
-    }
-}
-
-struct RealNode {
-    fixture: FixtureNodeName,
-    node_id: NodeId,
-    namespace: String,
-    host_veth: String,
-    namespace_veth: String,
-    host_address: Ipv4Addr,
-    workload_address: Ipv4Addr,
-    data_directory: PathBuf,
-    config_path: PathBuf,
-    log_path: PathBuf,
-    child: Option<Child>,
-    launch_sequence: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -871,24 +761,6 @@ fn append_file(path: &Path) -> Result<File, RealClusterError> {
         .map_err(RealClusterError::from_display)
 }
 
-fn run_checked<I, S>(program: &str, arguments: I) -> Result<(), Box<dyn std::error::Error>>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = Command::new(program).args(arguments).output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{program}` failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into())
-    }
-}
-
 fn require_command(command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let status = Command::new(command)
         .arg("-Version")
@@ -899,24 +771,6 @@ fn require_command(command: &str) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     } else {
         Err(format!("required command `{command}` is unavailable").into())
-    }
-}
-
-fn shortened_interface_name(prefix: &str, token: &str, index: usize) -> String {
-    let available = 15_usize.saturating_sub(prefix.len() + index.to_string().len());
-    let shortened = token.chars().take(available).collect::<String>();
-    format!("{prefix}{shortened}{index}")
-}
-
-fn kill_namespace_processes(namespace: &str) {
-    let Ok(output) = Command::new("ip")
-        .args(["netns", "pids", namespace])
-        .output()
-    else {
-        return;
-    };
-    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        let _ = Command::new("kill").args(["-KILL", pid]).status();
     }
 }
 

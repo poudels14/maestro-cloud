@@ -112,14 +112,18 @@ async fn find_link(
     handle: &Handle,
     name: &str,
 ) -> Result<Option<LinkMessage>, WorkloadBridgeBackendError> {
-    handle
+    let links = handle
         .link()
         .get()
-        .match_name(name.to_string())
         .execute()
-        .try_next()
+        .try_collect::<Vec<_>>()
         .await
-        .map_err(|error| backend_error("find workload bridge", error))
+        .map_err(|error| backend_error("list links while finding workload bridge", error))?;
+    Ok(links.into_iter().find(|link| {
+        link.attributes
+            .iter()
+            .any(|attribute| matches!(attribute, LinkAttribute::IfName(found) if found == name))
+    }))
 }
 
 fn validate_bridge(link: &LinkMessage) -> Result<(), WorkloadBridgeBackendError> {

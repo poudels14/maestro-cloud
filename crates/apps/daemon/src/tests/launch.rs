@@ -79,6 +79,14 @@ fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::e
     assert!(
         DaemonLaunchConfig {
             etcd_binary: Some(PathBuf::from("etcd")),
+            ..config.clone()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        DaemonLaunchConfig {
+            containerd_socket: PathBuf::from("containerd.sock"),
             ..config
         }
         .validate()
@@ -241,6 +249,7 @@ fn config(
         cluster: cluster_with_nodes(&[(node_id, role)])?,
         node_id: NodeId::new(node_id)?,
         data_directory: PathBuf::from("/var/lib/maestro"),
+        containerd_socket: PathBuf::from("/run/containerd/containerd.sock"),
         etcd_binary: Some(PathBuf::from("/usr/bin/etcd")),
         store_mode,
         security: NodeCertificateBundle {

@@ -69,6 +69,9 @@ pub struct DaemonLaunchConfig {
     pub node_id: NodeId,
     /// Root of all role and provider persistence.
     pub data_directory: PathBuf,
+    /// Containerd gRPC Unix socket used by the native production runtime.
+    #[serde(default = "default_containerd_socket")]
+    pub containerd_socket: PathBuf,
     /// Exact etcd executable on control-plane nodes; absent on workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etcd_binary: Option<PathBuf>,
@@ -113,8 +116,10 @@ impl DaemonLaunchConfig {
         if let Some(upgrade) = &self.nixos_upgrade {
             upgrade.validate()?;
         }
-        if !self.data_directory.is_absolute() {
-            return Err(invalid("data directory must be an absolute path"));
+        if !self.data_directory.is_absolute() || !self.containerd_socket.is_absolute() {
+            return Err(invalid(
+                "data directory and containerd socket must be absolute paths",
+            ));
         }
         let node = self.cluster.nodes.get(&self.node_id).ok_or_else(|| {
             invalid(format!(
@@ -190,6 +195,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         cluster,
         node_id,
         data_directory,
+        containerd_socket,
         etcd_binary,
         store_mode,
         security,
@@ -252,6 +258,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let containerd = Arc::new(
         ContainerdRuntime::connect(
             ContainerdRuntimeSettings {
+                socket: containerd_socket,
                 namespace: format!("maestro-{}", cluster.cluster_id),
                 state_root: data_directory.join("runtime").join("containerd"),
                 ..ContainerdRuntimeSettings::default()
@@ -381,6 +388,10 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
     Daemon::new(plan, factory).start().await.map_err(Into::into)
+}
+
+fn default_containerd_socket() -> PathBuf {
+    ContainerdRuntimeSettings::default().socket
 }
 
 fn api_settings(

@@ -307,14 +307,18 @@ async fn find_link(
     handle: &Handle,
     name: &str,
 ) -> Result<Option<LinkMessage>, NetworkProviderError> {
-    handle
+    let links = handle
         .link()
         .get()
-        .match_name(name.to_owned())
         .execute()
-        .try_next()
+        .try_collect::<Vec<_>>()
         .await
-        .map_err(|error| network_error("find network interface", error))
+        .map_err(|error| network_error("list network interfaces", error))?;
+    Ok(links.into_iter().find(|link| {
+        link.attributes
+            .iter()
+            .any(|attribute| matches!(attribute, LinkAttribute::IfName(found) if found == name))
+    }))
 }
 
 fn address_ipv4(address: &AddressMessage) -> Option<Ipv4Addr> {

@@ -46,6 +46,7 @@ in {
     virtualisation.containerd.settings = {
       plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
     };
+    boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
 
     systemd.services.buildkitd = {
       description = "BuildKit daemon for Maestro";
