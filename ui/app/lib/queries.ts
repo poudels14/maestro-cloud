@@ -1,11 +1,6 @@
 import { keepPreviousData } from "@tanstack/solid-query";
 import type { ClusterInfo } from "./api";
-import type {
-  ClusterStats,
-  IngressTrafficBreakdown,
-  MaskedConfig,
-  TrafficBreakdownEntry
-} from "./types";
+import type { ClusterStats, MaskedConfig } from "./types";
 import {
   getClusterConfig,
   getClusterInfo,
@@ -160,20 +155,26 @@ const serviceTrafficQuery = (serviceId: string, rangeMs: number) => ({
 
 const ingressTrafficQuery = (rangeMs: number) => ({
   queryKey: queryKeys.ingressTraffic(rangeMs),
-  queryFn: ssrSafe(() => queryTrafficAcrossNodes(rangeMs, getIngressTraffic), {
-    byIp: [],
-    byPath: []
-  }),
+  queryFn: ssrSafe(
+    () => {
+      const now = Date.now();
+      return getIngressTraffic(now - rangeMs, now);
+    },
+    { byIp: [], byPath: [] }
+  ),
   placeholderData: keepPreviousData,
   refetchInterval: 15_000
 });
 
 const blockedIngressTrafficQuery = (rangeMs: number) => ({
   queryKey: queryKeys.blockedIngressTraffic(rangeMs),
-  queryFn: ssrSafe(() => queryTrafficAcrossNodes(rangeMs, getBlockedIngressTraffic), {
-    byIp: [],
-    byPath: []
-  }),
+  queryFn: ssrSafe(
+    () => {
+      const now = Date.now();
+      return getBlockedIngressTraffic(now - rangeMs, now);
+    },
+    { byIp: [], byPath: [] }
+  ),
   placeholderData: keepPreviousData,
   refetchInterval: 15_000
 });
@@ -183,96 +184,6 @@ const ingressBlocklistQuery = () => ({
   queryFn: ssrSafe(getIngressBlocklist, { blockedIps: [] }),
   refetchInterval: 15_000
 });
-
-async function queryTrafficAcrossNodes(
-  rangeMs: number,
-  fetchBreakdown: (from: number, to: number, nodeId?: string) => Promise<IngressTrafficBreakdown>
-): Promise<IngressTrafficBreakdown> {
-  const now = Date.now();
-  let nodeIds: string[] = [];
-  try {
-    nodeIds = (await getClusterNodes()).filter((node) => node.alive).map((node) => node.nodeId);
-  } catch {
-    // A legacy single-node controller has no cluster topology to enumerate.
-  }
-  if (nodeIds.length === 0) {
-    return fetchBreakdown(now - rangeMs, now);
-  }
-  const results = await Promise.allSettled(
-    nodeIds.map((nodeId) => fetchBreakdown(now - rangeMs, now, nodeId))
-  );
-  const available = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : []
-  );
-  if (available.length === 0) {
-    const firstFailure = results.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected"
-    );
-    throw firstFailure?.reason ?? new Error("No node returned ingress traffic");
-  }
-  return {
-    ...mergeTrafficBreakdowns(available, 100),
-    partial: available.length !== results.length,
-    unavailableNodes: results.length - available.length
-  };
-}
-
-function mergeTrafficBreakdowns(
-  breakdowns: IngressTrafficBreakdown[],
-  limit: number
-): IngressTrafficBreakdown {
-  return {
-    byIp: mergeBreakdownEntries(
-      breakdowns.flatMap((breakdown) => breakdown.byIp),
-      limit
-    ),
-    byPath: mergeBreakdownEntries(
-      breakdowns.flatMap((breakdown) => breakdown.byPath),
-      limit
-    )
-  };
-}
-
-function mergeBreakdownEntries(
-  entries: TrafficBreakdownEntry[],
-  limit: number
-): TrafficBreakdownEntry[] {
-  const merged = new Map<string, TrafficBreakdownEntry>();
-  for (const entry of entries) {
-    const key = `${entry.value}\0${entry.statusCode}`;
-    const current = merged.get(key);
-    if (current) {
-      current.requests += entry.requests;
-      current.lastSeenAtMs = Math.max(current.lastSeenAtMs, entry.lastSeenAtMs);
-    } else {
-      merged.set(key, { ...entry });
-    }
-  }
-  const totals = new Map<string, { requests: number; lastSeenAtMs: number }>();
-  for (const entry of merged.values()) {
-    const total = totals.get(entry.value) ?? { requests: 0, lastSeenAtMs: 0 };
-    total.requests += entry.requests;
-    total.lastSeenAtMs = Math.max(total.lastSeenAtMs, entry.lastSeenAtMs);
-    totals.set(entry.value, total);
-  }
-  const ranks = new Map(
-    Array.from(totals.entries())
-      .sort(
-        (left, right) =>
-          right[1].requests - left[1].requests ||
-          right[1].lastSeenAtMs - left[1].lastSeenAtMs ||
-          left[0].localeCompare(right[0])
-      )
-      .slice(0, limit)
-      .map(([value], rank) => [value, rank])
-  );
-  return Array.from(merged.values())
-    .filter((entry) => ranks.has(entry.value))
-    .sort(
-      (left, right) =>
-        ranks.get(left.value)! - ranks.get(right.value)! || left.statusCode - right.statusCode
-    );
-}
 
 const containerMetricsQuery = (serviceId: string, rangeMs: number) => ({
   queryKey: queryKeys.containerMetrics(serviceId, rangeMs),

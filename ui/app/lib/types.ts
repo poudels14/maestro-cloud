@@ -28,16 +28,8 @@ export interface Ingress {
   sessionAffinity?: { header: string } | null;
 }
 
-export interface IngressBlocklist {
-  blockedIps: string[];
-}
-
-export interface IngressRouting {
-  serviceId: string;
-  rule: string;
-  entryPoints: string[];
-  servers: string[];
-}
+export type IngressBlocklist = ApiSchemas["BlockedIpsResponse"];
+export type IngressRouting = ApiSchemas["IngressRouting"];
 
 export interface SecretKeyMeta {
   hash?: string;
@@ -208,19 +200,8 @@ export interface TrafficPoint {
   latTotal: number;
 }
 
-export interface TrafficBreakdownEntry {
-  value: string;
-  statusCode: number;
-  requests: number;
-  lastSeenAtMs: number;
-}
-
-export interface IngressTrafficBreakdown {
-  byIp: TrafficBreakdownEntry[];
-  byPath: TrafficBreakdownEntry[];
-  partial?: boolean;
-  unavailableNodes?: number;
-}
+export type TrafficBreakdownEntry = ApiSchemas["TrafficBreakdownEntry"];
+export type IngressTrafficBreakdown = ApiSchemas["IngressTrafficBreakdown"];
 
 export interface DiskInfo {
   name: string;

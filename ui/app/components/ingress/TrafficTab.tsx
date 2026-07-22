@@ -137,21 +137,6 @@ function IngressTrafficTab() {
           onRetry={() => blockedTraffic.refetch()}
         />
       </Show>
-      <Show when={traffic.data?.partial}>
-        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          Traffic from {traffic.data?.unavailableNodes} live node
-          {traffic.data?.unavailableNodes === 1 ? " is" : "s are"} temporarily unavailable. The
-          totals below are partial.
-        </div>
-      </Show>
-      <Show when={blockedTraffic.data?.partial}>
-        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          Blocked traffic from {blockedTraffic.data?.unavailableNodes} live node
-          {blockedTraffic.data?.unavailableNodes === 1 ? " is" : "s are"} temporarily unavailable.
-          The denied totals below are partial.
-        </div>
-      </Show>
-
       <Card class="px-3 pt-3 pb-1.5">
         <div class="flex flex-wrap items-center justify-between gap-2 px-1">
           <div class="text-sm font-medium tabular-nums text-gray-700">

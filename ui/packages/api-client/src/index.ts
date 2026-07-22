@@ -1,4 +1,4 @@
-export type { components, paths, webhooks } from "./schema";
+export type { components, operations, paths, webhooks } from "./schema";
 export type {
   ApiSchemas,
   BuiltinResource,
@@ -9,8 +9,13 @@ export { ApiHttpError, createFetchTransport, decodeJson } from "./transport";
 export type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
 
 import type { ApiSchemas } from "./resources";
+import type { operations } from "./schema";
 import { decodeJson } from "./transport";
 import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
+
+export type IngressTrafficQuery = NonNullable<
+  operations["getIngressTraffic"]["parameters"]["query"]
+>;
 
 export interface MaestroApiClient {
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
@@ -32,10 +37,7 @@ export interface MaestroApiClient {
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["NodeCommandResponse"]>;
   listUpgrades(options?: ApiRequestOptions): Promise<ApiSchemas["UpgradeRun"][]>;
-  getUpgrade(
-    upgradeRunId: string,
-    options?: ApiRequestOptions
-  ): Promise<ApiSchemas["UpgradeRun"]>;
+  getUpgrade(upgradeRunId: string, options?: ApiRequestOptions): Promise<ApiSchemas["UpgradeRun"]>;
   startUpgrade(
     request: ApiSchemas["UpgradeCreateRequest"],
     idempotencyKey: string,
@@ -58,10 +60,7 @@ export interface MaestroApiClient {
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["NodeFirewall"]>;
   listDnsRecords(options?: ApiRequestOptions): Promise<ApiSchemas["DnsRecord"][]>;
-  getDnsRecord(
-    recordId: string,
-    options?: ApiRequestOptions
-  ): Promise<ApiSchemas["DnsRecord"]>;
+  getDnsRecord(recordId: string, options?: ApiRequestOptions): Promise<ApiSchemas["DnsRecord"]>;
   listFirewallPolicies(options?: ApiRequestOptions): Promise<ApiSchemas["FirewallPolicy"][]>;
   getFirewallPolicy(
     policyId: string,
@@ -139,10 +138,7 @@ export interface MaestroApiClient {
     replicaId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ReplicaState"]>;
-  listBuilds(
-    serviceId: string,
-    options?: ApiRequestOptions
-  ): Promise<ApiSchemas["Build"][]>;
+  listBuilds(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Build"][]>;
   getBuild(
     serviceId: string,
     buildId: string,
@@ -158,6 +154,19 @@ export interface MaestroApiClient {
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["IngressRoute"]>;
   listActiveIngressRoutes(options?: ApiRequestOptions): Promise<ApiSchemas["IngressRouting"][]>;
+  getIngressBlocklist(options?: ApiRequestOptions): Promise<ApiSchemas["BlockedIpsResponse"]>;
+  setBlockedIngressIp(
+    request: ApiSchemas["BlockedIpRequest"],
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["BlockedIpsResponse"]>;
+  getIngressTraffic(
+    query?: IngressTrafficQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["IngressTrafficBreakdown"]>;
+  getBlockedIngressTraffic(
+    query?: IngressTrafficQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["IngressTrafficBreakdown"]>;
   listTrafficGenerations(
     serviceId: string,
     options?: ApiRequestOptions
@@ -266,12 +275,13 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
   }
 
   function submit<Response, Body>(
+    method: "PATCH" | "POST",
     path: string,
     body: Body,
     options?: ApiRequestOptions
   ): Promise<Response> {
     const request: TransportRequest<Response, Body> = {
-      method: "POST",
+      method,
       path,
       body,
       decode: decodeJson
@@ -285,12 +295,20 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     return transport.request(request);
   }
 
+  function withQuery(path: string, parameters?: object): string {
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(parameters ?? {})) {
+      if (value !== undefined && value !== null) query.set(name, String(value));
+    }
+    const encoded = query.toString();
+    return encoded ? `${path}?${encoded}` : path;
+  }
+
   return {
     getClusterInfo: (options) => get("/api/cluster", options),
     listNodes: (options) => get("/api/cluster/nodes", options),
     listUnschedulableReplicas: (options) => get("/api/cluster/unschedulable", options),
-    getNode: (nodeId, options) =>
-      get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
+    getNode: (nodeId, options) => get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
     drainNode: (nodeId, request, idempotencyKey, options) =>
       mutate(
         "POST",
@@ -350,6 +368,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       ),
     dryRunFirewallPolicy: (policyId, request, options) =>
       submit(
+        "POST",
         `/api/firewall/policies/${encodeURIComponent(policyId)}/dry-run`,
         request,
         options
@@ -429,11 +448,14 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         options
       ),
     listActiveIngressRoutes: (options) => get("/api/ingress/routes", options),
+    getIngressBlocklist: (options) => get("/api/ingress/blocked-ips", options),
+    setBlockedIngressIp: (request, options) =>
+      submit("PATCH", "/api/ingress/blocked-ips", request, options),
+    getIngressTraffic: (query, options) => get(withQuery("/api/ingress/traffic", query), options),
+    getBlockedIngressTraffic: (query, options) =>
+      get(withQuery("/api/ingress/blocked-traffic", query), options),
     listTrafficGenerations: (serviceId, options) =>
-      get(
-        `/api/services/${encodeURIComponent(serviceId)}/traffic-generations`,
-        options
-      ),
+      get(`/api/services/${encodeURIComponent(serviceId)}/traffic-generations`, options),
     getTrafficGeneration: (serviceId, generationId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/traffic-generations/${encodeURIComponent(generationId)}`,

@@ -544,9 +544,11 @@ export async function getDisks(): Promise<DiskInfo[]> {
 }
 
 export async function getIngressRoutes(): Promise<IngressRouting[]> {
-  const res = await fetch("/api/ingress/routes");
-  if (!res.ok) throw new Error(`Failed to fetch ingress routes: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listActiveIngressRoutes();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load ingress routes");
+  }
 }
 
 export async function getServiceMetrics(
@@ -581,14 +583,16 @@ export async function getIngressTraffic(
   to: number,
   nodeId?: string
 ): Promise<IngressTrafficBreakdown> {
-  const url = new URL("/api/ingress/traffic", location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  url.searchParams.set("limit", "200");
-  if (nodeId) url.searchParams.set("nodeId", nodeId);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ingress traffic: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getIngressTraffic({
+      from,
+      to,
+      limit: 200,
+      ...(nodeId ? { nodeId } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load ingress traffic");
+  }
 }
 
 export async function getBlockedIngressTraffic(
@@ -596,33 +600,32 @@ export async function getBlockedIngressTraffic(
   to: number,
   nodeId?: string
 ): Promise<IngressTrafficBreakdown> {
-  const url = new URL("/api/ingress/blocked-traffic", location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  url.searchParams.set("limit", "200");
-  if (nodeId) url.searchParams.set("nodeId", nodeId);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch blocked ingress traffic: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getBlockedIngressTraffic({
+      from,
+      to,
+      limit: 200,
+      ...(nodeId ? { nodeId } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load blocked ingress traffic");
+  }
 }
 
-export async function setBlockedIngressIp(ip: string, blocked: boolean) {
-  const res = await fetch("/api/ingress/blocked-ips", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ip, blocked })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update blocked IPs: ${res.statusText}`);
+export async function setBlockedIngressIp(ip: string, blocked: boolean): Promise<IngressBlocklist> {
+  try {
+    return await apiClient().setBlockedIngressIp({ ip, blocked });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to update blocked IPs");
   }
-  return res.json() as Promise<IngressBlocklist>;
 }
 
 export async function getIngressBlocklist(): Promise<IngressBlocklist> {
-  const res = await fetch("/api/ingress/blocked-ips");
-  if (!res.ok) throw new Error(`Failed to fetch ingress blocklist: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getIngressBlocklist();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load ingress blocklist");
+  }
 }
 
 export async function getNodeMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
