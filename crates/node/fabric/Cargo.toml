@@ -3,6 +3,7 @@ name = "node-fabric"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }

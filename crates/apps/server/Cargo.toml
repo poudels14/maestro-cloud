@@ -3,6 +3,7 @@ name = "server"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 async-trait.workspace = true
@@ -35,10 +36,10 @@ webhook = { version = "0.1.0", path = "../../operators/webhook" }
 
 [dev-dependencies]
 http-body-util = "=0.1.4"
-logs = { path = "../../observability/logs", features = ["test-util"] }
-metrics = { path = "../../observability/metrics", features = ["test-util"] }
+logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
+metrics = { version = "0.1.0", path = "../../observability/metrics", features = ["test-util"] }
 rcgen = { version = "=0.14.8", features = ["pem"] }
-runtime = { path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 
 [lints]

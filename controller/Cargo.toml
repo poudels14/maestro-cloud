@@ -3,6 +3,7 @@ name = "controller"
 version = "0.4.15"
 edition = "2024"
 rust-version = "1.97.0"
+publish = false
 
 [[bin]]
 name = "maestro"
@@ -99,5 +100,5 @@ crossterm = "0.29.0"
 prost-types = "0.14.4"
 
 [dev-dependencies]
-clustertest = { path = "../crates/clustertest" }
+clustertest = { version = "0.1.0", path = "../crates/clustertest" }
 proptest = "1.11.0"

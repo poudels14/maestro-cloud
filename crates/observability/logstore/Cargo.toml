@@ -3,6 +3,7 @@ name = "logstore"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 async-trait.workspace = true
@@ -19,9 +20,9 @@ thiserror.workspace = true
 tokio = { version = "=1.52.3", features = ["rt", "sync"] }
 
 [dev-dependencies]
-logs = { path = "../logs", features = ["test-util"] }
-metrics = { path = "../metrics", features = ["test-util"] }
-runtime = { path = "../../runtime", default-features = false }
+logs = { version = "0.1.0", path = "../logs", features = ["test-util"] }
+metrics = { version = "0.1.0", path = "../metrics", features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 tempfile = "=3.27.0"
 tokio.workspace = true
 
