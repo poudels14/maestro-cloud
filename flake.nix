@@ -114,9 +114,33 @@
       migrate = app self.packages.${system}.rewrite "maestro-migrate";
     });
 
-    checks = forAllSystems (system: {
-      rewrite = self.packages.${system}.rewrite;
-    });
+    checks = forAllSystems (
+      system: let
+        pkgs = pkgsFor system;
+        rewritePackage = self.packages.${system}.rewrite;
+      in
+        {
+          rewrite = rewritePackage;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          rewrite-module = import ./nix/rewrite-module-check.nix {
+            inherit pkgs rewritePackage;
+            config = (nixpkgs.lib.nixosSystem {
+              inherit system;
+              modules = [
+                self.nixosModules.rewrite
+                {
+                  system.stateVersion = "24.11";
+                  services.maestro-rewrite = {
+                    enable = true;
+                    launchConfig = "/run/maestro/launch.json";
+                  };
+                }
+              ];
+            }).config;
+          };
+        }
+    );
 
     devShells = forAllSystems (
       system: let
