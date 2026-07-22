@@ -1,6 +1,6 @@
 import { keepPreviousData } from "@tanstack/solid-query";
 import type { ClusterInfo } from "./api";
-import type { ClusterStats, MaskedConfig } from "./types";
+import type { ClusterStats, Deployment, MaskedConfig } from "./types";
 import {
   getClusterConfig,
   getClusterInfo,
@@ -8,6 +8,7 @@ import {
   getClusterMetrics,
   getContainerMetrics,
   getDeployments,
+  getDeploymentReplicas,
   getDisks,
   getIngressRoutes,
   getIngressTraffic,
@@ -37,6 +38,8 @@ const queryKeys = {
   config: ["config"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
+  deploymentReplicas: (serviceId: string, deploymentId: string) =>
+    ["deployments", serviceId, deploymentId, "replicas"] as const,
   ingress: ["ingress"] as const,
   disks: ["disks"] as const,
   nodeMetrics: (range: number) => ["metrics", "node", range] as const,
@@ -99,6 +102,14 @@ const deploymentsQuery = (serviceId: string) => ({
   refetchInterval: 10_000,
   refetchOnWindowFocus: true,
   staleTime: 5_000
+});
+
+const deploymentReplicasQuery = (deployment: Deployment) => ({
+  queryKey: queryKeys.deploymentReplicas(deployment.spec.serviceId, deployment.meta.id),
+  queryFn: ssrSafe(() => getDeploymentReplicas(deployment), []),
+  refetchInterval: 5_000,
+  refetchOnWindowFocus: true,
+  staleTime: 2_000
 });
 
 const ingressRoutesQuery = () => ({
@@ -215,6 +226,7 @@ export {
   unschedulableQuery,
   servicesQuery,
   deploymentsQuery,
+  deploymentReplicasQuery,
   ingressRoutesQuery,
   disksQuery,
   nodeMetricsQuery,

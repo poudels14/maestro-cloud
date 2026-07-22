@@ -3,19 +3,24 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
-import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
+import {
+  cancelDeployment,
+  redeployService,
+  removeDeployment,
+  restartDeployment
+} from "../../lib/api";
 import { deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "../../lib/ui";
 import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import { showErrorToast } from "../AppToasts";
-import type { Service } from "../../lib/types";
+import type { Deployment, Service } from "../../lib/types";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
+function DeploymentsTab(props: { service: Service }) {
   const queryClient = useQueryClient();
   const serviceId = () => props.service.meta.id;
   const deployFrozen = () => props.service.status.rollout === "frozen";
@@ -24,9 +29,7 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
 
-  const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<"redeploy" | "restart" | null>(
-    null
-  );
+  const [confirmFrozenRedeploy, setConfirmFrozenRedeploy] = createSignal(false);
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
 
   const setUrlSheetState = (updates: { deployment?: string; tab?: SheetTabId }) =>
@@ -49,12 +52,14 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
     ]);
 
   const cancelMutation = useMutation(() => ({
-    mutationFn: (deploymentId: string) => cancelDeployment(serviceId(), deploymentId),
-    onSuccess: invalidateDeployments
+    mutationFn: (deployment: Deployment) => cancelDeployment(deployment),
+    onSuccess: invalidateDeployments,
+    onError: (error) => showErrorToast("Cancel failed", error)
   }));
-  const stopMutation = useMutation(() => ({
-    mutationFn: (deploymentId: string) => stopDeployment(serviceId(), deploymentId),
-    onSuccess: invalidateDeployments
+  const removeMutation = useMutation(() => ({
+    mutationFn: (deployment: Deployment) => removeDeployment(deployment),
+    onSuccess: invalidateDeployments,
+    onError: (error) => showErrorToast("Remove failed", error)
   }));
   const redeployMutation = useMutation(() => ({
     mutationFn: () => redeployService(props.service),
@@ -62,12 +67,13 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
     onError: (error) => showErrorToast("Redeploy failed", error)
   }));
   const restartMutation = useMutation(() => ({
-    mutationFn: () => restartService(serviceId()),
+    mutationFn: (deployment: Deployment) => restartDeployment(deployment),
     onSuccess: invalidateDeployments,
     onError: (error) => showErrorToast("Restart failed", error)
   }));
 
-  const selectedDeployment = () => deployments.data?.find((d) => d.id === selectedId()) ?? null;
+  const selectedDeployment = () =>
+    deployments.data?.find((deployment) => deployment.meta.id === selectedId()) ?? null;
   const visibleDeployments = () => deployments.data?.slice(0, visibleCount()) ?? [];
   const hasMore = () => (deployments.data?.length ?? 0) > visibleCount();
 
@@ -91,19 +97,11 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
 
   const handleRedeploy = () => {
     if (deployFrozen()) {
-      setFreezeConfirmAction("redeploy");
+      setConfirmFrozenRedeploy(true);
     } else {
       redeployMutation.mutate();
     }
   };
-  const handleRestart = () => {
-    if (deployFrozen()) {
-      setFreezeConfirmAction("restart");
-    } else {
-      restartMutation.mutate();
-    }
-  };
-
   return (
     <>
       <Show when={deployments.isError}>
@@ -119,7 +117,7 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
         </div>
       </Show>
       <ConfirmDialog
-        open={freezeConfirmAction() !== null}
+        open={confirmFrozenRedeploy()}
         title="Deploy is frozen"
         description={
           <>
@@ -127,17 +125,12 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
             queued until you unfreeze it.
           </>
         }
-        confirmLabel={freezeConfirmAction() === "restart" ? "Restart" : "Redeploy"}
+        confirmLabel="Redeploy"
         onConfirm={() => {
-          const action = freezeConfirmAction();
-          setFreezeConfirmAction(null);
-          if (action === "restart") {
-            restartMutation.mutate();
-          } else if (action === "redeploy") {
-            redeployMutation.mutate();
-          }
+          setConfirmFrozenRedeploy(false);
+          redeployMutation.mutate();
         }}
-        onCancel={() => setFreezeConfirmAction(null)}
+        onCancel={() => setConfirmFrozenRedeploy(false)}
       />
 
       <Show
@@ -163,17 +156,21 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
                   <DeploymentRow
                     deployment={deployment}
                     isLatest={index() === 0}
-                    isSelected={selectedId() === deployment.id}
+                    isSelected={selectedId() === deployment.meta.id}
                     onOpen={() =>
                       setUrlSheetState({
-                        deployment: deployment.id,
-                        tab: ["QUEUED", "BUILDING"].includes(deployment.status) ? "build" : "logs"
+                        deployment: deployment.meta.id,
+                        tab:
+                          deployment.spec.service.artifact.type === "build" &&
+                          ["QUEUED", "BUILDING"].includes(deployment.status.phase)
+                            ? "build"
+                            : "logs"
                       })
                     }
-                    onCancel={() => cancelMutation.mutate(deployment.id)}
-                    onStop={() => stopMutation.mutate(deployment.id)}
+                    onCancel={() => cancelMutation.mutate(deployment)}
+                    onRemove={() => removeMutation.mutate(deployment)}
                     onRedeploy={handleRedeploy}
-                    onRestart={handleRestart}
+                    onRestart={() => restartMutation.mutate(deployment)}
                   />
                 )}
               </For>
@@ -189,8 +186,6 @@ function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
       </Show>
       <DeploymentSheet
         deployment={selectedDeployment()}
-        serviceId={serviceId()}
-        hasBuild={props.hasBuild}
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}
         onClose={() => setUrlSheetState({ deployment: undefined, tab: undefined })}

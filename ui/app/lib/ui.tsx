@@ -85,18 +85,19 @@ export function TabButton(props: {
   );
 }
 
-const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING", "DEPLOYING"]);
-const STOPPABLE_STATUSES = new Set(["READY", "PENDING_READY", "RUNNING"]);
+const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING"]);
+const RESTARTABLE_STATUSES = new Set(["BUILDING", "PENDING_READY", "READY"]);
 
 export function DeploymentMenu(props: {
   status: string;
   onCancel: () => void;
-  onStop: () => void;
+  onRemove: () => void;
   onRedeploy: () => void;
   onRestart: () => void;
 }) {
   const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
-  const canStop = () => STOPPABLE_STATUSES.has(props.status);
+  const canRestart = () => RESTARTABLE_STATUSES.has(props.status);
+  const canRemove = () => props.status !== "REMOVED";
 
   return (
     <DropdownMenu placement="bottom-end">
@@ -114,13 +115,13 @@ export function DeploymentMenu(props: {
               Cancel deployment
             </DropdownMenu.Item>
           </Show>
-          <Show when={canStop()}>
+          <Show when={!canCancel() && canRemove()}>
             <DropdownMenu.Item
               class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
-              onSelect={() => props.onStop()}
+              onSelect={() => props.onRemove()}
             >
               <Square class="size-3" />
-              Stop deployment
+              Remove deployment
             </DropdownMenu.Item>
           </Show>
           <Show when={!canCancel()}>
@@ -131,13 +132,15 @@ export function DeploymentMenu(props: {
               <RotateCw class="size-3" />
               Redeploy
             </DropdownMenu.Item>
-            <DropdownMenu.Item
-              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer outline-none"
-              onSelect={() => props.onRestart()}
-            >
-              <RefreshCw class="size-3" />
-              Restart
-            </DropdownMenu.Item>
+            <Show when={canRestart()}>
+              <DropdownMenu.Item
+                class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer outline-none"
+                onSelect={() => props.onRestart()}
+              >
+                <RefreshCw class="size-3" />
+                Restart
+              </DropdownMenu.Item>
+            </Show>
           </Show>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

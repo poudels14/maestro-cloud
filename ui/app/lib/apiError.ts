@@ -25,8 +25,7 @@ class ApiRequestError extends Error {
   }
 }
 
-async function apiErrorFromResponse(response: Response, fallback: string) {
-  const body = await response.text();
+function apiErrorFromBody(status: number, body: string, fallback: string) {
   let error: ApiErrorPayload | null = null;
   if (body) {
     try {
@@ -41,12 +40,11 @@ async function apiErrorFromResponse(response: Response, fallback: string) {
       error = { message: body };
     }
   }
-  const suffix = response.statusText ? `: ${response.statusText}` : "";
-  return new ApiRequestError(error?.message || `${fallback}${suffix}`, {
-    status: response.status,
+  return new ApiRequestError(error?.message || fallback, {
+    status,
     code: error?.code,
     details: error?.details
   });
 }
 
-export { ApiRequestError, apiErrorFromResponse };
+export { ApiRequestError, apiErrorFromBody };

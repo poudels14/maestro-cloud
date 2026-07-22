@@ -1,92 +1,7 @@
 import type { ApiSchemas } from "@maestro/api-client";
 
-export interface BuildCommand {
-  command: string;
-  args: string[];
-}
-
-export interface EnvConfig {
-  source?: string | null;
-  items?: Record<string, string>;
-}
-
-export interface Build {
-  repo?: string | null;
-  branch?: string | null;
-  dockerfile: string;
-  watch?: boolean;
-  registry?: string | null;
-  depot?: { project: string } | null;
-  env?: EnvConfig;
-  secrets?: EnvConfig;
-}
-
-export interface Ingress {
-  host?: string | null;
-  hosts?: string[];
-  port?: number | null;
-  sessionAffinity?: { header: string } | null;
-}
-
 export type IngressBlocklist = ApiSchemas["BlockedIpsResponse"];
 export type IngressRouting = ApiSchemas["IngressRouting"];
-
-export interface SecretKeyMeta {
-  hash?: string;
-  changed: boolean;
-}
-
-export interface SecretsConfig {
-  mountPath: string;
-  source?: string | null;
-  items?: Record<string, string>;
-  keys?: Record<string, SecretKeyMeta>;
-}
-
-export interface Deploy {
-  flags?: string[];
-  exposePorts?: number[];
-  command: BuildCommand | null;
-  healthcheckPath?: string | null;
-  healthcheckInterval: number;
-  replicas: number;
-  maxRestarts?: number | null;
-  env?: EnvConfig;
-  secrets?: SecretsConfig | null;
-  volumes?: VolumeMount[];
-}
-
-export interface VolumeMount {
-  hostPath: string;
-  mountPath: string;
-  readOnly?: boolean;
-  owner?: VolumeOwner;
-}
-
-export interface VolumeOwner {
-  uid: number;
-  gid?: number;
-}
-
-export namespace Preview {
-  export type Config = {
-    enabled: boolean;
-    closeGracePeriod: string;
-    replicas: number;
-    env?: { items?: Record<string, string> };
-  };
-
-  export type Source = {
-    baseServiceId: string;
-    prNumber: number;
-    headRef: string;
-    headSha: string;
-    title: string;
-    createdAt: number;
-    volumesStripped?: boolean;
-    closedAt?: number | null;
-  };
-}
 
 export type Webhook = ApiSchemas["Webhook"];
 export type WebhookEvent = ApiSchemas["WebhookEvent"];
@@ -96,40 +11,11 @@ export type FirewallPolicy = ApiSchemas["FirewallPolicy"];
 export type FirewallPolicySpec = ApiSchemas["FirewallPolicySpec"];
 export type FirewallDryRun = ApiSchemas["FirewallDryRunResponse"];
 
-interface LegacyServiceConfig {
-  id: string;
-  name: string;
-  version: string;
-  status?: string | null;
-  build?: Build | null;
-  image?: string | null;
-  deploy: Deploy;
-  ingress?: Ingress | null;
-  system?: boolean;
-  deployFrozen?: boolean;
-  replicasOverride?: number | null;
-  preview?: Preview.Config | null;
-  previewSource?: Preview.Source | null;
-}
-
 export type Service = ApiSchemas["Service"] & {
   previewResource?: ApiSchemas["Preview"];
 };
-
-export interface ReplicaState {
-  replicaIndex: number;
-  status: string;
-  healthcheckFailures: number;
-  restartAttempts: number;
-  nodeId?: string | null;
-  assignmentId?: string | null;
-  endpoint?: {
-    containerIp: string;
-    containerHostname: string;
-    ingressContainerPort: number;
-  } | null;
-  error?: string | null;
-}
+export type Deployment = ApiSchemas["Deployment"];
+export type ReplicaState = ApiSchemas["ReplicaState"];
 
 export interface ClusterNode {
   nodeId: string;
@@ -155,28 +41,6 @@ export interface UnschedulableReplica {
   deploymentId: string;
   replicaIndex: number;
   reason: string;
-}
-
-export interface GitCommitInfo {
-  reference: string;
-  message: string;
-}
-
-export interface Deployment {
-  id: string;
-  createdAt: number;
-  deployedAt?: number | null;
-  drainedAt?: number | null;
-  status: string;
-  replicas?: ReplicaState[];
-  config: LegacyServiceConfig;
-  gitCommit: GitCommitInfo | null;
-  build: DeploymentBuildInfo | null;
-  uploadArchive?: string | null;
-}
-
-export interface DeploymentBuildInfo {
-  dockerImageId: string;
 }
 
 export type MetricPoint = ApiSchemas["ResourceMetricPoint"];

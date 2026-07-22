@@ -181,10 +181,7 @@ function ServiceDetailPanel(props: {
             <OverviewTab service={props.service} services={props.services} />
           </Show>
           <Show when={props.tab === "deployments"}>
-            <DeploymentsTab
-              service={props.service}
-              hasBuild={props.service.spec.artifact.type === "build"}
-            />
+            <DeploymentsTab service={props.service} />
           </Show>
           <Show when={props.tab === "metrics"}>
             <MetricsTab service={props.service} />

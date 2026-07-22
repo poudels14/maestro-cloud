@@ -2,7 +2,6 @@ import type { ApiSchemas } from "@maestro/api-client";
 import type {
   ClusterNode,
   ClusterSummary,
-  Deployment,
   DiskInfo,
   FirewallDryRun,
   FirewallPolicy,
@@ -21,7 +20,6 @@ import type {
   Webhook,
   WebhookEvent
 } from "./types";
-import { apiErrorFromResponse } from "./apiError";
 import { apiClient, apiRequestError } from "./client";
 
 export {
@@ -32,6 +30,13 @@ export {
   redeployService,
   setServiceReplicas
 } from "./serviceApi";
+export {
+  cancelDeployment,
+  getDeploymentReplicas,
+  getDeployments,
+  removeDeployment,
+  restartDeployment
+} from "./deploymentApi";
 
 export interface ClusterInfo extends ClusterSummary {
   nodes: ClusterNode[];
@@ -207,32 +212,6 @@ export async function getClusterConfig(): Promise<MaskedConfig> {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`Failed to fetch cluster config: ${res.statusText}`);
   return res.json();
-}
-
-export async function getDeployments(serviceId: string): Promise<Deployment[]> {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch deployments: ${res.statusText}`);
-  return res.json();
-}
-
-export async function restartService(serviceId: string, force?: boolean) {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/restart`, location.origin);
-  if (force) url.searchParams.set("force", "true");
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw await apiErrorFromResponse(res, "Failed to restart");
-}
-
-export async function cancelDeployment(serviceId: string, deploymentId: string) {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`;
-  const res = await fetch(url, { method: "PATCH" });
-  if (!res.ok) throw new Error(`Failed to cancel deployment: ${res.statusText}`);
-}
-
-export async function stopDeployment(serviceId: string, deploymentId: string) {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/remove`;
-  const res = await fetch(url, { method: "PATCH" });
-  if (!res.ok) throw new Error(`Failed to stop deployment: ${res.statusText}`);
 }
 
 export async function getLogs(

@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { ApiRequestError, apiErrorFromResponse } from "./apiError.ts";
+import { ApiRequestError, apiErrorFromBody } from "./apiError.ts";
 
 test("parses structured API errors", async () => {
-  const error = await apiErrorFromResponse(
-    new Response(
-      JSON.stringify({
-        error: {
-          code: "cluster_deploys_frozen",
-          message: "cluster deploys are frozen",
-          details: { upgradeRunId: "run-123" }
-        }
-      }),
-      { status: 409, headers: { "Content-Type": "application/json" } }
-    ),
+  const error = apiErrorFromBody(
+    409,
+    JSON.stringify({
+      error: {
+        code: "cluster_deploys_frozen",
+        message: "cluster deploys are frozen",
+        details: { upgradeRunId: "run-123" }
+      }
+    }),
     "Redeploy failed"
   );
 
@@ -25,10 +23,7 @@ test("parses structured API errors", async () => {
 });
 
 test("keeps plain-text errors compatible during rolling upgrades", async () => {
-  const error = await apiErrorFromResponse(
-    new Response("legacy controller error", { status: 409 }),
-    "Restart failed"
-  );
+  const error = apiErrorFromBody(409, "legacy controller error", "Restart failed");
 
   assert.equal(error.status, 409);
   assert.equal(error.code, null);

@@ -72,3 +72,78 @@ test("generated service commands preserve revisions and idempotency", async () =
     }
   ]);
 });
+
+test("generated deployment reads and commands preserve resource scope", async () => {
+  const requests: Array<{
+    method: string;
+    path: string;
+    body: unknown;
+    idempotencyKey: string | undefined;
+  }> = [];
+  const transport: ApiTransport = {
+    async request<Response, Body>(request: TransportRequest<Response, Body>): Promise<Response> {
+      requests.push({
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        idempotencyKey: request.headers?.["Idempotency-Key"]
+      });
+      return [] as Response;
+    }
+  };
+  const client = createApiClient(transport);
+
+  await client.listDeployments("service/a");
+  await client.listReplicas("service/a", "deployment/b");
+  await client.restartDeployment(
+    "service/a",
+    "deployment/b",
+    { expectedRevision: 21 },
+    "restart-key"
+  );
+  await client.cancelDeployment(
+    "service/a",
+    "deployment/b",
+    { expectedRevision: 22 },
+    "cancel-key"
+  );
+  await client.removeDeployment(
+    "service/a",
+    "deployment/b",
+    { expectedRevision: 23 },
+    "remove-key"
+  );
+
+  assert.deepEqual(requests, [
+    {
+      method: "GET",
+      path: "/api/services/service%2Fa/deployments",
+      body: undefined,
+      idempotencyKey: undefined
+    },
+    {
+      method: "GET",
+      path: "/api/services/service%2Fa/deployments/deployment%2Fb/replicas",
+      body: undefined,
+      idempotencyKey: undefined
+    },
+    {
+      method: "POST",
+      path: "/api/services/service%2Fa/deployments/deployment%2Fb/restart",
+      body: { expectedRevision: 21 },
+      idempotencyKey: "restart-key"
+    },
+    {
+      method: "POST",
+      path: "/api/services/service%2Fa/deployments/deployment%2Fb/cancel",
+      body: { expectedRevision: 22 },
+      idempotencyKey: "cancel-key"
+    },
+    {
+      method: "POST",
+      path: "/api/services/service%2Fa/deployments/deployment%2Fb/remove",
+      body: { expectedRevision: 23 },
+      idempotencyKey: "remove-key"
+    }
+  ]);
+});
