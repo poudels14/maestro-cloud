@@ -61,6 +61,27 @@ impl ApiClient {
         decode_response(response).await
     }
 
+    pub(crate) async fn get_query<Response>(
+        &self,
+        path: &str,
+        parameters: &[(String, String)],
+    ) -> Result<Response, CliError>
+    where
+        Response: DeserializeOwned,
+    {
+        let mut endpoint = self.endpoint(path)?;
+        endpoint
+            .query_pairs_mut()
+            .extend_pairs(parameters.iter().map(|(name, value)| (name, value)));
+        let response = self
+            .client
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|source| CliError::transport("API request failed", source))?;
+        decode_response(response).await
+    }
+
     pub(crate) async fn post<Request, Response>(
         &self,
         path: &str,

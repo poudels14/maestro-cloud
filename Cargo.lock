@@ -3498,6 +3498,7 @@ dependencies = [
  "json5",
  "jsonwebtoken",
  "kernel-api",
+ "logs",
  "reqwest",
  "rpassword",
  "semver",

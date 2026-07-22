@@ -15,6 +15,7 @@ mod config_source;
 mod contexts;
 mod deployments;
 mod error;
+mod log_command;
 mod login;
 mod rollout;
 mod service_config;

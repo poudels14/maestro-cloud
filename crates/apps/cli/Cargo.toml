@@ -20,6 +20,7 @@ jsonwebtoken.workspace = true
 json5.workspace = true
 ipnet.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+logs = { version = "0.1.0", path = "../../observability/logs" }
 reqwest = { workspace = true, features = ["json"] }
 rpassword = "=7.5.4"
 semver.workspace = true
@@ -32,7 +33,7 @@ shellexpand.workspace = true
 tempfile = "=3.27.0"
 thiserror.workspace = true
 tar.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 uuid.workspace = true
 
 [lints]
