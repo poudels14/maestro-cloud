@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use kernel_api::RequestId;
+use kernel_api::{ArtifactArchiveId, ArtifactArchiveUploadResponse, RequestId};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,28 @@ impl ApiClient {
     {
         self.mutate(reqwest::Method::DELETE, path, request_id, body)
             .await
+    }
+
+    pub(crate) async fn upload_artifact_archive(
+        &self,
+        archive_id: &ArtifactArchiveId,
+        content: Vec<u8>,
+    ) -> Result<ArtifactArchiveUploadResponse, CliError> {
+        let endpoint = self.endpoint(&format!("/api/artifact-archives/{archive_id}"))?;
+        let response = self
+            .client
+            .put(endpoint)
+            .header(CONTENT_TYPE, "application/gzip")
+            .body(content)
+            .send()
+            .await
+            .map_err(|source| {
+                CliError::transport(
+                    format!("artifact upload failed; retry archive `{archive_id}`"),
+                    source,
+                )
+            })?;
+        decode_response(response).await
     }
 
     pub(crate) async fn post_query<Request, Response>(

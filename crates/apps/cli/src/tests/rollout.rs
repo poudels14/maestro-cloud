@@ -1,8 +1,9 @@
 use std::sync::Mutex;
 
 use kernel_api::{
-    CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId, Generation, RequestId,
-    Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffStatus, ServiceId,
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, CommandRequest, Deployment,
+    DeploymentCommandResponse, DeploymentId, Generation, RequestId, Service,
+    ServiceCommandResponse, ServiceDiffChange, ServiceDiffStatus, ServiceId,
     ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
     ServiceRolloutRequest, ServiceRolloutResponse,
 };
@@ -28,6 +29,14 @@ struct RecordingApi {
 }
 
 impl ServiceApi for RecordingApi {
+    async fn upload_artifact_archive(
+        &self,
+        _archive_id: &ArtifactArchiveId,
+        _content: Vec<u8>,
+    ) -> Result<ArtifactArchiveUploadResponse, CliError> {
+        Err(unexpected())
+    }
+
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
         Err(unexpected())
     }

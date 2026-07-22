@@ -5,17 +5,17 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::put;
 use axum::{Json, Router};
 use build::{ArtifactArchiveWrite, BuildSourceError};
-use kernel_api::{ArtifactArchiveId, ArtifactArchiveUploadResponse};
+use kernel_api::{
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, MAXIMUM_ARTIFACT_ARCHIVE_BYTES,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{ApiError, AppState};
 
-pub(super) const MAXIMUM_ARCHIVE_BYTES: usize = 64 * 1_024 * 1_024;
-
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/artifact-archives/{archive_id}", put(upload))
-        .layer(DefaultBodyLimit::max(MAXIMUM_ARCHIVE_BYTES))
+        .layer(DefaultBodyLimit::max(MAXIMUM_ARTIFACT_ARCHIVE_BYTES))
 }
 
 async fn upload(
@@ -36,7 +36,7 @@ async fn upload(
     let content = payload.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
             ApiError::payload_too_large(format!(
-                "artifact archive exceeds {MAXIMUM_ARCHIVE_BYTES} bytes"
+                "artifact archive exceeds {MAXIMUM_ARTIFACT_ARCHIVE_BYTES} bytes"
             ))
         } else {
             ApiError::bad_request(rejection.body_text())

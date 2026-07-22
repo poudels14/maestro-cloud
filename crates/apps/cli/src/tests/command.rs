@@ -66,6 +66,21 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from(["maestro-next", "services", "replicas", "set", "api", "3",]).is_ok()
     );
     assert!(Cli::try_parse_from(["maestro-next", "services", "replicas", "clear", "api",]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "services",
+            "up",
+            "api",
+            "--config",
+            "services.jsonc",
+            "--context",
+            "./api",
+            "--idempotency-key",
+            "up-1",
+        ])
+        .is_ok()
+    );
 }
 
 #[tokio::test]

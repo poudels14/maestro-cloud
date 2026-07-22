@@ -37,6 +37,8 @@ pub enum CliError {
     },
     #[error("API response exceeded the {limit_bytes}-byte client limit")]
     ResponseTooLarge { limit_bytes: usize },
+    #[error("invalid API response: {message}")]
+    InvalidApiResponse { message: String },
 }
 
 impl CliError {
@@ -76,6 +78,12 @@ impl CliError {
         Self::Transport {
             action: action.into(),
             source,
+        }
+    }
+
+    pub(crate) fn invalid_api_response(message: impl Into<String>) -> Self {
+        Self::InvalidApiResponse {
+            message: message.into(),
         }
     }
 }

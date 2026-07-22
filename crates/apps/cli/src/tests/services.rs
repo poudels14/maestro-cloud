@@ -1,10 +1,11 @@
 use std::sync::Mutex;
 
 use kernel_api::{
-    CommandRequest, Deployment, DeploymentCommandResponse, DeploymentGoal, DeploymentId,
-    Generation, RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
-    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
-    ServiceRolloutRequest, ServiceRolloutResponse,
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, CommandRequest, Deployment,
+    DeploymentCommandResponse, DeploymentGoal, DeploymentId, Generation, RequestId, RolloutState,
+    Service, ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse,
 };
 use serde_json::json;
 
@@ -151,6 +152,14 @@ struct RecordingServiceApi {
 }
 
 impl ServiceApi for RecordingServiceApi {
+    async fn upload_artifact_archive(
+        &self,
+        _archive_id: &ArtifactArchiveId,
+        _content: Vec<u8>,
+    ) -> Result<ArtifactArchiveUploadResponse, CliError> {
+        Err(CliError::invalid_input("unexpected archive upload"))
+    }
+
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
         Ok(vec![self.service.clone()])
     }

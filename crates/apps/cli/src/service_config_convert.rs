@@ -13,10 +13,16 @@ use crate::service_config::{
     BuildConfig, DesiredService, PreviewConfig, ServiceTemplate, ValueSource,
 };
 
+pub(super) enum BuildSourceSelection {
+    ConfiguredGit,
+    UploadedArchive(kernel_api::ArtifactArchiveId),
+}
+
 pub(super) async fn convert_service(
     config_source: &str,
     service_id: &ServiceId,
     template: ServiceTemplate,
+    build_source: BuildSourceSelection,
     reader: &impl ConfigSourceReader,
 ) -> Result<DesiredService, CliError> {
     let path = format!("services.{service_id}");
@@ -33,13 +39,31 @@ pub(super) async fn convert_service(
 
     let artifact = match (template.build, template.image) {
         (Some(build), None) => ArtifactTemplate::Build {
-            template: convert_build(config_source, &path, build, reader).await?,
+            template: convert_build(config_source, &path, build, build_source, reader).await?,
         },
         (None, Some(image)) => ArtifactTemplate::Image {
             reference: required_text(&format!("{path}.image"), &image)?,
         },
         _ => return Err(invalid(&path, "set exactly one of `build` or `image`")),
     };
+    if matches!(
+        &artifact,
+        ArtifactTemplate::Build {
+            template: BuildTemplate {
+                source: BuildSource::Tarball { .. },
+                ..
+            }
+        }
+    ) && template
+        .preview
+        .as_ref()
+        .is_some_and(|preview| preview.enabled)
+    {
+        return Err(invalid(
+            &format!("{path}.preview.enabled"),
+            "requires a Git build source",
+        ));
+    }
 
     let environment = resolve_values(
         config_source,
@@ -212,14 +236,9 @@ async fn convert_build(
     config_source: &str,
     service_path: &str,
     build: BuildConfig,
+    source: BuildSourceSelection,
     reader: &impl ConfigSourceReader,
 ) -> Result<BuildTemplate, CliError> {
-    let repository = build.repo.ok_or_else(|| {
-        invalid(
-            &format!("{service_path}.build.repo"),
-            "is required for declarative rollout; use `services up` for a local context",
-        )
-    })?;
     let environment = resolve_values(
         config_source,
         &format!("{service_path}.build.env"),
@@ -237,16 +256,36 @@ async fn convert_build(
     .into_iter()
     .map(|(key, value)| (key, SecretValue::new(value)))
     .collect();
+    let source = match source {
+        BuildSourceSelection::ConfiguredGit => {
+            let repository = build.repo.ok_or_else(|| {
+                invalid(
+                    &format!("{service_path}.build.repo"),
+                    "is required for declarative rollout; use `services up` for a local context",
+                )
+            })?;
+            BuildSource::Git {
+                repository: required_text(&format!("{service_path}.build.repo"), &repository)?,
+                revision: build
+                    .branch
+                    .as_deref()
+                    .map(|branch| required_text(&format!("{service_path}.build.branch"), branch))
+                    .transpose()?
+                    .unwrap_or_else(|| "HEAD".to_string()),
+            }
+        }
+        BuildSourceSelection::UploadedArchive(archive_id) => {
+            if build.watch {
+                return Err(invalid(
+                    &format!("{service_path}.build.watch"),
+                    "cannot watch an uploaded context",
+                ));
+            }
+            BuildSource::Tarball { archive_id }
+        }
+    };
     Ok(BuildTemplate {
-        source: BuildSource::Git {
-            repository: required_text(&format!("{service_path}.build.repo"), &repository)?,
-            revision: build
-                .branch
-                .as_deref()
-                .map(|branch| required_text(&format!("{service_path}.build.branch"), branch))
-                .transpose()?
-                .unwrap_or_else(|| "HEAD".to_string()),
-        },
+        source,
         dockerfile: required_text(
             &format!("{service_path}.build.dockerfile"),
             &build.dockerfile,

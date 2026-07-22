@@ -9,11 +9,19 @@ use serde::Deserialize;
 
 use crate::CliError;
 use crate::config_source::{ConfigSourceReader, decode_document, load_merged};
+use crate::service_config_convert::BuildSourceSelection;
 use crate::service_config_convert::convert_service;
 
 #[derive(Debug)]
 pub(crate) struct LoadedServices {
     pub(crate) services: BTreeMap<ServiceId, DesiredService>,
+    pub(crate) ignored_fields: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct LoadedUploadedService {
+    pub(crate) service_id: ServiceId,
+    pub(crate) desired: DesiredService,
     pub(crate) ignored_fields: Vec<String>,
 }
 
@@ -111,11 +119,55 @@ pub(crate) async fn decode_services(
     for (raw_id, template) in document.services {
         let id = ServiceId::new(raw_id.clone())
             .map_err(|error| CliError::invalid_input(format!("services.{raw_id}: {error}")))?;
-        let desired = convert_service(source, &id, template, reader).await?;
+        let desired = convert_service(
+            source,
+            &id,
+            template,
+            BuildSourceSelection::ConfiguredGit,
+            reader,
+        )
+        .await?;
         services.insert(id, desired);
     }
     Ok(LoadedServices {
         services,
+        ignored_fields,
+    })
+}
+
+pub(crate) async fn load_uploaded_service(
+    source: &str,
+    service_id: ServiceId,
+    archive_id: kernel_api::ArtifactArchiveId,
+    reader: &impl ConfigSourceReader,
+) -> Result<LoadedUploadedService, CliError> {
+    let merged = load_merged(source, reader).await?;
+    let (mut document, ignored_fields): (ServicesDocument, _) =
+        decode_document(&merged, &format!("services config `{source}`"))?;
+    let template = document
+        .services
+        .remove(service_id.as_str())
+        .ok_or_else(|| {
+            CliError::invalid_input(format!(
+                "service `{service_id}` is not configured in `{source}`"
+            ))
+        })?;
+    if template.build.is_none() || template.image.is_some() {
+        return Err(CliError::invalid_input(format!(
+            "services.{service_id}: `services up` requires `build` and does not accept `image`"
+        )));
+    }
+    let desired = convert_service(
+        source,
+        &service_id,
+        template,
+        BuildSourceSelection::UploadedArchive(archive_id),
+        reader,
+    )
+    .await?;
+    Ok(LoadedUploadedService {
+        service_id,
+        desired,
         ignored_fields,
     })
 }

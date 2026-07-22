@@ -14,6 +14,8 @@ aws-sdk-secretsmanager.workspace = true
 clap.workspace = true
 cluster = { version = "0.1.0", path = "../../cluster" }
 futures-util.workspace = true
+flate2.workspace = true
+ignore.workspace = true
 jsonwebtoken.workspace = true
 json5.workspace = true
 ipnet.workspace = true
@@ -28,6 +30,7 @@ sha2.workspace = true
 shellexpand.workspace = true
 tempfile = "=3.27.0"
 thiserror.workspace = true
+tar.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 uuid.workspace = true
 

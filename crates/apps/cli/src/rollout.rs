@@ -115,14 +115,17 @@ fn select<'a>(
     Ok(selected)
 }
 
-fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {
+pub(crate) fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {
     for field in fields {
         writeln!(output, "[maestro]: warning: ignored field `{field}`").map_err(output_error)?;
     }
     Ok(())
 }
 
-fn write_diff(diff: &ServiceRolloutDiffResponse, output: &mut dyn Write) -> Result<(), CliError> {
+pub(crate) fn write_diff(
+    diff: &ServiceRolloutDiffResponse,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     match diff.status {
         ServiceDiffStatus::New => {
             writeln!(output, "\n  + {} (new service)", diff.service_id).map_err(output_error)?;

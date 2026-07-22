@@ -23,10 +23,11 @@ pub use automation::{
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,
-    ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse,
-    ServiceDiffStatus, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
-    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
-    ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest, ServiceWriteResponse,
+    MAXIMUM_ARTIFACT_ARCHIVE_BYTES, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
+    ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
+    ServiceWriteResponse,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use identity::{

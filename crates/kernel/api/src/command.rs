@@ -8,6 +8,9 @@ use crate::{
     IngressRouteSpec, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
 };
 
+/// Maximum compressed bytes accepted for one uploaded build context archive.
+pub const MAXIMUM_ARTIFACT_ARCHIVE_BYTES: usize = 64 * 1_024 * 1_024;
+
 /// Optimistic lifecycle command targeting one exact resource revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

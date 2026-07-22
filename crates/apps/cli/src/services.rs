@@ -1,10 +1,10 @@
 use std::io::Write;
 
 use kernel_api::{
-    ArtifactTemplate, CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId,
-    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
-    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
-    ServiceRolloutRequest, ServiceRolloutResponse,
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, ArtifactTemplate, CommandRequest, Deployment,
+    DeploymentCommandResponse, DeploymentId, RequestId, RolloutState, Service,
+    ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
+    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
 };
 
 use crate::CliError;
@@ -158,6 +158,12 @@ pub(crate) async fn set_replicas(
 }
 
 pub(crate) trait ServiceApi {
+    async fn upload_artifact_archive(
+        &self,
+        archive_id: &ArtifactArchiveId,
+        content: Vec<u8>,
+    ) -> Result<ArtifactArchiveUploadResponse, CliError>;
+
     async fn list_services(&self) -> Result<Vec<Service>, CliError>;
 
     async fn get_service(&self, service_id: &ServiceId) -> Result<Service, CliError>;
@@ -207,6 +213,14 @@ pub(crate) trait ServiceApi {
 }
 
 impl ServiceApi for ApiClient {
+    async fn upload_artifact_archive(
+        &self,
+        archive_id: &ArtifactArchiveId,
+        content: Vec<u8>,
+    ) -> Result<ArtifactArchiveUploadResponse, CliError> {
+        ApiClient::upload_artifact_archive(self, archive_id, content).await
+    }
+
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
         self.get("/api/services").await
     }

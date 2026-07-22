@@ -5,6 +5,7 @@
 //! internals, cluster storage, or operator implementation modules.
 
 mod api_client;
+mod archive;
 mod cluster_config;
 mod command;
 mod config;
@@ -16,6 +17,8 @@ mod rollout;
 mod service_config;
 mod service_config_convert;
 mod services;
+mod services_command;
+mod up;
 
 pub use command::{Cli, run};
 pub use error::CliError;
