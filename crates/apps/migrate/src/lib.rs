@@ -1,6 +1,7 @@
 //! One-shot, resumable migration from legacy Maestro state into typed resources.
 
 mod artifact;
+mod etcd_source;
 mod legacy_cluster;
 mod legacy_config;
 mod legacy_convert;
@@ -31,6 +32,9 @@ mod runner;
 mod snapshot;
 
 pub use artifact::SnapshotArtifactError;
+pub use etcd_source::{
+    CapturedLegacySnapshot, CutoverEtcdConnection, CutoverEtcdError, LegacyEtcdSource,
+};
 pub use legacy_convert::{LegacyPlanError, plan_legacy_snapshot};
 pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use report::{MigrationPlanReport, ReportError};

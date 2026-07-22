@@ -12,6 +12,11 @@ const MAXIMUM_ENCODED_VALUE_BYTES: usize = MAXIMUM_VALUE_BYTES.div_ceil(3) * 4;
 const MAXIMUM_ARTIFACT_BYTES: usize = MAXIMUM_SNAPSHOT_BYTES * 2 + 16 * 1_024 * 1_024;
 
 impl LegacySnapshot {
+    /// Returns the maximum accepted serialized logical snapshot size.
+    pub const fn maximum_artifact_bytes() -> usize {
+        MAXIMUM_ARTIFACT_BYTES
+    }
+
     /// Encodes a portable, digest-bound logical snapshot for review and rehearsal.
     pub fn encode_artifact(&self) -> Result<Vec<u8>, SnapshotArtifactError> {
         let artifact = SnapshotArtifact {
@@ -39,7 +44,7 @@ impl LegacySnapshot {
         Ok(document)
     }
 
-    /// Authenticates and decodes one portable logical snapshot artifact.
+    /// Validates the declared digest and decodes one portable logical snapshot artifact.
     pub fn decode_artifact(document: &[u8]) -> Result<Self, SnapshotArtifactError> {
         if document.len() > MAXIMUM_ARTIFACT_BYTES {
             return Err(SnapshotArtifactError::ArtifactTooLarge {

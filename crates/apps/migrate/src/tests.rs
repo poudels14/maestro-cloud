@@ -12,11 +12,42 @@ use kernel_store::{
 };
 
 use crate::{
-    CutoverMigration, LegacyEntry, LegacySnapshot, MigrationError, MigrationOutcome, MigrationPlan,
-    PlanError, SnapshotError,
+    CutoverEtcdConnection, CutoverMigration, LegacyEntry, LegacySnapshot, MigrationError,
+    MigrationOutcome, MigrationPlan, PlanError, SnapshotError,
 };
 
 type TestResult<Value = ()> = Result<Value, Box<dyn std::error::Error>>;
+
+#[test]
+fn cutover_connection_rejects_ambiguous_origins_and_redacts_keys() -> TestResult {
+    for endpoints in [
+        Vec::new(),
+        vec!["http://127.0.0.1:2379".to_owned()],
+        vec!["https://127.0.0.1:2379/v3".to_owned()],
+        vec![
+            "https://STORE.example:2379".to_owned(),
+            "https://store.example:2379/".to_owned(),
+        ],
+    ] {
+        assert!(
+            CutoverEtcdConnection::new(
+                endpoints,
+                b"ca".to_vec(),
+                b"certificate".to_vec(),
+                b"private-key".to_vec(),
+            )
+            .is_err()
+        );
+    }
+    let connection = CutoverEtcdConnection::new(
+        vec!["https://127.0.0.1:2379".to_owned()],
+        b"ca".to_vec(),
+        b"certificate".to_vec(),
+        b"private-key-material".to_vec(),
+    )?;
+    assert!(!format!("{connection:?}").contains("private-key-material"));
+    Ok(())
+}
 
 #[test]
 fn snapshot_digest_is_order_independent_and_input_is_bounded() -> TestResult {
@@ -184,6 +215,41 @@ async fn migration_reuses_exact_partial_writes() -> TestResult {
             reused: 1,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_source_fence_commits_no_marker_and_resumes_exactly() -> TestResult {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let keyspace = keyspace()?;
+    let migration = migration(store.clone(), keyspace.clone())?;
+    let plan = plan("api", [25; 32])?;
+
+    assert!(matches!(
+        migration
+            .apply_guarded(&plan, || async { Err("legacy state changed".to_owned()) })
+            .await,
+        Err(MigrationError::SourceFence { .. })
+    ));
+    assert!(store.get(&resource_key(&keyspace, "api")?).await?.is_some());
+    assert!(store.get(&marker_key(&keyspace)?).await?.is_none());
+    assert_eq!(
+        migration.apply(&plan).await?,
+        MigrationOutcome::Applied {
+            resources: 1,
+            request_claims: 0,
+            written: 0,
+            reused: 1,
+        }
+    );
+    assert!(matches!(
+        migration
+            .apply_guarded(&plan, || async {
+                Err("legacy state changed again".to_owned())
+            })
+            .await,
+        Err(MigrationError::SourceFence { .. })
+    ));
     Ok(())
 }
 

@@ -1,3 +1,5 @@
+use std::fmt::Display;
+use std::future::Future;
 use std::sync::Arc;
 
 use kernel_api::{ClusterId, ResourceKind, ResourceName};
@@ -29,6 +31,21 @@ impl CutoverMigration {
 
     /// Converges every resource, then commits the completion marker last.
     pub async fn apply(&self, plan: &MigrationPlan) -> Result<MigrationOutcome, MigrationError> {
+        self.apply_guarded(plan, || async { Ok::<(), std::convert::Infallible>(()) })
+            .await
+    }
+
+    /// Converges every destination and rechecks the source immediately before completion.
+    pub async fn apply_guarded<Check, CheckFuture, CheckError>(
+        &self,
+        plan: &MigrationPlan,
+        source_check: Check,
+    ) -> Result<MigrationOutcome, MigrationError>
+    where
+        Check: FnOnce() -> CheckFuture,
+        CheckFuture: Future<Output = Result<(), CheckError>>,
+        CheckError: Display,
+    {
         let destination_prefix = self.keyspace.cluster().to_string();
         let expected_prefix = format!("/maestro/clusters/{}/", plan.cluster_id());
         if destination_prefix != expected_prefix {
@@ -42,6 +59,11 @@ impl CutoverMigration {
         if let Some(stored) = self.store.get(&marker_key).await? {
             let existing = decode_marker(&marker_key, &stored.value)?;
             if existing == marker {
+                source_check()
+                    .await
+                    .map_err(|error| MigrationError::SourceFence {
+                        message: error.to_string(),
+                    })?;
                 return Ok(MigrationOutcome::AlreadyComplete {
                     resources: plan.writes().len(),
                     request_claims: plan.request_claims().len(),
@@ -80,6 +102,11 @@ impl CutoverMigration {
                 WriteDisposition::Reused => reused += 1,
             }
         }
+        source_check()
+            .await
+            .map_err(|error| MigrationError::SourceFence {
+                message: error.to_string(),
+            })?;
 
         let marker_bytes =
             serde_json::to_vec(&marker).map_err(|error| MigrationError::MarkerEncode {
@@ -162,7 +189,8 @@ fn decode_marker(key: &StoreKey, value: &[u8]) -> Result<MigrationMarker, Migrat
 }
 
 /// Observable result of applying a cutover plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
 pub enum MigrationOutcome {
     /// Every destination converged and a completion marker was committed.
     Applied {
@@ -206,6 +234,12 @@ pub enum MigrationError {
         /// Rejected kind.
         kind: String,
         /// Validation detail.
+        message: String,
+    },
+    /// The stopped legacy source could not be revalidated before completion.
+    #[error("legacy source fence failed before migration completion: {message}")]
+    SourceFence {
+        /// Source comparison or read failure detail.
         message: String,
     },
     /// A destination exists with bytes not produced by this plan.
