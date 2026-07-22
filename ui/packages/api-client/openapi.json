@@ -102,7 +102,7 @@
         ]
       },
       "Assignment": {
-        "$ref": "#/components/schemas/Object5"
+        "$ref": "#/components/schemas/Object6"
       },
       "AssignmentId": {
         "description": "Stable identity of a scheduled workload assignment.",
@@ -366,7 +366,7 @@
         "type": "object"
       },
       "Build": {
-        "$ref": "#/components/schemas/Object12"
+        "$ref": "#/components/schemas/Object13"
       },
       "BuildId": {
         "description": "Stable identity of an artifact build.",
@@ -910,7 +910,7 @@
         "type": "object"
       },
       "Deployment": {
-        "$ref": "#/components/schemas/Object4"
+        "$ref": "#/components/schemas/Object5"
       },
       "DeploymentCommandResponse": {
         "properties": {
@@ -1198,7 +1198,7 @@
         "type": "object"
       },
       "DnsRecord": {
-        "$ref": "#/components/schemas/Object11"
+        "$ref": "#/components/schemas/Object12"
       },
       "DnsRecordId": {
         "description": "Stable identity of a cluster DNS record.",
@@ -1494,7 +1494,7 @@
         "type": "object"
       },
       "FirewallPolicy": {
-        "$ref": "#/components/schemas/Object10"
+        "$ref": "#/components/schemas/Object11"
       },
       "FirewallPolicyCommandResponse": {
         "properties": {
@@ -1864,7 +1864,7 @@
         "type": "object"
       },
       "IngressBlocklist": {
-        "$ref": "#/components/schemas/Object8"
+        "$ref": "#/components/schemas/Object9"
       },
       "IngressBlocklistId": {
         "description": "Stable identity of the cluster ingress blocklist.",
@@ -1917,7 +1917,7 @@
         "type": "object"
       },
       "IngressRoute": {
-        "$ref": "#/components/schemas/Object7"
+        "$ref": "#/components/schemas/Object8"
       },
       "IngressRouteId": {
         "description": "Stable identity of an ingress route.",
@@ -2283,7 +2283,7 @@
         "type": "object"
       },
       "NodeFirewall": {
-        "$ref": "#/components/schemas/Object16"
+        "$ref": "#/components/schemas/Object17"
       },
       "NodeFirewallId": {
         "description": "Stable identity of a node's desired firewall ruleset.",
@@ -2359,7 +2359,7 @@
         "type": "string"
       },
       "NodeNetwork": {
-        "$ref": "#/components/schemas/Object2"
+        "$ref": "#/components/schemas/Object3"
       },
       "NodeNetworkId": {
         "description": "Stable identity of a node's published network configuration.",
@@ -2541,6 +2541,58 @@
         ],
         "type": "object"
       },
+      "NodeTombstone": {
+        "$ref": "#/components/schemas/Object2"
+      },
+      "NodeTombstoneSpec": {
+        "description": "Immutable identity and topology evidence retained after node removal.",
+        "properties": {
+          "hostAddress": {
+            "description": "Last private control-plane address owned by the removed node.",
+            "format": "ip",
+            "type": "string"
+          },
+          "requestedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time at which removal was requested."
+          },
+          "role": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeRole"
+              }
+            ],
+            "description": "Last cluster role held by the removed node."
+          }
+        },
+        "required": [
+          "hostAddress",
+          "role",
+          "requestedAt"
+        ],
+        "type": "object"
+      },
+      "NodeTombstoneStatus": {
+        "description": "Observed completion of one irreversible node-identity removal.",
+        "properties": {
+          "removedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Time at which membership and durable node state were removed."
+          }
+        },
+        "required": [
+          "removedAt"
+        ],
+        "type": "object"
+      },
       "NodeUpgradeStatus": {
         "description": "Per-node progress retained across leader changes and daemon restarts.",
         "properties": {
@@ -2648,6 +2700,41 @@
           "meta": {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ObjectMeta9"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrafficGenerationStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object11": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/ObjectMeta10"
               }
             ],
@@ -2677,7 +2764,7 @@
         ],
         "type": "object"
       },
-      "Object11": {
+      "Object12": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2712,7 +2799,7 @@
         ],
         "type": "object"
       },
-      "Object12": {
+      "Object13": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2747,7 +2834,7 @@
         ],
         "type": "object"
       },
-      "Object13": {
+      "Object14": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2782,7 +2869,7 @@
         ],
         "type": "object"
       },
-      "Object14": {
+      "Object15": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2817,7 +2904,7 @@
         ],
         "type": "object"
       },
-      "Object15": {
+      "Object16": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2852,7 +2939,7 @@
         ],
         "type": "object"
       },
-      "Object16": {
+      "Object17": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2893,6 +2980,41 @@
           "meta": {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ObjectMeta"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeTombstoneSpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeTombstoneStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object3": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/ObjectMeta2"
               }
             ],
@@ -2922,7 +3044,7 @@
         ],
         "type": "object"
       },
-      "Object3": {
+      "Object4": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2957,7 +3079,7 @@
         ],
         "type": "object"
       },
-      "Object4": {
+      "Object5": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -2992,7 +3114,7 @@
         ],
         "type": "object"
       },
-      "Object5": {
+      "Object6": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -3027,7 +3149,7 @@
         ],
         "type": "object"
       },
-      "Object6": {
+      "Object7": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -3062,7 +3184,7 @@
         ],
         "type": "object"
       },
-      "Object7": {
+      "Object8": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -3097,7 +3219,7 @@
         ],
         "type": "object"
       },
-      "Object8": {
+      "Object9": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
@@ -3120,41 +3242,6 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/IngressBlocklistStatus"
-              }
-            ],
-            "description": "Observed state written by the resource's owning controller."
-          }
-        },
-        "required": [
-          "meta",
-          "spec",
-          "status"
-        ],
-        "type": "object"
-      },
-      "Object9": {
-        "description": "A typed Maestro resource with desired and observed state.",
-        "properties": {
-          "meta": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ObjectMeta9"
-              }
-            ],
-            "description": "Identity, concurrency, ownership, and deletion metadata."
-          },
-          "spec": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TrafficGenerationSpec"
-              }
-            ],
-            "description": "Desired state written by users or another controller."
-          },
-          "status": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TrafficGenerationStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -4512,7 +4599,7 @@
         "type": "object"
       },
       "Preview": {
-        "$ref": "#/components/schemas/Object13"
+        "$ref": "#/components/schemas/Object14"
       },
       "PreviewId": {
         "description": "Stable identity of a pull-request preview.",
@@ -4716,7 +4803,7 @@
         "type": "object"
       },
       "ReplicaState": {
-        "$ref": "#/components/schemas/Object6"
+        "$ref": "#/components/schemas/Object7"
       },
       "ReplicaStateId": {
         "description": "Stable identity of a deployment replica's observed state.",
@@ -4998,7 +5085,7 @@
         "type": "object"
       },
       "Service": {
-        "$ref": "#/components/schemas/Object3"
+        "$ref": "#/components/schemas/Object4"
       },
       "ServiceCommandResponse": {
         "properties": {
@@ -5858,7 +5945,7 @@
         "type": "object"
       },
       "TrafficGeneration": {
-        "$ref": "#/components/schemas/Object9"
+        "$ref": "#/components/schemas/Object10"
       },
       "TrafficGenerationId": {
         "description": "Stable identity of an ingress traffic generation.",
@@ -6349,7 +6436,7 @@
         ]
       },
       "UpgradeRun": {
-        "$ref": "#/components/schemas/Object14"
+        "$ref": "#/components/schemas/Object15"
       },
       "UpgradeRunId": {
         "description": "Stable identity of a persisted cluster upgrade run.",
@@ -6520,7 +6607,7 @@
         ]
       },
       "Webhook": {
-        "$ref": "#/components/schemas/Object15"
+        "$ref": "#/components/schemas/Object16"
       },
       "WebhookCategory": {
         "description": "Notification severity selected independently from event classes.",

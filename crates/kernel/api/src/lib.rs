@@ -56,7 +56,8 @@ pub use network::{
 };
 pub use node::{
     ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,
-    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, UnschedulableReplica,
+    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, NodeTombstone,
+    NodeTombstoneSpec, NodeTombstoneStatus, UnschedulableReplica,
 };
 pub use resource::Object;
 pub use schema::{

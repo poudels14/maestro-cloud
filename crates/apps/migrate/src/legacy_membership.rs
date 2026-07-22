@@ -64,6 +64,10 @@ impl LegacyMembershipCatalog {
         }
         Ok(())
     }
+
+    pub(crate) fn member_id(&self, node_id: &NodeId) -> Option<u64> {
+        self.members.get(node_id).map(|member| member.member_id)
+    }
 }
 
 fn match_members(

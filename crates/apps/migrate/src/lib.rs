@@ -9,6 +9,8 @@ mod legacy_maintenance;
 mod legacy_maintenance_schema;
 mod legacy_membership;
 mod legacy_network;
+mod legacy_node_lifecycle;
+mod legacy_node_lifecycle_schema;
 mod legacy_node_resources;
 mod legacy_node_schema;
 mod legacy_nodes;
@@ -35,6 +37,8 @@ mod legacy_maintenance_tests;
 mod legacy_membership_tests;
 #[cfg(test)]
 mod legacy_network_tests;
+#[cfg(test)]
+mod legacy_node_lifecycle_tests;
 #[cfg(test)]
 mod legacy_node_tests;
 #[cfg(test)]

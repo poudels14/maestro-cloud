@@ -124,6 +124,10 @@ impl LegacyNodeCatalog {
             .any(|candidate| candidate.as_str() == node_id)
     }
 
+    pub(crate) fn bundle(&self, node_id: &NodeId) -> Option<&NodeBundle> {
+        self.nodes.get(node_id)
+    }
+
     pub(crate) fn convert(&self) -> Result<Vec<BuiltinResource>, LegacyPlanError> {
         convert_nodes(&self.nodes)
     }

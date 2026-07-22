@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 use crate::{
     ArtifactArchiveUploadResponse, Assignment, Build, ClusterId, CommandRequest, Deployment,
     DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute,
-    IngressRouting, MaskedClusterConfig, Node, NodeFirewall, NodeNetwork, Preview, ReplicaState,
-    ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    IngressRouting, MaskedClusterConfig, Node, NodeFirewall, NodeNetwork, NodeTombstone, Preview,
+    ReplicaState, ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange,
+    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
     ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
     ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
     ServiceWriteResponse, TrafficGeneration, UnschedulableReplica, UpgradeRun, Webhook,
@@ -26,6 +26,8 @@ use crate::{
 pub enum BuiltinKind {
     /// A cluster node.
     Node,
+    /// A durable removed-node identity guard.
+    NodeTombstone,
     /// A node mesh publication.
     NodeNetwork,
     /// A node's desired and applied firewall ruleset.
@@ -60,8 +62,9 @@ pub enum BuiltinKind {
 
 impl BuiltinKind {
     /// Built-in kinds in deterministic schema and snapshot order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Node,
+        Self::NodeTombstone,
         Self::NodeNetwork,
         Self::Service,
         Self::Deployment,
@@ -83,6 +86,7 @@ impl BuiltinKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Node => "Node",
+            Self::NodeTombstone => "NodeTombstone",
             Self::NodeNetwork => "NodeNetwork",
             Self::NodeFirewall => "NodeFirewall",
             Self::Service => "Service",
@@ -114,6 +118,7 @@ impl TryFrom<&ResourceKind> for BuiltinKind {
     fn try_from(kind: &ResourceKind) -> Result<Self, Self::Error> {
         match kind.as_str() {
             "Node" => Ok(Self::Node),
+            "NodeTombstone" => Ok(Self::NodeTombstone),
             "NodeNetwork" => Ok(Self::NodeNetwork),
             "NodeFirewall" => Ok(Self::NodeFirewall),
             "Service" => Ok(Self::Service),
@@ -140,6 +145,8 @@ impl TryFrom<&ResourceKind> for BuiltinKind {
 pub enum BuiltinResource {
     /// A cluster node.
     Node(Node),
+    /// A durable removed-node identity guard.
+    NodeTombstone(NodeTombstone),
     /// A node mesh publication.
     NodeNetwork(NodeNetwork),
     /// A node's desired and applied firewall ruleset.
@@ -177,6 +184,7 @@ impl BuiltinResource {
     pub const fn kind(&self) -> BuiltinKind {
         match self {
             Self::Node(_) => BuiltinKind::Node,
+            Self::NodeTombstone(_) => BuiltinKind::NodeTombstone,
             Self::NodeNetwork(_) => BuiltinKind::NodeNetwork,
             Self::NodeFirewall(_) => BuiltinKind::NodeFirewall,
             Self::Service(_) => BuiltinKind::Service,
@@ -228,6 +236,9 @@ pub fn decode_builtin(
     let kind = BuiltinKind::try_from(kind)?;
     let decoded = match kind {
         BuiltinKind::Node => serde_json::from_value(value).map(BuiltinResource::Node),
+        BuiltinKind::NodeTombstone => {
+            serde_json::from_value(value).map(BuiltinResource::NodeTombstone)
+        }
         BuiltinKind::NodeNetwork => serde_json::from_value(value).map(BuiltinResource::NodeNetwork),
         BuiltinKind::NodeFirewall => {
             serde_json::from_value(value).map(BuiltinResource::NodeFirewall)
@@ -269,6 +280,7 @@ pub fn decode_builtin(
 pub fn openapi_document() -> Value {
     let mut generator = SchemaGenerator::new(SchemaSettings::openapi3());
     register_schema::<Node>(&mut generator, BuiltinKind::Node);
+    register_schema::<NodeTombstone>(&mut generator, BuiltinKind::NodeTombstone);
     register_schema::<NodeNetwork>(&mut generator, BuiltinKind::NodeNetwork);
     register_schema::<Service>(&mut generator, BuiltinKind::Service);
     register_schema::<Deployment>(&mut generator, BuiltinKind::Deployment);

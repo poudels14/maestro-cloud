@@ -97,6 +97,29 @@ pub struct NodeStatus {
 /// A cluster node resource.
 pub type Node = Object<NodeId, NodeSpec, NodeStatus>;
 
+/// Immutable identity and topology evidence retained after node removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTombstoneSpec {
+    /// Last private control-plane address owned by the removed node.
+    pub host_address: IpAddr,
+    /// Last cluster role held by the removed node.
+    pub role: NodeRole,
+    /// Time at which removal was requested.
+    pub requested_at: Timestamp,
+}
+
+/// Observed completion of one irreversible node-identity removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTombstoneStatus {
+    /// Time at which membership and durable node state were removed.
+    pub removed_at: Timestamp,
+}
+
+/// Durable guard preventing reuse of a removed node identity.
+pub type NodeTombstone = Object<NodeId, NodeTombstoneSpec, NodeTombstoneStatus>;
+
 /// Desired WireGuard publication and workload subnet for one node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

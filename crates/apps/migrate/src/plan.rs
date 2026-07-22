@@ -31,6 +31,7 @@ impl MigrationWrite {
 
         Ok(match resource {
             BuiltinResource::Node(resource) => encode!(Node, resource),
+            BuiltinResource::NodeTombstone(resource) => encode!(NodeTombstone, resource),
             BuiltinResource::NodeNetwork(resource) => encode!(NodeNetwork, resource),
             BuiltinResource::NodeFirewall(resource) => encode!(NodeFirewall, resource),
             BuiltinResource::Service(resource) => encode!(Service, resource),
