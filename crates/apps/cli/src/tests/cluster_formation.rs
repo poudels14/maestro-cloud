@@ -1,7 +1,7 @@
 use cluster::{ClusterCertificateAuthority, NodeCertificateBundle, certificate_fingerprint};
 
 use crate::CliError;
-use crate::cluster_formation::{init_ca, issue_node};
+use crate::cluster_formation::{init_ca, issue_node, prepare_join};
 use crate::config_source::ConfigSourceReader;
 
 struct MemoryReader {
@@ -100,6 +100,47 @@ async fn ca_initialization_requires_the_selected_master() -> Result<(), Box<dyn 
             .contains("must run for the declared master")
     );
     assert!(!directory.path().join("security/cluster-ca").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_preparation_persists_one_private_key_and_prints_approval_command()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let reader = MemoryReader {
+        source: cluster_document().replace("node: \"node-1\"", "node: \"node-2\""),
+    };
+    let mut first_output = Vec::new();
+    prepare_join(
+        "maestro.jsonc",
+        directory.path(),
+        &mut first_output,
+        &reader,
+    )
+    .await?;
+    let mut second_output = Vec::new();
+    prepare_join(
+        "maestro.jsonc",
+        directory.path(),
+        &mut second_output,
+        &reader,
+    )
+    .await?;
+    assert_eq!(first_output, second_output);
+    let output = String::from_utf8(first_output)?;
+    assert!(output.contains("Node: node-2"));
+    assert!(output.contains("Join key SHA-256:"));
+    assert!(output.contains("maestro-next cluster approve-node node-2"));
+    let key_path = directory.path().join("security/join.key");
+    assert!(key_path.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(key_path)?.permissions().mode() & 0o777,
+            0o600
+        );
+    }
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use cluster::{NodeJoinApproval, NodeJoinApprovalRequest, NodeJoinApprovalState};
 use kernel_api::{
     ClusterId, ClusterInfo, CommandRequest, MaskedClusterConfig, MaskedClusterConfigNode,
     MaskedClusterConfigPorts, Node, NodeCommandResponse, NodeId, NodeRole, RequestId,
@@ -16,6 +17,7 @@ struct RecordingClusterApi {
     config: MaskedClusterConfig,
     nodes: Vec<Node>,
     commands: Mutex<Vec<(NodeId, RequestId, NodeLifecycleAction, CommandRequest)>>,
+    approvals: Mutex<Vec<NodeJoinApprovalRequest>>,
 }
 
 impl ClusterApi for RecordingClusterApi {
@@ -37,6 +39,23 @@ impl ClusterApi for RecordingClusterApi {
             .find(|node| &node.meta.id == node_id)
             .cloned()
             .ok_or_else(|| CliError::not_found(format!("node `{node_id}`")))
+    }
+
+    async fn approve_node(
+        &self,
+        request: NodeJoinApprovalRequest,
+    ) -> Result<NodeJoinApproval, CliError> {
+        self.approvals
+            .lock()
+            .map_err(|_| poisoned())?
+            .push(request.clone());
+        Ok(NodeJoinApproval {
+            node_id: request.node_id,
+            public_key_sha256: request.public_key_sha256,
+            approved_at_unix_ms: 1_000,
+            state: NodeJoinApprovalState::Approved,
+            admitted_at_unix_ms: None,
+        })
     }
 
     async fn command_node(
@@ -131,6 +150,30 @@ async fn node_commands_submit_the_observed_revision_and_request_id()
     Ok(())
 }
 
+#[tokio::test]
+async fn node_approval_submits_and_checks_the_join_key_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    let fingerprint = "11".repeat(32);
+    let mut output = Vec::new();
+    crate::cluster::approve_node(&api, "node-a".to_string(), fingerprint.clone(), &mut output)
+        .await?;
+    assert_eq!(
+        api.approvals
+            .lock()
+            .map_err(|_| "approval lock poisoned")?
+            .as_slice(),
+        [NodeJoinApprovalRequest {
+            node_id: NodeId::new("node-a")?,
+            public_key_sha256: fingerprint.clone(),
+        }]
+    );
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("approved join key"));
+    assert!(output.contains(&fingerprint));
+    Ok(())
+}
+
 fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
     Ok(RecordingClusterApi {
         info: ClusterInfo {
@@ -164,6 +207,7 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
             node("node-a", "master-a", "master", "10.0.0.10", 7, true)?,
         ],
         commands: Mutex::new(Vec::new()),
+        approvals: Mutex::new(Vec::new()),
     })
 }
 

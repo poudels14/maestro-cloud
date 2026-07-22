@@ -38,6 +38,22 @@ pub(crate) enum ClusterCommand {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
+    /// Prepare this declared node's durable join key for operator approval.
+    PrepareJoin {
+        /// Cluster configuration source.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected data directory that will own the joined daemon state.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+    },
+    /// Approve one declared node's prepared join-key fingerprint.
+    ApproveNode {
+        /// Stable node identity already declared in the cluster topology.
+        node_id: String,
+        /// SHA-256 fingerprint printed by `cluster prepare-join` on that node.
+        public_key_sha256: String,
+    },
     /// Show the active cluster identity and node capabilities.
     Info,
     /// List durable cluster nodes and their scheduling state.
@@ -135,6 +151,14 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             )
             .await
         }
+        ClusterCommand::PrepareJoin { config, data_dir } => {
+            cluster_formation::prepare_join(&config, &data_dir, output, &SystemConfigSourceReader)
+                .await
+        }
+        ClusterCommand::ApproveNode {
+            node_id,
+            public_key_sha256,
+        } => cluster::approve_node(&active_client()?, node_id, public_key_sha256, output).await,
         ClusterCommand::Info => cluster::info(&active_client()?, output).await,
         ClusterCommand::Nodes => cluster::list_nodes(&active_client()?, output).await,
         ClusterCommand::Config => cluster::show_config(&active_client()?, output).await,
