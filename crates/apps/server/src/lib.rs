@@ -9,10 +9,13 @@ mod error;
 mod exec_service;
 mod mask;
 mod mutation;
+mod node_http_client;
 mod node_log_client;
+mod node_metric_client;
 mod openapi;
 mod openapi_commands;
 mod openapi_logs;
+mod openapi_metrics;
 mod resource;
 mod routes;
 mod settings;
@@ -38,7 +41,13 @@ pub use error::{ApiError, ApiErrorBody, ServerError};
 pub use exec_service::{
     ClusterExecSessions, ExecSessionOpenError, HttpClusterExecSessions, HttpExecClientError,
 };
-pub use node_log_client::{HttpNodeLogQueryStore, NodeLogClientError};
+pub use node_http_client::NodeHttpClientError;
+pub use node_log_client::HttpNodeLogQueryStore;
+pub use node_metric_client::{
+    HttpNodeMetricQueryStore, NodeMetricQueryError, NodeMetricQueryStore,
+};
+pub type NodeLogClientError = NodeHttpClientError;
+pub type NodeMetricClientError = NodeHttpClientError;
 pub use openapi::openapi_document;
 pub use settings::{ServerSettings, ServerSettingsError, TlsIdentity};
 
@@ -61,6 +70,8 @@ pub(crate) struct AppState {
     pub(crate) local_metric_node: Option<NodeId>,
     pub(crate) workload_metric_queries: Option<Arc<dyn metrics::WorkloadMetricQueryStore>>,
     pub(crate) host_metric_queries: Option<Arc<dyn metrics::HostMetricQueryStore>>,
+    pub(crate) cluster_metric_nodes: Arc<[NodeId]>,
+    pub(crate) cluster_metric_queries: Option<Arc<dyn NodeMetricQueryStore>>,
     pub(crate) exec_sessions: Option<Arc<dyn ClusterExecSessions>>,
     pub(crate) exec_relays: Arc<Semaphore>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
@@ -94,6 +105,8 @@ impl ApiServer {
             local_metric_node: None,
             workload_metric_queries: None,
             host_metric_queries: None,
+            cluster_metric_nodes: Arc::from([]),
+            cluster_metric_queries: None,
             exec_sessions: None,
             exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
@@ -155,6 +168,20 @@ impl ApiServer {
         self.state.local_metric_node = Some(node_id);
         self.state.workload_metric_queries = Some(workloads);
         self.state.host_metric_queries = Some(hosts);
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables cluster-wide metric fanout over the declared node topology.
+    pub fn with_cluster_metric_query_store(
+        mut self,
+        mut node_ids: Vec<NodeId>,
+        queries: Arc<dyn NodeMetricQueryStore>,
+    ) -> Self {
+        node_ids.sort();
+        node_ids.dedup();
+        self.state.cluster_metric_nodes = Arc::from(node_ids);
+        self.state.cluster_metric_queries = Some(queries);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

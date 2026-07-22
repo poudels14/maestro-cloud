@@ -3,8 +3,8 @@ use kernel_api::{ClusterId, NodeId, ServiceId, Timestamp};
 use crate::{
     HostDiskMetricPoint, HostMetricHistoryPoint, HostMetricPoint, HostMetricRecordId,
     HostResourceMetricPoint, ResourceMetricSource, WorkloadMetricHistoryPoint,
-    aggregate_workload_resource_metrics, project_host_resource_metrics, project_latest_disks,
-    project_workload_resource_metrics,
+    aggregate_workload_resource_metrics, aggregate_workload_resource_metrics_by_bucket,
+    project_host_resource_metrics, project_latest_disks, project_workload_resource_metrics,
 };
 
 #[test]
@@ -89,6 +89,35 @@ fn workload_projection_aggregates_exact_sweeps_and_isolates_resets()
 }
 
 #[test]
+fn workload_bucket_projection_merges_unaligned_nodes_and_deduplicates_a_workload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let early = workload_history("workload-1", 5_100, 1_000_000, 1_250_000)?;
+    let mut replacement = workload_history("workload-1", 5_900, 1_250_000, 1_750_000)?;
+    replacement.point.memory_current_bytes = 2_000;
+    let mut peer = workload_history("workload-2", 5_600, 2_000_000, 2_250_000)?;
+    peer.point.id.node_id = NodeId::new("node-2")?;
+    peer.point.metadata.node_id = NodeId::new("node-2")?;
+    peer.previous
+        .as_mut()
+        .ok_or("peer baseline missing")?
+        .id
+        .node_id = NodeId::new("node-2")?;
+
+    let points = aggregate_workload_resource_metrics_by_bucket(
+        &[early, replacement, peer],
+        ResourceMetricSource::Cluster,
+        NonZeroU64::new(5_000).ok_or("invalid bucket")?,
+    );
+    let point = points.first().ok_or("bucket aggregate missing")?;
+    assert_eq!(points.len(), 1);
+    assert_eq!(point.ts, 5_000);
+    assert_eq!(point.source, "cluster");
+    assert_eq!(point.cpu_percent, 75.0);
+    assert_eq!(point.memory_bytes, 3_000);
+    Ok(())
+}
+
+#[test]
 fn latest_disk_projection_is_node_keyed_and_wire_compatible()
 -> Result<(), Box<dyn std::error::Error>> {
     let point = host_point(2_000, 300, 100);
@@ -157,3 +186,4 @@ fn workload_history(
         previous: Some(previous),
     })
 }
+use std::num::NonZeroU64;

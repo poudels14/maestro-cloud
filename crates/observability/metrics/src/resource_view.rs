@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU64;
 
 use kernel_api::{NodeId, ServiceId, WorkloadId};
 use serde::{Deserialize, Serialize};
@@ -122,10 +123,60 @@ pub fn aggregate_workload_resource_metrics(
     history: &[WorkloadMetricHistoryPoint],
     source: ResourceMetricSource,
 ) -> Vec<ResourceMetricPoint> {
+    aggregate_projected(
+        history
+            .iter()
+            .map(|history| workload_point(history, &source)),
+    )
+}
+
+/// Aggregates at most one sample per workload into fixed wall-clock buckets.
+///
+/// Node agents sample all local workloads at one timestamp, while peer clocks and polling loops
+/// are not phase-aligned. Bucketing preserves a bounded cluster-wide series without treating each
+/// node's timestamp as a separate aggregate.
+pub fn aggregate_workload_resource_metrics_by_bucket(
+    history: &[WorkloadMetricHistoryPoint],
+    source: ResourceMetricSource,
+    bucket_ms: NonZeroU64,
+) -> Vec<ResourceMetricPoint> {
+    let bucket_ms = i64::try_from(bucket_ms.get()).unwrap_or(i64::MAX);
+    let mut latest = BTreeMap::new();
+    for point in history {
+        let timestamp = point.point.id.collected_at.0;
+        let bucket = timestamp.div_euclid(bucket_ms).saturating_mul(bucket_ms);
+        let key = (
+            bucket,
+            point.point.id.node_id.clone(),
+            point.point.id.workload_id.clone(),
+        );
+        let replace = latest
+            .get(&key)
+            .is_none_or(|current: &&WorkloadMetricHistoryPoint| {
+                current.point.id.collected_at.0 < timestamp
+            });
+        if replace {
+            latest.insert(key, point);
+        }
+    }
+    let mut projected = latest
+        .into_iter()
+        .map(|((bucket, _, _), history)| {
+            let mut point = workload_point(history, &source);
+            point.ts = bucket;
+            point
+        })
+        .collect::<Vec<_>>();
+    projected.sort_by_key(|point| point.ts);
+    aggregate_projected(projected)
+}
+
+fn aggregate_projected(
+    projected: impl IntoIterator<Item = ResourceMetricPoint>,
+) -> Vec<ResourceMetricPoint> {
     let mut aggregated = BTreeMap::<i64, ResourceMetricPoint>::new();
     let mut unlimited_memory = BTreeSet::new();
-    for history in history {
-        let point = workload_point(history, &source);
+    for point in projected {
         let aggregate = aggregated.entry(point.ts).or_insert(ResourceMetricPoint {
             ts: point.ts,
             source: point.source.clone(),

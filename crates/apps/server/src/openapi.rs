@@ -252,6 +252,7 @@ pub fn openapi_document() -> Value {
         ("/openapi.json".to_string(), openapi_operation()),
     ]);
     paths.extend(crate::openapi_logs::paths());
+    paths.extend(crate::openapi_metrics::paths());
     let paths = Value::Object(paths);
     let security_schemes = json!({
         "bearerAuth": {
@@ -268,6 +269,7 @@ pub fn openapi_document() -> Value {
             if let Some(schemas) = components.get_mut("schemas").and_then(Value::as_object_mut) {
                 insert_command_schemas(schemas);
                 crate::openapi_logs::insert_schemas(schemas);
+                crate::openapi_metrics::insert_schemas(schemas);
             }
         }
     }

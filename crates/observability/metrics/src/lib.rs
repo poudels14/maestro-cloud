@@ -63,7 +63,8 @@ pub use query::{
 };
 pub use resource_view::{
     DiskInfo, ResourceMetricPoint, ResourceMetricSource, aggregate_workload_resource_metrics,
-    project_host_resource_metrics, project_latest_disks, project_workload_resource_metrics,
+    aggregate_workload_resource_metrics_by_bucket, project_host_resource_metrics,
+    project_latest_disks, project_workload_resource_metrics,
 };
 pub use sink_worker::{
     MetricSinkSleeper, MetricSinkWorker, MetricSinkWorkerError, MetricSinkWorkerReport,

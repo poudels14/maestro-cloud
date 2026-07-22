@@ -6,6 +6,7 @@
 
 mod agent_lifecycle;
 mod agent_role;
+mod cluster_query_clients;
 mod control_plane;
 mod datadog;
 mod dead_letter_admin;

@@ -1,26 +1,45 @@
+use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use futures_util::future::try_join_all;
 use kernel_api::Timestamp;
 use metrics::{
     DiskInfo, HostMetricComponent, HostMetricHistoryPoint, HostMetricQuery, HostMetricQueryStore,
     HostMetricQueryStoreError, LatestHostMetricQuery, ResourceMetricPoint, ResourceMetricSource,
     WorkloadMetricHistoryPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
-    WorkloadMetricQueryStoreError, project_host_resource_metrics, project_latest_disks,
+    WorkloadMetricQueryStoreError, aggregate_workload_resource_metrics_by_bucket,
+    project_host_resource_metrics, project_latest_disks, project_workload_resource_metrics,
 };
 use serde::Deserialize;
 
 use crate::{ApiError, AppState};
+use crate::{NodeMetricQueryError, NodeMetricQueryStore};
 
 const DEFAULT_RANGE_MS: i64 = 3_600_000;
 const DEFAULT_LIMIT: usize = 10_000;
+const MAXIMUM_LIMIT: usize = 10_000;
+const DEFAULT_WORKLOAD_BUCKET_MS: u64 = 5_000;
+const MINIMUM_WORKLOAD_BUCKET_MS: u64 = 1_000;
+const MAXIMUM_WORKLOAD_BUCKET_MS: u64 = 3_600_000;
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/metrics/node", get(node_resource_metrics))
+        .route("/api/metrics/cluster", get(cluster_resource_metrics))
+        .route(
+            "/api/services/{service_id}/metrics",
+            get(service_resource_metrics),
+        )
+        .route(
+            "/api/services/{service_id}/metrics/containers",
+            get(container_resource_metrics),
+        )
         .route("/api/disks", get(local_disks))
+        .route("/api/disks/nodes", get(cluster_disks))
 }
 
 pub(super) fn node_router() -> Router<AppState> {
@@ -36,6 +55,7 @@ struct RangeParameters {
     from: Option<i64>,
     to: Option<i64>,
     limit: Option<usize>,
+    bucket_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,7 +81,7 @@ async fn node_resource_metrics(
     State(state): State<AppState>,
     Query(parameters): Query<RangeParameters>,
 ) -> Result<Json<Vec<ResourceMetricPoint>>, ApiError> {
-    let (from, to, limit) = public_range(&state, parameters)?;
+    let (from, to, limit) = public_range(&state, &parameters)?;
     let query = local_host_query(&state, from, to, HostMetricComponent::Resources, limit)?;
     let history = host_store(&state)?
         .query_host_metrics(&query)
@@ -71,6 +91,46 @@ async fn node_resource_metrics(
         &history,
         ResourceMetricSource::Node,
     )))
+}
+
+async fn cluster_resource_metrics(
+    State(state): State<AppState>,
+    Query(parameters): Query<RangeParameters>,
+) -> Result<Json<Vec<ResourceMetricPoint>>, ApiError> {
+    let bucket = workload_bucket(&parameters)?;
+    let history = cluster_workload_history(&state, &parameters, None).await?;
+    Ok(Json(aggregate_workload_resource_metrics_by_bucket(
+        &history,
+        ResourceMetricSource::Cluster,
+        bucket,
+    )))
+}
+
+async fn service_resource_metrics(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(parameters): Query<RangeParameters>,
+) -> Result<Json<Vec<ResourceMetricPoint>>, ApiError> {
+    let service_id = crate::routes::deployments::parse_service_id(service_id)?;
+    crate::routes::deployments::ensure_service(&state, service_id.clone()).await?;
+    let bucket = workload_bucket(&parameters)?;
+    let history = cluster_workload_history(&state, &parameters, Some(service_id.clone())).await?;
+    Ok(Json(aggregate_workload_resource_metrics_by_bucket(
+        &history,
+        ResourceMetricSource::Service(service_id),
+        bucket,
+    )))
+}
+
+async fn container_resource_metrics(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(parameters): Query<RangeParameters>,
+) -> Result<Json<Vec<ResourceMetricPoint>>, ApiError> {
+    let service_id = crate::routes::deployments::parse_service_id(service_id)?;
+    crate::routes::deployments::ensure_service(&state, service_id.clone()).await?;
+    let history = cluster_workload_history(&state, &parameters, Some(service_id)).await?;
+    Ok(Json(project_workload_resource_metrics(&history)))
 }
 
 async fn local_disks(State(state): State<AppState>) -> Result<Json<Vec<DiskInfo>>, ApiError> {
@@ -155,9 +215,73 @@ async fn node_disks(State(state): State<AppState>) -> Result<Json<Vec<DiskInfo>>
     ))
 }
 
+async fn cluster_disks(
+    State(state): State<AppState>,
+) -> Result<Json<BTreeMap<kernel_api::NodeId, Vec<DiskInfo>>>, ApiError> {
+    let queries = cluster_store(&state)?;
+    let futures = state.cluster_metric_nodes.iter().map(|node_id| {
+        let queries = queries.clone();
+        let cluster_id = state.cluster_id.clone();
+        async move {
+            let disks = queries
+                .query_node_disks(node_id, &cluster_id)
+                .await
+                .map_err(node_error)?;
+            Ok::<_, ApiError>((node_id.clone(), disks))
+        }
+    });
+    Ok(Json(try_join_all(futures).await?.into_iter().collect()))
+}
+
+async fn cluster_workload_history(
+    state: &AppState,
+    parameters: &RangeParameters,
+    service_id: Option<kernel_api::ServiceId>,
+) -> Result<Vec<WorkloadMetricHistoryPoint>, ApiError> {
+    let (from, to, limit) = public_range(state, parameters)?;
+    let queries = cluster_store(state)?;
+    if state.cluster_metric_nodes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let per_node_limit = limit.saturating_add(state.cluster_metric_nodes.len().saturating_sub(1))
+        / state.cluster_metric_nodes.len();
+    let futures = state.cluster_metric_nodes.iter().map(|node_id| {
+        let queries = queries.clone();
+        let query =
+            WorkloadMetricQuery::new(state.cluster_id.clone(), from, to, per_node_limit.max(1))
+                .map_err(|error| ApiError::bad_request(error.to_string()));
+        let service_id = service_id.clone();
+        async move {
+            let mut query = query?;
+            if let Some(service_id) = service_id {
+                query = query.with_service(service_id);
+            }
+            queries
+                .query_node_workloads(node_id, &query)
+                .await
+                .map_err(node_error)
+        }
+    });
+    let mut history = try_join_all(futures)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    history.sort_by(|left, right| {
+        left.point
+            .id
+            .collected_at
+            .cmp(&right.point.id.collected_at)
+            .then_with(|| left.point.id.node_id.cmp(&right.point.id.node_id))
+            .then_with(|| left.point.id.workload_id.cmp(&right.point.id.workload_id))
+    });
+    history.truncate(limit);
+    Ok(history)
+}
+
 fn public_range(
     state: &AppState,
-    parameters: RangeParameters,
+    parameters: &RangeParameters,
 ) -> Result<(Timestamp, Timestamp, usize), ApiError> {
     let to = Timestamp(
         parameters
@@ -174,7 +298,24 @@ fn public_range(
             "metric query start must not be after its end",
         ));
     }
-    Ok((from, to, parameters.limit.unwrap_or(DEFAULT_LIMIT)))
+    let limit = parameters.limit.unwrap_or(DEFAULT_LIMIT);
+    if !(1..=MAXIMUM_LIMIT).contains(&limit) {
+        return Err(ApiError::bad_request(format!(
+            "metric query limit must be between 1 and {MAXIMUM_LIMIT}"
+        )));
+    }
+    Ok((from, to, limit))
+}
+
+fn workload_bucket(parameters: &RangeParameters) -> Result<NonZeroU64, ApiError> {
+    let bucket_ms = parameters.bucket_ms.unwrap_or(DEFAULT_WORKLOAD_BUCKET_MS);
+    if !(MINIMUM_WORKLOAD_BUCKET_MS..=MAXIMUM_WORKLOAD_BUCKET_MS).contains(&bucket_ms) {
+        return Err(ApiError::bad_request(format!(
+            "metric bucketMs must be between {MINIMUM_WORKLOAD_BUCKET_MS} and {MAXIMUM_WORKLOAD_BUCKET_MS}"
+        )));
+    }
+    NonZeroU64::new(bucket_ms)
+        .ok_or_else(|| ApiError::bad_request("metric bucketMs must be non-zero"))
 }
 
 fn local_host_query(
@@ -212,6 +353,19 @@ fn workload_store(state: &AppState) -> Result<Arc<dyn WorkloadMetricQueryStore>,
     state.workload_metric_queries.clone().ok_or_else(|| {
         ApiError::service_unavailable("workload metric query store is not configured")
     })
+}
+
+fn cluster_store(state: &AppState) -> Result<Arc<dyn NodeMetricQueryStore>, ApiError> {
+    state.cluster_metric_queries.clone().ok_or_else(|| {
+        ApiError::service_unavailable("cluster metric query store is not configured")
+    })
+}
+
+fn node_error(error: NodeMetricQueryError) -> ApiError {
+    match error {
+        NodeMetricQueryError::Rejected { message } => ApiError::bad_request(message),
+        NodeMetricQueryError::Unavailable { message } => ApiError::service_unavailable(message),
+    }
 }
 
 fn host_error(error: HostMetricQueryStoreError) -> ApiError {

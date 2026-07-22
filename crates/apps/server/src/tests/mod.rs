@@ -300,6 +300,22 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(document.pointer("/paths/~1api~1previews/get").is_some());
     assert!(
         document
+            .pointer("/paths/~1api~1metrics~1cluster/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1metrics/get")
+            .is_some()
+    );
+    assert!(document.pointer("/paths/~1api~1disks~1nodes/get").is_some());
+    assert!(
+        document
+            .pointer("/components/schemas/ResourceMetricPoint")
+            .is_some()
+    );
+    assert!(
+        document
             .pointer("/paths/~1api~1webhooks~1{webhookId}/put")
             .is_some()
     );

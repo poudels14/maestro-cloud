@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cluster::WIREGUARD_MTU_BYTES;
 use kernel_store::Store;
-use logs::{LogQueryStore, NodeLogQueryStore};
+use logs::NodeLogQueryStore;
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeExecService,
@@ -13,6 +13,7 @@ use node_agent::{
 use tokio::sync::watch;
 
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
+use crate::cluster_query_clients;
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
@@ -93,12 +94,25 @@ where
     let local_log_queries = runtimes.log_query_store();
     let workload_metric_queries = runtimes.metric_query_store();
     let host_metric_queries = runtimes.host_metric_query_store();
-    let cluster_log_queries =
-        match cluster_log_query_store(plan, &factory.api_settings, local_log_queries.clone()) {
-            Ok(queries) => Arc::new(queries) as Arc<dyn NodeLogQueryStore>,
-            Err(error) => return runtimes.fail(error).await,
-        };
+    let cluster_log_queries = match cluster_query_clients::log_query_store(
+        plan,
+        &factory.api_settings,
+        local_log_queries.clone(),
+    ) {
+        Ok(queries) => Arc::new(queries) as Arc<dyn NodeLogQueryStore>,
+        Err(error) => return runtimes.fail(error).await,
+    };
     let cluster_log_nodes = plan.cluster().nodes.keys().cloned().collect::<Vec<_>>();
+    let cluster_metric_queries = match cluster_query_clients::metric_query_store(
+        plan,
+        &factory.api_settings,
+        workload_metric_queries.clone(),
+        host_metric_queries.clone(),
+    ) {
+        Ok(queries) => Arc::new(queries) as Arc<dyn server::NodeMetricQueryStore>,
+        Err(error) => return runtimes.fail(error).await,
+    };
+    let cluster_metric_nodes = cluster_log_nodes.clone();
     let exec_sessions = if spec.workload_enabled {
         match cluster_exec_sessions(factory, plan, spec, store.clone()) {
             Ok(sessions) => Some(Arc::new(sessions) as Arc<dyn server::ClusterExecSessions>),
@@ -122,7 +136,8 @@ where
                 spec.node_id.clone(),
                 workload_metric_queries,
                 host_metric_queries,
-            );
+            )
+            .with_cluster_metric_query_store(cluster_metric_nodes, cluster_metric_queries);
         let server = match exec_sessions {
             Some(sessions) => server.with_exec_sessions(sessions),
             None => server,
@@ -497,48 +512,6 @@ where
         factory.monotonic_clock.clone(),
         factory.settings.store_shutdown_grace,
     )))
-}
-
-fn cluster_log_query_store(
-    plan: &DaemonPlan,
-    settings: &server::ServerSettings,
-    local: Arc<dyn LogQueryStore>,
-) -> Result<server::HttpNodeLogQueryStore, RoleError> {
-    let trust_root = settings
-        .cluster_trust_root_pem
-        .as_deref()
-        .ok_or_else(|| RoleError::new("cluster log proxy has no trust root"))?;
-    let identity = settings
-        .cluster_client_identity
-        .as_ref()
-        .ok_or_else(|| RoleError::new("cluster log proxy has no TLS identity"))?;
-    let jwt_secret = settings
-        .jwt_secret_key
-        .as_ref()
-        .ok_or_else(|| RoleError::new("cluster log proxy has no JWT secret"))?;
-    let endpoints = plan
-        .cluster()
-        .nodes
-        .iter()
-        .map(|(node_id, node)| {
-            (
-                node_id.clone(),
-                SocketAddr::new(
-                    IpAddr::V4(node.endpoint.host_address),
-                    node.endpoint.api_port,
-                ),
-            )
-        })
-        .collect();
-    server::HttpNodeLogQueryStore::new(
-        plan.node_id().clone(),
-        endpoints,
-        trust_root,
-        identity,
-        jwt_secret,
-        local,
-    )
-    .map_err(|error| role_error("construct cluster log proxy", error))
 }
 
 fn cluster_exec_sessions<MeshBackendType, FirewallBackendType, BridgeBackendType>(
