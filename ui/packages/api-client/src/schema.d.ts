@@ -276,6 +276,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/disks": {
         parameters: {
             query?: never;
@@ -1771,6 +1787,67 @@ export interface components {
             groups: {
                 [key: string]: number;
             };
+        };
+        /**
+         * @description Secret-free cluster configuration returned to authenticated operators.
+         *
+         *     This is deliberately a separate wire contract from the daemon's parsed
+         *     configuration so adding a secret-bearing daemon field cannot expose it.
+         */
+        MaskedClusterConfig: {
+            /** @description Stable cluster identity. */
+            clusterId: components["schemas"]["ClusterId"];
+            /** @description Private networks allowed to initiate control-plane traffic. */
+            controlAllowCidrs: string[];
+            /** @description Node serving this view. */
+            localNodeId: components["schemas"]["NodeId"];
+            /** @description Human-readable DNS-safe cluster name. */
+            name: string;
+            /** @description Declared cluster members in stable node-ID order. */
+            nodes: components["schemas"]["MaskedClusterConfigNode"][];
+            /** @description Cluster-wide service ports. */
+            ports: components["schemas"]["MaskedClusterConfigPorts"];
+        };
+        /** @description Secret-free topology for one configured cluster member. */
+        MaskedClusterConfigNode: {
+            /**
+             * Format: uint16
+             * @description Public API port for this node.
+             */
+            apiPort: number;
+            /** @description Private control-plane address advertised to peers. */
+            hostAddress: string;
+            /** @description Configured node hostname. */
+            hostname: string;
+            /** @description Stable node identity. */
+            nodeId: components["schemas"]["NodeId"];
+            /** @description Scheduling and control-plane capability. */
+            role: components["schemas"]["NodeRole"];
+            /** @description Private workload subnet assigned to this node. */
+            workloadSubnet: string;
+        };
+        /** @description Secret-free cluster-wide port allocation. */
+        MaskedClusterConfigPorts: {
+            /**
+             * Format: uint16
+             * @description Cluster gateway listener port.
+             */
+            gateway: number;
+            /**
+             * Format: uint16
+             * @description Internal store client port.
+             */
+            storeClient: number;
+            /**
+             * Format: uint16
+             * @description Internal store membership port.
+             */
+            storePeer: number;
+            /**
+             * Format: uint16
+             * @description WireGuard mesh UDP port.
+             */
+            wireguard: number;
         };
         Node: components["schemas"]["Object"];
         /** @description Workload access to the private node API mounted at `/run/maestro`. */
@@ -3705,6 +3782,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getClusterConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaskedClusterConfig"];
+                };
             };
         };
     };

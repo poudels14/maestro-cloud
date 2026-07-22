@@ -2,16 +2,19 @@ import { For, Show } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import type { MaskedConfig } from "../../lib/types";
 import { clusterConfigQuery } from "../../lib/queries";
-import { SectionHeader } from "../../lib/ui";
+import { ErrorBanner, SectionHeader } from "../../lib/ui";
 
 function ClusterConfigSection() {
   const config = useQuery(() => clusterConfigQuery());
 
   return (
-    <Show when={config.data}>
-      {(data) => (
-        <div>
-          <SectionHeader class="mb-4">Cluster config</SectionHeader>
+    <div>
+      <SectionHeader class="mb-4">Cluster config</SectionHeader>
+      <Show when={config.error}>
+        <ErrorBanner message="Failed to load cluster config" onRetry={() => config.refetch()} />
+      </Show>
+      <Show when={config.data}>
+        {(data) => (
           <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
             <For each={configRows(data())}>
               {(item) => (
@@ -24,43 +27,37 @@ function ClusterConfigSection() {
               )}
             </For>
           </div>
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </div>
   );
 }
 
 function configRows(config: MaskedConfig) {
+  const local = config.nodes.find((node) => node.nodeId === config.localNodeId);
   const items: { label: string; value: string }[] = [
-    ...(config.node.name ? [{ label: "Node name", value: config.node.name }] : []),
-    { label: "Node role", value: config.node.role },
-    { label: "API port", value: String(config.node["api-port"]) },
-    { label: "Gateway port", value: String(config.node["gateway-port"]) },
-    { label: "etcd client port", value: String(config.node["etcd-client-port"]) },
-    { label: "etcd peer port", value: String(config.node["etcd-peer-port"]) },
-    { label: "Ingress ports", value: (config.ingress?.ports ?? []).join(", ") },
-    { label: "Runtime", value: config.runtime },
-    { label: "Builder", value: config.depot ? "depot" : "default" }
+    { label: "Cluster name", value: config.name },
+    { label: "Cluster ID", value: config.clusterId },
+    { label: "Local node", value: local?.hostname ?? config.localNodeId },
+    { label: "Node ID", value: config.localNodeId },
+    ...(local
+      ? [
+          { label: "Node role", value: local.role },
+          { label: "Host address", value: local.hostAddress },
+          { label: "API port", value: String(local.apiPort) },
+          { label: "Workload subnet", value: local.workloadSubnet }
+        ]
+      : []),
+    { label: "Cluster members", value: String(config.nodes.length) },
+    { label: "Gateway port", value: String(config.ports.gateway) },
+    { label: "Store client port", value: String(config.ports.storeClient) },
+    { label: "Store peer port", value: String(config.ports.storePeer) },
+    { label: "WireGuard port", value: String(config.ports.wireguard) }
   ];
-  const advertiseRoutes = config.tailscale?.["advertise-routes"] ?? [];
-  if (advertiseRoutes.length > 0) {
-    items.push({ label: "Tailscale routes", value: advertiseRoutes.join(", ") });
-  }
-  const egressDeny = config.egress?.deny ?? [];
-  if (egressDeny.length > 0) {
-    items.push({ label: "Egress deny", value: egressDeny.join(", ") });
-  }
-  const egressAllow = config.egress?.allow ?? [];
-  if (egressAllow.length > 0) {
-    items.push({ label: "Egress allow", value: egressAllow.join(", ") });
-  }
-  if (config.datadog?.site) {
-    items.push({ label: "Datadog site", value: config.datadog.site });
-  }
-  if (config.datadog) {
+  if (config.controlAllowCidrs.length > 0) {
     items.push({
-      label: "Datadog health-check logs",
-      value: config.datadog.logs["include-healthcheck"] ? "included" : "excluded on success"
+      label: "Control allow CIDRs",
+      value: config.controlAllowCidrs.join(", ")
     });
   }
   return items;

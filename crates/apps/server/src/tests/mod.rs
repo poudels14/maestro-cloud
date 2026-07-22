@@ -24,6 +24,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 mod artifact_archives;
 mod automation;
 mod cluster;
+mod config;
 mod deployment_commands;
 mod deployments;
 mod exec;
@@ -203,6 +204,12 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1artifact-archives~1{archiveId}/put")
+            .is_some()
+    );
+    assert!(document.pointer("/paths/~1api~1config/get").is_some());
+    assert!(
+        document
+            .pointer("/components/schemas/MaskedClusterConfig")
             .is_some()
     );
     assert!(document.pointer("/paths/~1api~1services/get").is_some());

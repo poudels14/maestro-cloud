@@ -218,9 +218,11 @@ export async function getStatsMetrics(
 }
 
 export async function getClusterConfig(): Promise<MaskedConfig> {
-  const res = await fetch("/api/config");
-  if (!res.ok) throw new Error(`Failed to fetch cluster config: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getClusterConfig();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load cluster config");
+  }
 }
 
 export async function getDisks(): Promise<DiskInfo[]> {

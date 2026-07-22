@@ -14,6 +14,10 @@ pub fn openapi_document() -> Value {
             singleton_operation("getClusterInfo", "ClusterInfo"),
         ),
         (
+            "/api/config".to_string(),
+            singleton_operation("getClusterConfig", "MaskedClusterConfig"),
+        ),
+        (
             "/api/cluster/nodes".to_string(),
             list_operation("listNodes", "Node"),
         ),

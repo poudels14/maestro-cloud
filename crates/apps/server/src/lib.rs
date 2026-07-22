@@ -31,7 +31,7 @@ use axum::Router;
 use axum_server::Handle;
 use axum_server::accept::Accept;
 use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig, from_tcp_rustls};
-use kernel_api::{ClusterId, NodeId};
+use kernel_api::{ClusterId, MaskedClusterConfig, NodeId};
 use kernel_controller::{RequestDeduplicator, SystemTimestampClock, TimestampClock};
 use kernel_store::Store;
 use tokio::net::TcpListener;
@@ -64,6 +64,7 @@ pub(crate) struct VerifiedNodeCertificate;
 pub(crate) struct AppState {
     pub(crate) store: Arc<dyn Store>,
     pub(crate) cluster_id: ClusterId,
+    pub(crate) cluster_config: Option<Arc<MaskedClusterConfig>>,
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
@@ -110,6 +111,7 @@ impl ApiServer {
             timestamp_clock: Arc::new(SystemTimestampClock),
             store,
             cluster_id,
+            cluster_config: None,
             artifact_archives: None,
             firewall_settings: None,
             log_queries: None,
@@ -139,6 +141,13 @@ impl ApiServer {
             state,
             router,
         })
+    }
+
+    /// Enables the secret-free configuration view for authenticated operators.
+    pub fn with_cluster_config(mut self, config: MaskedClusterConfig) -> Self {
+        self.state.cluster_config = Some(Arc::new(config));
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
     }
 
     /// Enables content-addressed build-context uploads through the configured archive store.

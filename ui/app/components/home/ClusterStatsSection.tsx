@@ -5,7 +5,7 @@ import { AlertTriangle } from "lucide-solid";
 import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
 import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
-import { clusterConfigQuery, clusterStatsQuery } from "../../lib/queries";
+import { clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
@@ -19,7 +19,6 @@ const ROW_COVERED_WARNING_CODES = new Set([
 
 function ClusterStatsSection() {
   const stats = useQuery(() => clusterStatsQuery());
-  const config = useQuery(() => clusterConfigQuery());
   return (
     <div>
       <div class="mb-4">
@@ -69,11 +68,6 @@ function ClusterStatsSection() {
                   label="Datadog logs"
                   sink={datadogSink()}
                   controllerPresent={!!controller()}
-                  successfulHealthchecksFiltered={
-                    config.data?.datadog
-                      ? !config.data.datadog.logs["include-healthcheck"]
-                      : undefined
-                  }
                 />
                 <SpoolRow controller={controller()} />
                 <DeadLetterRow controller={controller()} />

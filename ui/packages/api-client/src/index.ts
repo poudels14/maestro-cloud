@@ -41,6 +41,7 @@ export type SystemLogHistogramQuery = NonNullable<
 >;
 
 export interface MaestroApiClient {
+  getClusterConfig(options?: ApiRequestOptions): Promise<ApiSchemas["MaskedClusterConfig"]>;
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
   getClusterStats(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterStatsResponse"]>;
   listLocalDisks(options?: ApiRequestOptions): Promise<ApiSchemas["DiskInfo"][]>;
@@ -403,6 +404,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
   }
 
   return {
+    getClusterConfig: (options) => get("/api/config", options),
     getClusterInfo: (options) => get("/api/cluster", options),
     getClusterStats: (options) => get("/api/cluster/stats", options),
     listLocalDisks: (options) => get("/api/disks", options),

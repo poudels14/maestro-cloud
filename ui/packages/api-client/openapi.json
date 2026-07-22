@@ -2084,6 +2084,151 @@
         ],
         "type": "object"
       },
+      "MaskedClusterConfig": {
+        "description": "Secret-free cluster configuration returned to authenticated operators.\n\nThis is deliberately a separate wire contract from the daemon's parsed\nconfiguration so adding a secret-bearing daemon field cannot expose it.",
+        "properties": {
+          "clusterId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              }
+            ],
+            "description": "Stable cluster identity."
+          },
+          "controlAllowCidrs": {
+            "description": "Private networks allowed to initiate control-plane traffic.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "localNodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node serving this view."
+          },
+          "name": {
+            "description": "Human-readable DNS-safe cluster name.",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "Declared cluster members in stable node-ID order.",
+            "items": {
+              "$ref": "#/components/schemas/MaskedClusterConfigNode"
+            },
+            "type": "array"
+          },
+          "ports": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MaskedClusterConfigPorts"
+              }
+            ],
+            "description": "Cluster-wide service ports."
+          }
+        },
+        "required": [
+          "clusterId",
+          "name",
+          "localNodeId",
+          "nodes",
+          "controlAllowCidrs",
+          "ports"
+        ],
+        "type": "object"
+      },
+      "MaskedClusterConfigNode": {
+        "description": "Secret-free topology for one configured cluster member.",
+        "properties": {
+          "apiPort": {
+            "description": "Public API port for this node.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hostAddress": {
+            "description": "Private control-plane address advertised to peers.",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "Configured node hostname.",
+            "type": "string"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Stable node identity."
+          },
+          "role": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeRole"
+              }
+            ],
+            "description": "Scheduling and control-plane capability."
+          },
+          "workloadSubnet": {
+            "description": "Private workload subnet assigned to this node.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "hostname",
+          "role",
+          "hostAddress",
+          "apiPort",
+          "workloadSubnet"
+        ],
+        "type": "object"
+      },
+      "MaskedClusterConfigPorts": {
+        "description": "Secret-free cluster-wide port allocation.",
+        "properties": {
+          "gateway": {
+            "description": "Cluster gateway listener port.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storeClient": {
+            "description": "Internal store client port.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storePeer": {
+            "description": "Internal store membership port.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wireguard": {
+            "description": "WireGuard mesh UDP port.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "gateway",
+          "storeClient",
+          "storePeer",
+          "wireguard"
+        ],
+        "type": "object"
+      },
       "Node": {
         "$ref": "#/components/schemas/Object"
       },
@@ -7447,6 +7592,28 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/config": {
+      "get": {
+        "operationId": "getClusterConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaskedClusterConfig"
+                }
+              }
+            },
+            "description": "Resource summary"
           }
         },
         "security": [

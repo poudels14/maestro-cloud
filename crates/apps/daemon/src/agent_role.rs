@@ -14,6 +14,7 @@ use tokio::sync::watch;
 
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::cluster_query_clients;
+use crate::config_view::masked_cluster_config;
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
@@ -182,6 +183,7 @@ where
     )
     .map(|server| {
         let server = server
+            .with_cluster_config(masked_cluster_config(plan.cluster(), &spec.node_id))
             .with_artifact_archive_store(factory.artifact_archives.clone())
             .with_firewall_settings(factory.firewall_settings.clone())
             .with_log_query_store(local_log_queries)

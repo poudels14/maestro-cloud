@@ -2,6 +2,7 @@ mod artifact_archives;
 mod automation;
 mod cluster;
 mod cluster_commands;
+mod config;
 mod deployment_commands;
 mod deployments;
 mod exec;
@@ -34,6 +35,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(artifact_archives::router())
         .merge(cluster::router())
         .merge(cluster_commands::router())
+        .merge(config::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
         .merge(exec::router())
