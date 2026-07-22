@@ -5,6 +5,7 @@
 
 mod delivery_schema;
 mod duck;
+mod duck_query_compiler;
 mod duck_worker;
 mod error;
 mod host_metric_delivery_schema;
@@ -14,10 +15,12 @@ mod log_archive;
 mod log_backup;
 mod log_backup_schema;
 mod log_backup_stats_schema;
+mod log_query_schema;
 mod log_retention;
 mod metric_delivery_schema;
 mod metric_duck;
 mod metric_schema;
+mod query_duck;
 mod schema;
 mod settings;
 mod workload_metric_schema;

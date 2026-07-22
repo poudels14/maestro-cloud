@@ -12,6 +12,7 @@ async-trait.workspace = true
 chrono.workspace = true
 flate2.workspace = true
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+logql = { version = "0.1.0", path = "../logql" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
 node-fabric = { version = "0.1.0", path = "../../node/fabric" }
 prost = "=0.14.4"

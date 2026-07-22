@@ -147,6 +147,20 @@ pub(crate) fn run_worker(
                     cutoff,
                 ));
             }
+            Command::QueryLogs { query, response } => {
+                let _ignored = response.send(crate::log_query_schema::query_logs(
+                    &connection,
+                    cold_root,
+                    &query,
+                ));
+            }
+            Command::QueryHistogram { query, response } => {
+                let _ignored = response.send(crate::log_query_schema::query_histogram(
+                    &connection,
+                    cold_root,
+                    &query,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());
@@ -188,6 +202,12 @@ pub(crate) fn dead_worker_stopped(action: &'static str) -> DeadLetterStoreError 
 
 pub(crate) fn stats_worker_stopped(action: &'static str) -> LogStatsStoreError {
     LogStatsStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+pub(crate) fn query_worker_stopped(action: &'static str) -> logs::LogQueryStoreError {
+    logs::LogQueryStoreError::Unavailable {
         message: format!("DuckDB worker stopped before {action}"),
     }
 }

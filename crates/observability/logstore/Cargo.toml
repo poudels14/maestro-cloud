@@ -9,6 +9,7 @@ async-trait.workspace = true
 chrono.workspace = true
 duckdb = { version = "=1.4.1", features = ["bundled"] }
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+logql = { version = "0.1.0", path = "../logql" }
 logs = { version = "0.1.0", path = "../logs" }
 metrics = { version = "0.1.0", path = "../metrics" }
 serde.workspace = true

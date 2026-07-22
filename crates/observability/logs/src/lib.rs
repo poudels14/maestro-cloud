@@ -21,6 +21,7 @@ mod otlp;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
+mod query;
 mod sink_runtime;
 mod sink_worker;
 mod stats;
@@ -63,6 +64,11 @@ pub use parser::{
 };
 #[cfg(unix)]
 pub use pipeline::RuntimeLogPipeline;
+pub use query::{
+    LogHistogramBucket, LogHistogramGroupBy, LogHistogramQuery, LogQueryError, LogQueryScope,
+    LogQueryStore, LogQueryStoreError, LogReadCursor, LogReadOrder, LogReadQuery,
+    MAXIMUM_LOG_QUERY_LIMIT,
+};
 pub use sink_runtime::{
     SinkRuntimeClock, SinkRuntimeRegistry, SinkRuntimeSnapshot, SystemSinkRuntimeClock,
 };

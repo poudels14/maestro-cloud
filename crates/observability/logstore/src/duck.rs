@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use kernel_api::Timestamp;
 use logs::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
-    LogDeliveryStoreError, LogSequence, LogSinkId, LogSpoolStats, LogStatsStore,
-    LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
-    SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
+    LogDeliveryStoreError, LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadQuery,
+    LogSequence, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
+    LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
+    SinkDeadLetterStats,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -88,6 +89,14 @@ pub(crate) enum Command {
         cutoff: chrono::NaiveDate,
         response: oneshot::Sender<Result<LogRetentionReport, LogRetentionError>>,
     },
+    QueryLogs {
+        query: LogReadQuery,
+        response: oneshot::Sender<Result<Vec<SequencedLogEntry>, LogQueryStoreError>>,
+    },
+    QueryHistogram {
+        query: LogHistogramQuery,
+        response: oneshot::Sender<Result<Vec<LogHistogramBucket>, LogQueryStoreError>>,
+    },
     Shutdown {
         response: oneshot::Sender<()>,
     },
@@ -95,7 +104,7 @@ pub(crate) enum Command {
 
 /// Async append handle applying bounded backpressure to one DuckDB owner thread.
 pub struct DuckLogStore {
-    commands: mpsc::Sender<Command>,
+    pub(crate) commands: mpsc::Sender<Command>,
     cold_root: PathBuf,
 }
 
