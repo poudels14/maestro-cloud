@@ -225,7 +225,8 @@ impl WorkloadRuntime for DockerRuntime {
         &self,
         request: EventRequest,
     ) -> Result<Box<dyn RuntimeEventStream>, RuntimeError> {
-        let filters = ownership_filters(&request.cluster_id, &request.node_id);
+        let mut filters = ownership_filters(&request.cluster_id, &request.node_id);
+        filters.insert("type".to_owned(), vec!["container".to_owned()]);
         let mut options = EventsOptionsBuilder::default().filters(&filters);
         if let Some(cursor) = request.after {
             options = options.since(cursor.as_str());
@@ -331,17 +332,14 @@ impl WorkloadRuntime for DockerRuntime {
 }
 
 fn ownership_filters(cluster_id: &ClusterId, node_id: &NodeId) -> HashMap<String, Vec<String>> {
-    HashMap::from([
-        ("type".to_owned(), vec!["container".to_owned()]),
-        (
-            "label".to_owned(),
-            vec![
-                format!("{MANAGED_LABEL}=true"),
-                format!("{CLUSTER_LABEL}={cluster_id}"),
-                format!("{NODE_LABEL}={node_id}"),
-            ],
-        ),
-    ])
+    HashMap::from([(
+        "label".to_owned(),
+        vec![
+            format!("{MANAGED_LABEL}=true"),
+            format!("{CLUSTER_LABEL}={cluster_id}"),
+            format!("{NODE_LABEL}={node_id}"),
+        ],
+    )])
 }
 
 fn stop_timeout_seconds(timeout: Duration) -> i32 {
