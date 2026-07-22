@@ -58,6 +58,21 @@ nix run .#rewrite -- --help
 nix run .#migrate -- --help
 ```
 
+Linux release tags publish deterministic static-musl bundles for x86_64 and
+ARM64. Build the bundle for the current Linux architecture and verify it with:
+
+```sh
+nix build .#rewrite-static-bundle
+(cd result && sha256sum --check *.sha256)
+tar -xzf result/*.tar.gz
+```
+
+The archive contains standalone `maestro`, `maestro-daemon`, and
+`maestro-migrate` executables plus the cutover documentation. The daemon still
+requires the host runtime, network privileges, and external tools described by
+the NixOS module; the static bundle does not turn the daemon into an isolated
+container deployment.
+
 Selecting this module does not approve production runtime adoption. Complete
 the runtime-adoption gate and the migration rehearsal in `cutover.md` before
 enabling the service on a production node.

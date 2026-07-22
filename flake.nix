@@ -19,15 +19,6 @@
       };
     rustToolchainFor = pkgs: pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
     maestroVersion = (builtins.fromTOML (builtins.readFile ./controller/Cargo.toml)).package.version;
-    rewriteVersion = (builtins.fromTOML (builtins.readFile ./crates/apps/cli/Cargo.toml)).package.version;
-    rewritePackageFlags = [
-      "--package"
-      "maestro-cli"
-      "--package"
-      "daemon"
-      "--package"
-      "migrate"
-    ];
   in {
     packages = forAllSystems (
       system: let
@@ -58,48 +49,31 @@
             ];
         };
 
-        rewrite = rustPlatform.buildRustPackage {
-          pname = "maestro-rewrite";
-          version = rewriteVersion;
-          src = ./.;
-
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-
-          cargoBuildFlags = rewritePackageFlags;
-          cargoTestFlags = rewritePackageFlags ++ ["--all-targets"];
-          nativeBuildInputs = with pkgs; [pkg-config protobuf];
-
-          buildInputs = with pkgs;
-            [openssl]
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.apple-sdk_15
-            ];
-
-          installPhase = ''
-            runHook preInstall
-
-            release_directory="target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release"
-            if [ ! -x "$release_directory/daemon" ]; then
-              release_directory=target/release
-            fi
-
-            install -Dm755 "$release_directory/maestro-next" "$out/bin/maestro"
-            install -Dm755 "$release_directory/daemon" "$out/bin/maestro-daemon"
-            install -Dm755 "$release_directory/maestro-migrate" "$out/bin/maestro-migrate"
-            install -Dm644 docs/cutover.md "$out/share/doc/maestro/cutover.md"
-            install -Dm644 docs/nixos-rewrite.md "$out/share/doc/maestro/nixos-rewrite.md"
-
-            runHook postInstall
-          '';
-
-          meta = {
-            description = "Rewritten Maestro operator, daemon, and cutover tools";
-            mainProgram = "maestro";
-          };
+        rewrite = import ./nix/rewrite-package.nix {
+          inherit pkgs rustToolchain;
         };
       }
+      // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (let
+        muslPkgs =
+          {
+            aarch64-linux = pkgs.pkgsCross.aarch64-multiplatform-musl;
+            x86_64-linux = pkgs.pkgsCross.musl64;
+          }
+          .${system};
+        staticTarget = muslPkgs.stdenv.hostPlatform.rust.rustcTarget;
+        staticRewrite = import ./nix/rewrite-package.nix {
+          inherit muslPkgs pkgs;
+          rustToolchain = (rustToolchainFor pkgs).override {
+            targets = [staticTarget];
+          };
+        };
+      in {
+        rewrite-static = staticRewrite;
+        rewrite-static-bundle = import ./nix/rewrite-release-bundle.nix {
+          inherit pkgs;
+          rewritePackage = staticRewrite;
+        };
+      })
     );
 
     apps = forAllSystems (system: let
