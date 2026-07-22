@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use kernel_api::NodeId;
-use logs::LogQueryStore;
+use logs::{ControllerStatsProvider, LogQueryStore};
 use metrics::{HostMetricQueryStore, WorkloadMetricQueryStore};
 
 use crate::control_plane::role_error;
@@ -47,6 +47,25 @@ pub(crate) fn metric_query_store(
         hosts,
     )
     .map_err(|error| role_error("construct cluster metric proxy", error))
+}
+
+pub(crate) fn stats_query_store(
+    plan: &DaemonPlan,
+    settings: &server::ServerSettings,
+    local: Arc<dyn ControllerStatsProvider>,
+) -> Result<server::HttpNodeStatsQueryStore, RoleError> {
+    let trust_root = required_trust_root(settings, "stats")?;
+    let identity = required_identity(settings, "stats")?;
+    let jwt_secret = required_jwt_secret(settings, "stats")?;
+    server::HttpNodeStatsQueryStore::new(
+        plan.node_id().clone(),
+        node_endpoints(plan),
+        trust_root,
+        identity,
+        jwt_secret,
+        local,
+    )
+    .map_err(|error| role_error("construct cluster stats proxy", error))
 }
 
 fn node_endpoints(plan: &DaemonPlan) -> BTreeMap<NodeId, SocketAddr> {

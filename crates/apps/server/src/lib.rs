@@ -12,10 +12,12 @@ mod mutation;
 mod node_http_client;
 mod node_log_client;
 mod node_metric_client;
+mod node_stats_client;
 mod openapi;
 mod openapi_commands;
 mod openapi_logs;
 mod openapi_metrics;
+mod openapi_stats;
 mod resource;
 mod routes;
 mod settings;
@@ -46,6 +48,7 @@ pub use node_log_client::HttpNodeLogQueryStore;
 pub use node_metric_client::{
     HttpNodeMetricQueryStore, NodeMetricQueryError, NodeMetricQueryStore,
 };
+pub use node_stats_client::{HttpNodeStatsQueryStore, NodeStatsQueryError, NodeStatsQueryStore};
 pub type NodeLogClientError = NodeHttpClientError;
 pub type NodeMetricClientError = NodeHttpClientError;
 pub use openapi::openapi_document;
@@ -72,6 +75,11 @@ pub(crate) struct AppState {
     pub(crate) host_metric_queries: Option<Arc<dyn metrics::HostMetricQueryStore>>,
     pub(crate) cluster_metric_nodes: Arc<[NodeId]>,
     pub(crate) cluster_metric_queries: Option<Arc<dyn NodeMetricQueryStore>>,
+    pub(crate) controller_stats: Option<Arc<dyn logs::ControllerStatsProvider>>,
+    pub(crate) backup_stats: Option<Arc<dyn logs::BackupStatsProvider>>,
+    pub(crate) cluster_stats_nodes: Arc<[NodeId]>,
+    pub(crate) cluster_stats_queries: Option<Arc<dyn NodeStatsQueryStore>>,
+    pub(crate) started_at: std::time::Instant,
     pub(crate) exec_sessions: Option<Arc<dyn ClusterExecSessions>>,
     pub(crate) exec_relays: Arc<Semaphore>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
@@ -107,6 +115,11 @@ impl ApiServer {
             host_metric_queries: None,
             cluster_metric_nodes: Arc::from([]),
             cluster_metric_queries: None,
+            controller_stats: None,
+            backup_stats: None,
+            cluster_stats_nodes: Arc::from([]),
+            cluster_stats_queries: None,
+            started_at: std::time::Instant::now(),
             exec_sessions: None,
             exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
@@ -182,6 +195,24 @@ impl ApiServer {
         node_ids.dedup();
         self.state.cluster_metric_nodes = Arc::from(node_ids);
         self.state.cluster_metric_queries = Some(queries);
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables live local and cluster-wide controller observability snapshots.
+    pub fn with_stats_providers(
+        mut self,
+        controller: Arc<dyn logs::ControllerStatsProvider>,
+        backup: Option<Arc<dyn logs::BackupStatsProvider>>,
+        mut node_ids: Vec<NodeId>,
+        cluster: Arc<dyn NodeStatsQueryStore>,
+    ) -> Self {
+        node_ids.sort();
+        node_ids.dedup();
+        self.state.controller_stats = Some(controller);
+        self.state.backup_stats = backup;
+        self.state.cluster_stats_nodes = Arc::from(node_ids);
+        self.state.cluster_stats_queries = Some(cluster);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Days, Utc};
 use kernel_controller::TimestampClock;
 use kernel_store::Clock;
-use logs::BackupStatsSnapshot;
+use logs::{BackupStatsProvider, BackupStatsProviderError, BackupStatsSnapshot};
 use logstore::{BackupObjectStore, DuckLogStore, LogBackupSettings, backup_log_partitions};
 use tokio::sync::watch;
 
@@ -113,6 +113,12 @@ impl LogMaintenanceWorker {
             .map_err(|_| state_error("backup stats lock was poisoned"))
     }
 
+    pub(crate) fn stats_handle(&self) -> LogMaintenanceStatsHandle {
+        LogMaintenanceStatsHandle {
+            stats: self.stats.clone(),
+        }
+    }
+
     /// Runs immediate maintenance, then waits on injected monotonic deadlines until shutdown.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         let mut rollover_due = self.monotonic_clock.now();
@@ -209,6 +215,22 @@ impl LogMaintenanceWorker {
             .await
             .map(|_| ())
             .map_err(store_error("prune retained log partitions"))
+    }
+}
+
+/// Cloneable read handle retained by the API after the maintenance worker starts.
+pub(crate) struct LogMaintenanceStatsHandle {
+    stats: Arc<RwLock<BackupStatsSnapshot>>,
+}
+
+impl BackupStatsProvider for LogMaintenanceStatsHandle {
+    fn backup_stats(&self) -> Result<BackupStatsSnapshot, BackupStatsProviderError> {
+        self.stats
+            .read()
+            .map(|stats| stats.clone())
+            .map_err(|_| BackupStatsProviderError {
+                message: "backup stats lock was poisoned".to_owned(),
+            })
     }
 }
 

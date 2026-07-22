@@ -8,7 +8,7 @@ use crate::{
     BackupStatsSnapshot, ClusterStatsResponse, DeadLetterStore, InMemoryLogStore, IngestLogEntry,
     LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSinkId, LogStore, LogStream,
     OriginCursor, ProbeStatsSnapshot, SinkDeadLetter, SinkRuntimeClock, SinkRuntimeRegistry,
-    StatsWarning, collect_controller_stats,
+    StatsWarning, collect_controller_stats, derive_stats_warnings,
 };
 
 #[tokio::test]
@@ -161,6 +161,45 @@ fn cluster_and_backup_stats_preserve_defaults_metrics_and_wire_shape()
             }],
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn warnings_surface_sink_dead_letter_backup_and_version_failures()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = InMemoryLogStore::new();
+    let sink_id = LogSinkId::new("datadog")?;
+    let runtime = SinkRuntimeRegistry::default();
+    runtime.record_failure(&sink_id, "down");
+    store
+        .record(&SinkDeadLetter {
+            sink_id: sink_id.clone(),
+            source_sequence: crate::LogSequence(1),
+            status_code: Some(413),
+            reason: "too large".to_owned(),
+            payload: b"payload".to_vec(),
+            recorded_at: Timestamp(3_500),
+        })
+        .await?;
+    let controller =
+        collect_controller_stats(&store, &[sink_id], &runtime, 10_000, "old-version", 5_000)
+            .await?;
+    let backup = BackupStatsSnapshot {
+        configured: true,
+        last_success_at_ms: Some(8_000),
+        last_error_at_ms: Some(9_000),
+        ..BackupStatsSnapshot::default()
+    };
+    let warnings =
+        derive_stats_warnings(Some(&controller), &backup, Some(0), 10_000, "new-version");
+    let codes = warnings
+        .iter()
+        .map(|warning| warning.code.as_str())
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"component-version-mismatch"));
+    assert!(codes.contains(&"sink-datadog-failing"));
+    assert!(codes.contains(&"datadog-dead-letters"));
+    assert!(codes.contains(&"log-backup-failing"));
     Ok(())
 }
 

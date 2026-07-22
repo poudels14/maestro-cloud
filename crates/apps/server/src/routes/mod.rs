@@ -16,6 +16,7 @@ mod service_diff;
 mod service_rollout_validation;
 mod service_rollouts;
 mod services;
+mod stats;
 mod system;
 mod upgrades;
 mod webhook_commands;
@@ -44,6 +45,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(service_commands::router())
         .merge(service_rollouts::router())
         .merge(services::router())
+        .merge(stats::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())
         .route_layer(middleware::from_fn_with_state(
@@ -52,6 +54,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         ));
     let node = logs::node_router()
         .merge(metrics::node_router())
+        .merge(stats::node_router())
         .merge(exec::node_router())
         .route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()

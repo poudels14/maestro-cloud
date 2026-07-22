@@ -37,6 +37,7 @@ mod observations;
 mod service_commands;
 mod service_rollouts;
 mod services;
+mod stats;
 mod upgrades;
 
 #[test]
@@ -309,6 +310,16 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .is_some()
     );
     assert!(document.pointer("/paths/~1api~1disks~1nodes/get").is_some());
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1stats/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1stats~1nodes/get")
+            .is_some()
+    );
     assert!(
         document
             .pointer("/components/schemas/ResourceMetricPoint")

@@ -7,6 +7,7 @@ mod cluster_query;
 mod cluster_stats;
 #[cfg(any(test, feature = "test-util"))]
 pub mod conformance;
+mod controller_stats_provider;
 mod datadog;
 mod dead_letter;
 mod delivery;
@@ -28,6 +29,7 @@ mod query;
 mod sink_runtime;
 mod sink_worker;
 mod stats;
+mod stats_warnings;
 mod store;
 
 pub use cluster_query::{
@@ -38,6 +40,9 @@ pub use cluster_stats::{
     BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsSnapshot, DeadLetterStatsSnapshot,
     ProbeStatsSnapshot, SinkStatsSnapshot, SpoolStatsSnapshot, StatsMetricPoint, StatsWarning,
     collect_controller_stats,
+};
+pub use controller_stats_provider::{
+    BackupStatsProvider, BackupStatsProviderError, ControllerStatsProvider, LiveControllerStats,
 };
 pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
 pub use dead_letter::{
@@ -88,6 +93,7 @@ pub use stats::{
     LogSinkCursorStats, LogSpoolStats, LogStatsStore, LogStatsStoreError,
     MAX_RETAINED_DEAD_LETTERS, SinkDeadLetterSnapshot,
 };
+pub use stats_warnings::derive_stats_warnings;
 pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};
 
 #[cfg(test)]

@@ -92,6 +92,19 @@ where
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
     let local_log_queries = runtimes.log_query_store();
+    let controller_stats = Arc::new(logs::LiveControllerStats::new(
+        runtimes.log_stats_store(),
+        factory
+            .log_sinks
+            .iter()
+            .map(|sink| sink.id().clone())
+            .collect(),
+        factory.sink_runtime.clone(),
+        env!("CARGO_PKG_VERSION"),
+    )) as Arc<dyn logs::ControllerStatsProvider>;
+    let backup_stats = log_maintenance
+        .as_ref()
+        .map(|worker| Arc::new(worker.stats_handle()) as Arc<dyn logs::BackupStatsProvider>);
     let workload_metric_queries = runtimes.metric_query_store();
     let host_metric_queries = runtimes.host_metric_query_store();
     let cluster_log_queries = match cluster_query_clients::log_query_store(
@@ -113,6 +126,15 @@ where
         Err(error) => return runtimes.fail(error).await,
     };
     let cluster_metric_nodes = cluster_log_nodes.clone();
+    let cluster_stats_queries = match cluster_query_clients::stats_query_store(
+        plan,
+        &factory.api_settings,
+        controller_stats.clone(),
+    ) {
+        Ok(queries) => Arc::new(queries) as Arc<dyn server::NodeStatsQueryStore>,
+        Err(error) => return runtimes.fail(error).await,
+    };
+    let cluster_stats_nodes = cluster_log_nodes.clone();
     let exec_sessions = if spec.workload_enabled {
         match cluster_exec_sessions(factory, plan, spec, store.clone()) {
             Ok(sessions) => Some(Arc::new(sessions) as Arc<dyn server::ClusterExecSessions>),
@@ -137,7 +159,13 @@ where
                 workload_metric_queries,
                 host_metric_queries,
             )
-            .with_cluster_metric_query_store(cluster_metric_nodes, cluster_metric_queries);
+            .with_cluster_metric_query_store(cluster_metric_nodes, cluster_metric_queries)
+            .with_stats_providers(
+                controller_stats,
+                backup_stats,
+                cluster_stats_nodes,
+                cluster_stats_queries,
+            );
         let server = match exec_sessions {
             Some(sessions) => server.with_exec_sessions(sessions),
             None => server,
