@@ -27,6 +27,8 @@ pub struct OperatorSettings {
     pub deployment: LifecycleSettings,
     /// Retired ingress generation grace period.
     pub ingress: IngressSettings,
+    /// HTTPS node API endpoints serving the public ingress-denied response.
+    pub ingress_denied_backends: Vec<std::net::SocketAddr>,
     /// Authoritative service-record TTL.
     pub dns: DnsSettings,
     /// Static host, DNS, and egress firewall settings.
@@ -93,6 +95,16 @@ impl OperatorSettings {
             ingress: IngressSettings {
                 retirement_grace: Duration::from_secs(30),
             },
+            ingress_denied_backends: cluster
+                .nodes
+                .values()
+                .map(|node| {
+                    std::net::SocketAddr::new(
+                        std::net::IpAddr::V4(node.endpoint.host_address),
+                        node.endpoint.api_port,
+                    )
+                })
+                .collect(),
             dns: DnsSettings { ttl_secs: 5 },
             firewall: FirewallSettings {
                 table_name: "maestro_firewall".to_string(),

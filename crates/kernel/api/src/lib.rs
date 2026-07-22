@@ -34,9 +34,10 @@ pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,
-    FirewallPolicyId, IngressRouteId, InvalidIdentifier, NodeFirewallId, NodeId, NodeInstanceId,
-    NodeNetworkId, PreviewId, ReplicaStateId, RequestId, ResourceId, ResourceKind, ResourceName,
-    ServiceId, TrafficGenerationId, UpgradeRunId, WebhookId, WorkloadId,
+    FirewallPolicyId, IngressBlocklistId, IngressRouteId, InvalidIdentifier, NodeFirewallId,
+    NodeId, NodeInstanceId, NodeNetworkId, PreviewId, ReplicaStateId, RequestId, ResourceId,
+    ResourceKind, ResourceName, ServiceId, TrafficGenerationId, UpgradeRunId, WebhookId,
+    WorkloadId,
 };
 pub use metadata::{
     AnnotationKey, FinalizerName, Generation, LabelKey, ObjectMeta, OwnerReference, Ownership,
@@ -45,9 +46,10 @@ pub use metadata::{
 pub use network::{
     DnsRecord, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, FirewallDirection, FirewallPolicy,
     FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject, FirewallVerdict,
-    IngressRoute, IngressRouteSpec, IngressRouteStatus, NetworkAddress, PortRange, SessionAffinity,
-    TrafficGeneration, TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus,
-    TrafficRoute, TrafficTarget, TransportProtocol,
+    IngressBlocklist, IngressBlocklistSpec, IngressBlocklistStatus, IngressRoute, IngressRouteSpec,
+    IngressRouteStatus, NetworkAddress, PortRange, SessionAffinity, TrafficGeneration,
+    TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus, TrafficRoute,
+    TrafficTarget, TransportProtocol,
 };
 pub use node::{
     ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,

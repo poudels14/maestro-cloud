@@ -4,7 +4,10 @@ use build::{BuildReconciler, BuildRevisionResolver, BuildSourceProvider, BuildWa
 use deployment::DeploymentReconciler;
 use dns::DnsReconciler;
 use firewall::{FirewallBaselineReconciler, FirewallController, FirewallPolicyReconciler};
-use ingress::{IngressBackend, IngressReconciler, StoreTraefikProvider, TraefikBackend};
+use ingress::{
+    IngressBackend, IngressBlocklistReconciler, IngressReconciler, StoreTraefikProvider,
+    TraefikBackend,
+};
 use kernel_api::ClusterId;
 use kernel_controller::{ControllerError, ControllerRuntime, FencedStore, TimestampClock};
 use kernel_store::Clock;
@@ -119,7 +122,12 @@ impl LeaderWorkload for OperatorLeaderWorkload {
             self.timestamp_clock.clone(),
             self.settings.clone(),
             OperatorBackends {
-                ingress: Arc::new(TraefikBackend::new(self.cluster_id.clone(), provider)),
+                ingress: Arc::new(
+                    TraefikBackend::new(self.cluster_id.clone(), provider)
+                        .with_ingress_denied_backends(
+                            self.settings.ingress_denied_backends.clone(),
+                        ),
+                ),
                 build_source: self.builds.source.clone(),
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
@@ -155,6 +163,8 @@ pub struct OperatorInvocationReport {
     pub scheduler: usize,
     /// Service resources passed to ingress reconciliation.
     pub ingress: usize,
+    /// Singleton blocklist resources passed to ingress reconciliation.
+    pub ingress_blocklists: usize,
     /// Service resources passed to DNS reconciliation.
     pub dns: usize,
     /// FirewallPolicy resources passed to policy reconciliation.
@@ -175,6 +185,7 @@ pub struct OperatorSuite {
     deployment: ControllerRuntime<DeploymentReconciler>,
     scheduler: ControllerRuntime<SchedulerReconciler>,
     ingress: ControllerRuntime<IngressReconciler>,
+    ingress_blocklists: ControllerRuntime<IngressBlocklistReconciler>,
     dns: ControllerRuntime<DnsReconciler>,
     firewall_policies: ControllerRuntime<FirewallPolicyReconciler>,
     firewall_baselines: ControllerRuntime<FirewallBaselineReconciler>,
@@ -285,6 +296,17 @@ impl OperatorSuite {
             monotonic_clock.clone(),
             settings.runtime.clone(),
         );
+        let ingress_blocklists = Arc::new(IngressBlocklistReconciler::new(
+            cluster_id.clone(),
+            settings.ingress,
+            backends.ingress.clone(),
+            timestamp_clock.clone(),
+        )?)
+        .runtime(
+            store.clone(),
+            monotonic_clock.clone(),
+            settings.runtime.clone(),
+        );
         let ingress = Arc::new(IngressReconciler::new(
             cluster_id.clone(),
             settings.ingress,
@@ -321,6 +343,7 @@ impl OperatorSuite {
             deployment,
             scheduler,
             ingress,
+            ingress_blocklists,
             dns,
             firewall_policies,
             firewall_baselines,
@@ -339,6 +362,7 @@ impl OperatorSuite {
             builds: self.builds.reconcile_snapshot().await?,
             scheduler: self.scheduler.reconcile_snapshot().await?,
             ingress: self.ingress.reconcile_snapshot().await?,
+            ingress_blocklists: self.ingress_blocklists.reconcile_snapshot().await?,
             dns: self.dns.reconcile_snapshot().await?,
             firewall_policies: self.firewall_policies.reconcile_snapshot().await?,
             firewall_baselines: self.firewall_baselines.reconcile_snapshot().await?,
@@ -365,6 +389,7 @@ impl OperatorSuite {
         let upgrades = run_optional(self.upgrades.as_ref(), shutdown.clone());
         let scheduler = self.scheduler.run(shutdown.clone());
         let ingress = self.ingress.run(shutdown.clone());
+        let ingress_blocklists = self.ingress_blocklists.run(shutdown.clone());
         let dns = self.dns.run(shutdown.clone());
         let policies = self.firewall_policies.run(shutdown.clone());
         let webhooks = self.webhooks.run(shutdown.clone());
@@ -378,6 +403,7 @@ impl OperatorSuite {
             upgrades,
             scheduler,
             ingress,
+            ingress_blocklists,
             dns,
             policies,
             baselines,

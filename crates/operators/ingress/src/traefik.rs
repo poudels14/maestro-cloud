@@ -8,13 +8,21 @@ use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, TrafficGenerationId, TrafficRoute, TrafficTarget};
 use sha2::{Digest, Sha256};
 
-use crate::{BackendChange, IngressBackend, IngressBackendError, PublishedTraffic};
+use crate::{
+    BackendChange, IngressBackend, IngressBackendError, IngressBlocklistChange, PublishedTraffic,
+};
 
 const LABEL_DOMAIN: &[u8] = b"maestro-traefik-label-v1\0";
 const AFFINITY_DOMAIN: &[u8] = b"maestro-node-affinity-v1\0";
 
 /// Stable namespace reserved for routers that reject blocklisted client addresses.
 pub const TRAEFIK_BLOCKED_ROUTER_PREFIX: &str = "maestro.internal-blocked-";
+const TRAEFIK_BLOCKED_SERVICE_LABEL: &str = "maestro.internal-blocked";
+const TRAEFIK_BLOCKED_SERVICE_PREFIX: &str = "http/services/maestro.internal-blocked";
+const TRAEFIK_BLOCKED_MIDDLEWARE_PREFIX: &str = "http/middlewares/maestro.internal-blocked";
+const TRAEFIK_BLOCKED_TRANSPORT_PREFIX: &str = "http/serversTransports/maestro.internal-blocked";
+const TRAEFIK_BLOCKED_ROUTER_KEY_PREFIX: &str = "http/routers/maestro.internal-blocked-";
+const BLOCKLIST_ADDRESSES_PER_ROUTER: usize = 256;
 
 /// Returns the stable access-log router prefix owned by one service.
 pub fn traefik_service_router_prefix(service_id: &kernel_api::ServiceId) -> String {
@@ -41,6 +49,15 @@ pub struct TraefikCutover {
     pub remove_prefixes: Vec<String>,
 }
 
+/// Complete desired blocklist entries and the reserved prefixes they replace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraefikBlocklistConfig {
+    /// Dynamic-provider entries for the desired address set.
+    pub entries: BTreeMap<String, String>,
+    /// Reserved prefixes atomically replaced by `entries`.
+    pub owned_prefixes: Vec<String>,
+}
+
 /// Thin dynamic-provider persistence boundary used by the Traefik backend.
 #[async_trait]
 pub trait TraefikProvider: Send + Sync {
@@ -49,12 +66,19 @@ pub trait TraefikProvider: Send + Sync {
 
     /// Atomically replaces stable routers and removes explicitly retired prefixes.
     async fn cutover(&self, cutover: &TraefikCutover) -> Result<(), IngressBackendError>;
+
+    /// Atomically replaces every reserved blocklist router, service, and middleware entry.
+    async fn replace_blocklist(
+        &self,
+        config: &TraefikBlocklistConfig,
+    ) -> Result<(), IngressBackendError>;
 }
 
 /// Ingress backend which renders and publishes Traefik dynamic configuration.
 pub struct TraefikBackend {
     cluster_id: ClusterId,
     provider: Arc<dyn TraefikProvider>,
+    ingress_denied_backends: Vec<std::net::SocketAddr>,
 }
 
 impl TraefikBackend {
@@ -63,7 +87,16 @@ impl TraefikBackend {
         Self {
             cluster_id,
             provider,
+            ingress_denied_backends: Vec::new(),
         }
+    }
+
+    /// Configures host API endpoints serving the ingress-denied response.
+    pub fn with_ingress_denied_backends(mut self, mut backends: Vec<std::net::SocketAddr>) -> Self {
+        backends.sort();
+        backends.dedup();
+        self.ingress_denied_backends = backends;
+        self
     }
 }
 
@@ -104,6 +137,114 @@ impl IngressBackend for TraefikBackend {
             })
             .await
     }
+
+    async fn apply_blocklist(
+        &self,
+        change: &IngressBlocklistChange,
+    ) -> Result<(), IngressBackendError> {
+        if !change.addresses.is_empty() && self.ingress_denied_backends.is_empty() {
+            return Err(IngressBackendError::new(
+                "ingress blocklist has no ingress-denied API backends",
+            ));
+        }
+        self.provider
+            .replace_blocklist(&render_blocklist(change, &self.ingress_denied_backends))
+            .await
+    }
+}
+
+fn render_blocklist(
+    change: &IngressBlocklistChange,
+    backends: &[std::net::SocketAddr],
+) -> TraefikBlocklistConfig {
+    let owned_prefixes = vec![
+        TRAEFIK_BLOCKED_ROUTER_KEY_PREFIX.to_owned(),
+        TRAEFIK_BLOCKED_SERVICE_PREFIX.to_owned(),
+        TRAEFIK_BLOCKED_MIDDLEWARE_PREFIX.to_owned(),
+        TRAEFIK_BLOCKED_TRANSPORT_PREFIX.to_owned(),
+    ];
+    if change.addresses.is_empty() {
+        return TraefikBlocklistConfig {
+            entries: BTreeMap::new(),
+            owned_prefixes,
+        };
+    }
+    let mut entries = BTreeMap::new();
+    for (index, backend) in backends.iter().enumerate() {
+        entries.insert(
+            format!("{TRAEFIK_BLOCKED_SERVICE_PREFIX}/loadBalancer/servers/{index}/url"),
+            format!("https://{backend}"),
+        );
+    }
+    entries.insert(
+        format!("{TRAEFIK_BLOCKED_SERVICE_PREFIX}/loadBalancer/passHostHeader"),
+        "true".to_owned(),
+    );
+    entries.insert(
+        format!("{TRAEFIK_BLOCKED_SERVICE_PREFIX}/loadBalancer/serversTransport"),
+        TRAEFIK_BLOCKED_SERVICE_LABEL.to_owned(),
+    );
+    entries.insert(
+        format!("{TRAEFIK_BLOCKED_TRANSPORT_PREFIX}/insecureSkipVerify"),
+        "true".to_owned(),
+    );
+    entries.insert(
+        format!("{TRAEFIK_BLOCKED_MIDDLEWARE_PREFIX}/replacePath/path"),
+        "/_maestro/ingress-denied".to_owned(),
+    );
+    let fingerprint = change
+        .configuration_digest
+        .chars()
+        .take(16)
+        .collect::<String>();
+    for (index, addresses) in change
+        .addresses
+        .chunks(BLOCKLIST_ADDRESSES_PER_ROUTER)
+        .enumerate()
+    {
+        let label = format!("{TRAEFIK_BLOCKED_ROUTER_PREFIX}{fingerprint}-{index}");
+        let prefix = format!("http/routers/{label}");
+        entries.extend([
+            (format!("{prefix}/rule"), blocked_ip_matcher(addresses)),
+            (
+                format!("{prefix}/service"),
+                TRAEFIK_BLOCKED_SERVICE_LABEL.to_owned(),
+            ),
+            (format!("{prefix}/entryPoints/0"), "web".to_owned()),
+            (format!("{prefix}/priority"), "10000".to_owned()),
+            (
+                format!("{prefix}/middlewares/0"),
+                TRAEFIK_BLOCKED_SERVICE_LABEL.to_owned(),
+            ),
+        ]);
+    }
+    TraefikBlocklistConfig {
+        entries,
+        owned_prefixes,
+    }
+}
+
+fn blocked_ip_matcher(addresses: &[std::net::IpAddr]) -> String {
+    let addresses = addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let direct = addresses
+        .iter()
+        .map(|address| format!("ClientIP(`{address}`)"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let alternatives = addresses
+        .iter()
+        .map(|address| address.replace('.', r"\."))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!(
+        "{direct} || HeaderRegexp(`CF-Connecting-IP`, `^({alternatives})$`) || \
+         HeaderRegexp(`X-Real-IP`, `^({alternatives})$`) || \
+         HeaderRegexp(`X-Forwarded-For`, \
+         `(^[[:space:]]*|,[[:space:]]*)({alternatives})([[:space:]]*,|$)`)"
+    )
 }
 
 struct RenderedActive {

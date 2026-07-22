@@ -1,11 +1,14 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, IngressRoute, NodeId, NodeInstanceId, ResourceKind, ResourceName, Service,
-    Timestamp, TrafficGeneration, TrafficGenerationPhase,
+    ClusterId, Generation, IngressBlocklist, IngressBlocklistId, IngressBlocklistSpec,
+    IngressBlocklistStatus, IngressRoute, NodeId, NodeInstanceId, Object, ObjectMeta, ResourceKind,
+    ResourceName, ResourceRevision, Service, Timestamp, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -17,8 +20,8 @@ use kernel_store::{
 
 use super::plan::World as PlannedWorld;
 use crate::{
-    BackendChange, IngressBackend, IngressBackendError, IngressController, IngressReconciler,
-    IngressSettings,
+    BackendChange, IngressBackend, IngressBackendError, IngressBlocklistChange,
+    IngressBlocklistReconciler, IngressController, IngressReconciler, IngressSettings,
 };
 
 #[tokio::test]
@@ -67,6 +70,64 @@ async fn backend_failure_does_not_acknowledge_a_staged_generation()
     let route = world.one::<IngressRoute>("IngressRoute").await?;
     assert_eq!(generation.status.phase, TrafficGenerationPhase::Staged);
     assert_ne!(route.status.applied_generation, route.meta.generation);
+    Ok(())
+}
+
+#[tokio::test]
+async fn singleton_runtime_publishes_and_acknowledges_without_any_services()
+-> Result<(), Box<dyn std::error::Error>> {
+    let backend = Arc::new(RecordingBackend::default());
+    let world = StoreWorld::empty(backend.clone()).await?;
+    let blocklist = Object {
+        meta: ObjectMeta {
+            id: IngressBlocklistId::new("global")?,
+            labels: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            revision: ResourceRevision::default(),
+            generation: Generation(4),
+            owner_refs: Vec::new(),
+            finalizers: BTreeSet::new(),
+            deletion_timestamp: None,
+        },
+        spec: IngressBlocklistSpec {
+            addresses: vec![IpAddr::V4(Ipv4Addr::new(203, 0, 113, 44))],
+        },
+        status: IngressBlocklistStatus {
+            applied_generation: Generation::default(),
+            configuration_digest: None,
+            conditions: Vec::new(),
+        },
+    };
+    world
+        .put("IngressBlocklist", &blocklist.meta.id, &blocklist)
+        .await?;
+    let reconciler = Arc::new(IngressBlocklistReconciler::new(
+        world.cluster_id.clone(),
+        settings(),
+        backend.clone(),
+        Arc::new(ManualTimestampClock::new(1_000)),
+    )?);
+    let runtime = reconciler.runtime(
+        Arc::new(world.fenced.clone()),
+        Arc::new(NoopClock),
+        RuntimeConfig::new(
+            Duration::from_secs(60),
+            Backoff::new(Duration::from_millis(10), Duration::from_secs(1))?,
+        )?,
+    );
+
+    assert_eq!(runtime.reconcile_snapshot().await?, 0);
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    let published = backend.blocklists();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].generation, Generation(4));
+    assert_eq!(published[0].addresses, blocklist.spec.addresses);
+    let stored = world.one::<IngressBlocklist>("IngressBlocklist").await?;
+    assert_eq!(stored.status.applied_generation, Generation(4));
+    assert_eq!(
+        stored.status.configuration_digest,
+        Some(published[0].configuration_digest.clone())
+    );
     Ok(())
 }
 
@@ -159,12 +220,17 @@ async fn runtime_holds_service_finalizer_until_retirement_deadline()
 #[derive(Default)]
 struct RecordingBackend {
     changes: Mutex<Vec<BackendChange>>,
+    blocklists: Mutex<Vec<IngressBlocklistChange>>,
     fail: AtomicBool,
 }
 
 impl RecordingBackend {
     fn changes(&self) -> Vec<BackendChange> {
         self.changes.lock().expect("backend changes").clone()
+    }
+
+    fn blocklists(&self) -> Vec<IngressBlocklistChange> {
+        self.blocklists.lock().expect("backend blocklists").clone()
     }
 }
 
@@ -179,6 +245,21 @@ impl IngressBackend for RecordingBackend {
             .expect("backend changes")
             .push(change.clone());
         Ok(())
+    }
+
+    async fn apply_blocklist(
+        &self,
+        change: &IngressBlocklistChange,
+    ) -> Result<(), IngressBackendError> {
+        if self.fail.load(Ordering::SeqCst) {
+            Err(IngressBackendError::new("injected publication failure"))
+        } else {
+            self.blocklists
+                .lock()
+                .expect("backend blocklists")
+                .push(change.clone());
+            Ok(())
+        }
     }
 }
 
@@ -226,6 +307,13 @@ impl IngressBackend for RacingBackend {
         }
         Ok(())
     }
+
+    async fn apply_blocklist(
+        &self,
+        _change: &IngressBlocklistChange,
+    ) -> Result<(), IngressBackendError> {
+        Ok(())
+    }
 }
 
 struct StoreWorld {
@@ -239,6 +327,17 @@ struct StoreWorld {
 
 impl StoreWorld {
     async fn new(backend: Arc<dyn IngressBackend>) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build(backend, true).await
+    }
+
+    async fn empty(backend: Arc<dyn IngressBackend>) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build(backend, false).await
+    }
+
+    async fn build(
+        backend: Arc<dyn IngressBackend>,
+        seed: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new("cluster-1")?;
         let keys = Keyspace::new(&cluster_id);
         let store = Arc::new(InMemoryStore::new(Arc::new(NoopClock)));
@@ -277,7 +376,9 @@ impl StoreWorld {
             controller,
             _session: session,
         };
-        world.seed().await?;
+        if seed {
+            world.seed().await?;
+        }
         Ok(world)
     }
 

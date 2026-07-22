@@ -37,6 +37,7 @@ pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error +
         ingress: ingress::IngressSettings {
             retirement_grace: Duration::from_secs(30),
         },
+        ingress_denied_backends: vec!["127.0.0.1:3000".parse()?],
         dns: dns::DnsSettings { ttl_secs: 5 },
         firewall: FirewallSettings {
             table_name: "maestro_firewall".to_string(),

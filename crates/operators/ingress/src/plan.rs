@@ -1,14 +1,22 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
-    Deployment, DeploymentId, IngressRoute, IngressRouteId, IngressRouteStatus, Service, ServiceId,
-    TrafficGeneration, TrafficGenerationId, TrafficGenerationPhase, TrafficGenerationStatus,
+    Deployment, DeploymentId, Generation, IngressBlocklist, IngressRoute, IngressRouteId,
+    IngressRouteStatus, Service, ServiceId, TrafficGeneration, TrafficGenerationId,
+    TrafficGenerationPhase, TrafficGenerationStatus,
 };
+use sha2::{Digest, Sha256};
 
 use crate::lifecycle::{collect_expired, converge_desired, published, retire_all, select_active};
 use crate::target::desired_spec;
 use crate::validation::{capture_routes, validate_route_ownership};
-use crate::{BackendChange, IngressInput, IngressPlan, PublishedTraffic, ResourceStatusUpdate};
+use crate::{
+    BackendChange, IngressBlocklistChange, IngressInput, IngressPlan, PublishedTraffic,
+    ResourceStatusUpdate,
+};
+
+const BLOCKLIST_ID: &str = "global";
+const BLOCKLIST_DIGEST_DOMAIN: &[u8] = b"maestro-ingress-blocklist-v1\0";
 
 /// Computes one deterministic ingress traffic generation.
 pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
@@ -32,10 +40,19 @@ pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
         |resource| resource.meta.id.clone(),
         "TrafficGeneration",
     )?;
+    let blocklists = index(
+        input.blocklists,
+        |resource| resource.meta.id.clone(),
+        "IngressBlocklist",
+    )?;
+    validate_blocklists(&blocklists)?;
     validate_route_ownership(&services, &input.routes)?;
     validate_generation_ownership(&services, &deployments, &generations)?;
 
     let mut output = IngressPlan::default();
+    if let Some(blocklist) = blocklists.values().next() {
+        plan_blocklist(blocklist, &mut output);
+    }
     let mut desired_statuses = generations
         .iter()
         .map(|(id, generation)| (id.clone(), generation.status.clone()))
@@ -237,8 +254,79 @@ fn sort_plan(output: &mut IngressPlan) {
         .route_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     output
+        .blocklist_updates
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    output
         .backend_changes
         .sort_by(|left, right| left.service_id.cmp(&right.service_id));
+}
+
+fn validate_blocklists(
+    blocklists: &BTreeMap<kernel_api::IngressBlocklistId, IngressBlocklist>,
+) -> Result<(), IngressPlanError> {
+    if blocklists.len() > 1 {
+        return Err(IngressPlanError::MultipleIngressBlocklists);
+    }
+    let Some(blocklist) = blocklists.values().next() else {
+        return Ok(());
+    };
+    if blocklist.meta.id.as_str() != BLOCKLIST_ID {
+        return Err(IngressPlanError::UnexpectedBlocklistId {
+            blocklist_id: blocklist.meta.id.clone(),
+        });
+    }
+    let normalized = blocklist
+        .spec
+        .addresses
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if normalized != blocklist.spec.addresses {
+        return Err(IngressPlanError::NonCanonicalBlocklist);
+    }
+    Ok(())
+}
+
+fn plan_blocklist(blocklist: &IngressBlocklist, output: &mut IngressPlan) {
+    let addresses = if blocklist.meta.deletion_timestamp.is_some() {
+        Vec::new()
+    } else {
+        blocklist.spec.addresses.clone()
+    };
+    let change = blocklist_change(blocklist.meta.generation, addresses);
+    if blocklist.status.applied_generation != blocklist.meta.generation
+        || blocklist.status.configuration_digest.as_deref()
+            != Some(change.configuration_digest.as_str())
+    {
+        let mut status = blocklist.status.clone();
+        status.applied_generation = blocklist.meta.generation;
+        status.configuration_digest = Some(change.configuration_digest.clone());
+        output.blocklist_change = Some(change);
+        output.blocklist_updates.push(ResourceStatusUpdate {
+            id: blocklist.meta.id.clone(),
+            observed_revision: blocklist.meta.revision,
+            status,
+        });
+    }
+}
+
+pub(crate) fn blocklist_change(
+    generation: Generation,
+    addresses: Vec<std::net::IpAddr>,
+) -> IngressBlocklistChange {
+    let mut digest = Sha256::new();
+    digest.update(BLOCKLIST_DIGEST_DOMAIN);
+    for address in &addresses {
+        digest.update(address.to_string().as_bytes());
+        digest.update([0]);
+    }
+    IngressBlocklistChange {
+        generation,
+        addresses,
+        configuration_digest: format!("{:x}", digest.finalize()),
+    }
 }
 
 /// Invalid ingress input or impossible persisted transition.
@@ -256,6 +344,18 @@ pub enum IngressPlanError {
         kind: &'static str,
         resource_id: String,
     },
+    /// More than one singleton ingress blocklist was stored.
+    #[error("more than one IngressBlocklist resource exists")]
+    MultipleIngressBlocklists,
+    /// The singleton blocklist used an identity other than `global`.
+    #[error("IngressBlocklist `{blocklist_id}` must use the singleton identity `global`")]
+    UnexpectedBlocklistId {
+        /// Unexpected stored identity.
+        blocklist_id: kernel_api::IngressBlocklistId,
+    },
+    /// Stored blocklist addresses were duplicated or not deterministically ordered.
+    #[error("IngressBlocklist addresses must be unique and in canonical network order")]
+    NonCanonicalBlocklist,
     /// A route referenced a Service absent from the complete snapshot.
     #[error("IngressRoute `{route_id}` references missing Service `{service_id}`")]
     MissingRouteService {

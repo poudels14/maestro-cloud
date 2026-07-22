@@ -126,6 +126,10 @@ identifier!(
 );
 identifier!(IngressRouteId, "Stable identity of an ingress route.");
 identifier!(
+    IngressBlocklistId,
+    "Stable identity of the cluster ingress blocklist."
+);
+identifier!(
     TrafficGenerationId,
     "Stable identity of an ingress traffic generation."
 );
@@ -194,6 +198,7 @@ resource_name_from!(
     AssignmentId,
     ReplicaStateId,
     IngressRouteId,
+    IngressBlocklistId,
     TrafficGenerationId,
     FirewallPolicyId,
     DnsRecordId,

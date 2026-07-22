@@ -457,6 +457,13 @@ impl IngressBackend for RecordingIngress {
             .push(change.clone());
         Ok(())
     }
+
+    async fn apply_blocklist(
+        &self,
+        _change: &ingress::IngressBlocklistChange,
+    ) -> Result<(), ingress::IngressBackendError> {
+        Ok(())
+    }
 }
 
 struct RecordingNodeFirewallBackend;

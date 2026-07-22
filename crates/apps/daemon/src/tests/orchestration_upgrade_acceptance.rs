@@ -299,6 +299,13 @@ impl IngressBackend for NoopIngressBackend {
     async fn apply(&self, _change: &BackendChange) -> Result<(), IngressBackendError> {
         Ok(())
     }
+
+    async fn apply_blocklist(
+        &self,
+        _change: &ingress::IngressBlocklistChange,
+    ) -> Result<(), ingress::IngressBackendError> {
+        Ok(())
+    }
 }
 
 fn upgrade_run(

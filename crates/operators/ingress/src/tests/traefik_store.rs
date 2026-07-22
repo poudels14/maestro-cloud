@@ -8,7 +8,9 @@ use kernel_controller::{
 };
 use kernel_store::{InMemoryStore, Keyspace, Store, TokioClock};
 
-use crate::{StoreTraefikProvider, TraefikCutover, TraefikProvider, TraefikStage};
+use crate::{
+    StoreTraefikProvider, TraefikBlocklistConfig, TraefikCutover, TraefikProvider, TraefikStage,
+};
 
 #[tokio::test]
 async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
@@ -87,6 +89,111 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
             .is_empty()
     );
     successor_lease.resign().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocklist_replacement_removes_only_obsolete_reserved_entries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("blocklist-traefik")?;
+    let clock = Arc::new(TokioClock::new());
+    let store = Arc::new(InMemoryStore::new(clock));
+    let keys = Keyspace::new(&cluster_id);
+    let (fenced, lease) = campaign(store.clone(), &keys, "leader-1").await?;
+    let provider = StoreTraefikProvider::new(cluster_id, fenced);
+    let owned_prefixes = vec![
+        "http/routers/maestro.internal-blocked-".to_string(),
+        "http/services/maestro.internal-blocked".to_string(),
+        "http/middlewares/maestro.internal-blocked".to_string(),
+        "http/serversTransports/maestro.internal-blocked".to_string(),
+    ];
+    provider
+        .replace_blocklist(&TraefikBlocklistConfig {
+            entries: BTreeMap::from([
+                (
+                    "http/routers/maestro.internal-blocked-old/rule".to_string(),
+                    "ClientIP(`203.0.113.1`)".to_string(),
+                ),
+                (
+                    "http/routers/maestro.internal-blocked-stale/rule".to_string(),
+                    "ClientIP(`203.0.113.2`)".to_string(),
+                ),
+                (
+                    "http/services/maestro.internal-blocked/loadBalancer/passHostHeader"
+                        .to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "http/middlewares/maestro.internal-blocked/replacePath/path".to_string(),
+                    "/_maestro/ingress-denied".to_string(),
+                ),
+                (
+                    "http/serversTransports/maestro.internal-blocked/insecureSkipVerify"
+                        .to_string(),
+                    "true".to_string(),
+                ),
+            ]),
+            owned_prefixes: owned_prefixes.clone(),
+        })
+        .await?;
+    provider
+        .replace_blocklist(&TraefikBlocklistConfig {
+            entries: BTreeMap::from([(
+                "http/routers/maestro.internal-blocked-new/rule".to_string(),
+                "ClientIP(`203.0.113.3`)".to_string(),
+            )]),
+            owned_prefixes: owned_prefixes.clone(),
+        })
+        .await?;
+
+    let blocked = store
+        .list(&keys.traefik_prefix("http/routers")?)
+        .await?
+        .values
+        .into_iter()
+        .filter(|value| value.key.as_str().contains("/maestro.internal-blocked-"))
+        .collect::<Vec<_>>();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].value, b"ClientIP(`203.0.113.3`)");
+    assert!(
+        store
+            .list(&keys.traefik_prefix("http/services/maestro.internal-blocked")?)
+            .await?
+            .values
+            .is_empty()
+    );
+    assert!(
+        store
+            .list(&keys.traefik_prefix("http/middlewares/maestro.internal-blocked")?)
+            .await?
+            .values
+            .is_empty()
+    );
+    assert!(
+        store
+            .list(&keys.traefik_prefix("http/serversTransports/maestro.internal-blocked")?)
+            .await?
+            .values
+            .is_empty()
+    );
+
+    provider
+        .replace_blocklist(&TraefikBlocklistConfig {
+            entries: BTreeMap::new(),
+            owned_prefixes,
+        })
+        .await?;
+    assert!(
+        store
+            .list(&keys.traefik_prefix("http/routers")?)
+            .await?
+            .values
+            .into_iter()
+            .filter(|value| value.key.as_str().contains("/maestro.internal-blocked-"))
+            .collect::<Vec<_>>()
+            .is_empty()
+    );
+    lease.resign().await?;
     Ok(())
 }
 

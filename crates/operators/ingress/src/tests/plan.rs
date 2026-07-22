@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     ClusterId, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus,
-    ExecPolicy, Generation, IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus,
+    ExecPolicy, Generation, IngressBlocklist, IngressBlocklistId, IngressBlocklistSpec,
+    IngressBlocklistStatus, IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus,
     NodeApiAccess, NodeId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
     ReplicaStateSpec, ReplicaStateStatus, ResourceRevision, RolloutState, Service, ServiceId,
     ServiceSpec, ServiceStatus, SessionAffinity, Timestamp, TrafficGeneration,
@@ -249,6 +250,52 @@ fn malformed_and_ambiguous_routes_fail_closed() {
     ));
 }
 
+#[test]
+fn blocklist_plan_is_stable_and_acknowledges_the_exact_generation() {
+    let mut world = World::ready();
+    world.blocklists.push(blocklist(vec![
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9)),
+    ]));
+
+    let planned = plan(world.input()).expect("blocklist plan");
+    let change = planned.blocklist_change.as_ref().expect("publication");
+    assert_eq!(change.generation, Generation(2));
+    assert_eq!(change.addresses, world.blocklists[0].spec.addresses);
+    assert_eq!(planned.blocklist_updates.len(), 1);
+    assert_eq!(
+        planned.blocklist_updates[0].status.configuration_digest,
+        Some(change.configuration_digest.clone())
+    );
+
+    world.blocklists[0].status = planned.blocklist_updates[0].status.clone();
+    let stable = plan(world.input()).expect("stable blocklist plan");
+    assert!(stable.blocklist_change.is_none());
+    assert!(stable.blocklist_updates.is_empty());
+}
+
+#[test]
+fn blocklist_plan_rejects_non_singleton_and_noncanonical_state() {
+    let mut duplicate = World::ready();
+    duplicate.blocklists.push(blocklist(vec![
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+        IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+    ]));
+    assert!(matches!(
+        plan(duplicate.input()),
+        Err(IngressPlanError::NonCanonicalBlocklist)
+    ));
+
+    let mut wrong_id = World::ready();
+    let mut blocklist = blocklist(Vec::new());
+    blocklist.meta.id = IngressBlocklistId::new("other").unwrap();
+    wrong_id.blocklists.push(blocklist);
+    assert!(matches!(
+        plan(wrong_id.input()),
+        Err(IngressPlanError::UnexpectedBlocklistId { .. })
+    ));
+}
+
 fn update_phase(
     plan: &crate::IngressPlan,
     id: &kernel_api::TrafficGenerationId,
@@ -269,6 +316,7 @@ pub(super) struct World {
     pub(super) assignments: Vec<Assignment>,
     pub(super) replicas: Vec<ReplicaState>,
     pub(super) generations: Vec<TrafficGeneration>,
+    pub(super) blocklists: Vec<kernel_api::IngressBlocklist>,
 }
 
 impl World {
@@ -366,6 +414,7 @@ impl World {
             assignments: vec![assignment],
             replicas: vec![replica],
             generations: Vec::new(),
+            blocklists: Vec::new(),
         }
     }
 
@@ -382,6 +431,7 @@ impl World {
             assignments: self.assignments.clone(),
             replicas: self.replicas.clone(),
             traffic_generations: self.generations.clone(),
+            blocklists: self.blocklists.clone(),
         }
     }
 }
@@ -406,6 +456,18 @@ fn service_spec() -> ServiceSpec {
         volumes: Vec::new(),
         placement: PlacementConstraint::default(),
         exec: ExecPolicy::Allowed,
+    }
+}
+
+fn blocklist(addresses: Vec<IpAddr>) -> IngressBlocklist {
+    Object {
+        meta: metadata(IngressBlocklistId::new("global").unwrap(), Generation(2)),
+        spec: IngressBlocklistSpec { addresses },
+        status: IngressBlocklistStatus {
+            applied_generation: Generation::default(),
+            configuration_digest: None,
+            conditions: Vec::new(),
+        },
     }
 }
 

@@ -2,17 +2,78 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::http::StatusCode;
-use kernel_api::{ClusterId, NodeId, SecretValue, ServiceId, Timestamp};
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use kernel_api::{
+    BuiltinKind, ClusterId, IngressBlocklist, IngressBlocklistId, NodeId, ResourceKind,
+    SecretValue, ServiceId, Timestamp,
+};
+use kernel_store::{Keyspace, Store};
 use logs::{
     InMemoryLogStore, IngestLogEntry, IngressTrafficBreakdown, IngressTrafficQuery,
     IngressTrafficScope, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore, LogStream,
     NodeTrafficQueryStore, OriginCursor, ServiceTrafficQuery, TrafficMetricPoint,
     TrafficQueryError, TrafficQueryStore,
 };
+use tower::ServiceExt;
 
 use super::{decode, request, seeded_store, token};
 use crate::{ApiServer, HttpNodeLogQueryStore, ServerSettings, TlsIdentity};
+
+#[tokio::test]
+async fn ingress_blocklist_is_canonical_idempotent_and_cluster_scoped()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (kernel_store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        kernel_store.clone(),
+        cluster_id.clone(),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let empty: serde_json::Value =
+        decode(request(&server, "/api/ingress/blocked-ips", None).await?).await?;
+    assert_eq!(empty, serde_json::json!({"blockedIps": []}));
+
+    let (ipv4, ipv6) = tokio::join!(
+        patch_blocklist(&server, "203.0.113.9", true),
+        patch_blocklist(&server, " 2001:0db8::9 ", true),
+    );
+    assert_eq!(ipv4?.status(), StatusCode::OK);
+    assert_eq!(ipv6?.status(), StatusCode::OK);
+    let updated: serde_json::Value =
+        decode(request(&server, "/api/ingress/blocked-ips", None).await?).await?;
+    assert_eq!(
+        updated,
+        serde_json::json!({"blockedIps": ["203.0.113.9", "2001:db8::9"]})
+    );
+    let response = patch_blocklist(&server, "2001:db8::9", true).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let keys = Keyspace::new(&cluster_id);
+    let key = keys.resource(
+        &ResourceKind::new(BuiltinKind::IngressBlocklist.as_str())?,
+        &IngressBlocklistId::new("global")?.into(),
+    );
+    let stored = kernel_store.get(&key).await?.ok_or("blocklist missing")?;
+    let blocklist: IngressBlocklist = serde_json::from_slice(&stored.value)?;
+    assert_eq!(blocklist.meta.generation.0, 2);
+
+    assert_eq!(
+        patch_blocklist(&server, "not-an-ip", true).await?.status(),
+        StatusCode::BAD_REQUEST
+    );
+    patch_blocklist(&server, "203.0.113.9", false).await?;
+    let response = patch_blocklist(&server, "2001:db8::9", false).await?;
+    let updated: serde_json::Value = decode(response).await?;
+    assert_eq!(updated, serde_json::json!({"blockedIps": []}));
+    assert_eq!(
+        request(&server, "/_maestro/ingress-denied", None)
+            .await?
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn traffic_routes_merge_nodes_and_honor_exact_node_selection()
@@ -315,4 +376,24 @@ fn access_entry(
             ("Duration".to_owned(), "500000000".to_owned()),
         ]),
     })
+}
+
+async fn patch_blocklist(
+    server: &ApiServer,
+    ip: &str,
+    blocked: bool,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    Ok(server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/api/ingress/blocked-ips")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&serde_json::json!({
+                    "ip": ip,
+                    "blocked": blocked
+                }))?))?,
+        )
+        .await?)
 }

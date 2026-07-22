@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use kernel_api::{
-    Assignment, Deployment, IngressRoute, IngressRouteId, IngressRouteStatus, ReplicaState,
+    Assignment, Deployment, Generation, IngressBlocklist, IngressBlocklistId,
+    IngressBlocklistStatus, IngressRoute, IngressRouteId, IngressRouteStatus, ReplicaState,
     ResourceRevision, Service, ServiceId, Timestamp, TrafficGeneration, TrafficGenerationId,
     TrafficGenerationSpec, TrafficGenerationStatus,
 };
@@ -34,6 +35,8 @@ pub struct IngressInput {
     pub replicas: Vec<ReplicaState>,
     /// Existing immutable traffic generations.
     pub traffic_generations: Vec<TrafficGeneration>,
+    /// Desired singleton client-address blocklist.
+    pub blocklists: Vec<IngressBlocklist>,
 }
 
 /// Optimistic status replacement for one existing resource.
@@ -67,6 +70,17 @@ pub struct BackendChange {
     pub remove: Vec<TrafficGenerationId>,
 }
 
+/// One idempotent publication of the cluster ingress blocklist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngressBlocklistChange {
+    /// Desired resource generation acknowledged after publication.
+    pub generation: Generation,
+    /// Canonical unique addresses denied before service routing.
+    pub addresses: Vec<std::net::IpAddr>,
+    /// Stable digest of the exact desired address set.
+    pub configuration_digest: String,
+}
+
 /// Desired resource and publication mutations from one ingress pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IngressPlan {
@@ -80,6 +94,10 @@ pub struct IngressPlan {
     pub route_updates: Vec<ResourceStatusUpdate<IngressRouteId, IngressRouteStatus>>,
     /// Idempotent side effects which must precede the matching status commit.
     pub backend_changes: Vec<BackendChange>,
+    /// Cluster blocklist publication required before acknowledgement.
+    pub blocklist_change: Option<IngressBlocklistChange>,
+    /// Singleton blocklist publication acknowledgement.
+    pub blocklist_updates: Vec<ResourceStatusUpdate<IngressBlocklistId, IngressBlocklistStatus>>,
     /// Earliest persisted retirement deadline requiring another lifecycle pass.
     pub requeue_at: Option<Timestamp>,
 }

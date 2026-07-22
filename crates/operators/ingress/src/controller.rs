@@ -22,6 +22,8 @@ pub struct IngressReport {
     pub deleted_generations: usize,
     /// Per-service backend changes applied before the resource commit.
     pub backend_changes: usize,
+    /// Whether the cluster ingress blocklist was published and acknowledged.
+    pub blocklist_updated: bool,
     /// Whether concurrent input invalidated the snapshot without a resource commit.
     pub conflict: bool,
     /// Earliest UTC retirement deadline requiring another pass.
@@ -83,6 +85,9 @@ impl IngressController {
         for change in &plan.backend_changes {
             self.backend.apply(change).await?;
         }
+        if let Some(change) = plan.blocklist_change.as_ref() {
+            self.backend.apply_blocklist(change).await?;
+        }
         let write = self.writer.apply(store, &snapshot, &plan).await?;
         Ok(report(
             write,
@@ -123,6 +128,7 @@ fn report(
         updated_routes: write.updated_routes,
         deleted_generations: write.deleted_generations,
         backend_changes,
+        blocklist_updated: write.updated_blocklists > 0,
         conflict: write.conflict,
         requeue_at,
         services_with_generations,

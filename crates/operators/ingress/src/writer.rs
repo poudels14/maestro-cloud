@@ -15,6 +15,7 @@ pub(crate) struct IngressWriteReport {
     pub(crate) created_generations: usize,
     pub(crate) updated_generations: usize,
     pub(crate) updated_routes: usize,
+    pub(crate) updated_blocklists: usize,
     pub(crate) deleted_generations: usize,
     pub(crate) conflict: bool,
 }
@@ -92,6 +93,16 @@ impl IngressWriter {
             let resource = status_replacement(current, update, "IngressRoute")?;
             mutations.push(put(&current.stored, &resource, "IngressRoute", &update.id)?);
         }
+        for update in &plan.blocklist_updates {
+            let current = required(&snapshot.blocklists, &update.id, "IngressBlocklist")?;
+            let resource = status_replacement(current, update, "IngressBlocklist")?;
+            mutations.push(put(
+                &current.stored,
+                &resource,
+                "IngressBlocklist",
+                &update.id,
+            )?);
+        }
         for id in &plan.delete_generations {
             mutations.push(delete(required(
                 &snapshot.generations,
@@ -116,6 +127,7 @@ impl IngressWriter {
             created_generations: plan.create_generations.len(),
             updated_generations: plan.generation_updates.len(),
             updated_routes: plan.route_updates.len(),
+            updated_blocklists: plan.blocklist_updates.len(),
             deleted_generations: plan.delete_generations.len(),
             conflict: false,
         })

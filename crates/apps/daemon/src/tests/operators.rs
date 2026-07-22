@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use ingress::{BackendChange, IngressBackend, IngressBackendError};
+use ingress::{BackendChange, IngressBackend, IngressBackendError, IngressBlocklistChange};
 use kernel_api::{
     ArtifactTemplate, Build, BuildId, BuildPhase, BuildSource, BuildSpec, BuildStatus,
     BuildTemplate, ClusterId, Deployment, DeploymentId, ExecPolicy, Generation, Node,
@@ -244,6 +244,13 @@ impl IngressBackend for RecordingIngress {
             .push(change.clone());
         Ok(())
     }
+
+    async fn apply_blocklist(
+        &self,
+        _change: &IngressBlocklistChange,
+    ) -> Result<(), IngressBackendError> {
+        Ok(())
+    }
 }
 
 fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
@@ -262,6 +269,7 @@ fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error>> {
         ingress: ingress::IngressSettings {
             retirement_grace: Duration::from_secs(30),
         },
+        ingress_denied_backends: vec!["127.0.0.1:3000".parse()?],
         dns: dns::DnsSettings { ttl_secs: 5 },
         firewall: firewall::FirewallSettings {
             table_name: "maestro_firewall".to_string(),

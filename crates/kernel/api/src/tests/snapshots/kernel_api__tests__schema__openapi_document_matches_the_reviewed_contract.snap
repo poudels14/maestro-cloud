@@ -269,7 +269,7 @@ expression: openapi_document()
         "type": "object"
       },
       "Build": {
-        "$ref": "#/components/schemas/Object11"
+        "$ref": "#/components/schemas/Object12"
       },
       "BuildId": {
         "description": "Stable identity of an artifact build.",
@@ -894,7 +894,7 @@ expression: openapi_document()
         "type": "object"
       },
       "DnsRecord": {
-        "$ref": "#/components/schemas/Object10"
+        "$ref": "#/components/schemas/Object11"
       },
       "DnsRecordId": {
         "description": "Stable identity of a cluster DNS record.",
@@ -1137,7 +1137,7 @@ expression: openapi_document()
         ]
       },
       "FirewallPolicy": {
-        "$ref": "#/components/schemas/Object9"
+        "$ref": "#/components/schemas/Object10"
       },
       "FirewallPolicyId": {
         "description": "Stable identity of an effective firewall policy.",
@@ -1422,6 +1422,59 @@ expression: openapi_document()
           }
         ]
       },
+      "IngressBlocklist": {
+        "$ref": "#/components/schemas/Object8"
+      },
+      "IngressBlocklistId": {
+        "description": "Stable identity of the cluster ingress blocklist.",
+        "type": "string"
+      },
+      "IngressBlocklistSpec": {
+        "description": "Desired canonical client addresses denied before service routing.",
+        "properties": {
+          "addresses": {
+            "description": "Unique addresses in deterministic network ordering.",
+            "items": {
+              "format": "ip",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      },
+      "IngressBlocklistStatus": {
+        "description": "Observed publication state for the cluster ingress blocklist.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently published to the ingress backend."
+          },
+          "conditions": {
+            "description": "Generic publication and validation evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "configurationDigest": {
+            "description": "Digest of the exact rendered address set.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
       "IngressRoute": {
         "$ref": "#/components/schemas/Object7"
       },
@@ -1535,7 +1588,7 @@ expression: openapi_document()
         ]
       },
       "NodeFirewall": {
-        "$ref": "#/components/schemas/Object15"
+        "$ref": "#/components/schemas/Object16"
       },
       "NodeFirewallId": {
         "description": "Stable identity of a node's desired firewall ruleset.",
@@ -1902,6 +1955,41 @@ expression: openapi_document()
           "spec": {
             "allOf": [
               {
+                "$ref": "#/components/schemas/FirewallPolicySpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicyStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object11": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta11"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/DnsRecordSpec"
               }
             ],
@@ -1923,13 +2011,13 @@ expression: openapi_document()
         ],
         "type": "object"
       },
-      "Object11": {
+      "Object12": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta11"
+                "$ref": "#/components/schemas/ObjectMeta12"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -1958,13 +2046,13 @@ expression: openapi_document()
         ],
         "type": "object"
       },
-      "Object12": {
+      "Object13": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta12"
+                "$ref": "#/components/schemas/ObjectMeta13"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -1993,13 +2081,13 @@ expression: openapi_document()
         ],
         "type": "object"
       },
-      "Object13": {
+      "Object14": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta13"
+                "$ref": "#/components/schemas/ObjectMeta14"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2028,13 +2116,13 @@ expression: openapi_document()
         ],
         "type": "object"
       },
-      "Object14": {
+      "Object15": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta14"
+                "$ref": "#/components/schemas/ObjectMeta15"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2063,13 +2151,13 @@ expression: openapi_document()
         ],
         "type": "object"
       },
-      "Object15": {
+      "Object16": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta15"
+                "$ref": "#/components/schemas/ObjectMeta16"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2322,7 +2410,7 @@ expression: openapi_document()
           "spec": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationSpec"
+                "$ref": "#/components/schemas/IngressBlocklistSpec"
               }
             ],
             "description": "Desired state written by users or another controller."
@@ -2330,7 +2418,7 @@ expression: openapi_document()
           "status": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationStatus"
+                "$ref": "#/components/schemas/IngressBlocklistStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2357,7 +2445,7 @@ expression: openapi_document()
           "spec": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicySpec"
+                "$ref": "#/components/schemas/TrafficGenerationSpec"
               }
             ],
             "description": "Desired state written by users or another controller."
@@ -2365,7 +2453,7 @@ expression: openapi_document()
           "status": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicyStatus"
+                "$ref": "#/components/schemas/TrafficGenerationStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2499,7 +2587,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/DnsRecordId"
+                "$ref": "#/components/schemas/FirewallPolicyId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2577,7 +2665,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/BuildId"
+                "$ref": "#/components/schemas/DnsRecordId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2655,7 +2743,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/PreviewId"
+                "$ref": "#/components/schemas/BuildId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2733,7 +2821,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/UpgradeRunId"
+                "$ref": "#/components/schemas/PreviewId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2811,7 +2899,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/WebhookId"
+                "$ref": "#/components/schemas/UpgradeRunId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2847,6 +2935,84 @@ expression: openapi_document()
         "type": "object"
       },
       "ObjectMeta15": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta16": {
         "description": "Metadata shared by every resource kind.",
         "properties": {
           "annotations": {
@@ -3435,7 +3601,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationId"
+                "$ref": "#/components/schemas/IngressBlocklistId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -3513,7 +3679,7 @@ expression: openapi_document()
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicyId"
+                "$ref": "#/components/schemas/TrafficGenerationId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -3645,7 +3811,7 @@ expression: openapi_document()
         "type": "object"
       },
       "Preview": {
-        "$ref": "#/components/schemas/Object12"
+        "$ref": "#/components/schemas/Object13"
       },
       "PreviewId": {
         "description": "Stable identity of a pull-request preview.",
@@ -4772,7 +4938,7 @@ expression: openapi_document()
         "type": "integer"
       },
       "TrafficGeneration": {
-        "$ref": "#/components/schemas/Object8"
+        "$ref": "#/components/schemas/Object9"
       },
       "TrafficGenerationId": {
         "description": "Stable identity of an ingress traffic generation.",
@@ -5113,7 +5279,7 @@ expression: openapi_document()
         ]
       },
       "UpgradeRun": {
-        "$ref": "#/components/schemas/Object13"
+        "$ref": "#/components/schemas/Object14"
       },
       "UpgradeRunId": {
         "description": "Stable identity of a persisted cluster upgrade run.",
@@ -5284,7 +5450,7 @@ expression: openapi_document()
         ]
       },
       "Webhook": {
-        "$ref": "#/components/schemas/Object14"
+        "$ref": "#/components/schemas/Object15"
       },
       "WebhookEvent": {
         "description": "Built-in event that may be delivered to an outbound webhook.",

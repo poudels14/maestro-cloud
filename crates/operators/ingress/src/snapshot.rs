@@ -3,9 +3,10 @@ use std::fmt::Display;
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentSpec, AssignmentStatus, Deployment, DeploymentId,
-    DeploymentSpec, DeploymentStatus, IngressRoute, IngressRouteId, IngressRouteSpec,
-    IngressRouteStatus, Object, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
-    ResourceKind, ResourceName, Service, ServiceId, ServiceSpec, ServiceStatus, TrafficGeneration,
+    DeploymentSpec, DeploymentStatus, IngressBlocklist, IngressBlocklistId, IngressBlocklistSpec,
+    IngressBlocklistStatus, IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus,
+    Object, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind,
+    ResourceName, Service, ServiceId, ServiceSpec, ServiceStatus, TrafficGeneration,
     TrafficGenerationId, TrafficGenerationSpec, TrafficGenerationStatus,
 };
 use kernel_controller::FencedStore;
@@ -21,6 +22,7 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) assignments: BTreeMap<AssignmentId, StoredResource<Assignment>>,
     pub(crate) replicas: BTreeMap<ReplicaStateId, StoredResource<ReplicaState>>,
     pub(crate) generations: BTreeMap<TrafficGenerationId, StoredResource<TrafficGeneration>>,
+    pub(crate) blocklists: BTreeMap<IngressBlocklistId, StoredResource<IngressBlocklist>>,
 }
 
 impl ResourceSnapshot {
@@ -58,6 +60,11 @@ impl ResourceSnapshot {
                 TrafficGenerationSpec,
                 TrafficGenerationStatus,
             >(&values, keyspace, "TrafficGeneration")?,
+            blocklists: decode_kind::<
+                IngressBlocklistId,
+                IngressBlocklistSpec,
+                IngressBlocklistStatus,
+            >(&values, keyspace, "IngressBlocklist")?,
         })
     }
 
@@ -77,6 +84,7 @@ impl ResourceSnapshot {
             assignments: resources(&self.assignments),
             replicas: resources(&self.replicas),
             traffic_generations: resources(&self.generations),
+            blocklists: resources(&self.blocklists),
         }
     }
 
@@ -98,6 +106,7 @@ impl ResourceSnapshot {
             .chain(self.assignments.values().map(|resource| &resource.stored))
             .chain(self.replicas.values().map(|resource| &resource.stored))
             .chain(self.generations.values().map(|resource| &resource.stored))
+            .chain(self.blocklists.values().map(|resource| &resource.stored))
     }
 }
 

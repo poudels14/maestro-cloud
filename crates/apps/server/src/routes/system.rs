@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::Router;
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::routing::{any, get};
 use serde_json::{Value, json};
 
 use crate::AppState;
@@ -9,6 +10,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(health))
         .route("/openapi.json", get(openapi))
+        .route("/_maestro/ingress-denied", any(ingress_denied))
 }
 
 async fn health() -> Json<Value> {
@@ -17,4 +19,8 @@ async fn health() -> Json<Value> {
 
 async fn openapi() -> Json<Value> {
     Json(crate::openapi_document())
+}
+
+async fn ingress_denied() -> StatusCode {
+    StatusCode::FORBIDDEN
 }

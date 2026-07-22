@@ -11,6 +11,10 @@ pub(crate) fn paths() -> Map<String, Value> {
             breakdown_operation("getBlockedIngressTraffic", false),
         ),
         (
+            "/api/ingress/blocked-ips".to_owned(),
+            blocked_ips_operation(),
+        ),
+        (
             "/api/services/{serviceId}/traffic".to_owned(),
             service_traffic_operation(),
         ),
@@ -76,6 +80,71 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+    schemas.insert(
+        "BlockedIpRequest".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ip", "blocked"],
+            "properties": {
+                "ip": {"type": "string"},
+                "blocked": {"type": "boolean"}
+            }
+        }),
+    );
+    schemas.insert(
+        "BlockedIpsResponse".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["blockedIps"],
+            "properties": {
+                "blockedIps": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": true
+                }
+            }
+        }),
+    );
+}
+
+fn blocked_ips_operation() -> Value {
+    json!({
+        "get": {
+            "operationId": "getIngressBlocklist",
+            "security": [{"bearerAuth": []}],
+            "responses": {
+                "200": {
+                    "description": "Canonical cluster ingress blocklist",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/BlockedIpsResponse"
+                    }}}
+                },
+                "503": {"description": "Cluster state is unavailable"}
+            }
+        },
+        "patch": {
+            "operationId": "setBlockedIngressIp",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {
+                "required": true,
+                "content": {"application/json": {"schema": {
+                    "$ref": "#/components/schemas/BlockedIpRequest"
+                }}}
+            },
+            "responses": {
+                "200": {
+                    "description": "Updated canonical cluster ingress blocklist",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/BlockedIpsResponse"
+                    }}}
+                },
+                "400": {"description": "Invalid JSON or IP address"},
+                "409": {"description": "Concurrent blocklist updates did not converge"},
+                "503": {"description": "Cluster state is unavailable"}
+            }
+        }
+    })
 }
 
 fn breakdown_operation(operation_id: &str, service_scoped: bool) -> Value {

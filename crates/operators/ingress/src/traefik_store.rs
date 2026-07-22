@@ -6,7 +6,9 @@ use kernel_api::ClusterId;
 use kernel_controller::FencedStore;
 use kernel_store::{Keyspace, Mutation, StoreKey, Transaction, TransactionOutcome};
 
-use crate::{IngressBackendError, TraefikCutover, TraefikProvider, TraefikStage};
+use crate::{
+    IngressBackendError, TraefikBlocklistConfig, TraefikCutover, TraefikProvider, TraefikStage,
+};
 
 /// Fenced persistence adapter for Traefik's cluster-scoped dynamic provider.
 pub struct StoreTraefikProvider {
@@ -134,6 +136,59 @@ impl TraefikProvider for StoreTraefikProvider {
             session: None,
         }));
         self.commit("router cutover", mutations).await
+    }
+
+    async fn replace_blocklist(
+        &self,
+        config: &TraefikBlocklistConfig,
+    ) -> Result<(), IngressBackendError> {
+        let owned_prefixes = config
+            .owned_prefixes
+            .iter()
+            .map(|relative| {
+                self.keyspace
+                    .traefik_entry(relative)
+                    .map_err(|error| backend_error("blocklist prefix validation", error))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let desired = config
+            .entries
+            .iter()
+            .map(|(relative, value)| {
+                self.keyspace
+                    .traefik_entry(relative)
+                    .map(|key| (key, value.as_bytes().to_vec()))
+                    .map_err(|error| backend_error("blocklist path validation", error))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        if desired.keys().any(|key| {
+            owned_prefixes
+                .iter()
+                .all(|prefix| !key.as_str().starts_with(prefix.as_str()))
+        }) {
+            return Err(IngressBackendError::new(
+                "Traefik blocklist contains an entry outside its owned prefixes",
+            ));
+        }
+        let mut deletes = BTreeSet::new();
+        for prefix in &config.owned_prefixes {
+            deletes.extend(
+                self.list_owned(prefix)
+                    .await?
+                    .into_iter()
+                    .filter(|key| !desired.contains_key(key)),
+            );
+        }
+        let mut mutations = deletes
+            .into_iter()
+            .map(|key| Mutation::Delete { key })
+            .collect::<Vec<_>>();
+        mutations.extend(desired.into_iter().map(|(key, value)| Mutation::Put {
+            key,
+            value,
+            session: None,
+        }));
+        self.commit("blocklist replacement", mutations).await
     }
 }
 

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AssignmentId, Condition, DeploymentId, DnsRecordId, FirewallPolicyId, Generation,
-    IngressRouteId, NodeId, Object, ServiceId, TrafficGenerationId,
+    IngressBlocklistId, IngressRouteId, NodeId, Object, ServiceId, TrafficGenerationId,
 };
 
 /// Optional header-based affinity applied by ingress.
@@ -47,6 +47,32 @@ pub struct IngressRouteStatus {
 
 /// An ingress route resource.
 pub type IngressRoute = Object<IngressRouteId, IngressRouteSpec, IngressRouteStatus>;
+
+/// Desired canonical client addresses denied before service routing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressBlocklistSpec {
+    /// Unique addresses in deterministic network ordering.
+    pub addresses: Vec<IpAddr>,
+}
+
+/// Observed publication state for the cluster ingress blocklist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressBlocklistStatus {
+    /// Desired generation most recently published to the ingress backend.
+    pub applied_generation: Generation,
+    /// Digest of the exact rendered address set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration_digest: Option<String>,
+    /// Generic publication and validation evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+}
+
+/// The singleton cluster ingress blocklist resource.
+pub type IngressBlocklist =
+    Object<IngressBlocklistId, IngressBlocklistSpec, IngressBlocklistStatus>;
 
 /// One cluster-routable workload selected for ingress traffic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

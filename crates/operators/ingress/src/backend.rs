@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::BackendChange;
+use crate::{BackendChange, IngressBlocklistChange};
 
 /// Side-effect boundary for publishing one service's ingress configuration.
 #[async_trait]
@@ -10,6 +10,12 @@ pub trait IngressBackend: Send + Sync {
     /// Implementations must stage all backend services before switching routers,
     /// and must tolerate replay after cancellation or a later store conflict.
     async fn apply(&self, change: &BackendChange) -> Result<(), IngressBackendError>;
+
+    /// Idempotently replaces the cluster-wide client-address rejection policy.
+    async fn apply_blocklist(
+        &self,
+        change: &IngressBlocklistChange,
+    ) -> Result<(), IngressBackendError>;
 }
 
 /// Matchable ingress publication failure retried by the controller runtime.

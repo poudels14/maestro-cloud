@@ -20,14 +20,14 @@ mod writer;
 pub use backend::{IngressBackend, IngressBackendError};
 pub use controller::{IngressController, IngressError, IngressReport};
 pub use model::{
-    BackendChange, IngressInput, IngressPlan, IngressSettings, PublishedTraffic,
-    ResourceStatusUpdate,
+    BackendChange, IngressBlocklistChange, IngressInput, IngressPlan, IngressSettings,
+    PublishedTraffic, ResourceStatusUpdate,
 };
 pub use plan::{IngressPlanError, plan};
-pub use reconciler::IngressReconciler;
+pub use reconciler::{IngressBlocklistReconciler, IngressReconciler};
 pub use traefik::{
-    TRAEFIK_BLOCKED_ROUTER_PREFIX, TraefikBackend, TraefikCutover, TraefikProvider, TraefikStage,
-    traefik_service_router_prefix,
+    TRAEFIK_BLOCKED_ROUTER_PREFIX, TraefikBackend, TraefikBlocklistConfig, TraefikCutover,
+    TraefikProvider, TraefikStage, traefik_service_router_prefix,
 };
 pub use traefik_store::StoreTraefikProvider;
 pub use validation::validate_route_spec;

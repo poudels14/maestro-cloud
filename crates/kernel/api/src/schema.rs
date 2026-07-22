@@ -6,12 +6,13 @@ use serde_json::{Value, json};
 
 use crate::{
     ArtifactArchiveUploadResponse, Assignment, Build, CommandRequest, Deployment,
-    DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressRoute, Node, NodeFirewall,
-    NodeNetwork, Preview, ReplicaState, ResourceKind, Service, ServiceCommandResponse,
-    ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus,
-    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
-    ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec,
-    ServiceWriteRequest, ServiceWriteResponse, TrafficGeneration, UpgradeRun, Webhook,
+    DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute, Node,
+    NodeFirewall, NodeNetwork, Preview, ReplicaState, ResourceKind, Service,
+    ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse,
+    ServiceDiffStatus, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
+    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
+    ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest, ServiceWriteResponse,
+    TrafficGeneration, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -39,6 +40,8 @@ pub enum BuiltinKind {
     ReplicaState,
     /// An ingress route.
     IngressRoute,
+    /// The singleton ingress client-address blocklist.
+    IngressBlocklist,
     /// A blue/green traffic generation.
     TrafficGeneration,
     /// An atomic firewall policy.
@@ -57,7 +60,7 @@ pub enum BuiltinKind {
 
 impl BuiltinKind {
     /// Built-in kinds in deterministic schema and snapshot order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Node,
         Self::NodeNetwork,
         Self::Service,
@@ -65,6 +68,7 @@ impl BuiltinKind {
         Self::Assignment,
         Self::ReplicaState,
         Self::IngressRoute,
+        Self::IngressBlocklist,
         Self::TrafficGeneration,
         Self::FirewallPolicy,
         Self::DnsRecord,
@@ -86,6 +90,7 @@ impl BuiltinKind {
             Self::Assignment => "Assignment",
             Self::ReplicaState => "ReplicaState",
             Self::IngressRoute => "IngressRoute",
+            Self::IngressBlocklist => "IngressBlocklist",
             Self::TrafficGeneration => "TrafficGeneration",
             Self::FirewallPolicy => "FirewallPolicy",
             Self::DnsRecord => "DnsRecord",
@@ -116,6 +121,7 @@ impl TryFrom<&ResourceKind> for BuiltinKind {
             "Assignment" => Ok(Self::Assignment),
             "ReplicaState" => Ok(Self::ReplicaState),
             "IngressRoute" => Ok(Self::IngressRoute),
+            "IngressBlocklist" => Ok(Self::IngressBlocklist),
             "TrafficGeneration" => Ok(Self::TrafficGeneration),
             "FirewallPolicy" => Ok(Self::FirewallPolicy),
             "DnsRecord" => Ok(Self::DnsRecord),
@@ -148,6 +154,8 @@ pub enum BuiltinResource {
     ReplicaState(ReplicaState),
     /// An ingress route.
     IngressRoute(IngressRoute),
+    /// The singleton ingress client-address blocklist.
+    IngressBlocklist(IngressBlocklist),
     /// A blue/green traffic generation.
     TrafficGeneration(TrafficGeneration),
     /// An atomic firewall policy.
@@ -176,6 +184,7 @@ impl BuiltinResource {
             Self::Assignment(_) => BuiltinKind::Assignment,
             Self::ReplicaState(_) => BuiltinKind::ReplicaState,
             Self::IngressRoute(_) => BuiltinKind::IngressRoute,
+            Self::IngressBlocklist(_) => BuiltinKind::IngressBlocklist,
             Self::TrafficGeneration(_) => BuiltinKind::TrafficGeneration,
             Self::FirewallPolicy(_) => BuiltinKind::FirewallPolicy,
             Self::DnsRecord(_) => BuiltinKind::DnsRecord,
@@ -232,6 +241,9 @@ pub fn decode_builtin(
         BuiltinKind::IngressRoute => {
             serde_json::from_value(value).map(BuiltinResource::IngressRoute)
         }
+        BuiltinKind::IngressBlocklist => {
+            serde_json::from_value(value).map(BuiltinResource::IngressBlocklist)
+        }
         BuiltinKind::TrafficGeneration => {
             serde_json::from_value(value).map(BuiltinResource::TrafficGeneration)
         }
@@ -263,6 +275,7 @@ pub fn openapi_document() -> Value {
     register_schema::<Assignment>(&mut generator, BuiltinKind::Assignment);
     register_schema::<ReplicaState>(&mut generator, BuiltinKind::ReplicaState);
     register_schema::<IngressRoute>(&mut generator, BuiltinKind::IngressRoute);
+    register_schema::<IngressBlocklist>(&mut generator, BuiltinKind::IngressBlocklist);
     register_schema::<TrafficGeneration>(&mut generator, BuiltinKind::TrafficGeneration);
     register_schema::<FirewallPolicy>(&mut generator, BuiltinKind::FirewallPolicy);
     register_schema::<DnsRecord>(&mut generator, BuiltinKind::DnsRecord);

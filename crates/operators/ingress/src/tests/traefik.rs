@@ -1,12 +1,14 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kernel_api::{ClusterId, TrafficGenerationId};
+use kernel_api::{ClusterId, Generation, TrafficGenerationId};
 
 use super::plan::World;
 use crate::{
     BackendChange, IngressBackend, IngressBackendError, PublishedTraffic, TraefikBackend,
-    TraefikCutover, TraefikProvider, TraefikStage, plan, traefik_service_router_prefix,
+    TraefikBlocklistConfig, TraefikCutover, TraefikProvider, TraefikStage, plan,
+    traefik_service_router_prefix,
 };
 
 #[tokio::test]
@@ -153,6 +155,67 @@ async fn retirement_removes_only_hashed_generation_prefixes()
     Ok(())
 }
 
+#[tokio::test]
+async fn blocklist_rendering_chunks_forwarding_aware_rules_and_all_denial_backends()
+-> Result<(), Box<dyn std::error::Error>> {
+    let provider = Arc::new(RecordingProvider::default());
+    let backend = TraefikBackend::new(ClusterId::new("cluster-1")?, provider.clone())
+        .with_ingress_denied_backends(vec![
+            SocketAddr::from(([10, 0, 0, 2], 3000)),
+            SocketAddr::from(([10, 0, 0, 1], 3000)),
+        ]);
+    let addresses = (0..600_u32)
+        .map(|offset| IpAddr::V4(Ipv4Addr::from(0xcb00_7100_u32 + offset)))
+        .collect::<Vec<_>>();
+    backend
+        .apply_blocklist(&crate::plan::blocklist_change(Generation(7), addresses))
+        .await?;
+
+    let config = provider.blocklists().remove(0);
+    let rules = config
+        .entries
+        .iter()
+        .filter(|(key, _)| key.ends_with("/rule"))
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    assert_eq!(rules.len(), 3);
+    assert!(rules.iter().all(|rule| {
+        rule.contains("ClientIP")
+            && rule.contains("CF-Connecting-IP")
+            && rule.contains("X-Real-IP")
+            && rule.contains("X-Forwarded-For")
+    }));
+    assert_eq!(
+        config
+            .entries
+            .iter()
+            .filter(|(key, _)| key.contains("/loadBalancer/servers/") && key.ends_with("/url"))
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
+        ["https://10.0.0.1:3000", "https://10.0.0.2:3000"]
+    );
+    assert_eq!(
+        config
+            .entries
+            .get("http/serversTransports/maestro.internal-blocked/insecureSkipVerify")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert!(
+        config
+            .entries
+            .keys()
+            .filter(|key| key.starts_with("http/routers/"))
+            .all(|key| key.starts_with("http/routers/maestro.internal-blocked-"))
+    );
+
+    backend
+        .apply_blocklist(&crate::plan::blocklist_change(Generation(8), Vec::new()))
+        .await?;
+    assert!(provider.blocklists().remove(1).entries.is_empty());
+    Ok(())
+}
+
 fn active_change() -> BackendChange {
     let world = World::ready();
     let generation = plan(world.input())
@@ -180,6 +243,7 @@ struct RecordingProvider {
     events: Mutex<Vec<Event>>,
     stages: Mutex<Vec<TraefikStage>>,
     cutovers: Mutex<Vec<TraefikCutover>>,
+    blocklists: Mutex<Vec<TraefikBlocklistConfig>>,
     fail_stage: bool,
 }
 
@@ -194,6 +258,10 @@ impl RecordingProvider {
 
     fn cutovers(&self) -> Vec<TraefikCutover> {
         self.cutovers.lock().expect("cutovers").clone()
+    }
+
+    fn blocklists(&self) -> Vec<TraefikBlocklistConfig> {
+        self.blocklists.lock().expect("blocklists").clone()
     }
 }
 
@@ -214,6 +282,17 @@ impl TraefikProvider for RecordingProvider {
             .lock()
             .expect("cutovers")
             .push(cutover.clone());
+        Ok(())
+    }
+
+    async fn replace_blocklist(
+        &self,
+        config: &TraefikBlocklistConfig,
+    ) -> Result<(), IngressBackendError> {
+        self.blocklists
+            .lock()
+            .expect("blocklists")
+            .push(config.clone());
         Ok(())
     }
 }
