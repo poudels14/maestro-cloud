@@ -16,9 +16,37 @@ import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transp
 export type IngressTrafficQuery = NonNullable<
   operations["getIngressTraffic"]["parameters"]["query"]
 >;
+export type ClusterMetricQuery = NonNullable<
+  operations["listClusterMetrics"]["parameters"]["query"]
+>;
+export type NodeMetricQuery = NonNullable<operations["listNodeMetrics"]["parameters"]["query"]>;
+export type StatsMetricQuery = NonNullable<
+  operations["listOperationalStatsMetrics"]["parameters"]["query"]
+>;
+export type ServiceMetricQuery = NonNullable<
+  operations["listServiceMetrics"]["parameters"]["query"]
+>;
+export type ContainerMetricQuery = NonNullable<
+  operations["listContainerMetrics"]["parameters"]["query"]
+>;
 
 export interface MaestroApiClient {
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
+  getClusterStats(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterStatsResponse"]>;
+  listLocalDisks(options?: ApiRequestOptions): Promise<ApiSchemas["DiskInfo"][]>;
+  listNodeDisks(options?: ApiRequestOptions): Promise<ApiSchemas["NodeDiskMap"]>;
+  listNodeMetrics(
+    query?: NodeMetricQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
+  listClusterMetrics(
+    query?: ClusterMetricQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
+  listOperationalStatsMetrics(
+    query?: StatsMetricQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["StatsMetricPoint"][]>;
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
   listUnschedulableReplicas(
     options?: ApiRequestOptions
@@ -153,6 +181,16 @@ export interface MaestroApiClient {
     routeId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["IngressRoute"]>;
+  listServiceMetrics(
+    serviceId: string,
+    query?: ServiceMetricQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
+  listContainerMetrics(
+    serviceId: string,
+    query?: ContainerMetricQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
   listActiveIngressRoutes(options?: ApiRequestOptions): Promise<ApiSchemas["IngressRouting"][]>;
   getIngressBlocklist(options?: ApiRequestOptions): Promise<ApiSchemas["BlockedIpsResponse"]>;
   setBlockedIngressIp(
@@ -306,6 +344,13 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
 
   return {
     getClusterInfo: (options) => get("/api/cluster", options),
+    getClusterStats: (options) => get("/api/cluster/stats", options),
+    listLocalDisks: (options) => get("/api/disks", options),
+    listNodeDisks: (options) => get("/api/disks/nodes", options),
+    listNodeMetrics: (query, options) => get(withQuery("/api/metrics/node", query), options),
+    listClusterMetrics: (query, options) => get(withQuery("/api/metrics/cluster", query), options),
+    listOperationalStatsMetrics: (query, options) =>
+      get(withQuery("/api/metrics/stats", query), options),
     listNodes: (options) => get("/api/cluster/nodes", options),
     listUnschedulableReplicas: (options) => get("/api/cluster/unschedulable", options),
     getNode: (nodeId, options) => get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
@@ -445,6 +490,13 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     getIngressRoute: (serviceId, routeId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/routes/${encodeURIComponent(routeId)}`,
+        options
+      ),
+    listServiceMetrics: (serviceId, query, options) =>
+      get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics`, query), options),
+    listContainerMetrics: (serviceId, query, options) =>
+      get(
+        withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics/containers`, query),
         options
       ),
     listActiveIngressRoutes: (options) => get("/api/ingress/routes", options),

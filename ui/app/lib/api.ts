@@ -180,9 +180,11 @@ export async function dryRunFirewallPolicy(
 }
 
 export async function getClusterStats(): Promise<ClusterStats> {
-  const res = await fetch("/api/cluster/stats");
-  if (!res.ok) throw new Error(`Failed to fetch cluster stats: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getClusterStats();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load cluster stats");
+  }
 }
 
 export async function getStatsMetrics(
@@ -190,13 +192,15 @@ export async function getStatsMetrics(
   from?: number,
   to?: number
 ): Promise<StatsMetricPoint[]> {
-  const url = new URL("/api/metrics/stats", location.origin);
-  if (name) url.searchParams.set("name", name);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch stats metrics: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listOperationalStatsMetrics({
+      ...(name ? { name } : {}),
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load stats metrics");
+  }
 }
 
 export async function getClusterConfig(): Promise<MaskedConfig> {
@@ -538,9 +542,11 @@ function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
 }
 
 export async function getDisks(): Promise<DiskInfo[]> {
-  const res = await fetch("/api/disks");
-  if (!res.ok) throw new Error(`Failed to fetch disks: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listLocalDisks();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load disks");
+  }
 }
 
 export async function getIngressRoutes(): Promise<IngressRouting[]> {
@@ -556,12 +562,14 @@ export async function getServiceMetrics(
   from?: number,
   to?: number
 ): Promise<MetricPoint[]> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/metrics`, location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch metrics: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listServiceMetrics(serviceId, {
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load service metrics");
+  }
 }
 
 export async function getServiceTraffic(
@@ -629,21 +637,25 @@ export async function getIngressBlocklist(): Promise<IngressBlocklist> {
 }
 
 export async function getNodeMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  const url = new URL("/api/metrics/node", location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch node metrics: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listNodeMetrics({
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load node metrics");
+  }
 }
 
 export async function getClusterMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  const url = new URL("/api/metrics/cluster", location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch cluster metrics: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listClusterMetrics({
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load cluster metrics");
+  }
 }
 
 export async function getContainerMetrics(
@@ -651,15 +663,14 @@ export async function getContainerMetrics(
   from?: number,
   to?: number
 ): Promise<MetricPoint[]> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/metrics/containers`,
-    location.origin
-  );
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch container metrics: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listContainerMetrics(serviceId, {
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load container metrics");
+  }
 }
 
 function apiRequestError(error: unknown, fallback: string): Error {

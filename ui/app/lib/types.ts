@@ -175,15 +175,7 @@ export interface DeploymentBuildInfo {
   dockerImageId: string;
 }
 
-export interface MetricPoint {
-  ts: number;
-  source: string;
-  cpuPercent: number;
-  memoryBytes: number;
-  memoryLimitBytes: number;
-  netRxBytes: number;
-  netTxBytes: number;
-}
+export type MetricPoint = ApiSchemas["ResourceMetricPoint"];
 
 export interface TrafficPoint {
   ts: number;
@@ -203,86 +195,13 @@ export interface TrafficPoint {
 export type TrafficBreakdownEntry = ApiSchemas["TrafficBreakdownEntry"];
 export type IngressTrafficBreakdown = ApiSchemas["IngressTrafficBreakdown"];
 
-export interface DiskInfo {
-  name: string;
-  mountPoint: string;
-  totalBytes: number;
-  availableBytes: number;
-  fileSystem: string;
-}
-
-export interface ClusterStats {
-  generatedAtMs: number;
-  probe: {
-    version: string;
-    uptimeMs: number;
-  };
-  controller: ControllerStats | null;
-  controllerHeartbeatAgeMs: number | null;
-  backup: BackupStats;
-  warnings: StatsWarning[];
-}
-
-export interface ControllerStats {
-  reportedAtMs: number;
-  version: string;
-  uptimeMs: number;
-  spool: {
-    rowCount: number;
-    highWatermark: number;
-    oldestEntryAtMs: number | null;
-    databaseBytes: number;
-  };
-  sinks: SinkStats[];
-  deadLetters: {
-    count: number;
-    capacity: number;
-    payloadBytes: number;
-    latestAtMs: number | null;
-    latestStatus: number | null;
-    latestError: string | null;
-  };
-}
-
-export interface SinkStats {
-  id: string;
-  cursor: number;
-  pendingEntries: number;
-  oldestPendingAtMs: number | null;
-  lastSuccessAtMs: number | null;
-  lastErrorAtMs: number | null;
-  lastError: string | null;
-  consecutiveFailures: number;
-  lastCursorAdvanceAtMs: number | null;
-  filteredEntries: number;
-}
-
-export interface BackupStats {
-  configured: boolean;
-  lastAttemptAtMs: number | null;
-  lastSuccessAtMs: number | null;
-  lastErrorAtMs: number | null;
-  lastError: string | null;
-  pendingPartitions: number;
-  pendingBytes: number;
-  oldestPendingDate: string | null;
-  uploadedBytesLastRun: number;
-  completedPartitionsLastRun: number;
-  failedPartitionsLastRun: number;
-}
-
-export interface StatsWarning {
-  code: string;
-  severity: "warning" | "error";
-  message: string;
-}
-
-export interface StatsMetricPoint {
-  ts: number;
-  name: string;
-  value: number;
-  labels?: Record<string, string>;
-}
+export type DiskInfo = ApiSchemas["DiskInfo"];
+export type ClusterStats = ApiSchemas["ClusterStatsResponse"];
+export type ControllerStats = ApiSchemas["ControllerStatsSnapshot"];
+export type SinkStats = ApiSchemas["SinkStatsSnapshot"];
+export type BackupStats = ApiSchemas["BackupStatsSnapshot"];
+export type StatsWarning = ApiSchemas["StatsWarning"];
+export type StatsMetricPoint = ApiSchemas["StatsMetricPoint"];
 
 export interface LogEntry {
   seq: number;
