@@ -67,10 +67,26 @@
             targets = [staticTarget];
           };
         };
+        rewriteDaemonImage = import ./nix/rewrite-daemon-image.nix {
+          inherit pkgs;
+          rewriteBinaries = staticRewrite.passthru.binaries;
+        };
+        imageArchitecture =
+          {
+            aarch64-linux = "arm64";
+            x86_64-linux = "amd64";
+          }
+          .${system};
       in {
         rewrite-static = staticRewrite;
         rewrite-static-bundle = import ./nix/rewrite-release-bundle.nix {
           inherit pkgs;
+          rewritePackage = staticRewrite;
+        };
+        rewrite-daemon-image = rewriteDaemonImage;
+        rewrite-daemon-image-bundle = import ./nix/rewrite-daemon-image-bundle.nix {
+          daemonImage = rewriteDaemonImage;
+          inherit imageArchitecture pkgs;
           rewritePackage = staticRewrite;
         };
       })

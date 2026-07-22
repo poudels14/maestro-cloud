@@ -73,6 +73,24 @@ requires the host runtime, network privileges, and external tools described by
 the NixOS module; the static bundle does not turn the daemon into an isolated
 container deployment.
 
+Release builds also publish a minimal, deterministic daemon image archive for
+each Linux architecture. Build and verify it locally with:
+
+```sh
+nix build .#rewrite-daemon-image-bundle
+(cd result && sha256sum --check *.sha256)
+gzip -dc result/*.docker.tar.gz | docker load
+version=$(nix eval --raw .#rewrite-static.version)
+docker run --rm "maestro-daemon:$version" --help
+```
+
+The image contains the static daemon and no shell. It is a packaging artifact,
+not a replacement for the host integration in `services.maestro-rewrite`: a
+real daemon still needs host networking, containerd, privileged network access,
+the launch document, and the external adapter binaries selected by that
+document. Prefer the NixOS module for production and use the image only where
+those dependencies are explicitly supplied by the container orchestrator.
+
 Selecting this module does not approve production runtime adoption. Complete
 the runtime-adoption gate and the migration rehearsal in `cutover.md` before
 enabling the service on a production node.
