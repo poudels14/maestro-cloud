@@ -3581,7 +3581,11 @@ dependencies = [
 name = "migrate"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "argon2",
+ "base64 0.22.1",
  "hex",
+ "ipnet",
  "kernel-api",
  "kernel-store",
  "serde",
@@ -3589,6 +3593,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

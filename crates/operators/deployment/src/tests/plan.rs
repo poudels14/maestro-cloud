@@ -63,6 +63,37 @@ fn watched_commit_creates_a_pinned_deployment_in_the_same_service_generation() {
 }
 
 #[test]
+fn watched_commit_reuses_an_equivalent_migrated_deployment() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let ArtifactTemplate::Build { template } = &mut service.spec.artifact else {
+        return;
+    };
+    template.watch = true;
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_WATCH_REVISION_ANNOTATION.to_string()),
+        revision.to_string(),
+    );
+    let mut migrated = deployment(&service, DeploymentPhase::Ready);
+    migrated.meta.id = DeploymentId::new("legacy-deployment").expect("legacy deployment id");
+    let ArtifactTemplate::Build { template } = &mut migrated.spec.service.artifact else {
+        return;
+    };
+    let BuildSource::Git {
+        revision: captured, ..
+    } = &mut template.source
+    else {
+        return;
+    };
+    *captured = revision.to_string();
+
+    let result = plan(input(service, vec![migrated])).expect("reuse migrated deployment");
+
+    assert!(result.create_deployments.is_empty());
+}
+
+#[test]
 fn existing_watched_commit_advances_without_recreating_its_deployment() {
     let mut service = service(Generation(7), RolloutState::Active);
     service.spec.artifact = build_artifact();

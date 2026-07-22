@@ -48,6 +48,10 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             let watched_revision = desired.spec.service != service.spec;
             let exists = if watched_revision {
                 deployments.contains_key(&desired.meta.id)
+                    || related.iter().any(|deployment| {
+                        deployment.spec.service_generation == service.meta.generation
+                            && deployment.spec.service == desired.spec.service
+                    })
             } else {
                 related
                     .iter()
