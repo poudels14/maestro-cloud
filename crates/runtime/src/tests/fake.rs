@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 
-use crate::conformance::{WorkloadRuntimeFixture, exercise_workload_runtime};
+use crate::conformance::{
+    ExecConformanceFixture, RunningWorkloadFixture, WorkloadRuntimeFixture,
+    exercise_running_workload, exercise_workload_runtime,
+};
 use crate::{
     EventRequest, ExecMode, ExecOutput, ExecRequest, FakeRuntime, FakeRuntimeOperation, LogMode,
     LogRequest, LogSource, ProcessWorkload, RuntimeError, RuntimeEventKind, ShutdownRequest,
@@ -15,6 +18,32 @@ use crate::{
 async fn fake_passes_workload_runtime_conformance() {
     let runtime = FakeRuntime::new();
     exercise_workload_runtime(&runtime, &fixture())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn fake_passes_running_workload_conformance() {
+    let runtime = FakeRuntime::new();
+    let fixture = fixture();
+    let handle = runtime.create(&fixture.spec).await.unwrap();
+    runtime.start(&handle).await.unwrap();
+    runtime
+        .append_log(
+            handle.workload_id(),
+            LogSource::Stdout,
+            b"runtime-stdout".to_vec(),
+        )
+        .unwrap();
+    runtime
+        .append_log(
+            handle.workload_id(),
+            LogSource::Stderr,
+            b"runtime-stderr".to_vec(),
+        )
+        .unwrap();
+
+    exercise_running_workload(&runtime, &handle, &running_fixture())
         .await
         .unwrap();
 }
@@ -182,6 +211,28 @@ fn fixture() -> WorkloadRuntimeFixture {
     WorkloadRuntimeFixture {
         spec: process_spec("/bin/true"),
         conflicting_spec: process_spec("/bin/false"),
+    }
+}
+
+fn running_fixture() -> RunningWorkloadFixture {
+    RunningWorkloadFixture {
+        cluster_id: ClusterId::new("cluster-1").unwrap(),
+        node_id: NodeId::new("node-1").unwrap(),
+        stdout_marker: b"runtime-stdout".to_vec(),
+        stderr_marker: b"runtime-stderr".to_vec(),
+        exec: Some(ExecConformanceFixture {
+            request: ExecRequest {
+                command: CommandSpec {
+                    executable: "fake-exec-stdout".to_owned(),
+                    arguments: Vec::new(),
+                },
+                environment: BTreeMap::new(),
+                mode: ExecMode::Pipes,
+            },
+            stdout_marker: b"fake-exec-stdout".to_vec(),
+            stderr_marker: None,
+        }),
+        timeout: Duration::from_secs(1),
     }
 }
 

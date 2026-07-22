@@ -5,11 +5,13 @@ use std::time::Duration;
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 use supervisor::ProcessSupervisor;
 
-use crate::conformance::{WorkloadRuntimeFixture, exercise_workload_runtime};
+use crate::conformance::{
+    RunningWorkloadFixture, WorkloadRuntimeFixture, assert_running_workload_adoptable,
+    exercise_running_workload, exercise_workload_runtime,
+};
 use crate::{
-    EventRequest, LogMode, LogRequest, ProcessRuntime, ProcessRuntimeSettings, ProcessWorkload,
-    ShutdownRequest, TokioRuntimeClock, WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime,
-    WorkloadSpec, WorkloadState,
+    ProcessRuntime, ProcessRuntimeSettings, ProcessWorkload, TokioRuntimeClock,
+    WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
 };
 
 #[tokio::test]
@@ -30,7 +32,10 @@ async fn process_backend_streams_logs_and_adopts_across_runtime_restart() {
     let first = process_runtime(root.path());
     let spec = process_spec(
         "/bin/sh",
-        &["-c", "printf adopted-output; exec /bin/sleep 30"],
+        &[
+            "-c",
+            "printf process-stdout; printf process-stderr >&2; exec /bin/sleep 30",
+        ],
     );
     let handle = first.create(&spec).await.unwrap();
     first.start(&handle).await.unwrap();
@@ -43,69 +48,23 @@ async fn process_backend_streams_logs_and_adopts_across_runtime_restart() {
             .is_absolute()
     );
 
-    let mut events = first
-        .events(EventRequest {
-            cluster_id: ClusterId::new("cluster-1").unwrap(),
-            node_id: NodeId::new("node-1").unwrap(),
-            after: None,
-        })
-        .await
-        .unwrap();
-    assert!(events.next().await.unwrap().is_some());
-    assert!(events.next().await.unwrap().is_some());
-    let mut logs = first
-        .logs(
-            &handle,
-            LogRequest {
-                after: None,
-                mode: LogMode::Follow,
-            },
-        )
-        .await
-        .unwrap();
-    let frame = tokio::time::timeout(Duration::from_secs(5), logs.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(frame.payload, b"adopted-output");
     drop(first);
 
     let replacement = process_runtime(root.path());
-    let observed = replacement
-        .list(
-            &ClusterId::new("cluster-1").unwrap(),
-            &NodeId::new("node-1").unwrap(),
-        )
+    let fixture = RunningWorkloadFixture {
+        cluster_id: ClusterId::new("cluster-1").unwrap(),
+        node_id: NodeId::new("node-1").unwrap(),
+        stdout_marker: b"process-stdout".to_vec(),
+        stderr_marker: b"process-stderr".to_vec(),
+        exec: None,
+        timeout: Duration::from_secs(5),
+    };
+    assert_running_workload_adoptable(&replacement, &handle, &fixture)
         .await
         .unwrap();
-    assert_eq!(observed.len(), 1);
-    assert_eq!(
-        observed.first().unwrap().status.state,
-        WorkloadState::Running
-    );
-    replacement
-        .stop(
-            &handle,
-            ShutdownRequest {
-                timeout: Duration::from_secs(5),
-            },
-        )
+    exercise_running_workload(&replacement, &handle, &fixture)
         .await
         .unwrap();
-    assert_eq!(
-        replacement.status(&handle).await.unwrap().state,
-        WorkloadState::Stopped
-    );
-
-    replacement.create(&spec).await.unwrap();
-    replacement.start(&handle).await.unwrap();
-    assert_eq!(
-        replacement.status(&handle).await.unwrap().state,
-        WorkloadState::Running
-    );
-    replacement.kill(&handle).await.unwrap();
-    replacement.remove(&handle).await.unwrap();
 }
 
 fn process_runtime(root: &std::path::Path) -> ProcessRuntime {

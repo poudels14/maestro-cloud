@@ -12,32 +12,49 @@ use crate::{
 };
 
 pub(crate) struct ContainerdEventStream {
-    events: Streaming<Envelope>,
+    events: Option<Streaming<Envelope>>,
     channel: Channel,
     namespace: String,
     request: EventRequest,
 }
 
 impl ContainerdEventStream {
-    pub(crate) async fn subscribe(
+    pub(crate) fn subscribe(
         channel: Channel,
         namespace: String,
         request: EventRequest,
     ) -> Result<Box<dyn RuntimeEventStream>, RuntimeError> {
-        let response = containerd::services::v1::events_client::EventsClient::new(channel.clone())
-            .subscribe(SubscribeRequest {
-                filters: vec![format!("namespace=={namespace}")],
-            })
-            .await
-            .map_err(|error| RuntimeError::Unavailable {
-                message: format!("failed to subscribe to containerd events: {error}"),
-            })?;
         Ok(Box::new(Self {
-            events: response.into_inner(),
+            events: None,
             channel,
             namespace,
             request,
         }))
+    }
+
+    async fn next_envelope(&mut self) -> Result<Option<Envelope>, RuntimeError> {
+        if self.events.is_none() {
+            let response =
+                containerd::services::v1::events_client::EventsClient::new(self.channel.clone())
+                    .subscribe(SubscribeRequest {
+                        filters: vec![format!("namespace=={}", self.namespace)],
+                    })
+                    .await
+                    .map_err(|error| RuntimeError::Unavailable {
+                        message: format!("failed to subscribe to containerd events: {error}"),
+                    })?;
+            self.events = Some(response.into_inner());
+        }
+        self.events
+            .as_mut()
+            .ok_or_else(|| RuntimeError::Stream {
+                message: "containerd event subscription state is inconsistent".to_owned(),
+            })?
+            .message()
+            .await
+            .map_err(|error| RuntimeError::Stream {
+                message: format!("containerd event stream failed: {error}"),
+            })
     }
 
     async fn metadata_matches(&self, container_id: &str) -> Result<bool, RuntimeError> {
@@ -76,14 +93,7 @@ impl ContainerdEventStream {
 #[async_trait]
 impl RuntimeEventStream for ContainerdEventStream {
     async fn next(&mut self) -> Result<Option<RuntimeEvent>, RuntimeError> {
-        while let Some(envelope) =
-            self.events
-                .message()
-                .await
-                .map_err(|error| RuntimeError::Stream {
-                    message: format!("containerd event stream failed: {error}"),
-                })?
-        {
+        while let Some(envelope) = self.next_envelope().await? {
             let Some(native) = decode_event(&envelope)? else {
                 continue;
             };
@@ -148,7 +158,7 @@ pub(crate) fn decode_event(envelope: &Envelope) -> Result<Option<NativeEvent>, R
         }
         "/tasks/exit" => {
             let event = TaskExit::decode(payload.value.as_slice()).map_err(event_decode)?;
-            if event.id.is_empty() {
+            if event.id.is_empty() || event.id == event.container_id {
                 Ok(Some(NativeEvent {
                     container_id: event.container_id,
                     kind: RuntimeEventKind::Exited,

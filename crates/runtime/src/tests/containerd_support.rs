@@ -1,7 +1,9 @@
 use containerd::services::v1::Container;
 use containerd::types::v1::{Process, Status};
 
-use crate::containerd_support::{metadata_labels, task_status, validate_existing};
+use crate::containerd_support::{
+    metadata_labels, task_container_id, task_status, validate_existing,
+};
 use crate::{RuntimeError, WorkloadState};
 
 use super::containerd_fixture::metadata;
@@ -40,4 +42,20 @@ fn containerd_task_status_preserves_runtime_state_and_exit_code() {
     let status = task_status(Some(&stopped));
     assert_eq!(status.state, WorkloadState::Stopped);
     assert_eq!(status.exit_code, Some(17));
+}
+
+#[test]
+fn containerd_task_listing_accepts_service_and_shim_identity_shapes() {
+    let service_shape = Process {
+        id: "maestro-workload-1".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(task_container_id(&service_shape), "maestro-workload-1");
+
+    let explicit_shape = Process {
+        container_id: "maestro-workload-2".to_owned(),
+        id: "init".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(task_container_id(&explicit_shape), "maestro-workload-2");
 }

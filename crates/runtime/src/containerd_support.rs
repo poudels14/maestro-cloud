@@ -146,6 +146,14 @@ pub(crate) fn task_status(process: Option<&containerd::types::v1::Process>) -> W
     }
 }
 
+pub(crate) fn task_container_id(process: &containerd::types::v1::Process) -> &str {
+    if process.container_id.is_empty() {
+        &process.id
+    } else {
+        &process.container_id
+    }
+}
+
 pub(crate) fn runtime_status(error: Status, workload_id: &WorkloadId) -> RuntimeError {
     let message = error.message().to_owned();
     match error.code() {

@@ -6,15 +6,21 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use std::sync::Arc;
+#[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
+use std::time::Duration;
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
-use runtime::conformance::{WorkloadRuntimeFixture, exercise_workload_runtime};
+use runtime::conformance::{
+    ExecConformanceFixture, RunningWorkloadFixture, WorkloadRuntimeFixture,
+    assert_running_workload_adoptable, exercise_running_workload, exercise_workload_runtime,
+};
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use runtime::{
-    ArtifactReference, ContainerWorkload, ContainerdRuntime, ContainerdRuntimeSettings,
-    TokioRuntimeClock, WorkloadConfiguration, WorkloadMetadata, WorkloadSpec,
+    ArtifactReference, ContainerWorkload, ContainerdRuntime, ContainerdRuntimeSettings, ExecMode,
+    ExecRequest, TokioRuntimeClock, WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime,
+    WorkloadSpec,
 };
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
@@ -37,7 +43,7 @@ async fn containerd_backend_passes_workload_runtime_conformance() {
         state_root: temporary_root.path().to_path_buf(),
         ..ContainerdRuntimeSettings::default()
     };
-    let runtime = ContainerdRuntime::connect(settings, Arc::new(TokioRuntimeClock::new()))
+    let runtime = ContainerdRuntime::connect(settings.clone(), Arc::new(TokioRuntimeClock::new()))
         .await
         .unwrap();
     let workload_id = format!("containerd-conformance-{process_id}");
@@ -53,6 +59,21 @@ async fn containerd_backend_passes_workload_runtime_conformance() {
     )
     .await
     .unwrap();
+
+    let streaming_id = format!("containerd-streaming-{process_id}");
+    let streaming_spec = container_spec(&image, &streaming_id, "containerd-streaming");
+    let handle = runtime.create(&streaming_spec).await.unwrap();
+    runtime.start(&handle).await.unwrap();
+    let replacement = ContainerdRuntime::connect(settings, Arc::new(TokioRuntimeClock::new()))
+        .await
+        .unwrap();
+    let fixture = running_fixture("containerd-conformance");
+    assert_running_workload_adoptable(&replacement, &handle, &fixture)
+        .await
+        .unwrap();
+    exercise_running_workload(&replacement, &handle, &fixture)
+        .await
+        .unwrap();
 }
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
@@ -80,8 +101,35 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             executable: "/bin/sh".to_owned(),
             arguments: vec![
                 "-c".to_owned(),
-                "trap 'exit 0' TERM; while :; do sleep 60; done".to_owned(),
+                "printf runtime-stdout; printf runtime-stderr >&2; trap 'exit 0' TERM; while :; do sleep 60; done"
+                    .to_owned(),
             ],
         }),
     })
+}
+
+#[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
+fn running_fixture(cluster: &str) -> RunningWorkloadFixture {
+    RunningWorkloadFixture {
+        cluster_id: ClusterId::new(cluster).unwrap(),
+        node_id: NodeId::new("node-1").unwrap(),
+        stdout_marker: b"runtime-stdout".to_vec(),
+        stderr_marker: b"runtime-stderr".to_vec(),
+        exec: Some(ExecConformanceFixture {
+            request: ExecRequest {
+                command: CommandSpec {
+                    executable: "/bin/sh".to_owned(),
+                    arguments: vec![
+                        "-c".to_owned(),
+                        "printf exec-stdout; printf exec-stderr >&2".to_owned(),
+                    ],
+                },
+                environment: BTreeMap::new(),
+                mode: ExecMode::Pipes,
+            },
+            stdout_marker: b"exec-stdout".to_vec(),
+            stderr_marker: Some(b"exec-stderr".to_vec()),
+        }),
+        timeout: Duration::from_secs(10),
+    }
 }

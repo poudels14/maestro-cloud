@@ -46,6 +46,28 @@ cleanup() {
     done
   fi
 
+  if [[ -S "$containerd_socket" ]] \
+    && sudo ctr --address "$containerd_socket" version >/dev/null 2>&1; then
+    while IFS= read -r task_id; do
+      if [[ -n "$task_id" ]]; then
+        sudo ctr --address "$containerd_socket" --namespace maestro-test \
+          tasks delete --force "$task_id" >/dev/null 2>&1 || true
+      fi
+    done < <(
+      sudo ctr --address "$containerd_socket" --namespace maestro-test \
+        tasks list --quiet 2>/dev/null || true
+    )
+    while IFS= read -r container_id; do
+      if [[ -n "$container_id" ]]; then
+        sudo ctr --address "$containerd_socket" --namespace maestro-test \
+          containers delete "$container_id" >/dev/null 2>&1 || true
+      fi
+    done < <(
+      sudo ctr --address "$containerd_socket" --namespace maestro-test \
+        containers list --quiet 2>/dev/null || true
+    )
+  fi
+
   for pid in "$buildkit_pid" "$containerd_pid"; do
     if [[ -n "$pid" ]]; then
       sudo kill "$pid" >/dev/null 2>&1 || true
@@ -67,6 +89,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# The caller owns the isolated log directory used by this redirection.
+# shellcheck disable=SC2024
 sudo containerd \
   --log-level warn \
   --address "$containerd_socket" \
@@ -75,6 +99,8 @@ sudo containerd \
   >"$acceptance_root/containerd.log" 2>&1 &
 containerd_pid=$!
 
+# The caller owns the isolated log directory used by this redirection.
+# shellcheck disable=SC2024
 sudo buildkitd \
   --root "$acceptance_root/buildkit-root" \
   --addr "unix://$buildkit_socket" \

@@ -23,7 +23,8 @@ use crate::containerd_resolver::prepare_resolver_file;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{
     CLUSTER_LABEL, NODE_LABEL, container_id, container_name, is_already_exists, is_not_found,
-    namespaced, observed_workload, runtime_status, task_status, validate_existing,
+    namespaced, observed_workload, runtime_status, task_container_id, task_status,
+    validate_existing,
 };
 use crate::file_log::FileLogStream;
 use crate::{
@@ -379,7 +380,7 @@ impl WorkloadRuntime for ContainerdRuntime {
             .into_inner()
             .tasks
             .into_iter()
-            .map(|process| (process.container_id.clone(), process))
+            .map(|process| (task_container_id(&process).to_owned(), process))
             .collect::<HashMap<_, _>>();
         let cluster_id = cluster_id.to_string();
         let node_id = node_id.to_string();
@@ -410,7 +411,6 @@ impl WorkloadRuntime for ContainerdRuntime {
             self.settings.namespace.clone(),
             request,
         )
-        .await
     }
 
     async fn logs(

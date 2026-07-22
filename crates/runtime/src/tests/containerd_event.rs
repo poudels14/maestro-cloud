@@ -32,6 +32,19 @@ fn containerd_events_decode_primary_lifecycle_changes() {
     let event = decode_event(&exited).unwrap().unwrap();
     assert_eq!(event.kind, RuntimeEventKind::Exited);
     assert_eq!(event.exit_code, Some(23));
+
+    let service_shaped_exit = envelope(
+        "/tasks/exit",
+        TaskExit {
+            container_id: "maestro-workload-1".to_owned(),
+            id: "maestro-workload-1".to_owned(),
+            exit_status: 24,
+            ..Default::default()
+        },
+    );
+    let event = decode_event(&service_shaped_exit).unwrap().unwrap();
+    assert_eq!(event.kind, RuntimeEventKind::Exited);
+    assert_eq!(event.exit_code, Some(24));
 }
 
 #[test]
