@@ -13,6 +13,8 @@ mod delivery;
 mod fake;
 #[cfg(any(test, feature = "test-util"))]
 mod fake_delivery;
+#[cfg(any(test, feature = "test-util"))]
+mod fake_query;
 mod filter;
 mod http;
 mod model;
@@ -53,6 +55,7 @@ pub use http::{
     HttpRequest, HttpResponse, HttpTransport, HttpTransportError, ReqwestHttpTransport,
     ReqwestHttpTransportError,
 };
+pub use logql::{LogQuery, LogQueryParseError};
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,
 };

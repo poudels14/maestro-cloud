@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cluster::{StoreRuntime, StoreShutdown};
 use kernel_store::Clock;
-use logs::{LogDeliveryStore, LogStore, LogStoreRuntime};
+use logs::{LogDeliveryStore, LogQueryStore, LogStore, LogStoreRuntime};
 use metrics::{
     HostMetricDeliveryStore, HostMetricStore, MetricDeliveryStore, MetricStore, MetricStoreRuntime,
 };
@@ -38,6 +38,10 @@ impl AgentStartupRuntimes {
 
     pub(crate) fn log_delivery_store(&self) -> Arc<dyn LogDeliveryStore> {
         self.logs.delivery_store()
+    }
+
+    pub(crate) fn log_query_store(&self) -> Arc<dyn LogQueryStore> {
+        self.logs.query_store()
     }
 
     pub(crate) fn metric_store(&self) -> Arc<dyn MetricStore> {

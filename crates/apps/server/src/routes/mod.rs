@@ -6,6 +6,7 @@ mod deployment_commands;
 mod deployments;
 mod firewall_dry_run;
 mod firewall_policies;
+mod logs;
 mod network_observations;
 mod observations;
 mod service_commands;
@@ -33,6 +34,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(deployments::router())
         .merge(firewall_dry_run::router())
         .merge(firewall_policies::router())
+        .merge(logs::router())
         .merge(network_observations::router())
         .merge(observations::router())
         .merge(service_commands::router())

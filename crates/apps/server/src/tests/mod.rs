@@ -28,6 +28,7 @@ mod deployment_commands;
 mod deployments;
 mod firewall_dry_run;
 mod firewall_policies;
+mod logs;
 mod network_observations;
 mod node_commands;
 mod observations;
@@ -308,6 +309,21 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1webhooks~1{webhookId}~1test/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1logs/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1system~1logs~1histogram/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/components/schemas/SequencedLogEntry/properties/entry/$ref")
             .is_some()
     );
     assert_eq!(

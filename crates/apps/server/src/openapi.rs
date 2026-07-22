@@ -8,7 +8,7 @@ use crate::openapi_commands::{
 /// Composes server path operations over the canonical kernel component schemas.
 pub fn openapi_document() -> Value {
     let mut document = kernel_api::openapi_document();
-    let paths = Value::Object(Map::from_iter([
+    let mut paths = Map::from_iter([
         (
             "/api/cluster".to_string(),
             singleton_operation("getClusterInfo", "ClusterInfo"),
@@ -250,7 +250,9 @@ pub fn openapi_document() -> Value {
         ),
         ("/healthz".to_string(), health_operation()),
         ("/openapi.json".to_string(), openapi_operation()),
-    ]));
+    ]);
+    paths.extend(crate::openapi_logs::paths());
+    let paths = Value::Object(paths);
     let security_schemes = json!({
         "bearerAuth": {
             "type": "http",
@@ -265,6 +267,7 @@ pub fn openapi_document() -> Value {
             components.insert("securitySchemes".to_string(), security_schemes);
             if let Some(schemas) = components.get_mut("schemas").and_then(Value::as_object_mut) {
                 insert_command_schemas(schemas);
+                crate::openapi_logs::insert_schemas(schemas);
             }
         }
     }

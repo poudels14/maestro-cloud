@@ -482,6 +482,10 @@ impl LogStoreRuntime for DuckLogStoreRuntime {
         self.store.clone()
     }
 
+    fn query_store(&self) -> Arc<dyn logs::LogQueryStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
         DuckLogStoreRuntime::shutdown(*self)
             .await

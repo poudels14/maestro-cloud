@@ -10,6 +10,7 @@ mod mask;
 mod mutation;
 mod openapi;
 mod openapi_commands;
+mod openapi_logs;
 mod resource;
 mod routes;
 mod settings;
@@ -43,6 +44,7 @@ pub(crate) struct AppState {
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
+    pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
 }
 
@@ -68,6 +70,7 @@ impl ApiServer {
             cluster_id,
             artifact_archives: None,
             firewall_settings: None,
+            log_queries: None,
             webhook_backend: None,
         };
         let router = routes::router(
@@ -97,6 +100,16 @@ impl ApiServer {
     /// Enables firewall dry-runs with the same static settings as the leader operator.
     pub fn with_firewall_settings(mut self, settings: firewall::FirewallSettings) -> Self {
         self.state.firewall_settings = Some(settings);
+        self.router = routes::router(
+            self.state.clone(),
+            AuthPolicy::new(self.settings.jwt_secret_key.clone()),
+        );
+        self
+    }
+
+    /// Enables node-local normalized-log reads and histograms.
+    pub fn with_log_query_store(mut self, store: Arc<dyn logs::LogQueryStore>) -> Self {
+        self.state.log_queries = Some(store);
         self.router = routes::router(
             self.state.clone(),
             AuthPolicy::new(self.settings.jwt_secret_key.clone()),

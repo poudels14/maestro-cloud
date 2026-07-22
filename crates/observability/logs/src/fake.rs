@@ -5,10 +5,10 @@ use async_trait::async_trait;
 
 use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
-    LogDeliveryStoreError, LogRecordId, LogSequence, LogSinkCursorStats, LogSinkId, LogSpoolStats,
-    LogStatsStore, LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime,
-    LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterSnapshot,
-    SinkDeadLetterStats,
+    LogDeliveryStoreError, LogQueryStore, LogQueryStoreError, LogRecordId, LogSequence,
+    LogSinkCursorStats, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
+    LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
+    SinkDeadLetterSnapshot, SinkDeadLetterStats,
 };
 
 /// Deterministic idempotent log store for pipeline and composition tests.
@@ -38,6 +38,15 @@ impl InMemoryLogStore {
             .values()
             .map(|entry| entry.entry.clone())
             .collect())
+    }
+
+    pub(crate) fn query_entries(&self) -> Result<Vec<SequencedLogEntry>, LogQueryStoreError> {
+        self.state
+            .lock()
+            .map_err(|_| LogQueryStoreError::Unavailable {
+                message: "in-memory log query lock was poisoned".to_owned(),
+            })
+            .map(|state| state.entries.values().cloned().collect())
     }
 }
 
@@ -343,6 +352,10 @@ impl LogStoreRuntime for InMemoryLogStoreRuntime {
     }
 
     fn stats_store(&self) -> Arc<dyn LogStatsStore> {
+        self.store.clone()
+    }
+
+    fn query_store(&self) -> Arc<dyn LogQueryStore> {
         self.store.clone()
     }
 

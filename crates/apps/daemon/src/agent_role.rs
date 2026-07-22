@@ -96,7 +96,8 @@ where
     .map(|server| {
         let server = server
             .with_artifact_archive_store(factory.artifact_archives.clone())
-            .with_firewall_settings(factory.firewall_settings.clone());
+            .with_firewall_settings(factory.firewall_settings.clone())
+            .with_log_query_store(runtimes.log_query_store());
         match &factory.webhook_backend {
             Some(backend) => server.with_webhook_backend(backend.clone()),
             None => server,
