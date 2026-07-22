@@ -8,6 +8,7 @@ mod exec;
 mod firewall_dry_run;
 mod firewall_policies;
 mod logs;
+mod metrics;
 mod network_observations;
 mod observations;
 mod service_commands;
@@ -37,6 +38,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(firewall_dry_run::router())
         .merge(firewall_policies::router())
         .merge(logs::router())
+        .merge(metrics::router())
         .merge(network_observations::router())
         .merge(observations::router())
         .merge(service_commands::router())
@@ -49,6 +51,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
             require_operator,
         ));
     let node = logs::node_router()
+        .merge(metrics::node_router())
         .merge(exec::node_router())
         .route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()

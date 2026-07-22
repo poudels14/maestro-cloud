@@ -5391,6 +5391,7 @@ dependencies = [
  "kernel-controller",
  "kernel-store",
  "logs",
+ "metrics",
  "node-agent",
  "rcgen",
  "reqwest",

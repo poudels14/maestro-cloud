@@ -30,6 +30,7 @@ mod exec;
 mod firewall_dry_run;
 mod firewall_policies;
 mod logs;
+mod metrics;
 mod network_observations;
 mod node_commands;
 mod observations;

@@ -58,6 +58,9 @@ pub(crate) struct AppState {
     pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,
     pub(crate) cluster_log_nodes: Arc<[NodeId]>,
     pub(crate) cluster_log_queries: Option<Arc<logs::ClusterLogQueryCoordinator>>,
+    pub(crate) local_metric_node: Option<NodeId>,
+    pub(crate) workload_metric_queries: Option<Arc<dyn metrics::WorkloadMetricQueryStore>>,
+    pub(crate) host_metric_queries: Option<Arc<dyn metrics::HostMetricQueryStore>>,
     pub(crate) exec_sessions: Option<Arc<dyn ClusterExecSessions>>,
     pub(crate) exec_relays: Arc<Semaphore>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
@@ -88,6 +91,9 @@ impl ApiServer {
             log_queries: None,
             cluster_log_nodes: Arc::from([]),
             cluster_log_queries: None,
+            local_metric_node: None,
+            workload_metric_queries: None,
+            host_metric_queries: None,
             exec_sessions: None,
             exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
@@ -135,6 +141,20 @@ impl ApiServer {
         self.state.cluster_log_nodes = Arc::from(node_ids);
         self.state.cluster_log_queries =
             Some(Arc::new(logs::ClusterLogQueryCoordinator::new(nodes)));
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables node-local workload, host-resource, and disk metric reads.
+    pub fn with_metric_query_stores(
+        mut self,
+        node_id: NodeId,
+        workloads: Arc<dyn metrics::WorkloadMetricQueryStore>,
+        hosts: Arc<dyn metrics::HostMetricQueryStore>,
+    ) -> Self {
+        self.state.local_metric_node = Some(node_id);
+        self.state.workload_metric_queries = Some(workloads);
+        self.state.host_metric_queries = Some(hosts);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

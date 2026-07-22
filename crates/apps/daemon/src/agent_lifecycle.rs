@@ -6,7 +6,8 @@ use cluster::{StoreRuntime, StoreShutdown};
 use kernel_store::Clock;
 use logs::{LogDeliveryStore, LogQueryStore, LogStore, LogStoreRuntime};
 use metrics::{
-    HostMetricDeliveryStore, HostMetricStore, MetricDeliveryStore, MetricStore, MetricStoreRuntime,
+    HostMetricDeliveryStore, HostMetricQueryStore, HostMetricStore, MetricDeliveryStore,
+    MetricStore, MetricStoreRuntime, WorkloadMetricQueryStore,
 };
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -52,12 +53,20 @@ impl AgentStartupRuntimes {
         self.metrics.delivery_store()
     }
 
+    pub(crate) fn metric_query_store(&self) -> Arc<dyn WorkloadMetricQueryStore> {
+        self.metrics.query_store()
+    }
+
     pub(crate) fn host_metric_store(&self) -> Arc<dyn HostMetricStore> {
         self.metrics.host_store()
     }
 
     pub(crate) fn host_metric_delivery_store(&self) -> Arc<dyn HostMetricDeliveryStore> {
         self.metrics.host_delivery_store()
+    }
+
+    pub(crate) fn host_metric_query_store(&self) -> Arc<dyn HostMetricQueryStore> {
+        self.metrics.host_query_store()
     }
 
     pub(crate) fn into_owned(self) -> AgentOwnedRuntimes {

@@ -91,6 +91,8 @@ where
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
     let local_log_queries = runtimes.log_query_store();
+    let workload_metric_queries = runtimes.metric_query_store();
+    let host_metric_queries = runtimes.host_metric_query_store();
     let cluster_log_queries =
         match cluster_log_query_store(plan, &factory.api_settings, local_log_queries.clone()) {
             Ok(queries) => Arc::new(queries) as Arc<dyn NodeLogQueryStore>,
@@ -115,7 +117,12 @@ where
             .with_artifact_archive_store(factory.artifact_archives.clone())
             .with_firewall_settings(factory.firewall_settings.clone())
             .with_log_query_store(local_log_queries)
-            .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries);
+            .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries)
+            .with_metric_query_stores(
+                spec.node_id.clone(),
+                workload_metric_queries,
+                host_metric_queries,
+            );
         let server = match exec_sessions {
             Some(sessions) => server.with_exec_sessions(sessions),
             None => server,
