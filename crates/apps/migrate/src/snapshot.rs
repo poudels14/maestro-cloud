@@ -1,9 +1,10 @@
 use sha2::{Digest, Sha256};
 
 const LEGACY_PREFIX: &str = "/maetro/";
-const MAXIMUM_ENTRY_COUNT: usize = 100_000;
-const MAXIMUM_KEY_BYTES: usize = 1_024;
-const MAXIMUM_VALUE_BYTES: usize = 16 * 1_024 * 1_024;
+pub(crate) const MAXIMUM_ENTRY_COUNT: usize = 100_000;
+pub(crate) const MAXIMUM_KEY_BYTES: usize = 1_024;
+pub(crate) const MAXIMUM_VALUE_BYTES: usize = 16 * 1_024 * 1_024;
+pub(crate) const MAXIMUM_SNAPSHOT_BYTES: usize = 1_024 * 1_024 * 1_024;
 const SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"maestro-cutover-snapshot-v1\0";
 
 /// One exact key/value pair read from the stopped legacy control plane.
@@ -52,6 +53,16 @@ impl LegacySnapshot {
 
         for entry in &entries {
             validate_entry(entry)?;
+        }
+        let total_bytes = entries.iter().try_fold(0_usize, |total, entry| {
+            total
+                .checked_add(entry.key.len())
+                .and_then(|total| total.checked_add(entry.value.len()))
+        });
+        if total_bytes.is_none_or(|total| total > MAXIMUM_SNAPSHOT_BYTES) {
+            return Err(SnapshotError::SnapshotTooLarge {
+                maximum: MAXIMUM_SNAPSHOT_BYTES,
+            });
         }
         entries.sort_by(|left, right| left.key.cmp(&right.key));
 
@@ -127,6 +138,12 @@ pub enum SnapshotError {
         /// Observed entry count.
         count: usize,
         /// Maximum accepted entry count.
+        maximum: usize,
+    },
+    /// The combined key and value bytes exceed the in-memory planning bound.
+    #[error("legacy snapshot exceeds the {maximum}-byte total input bound")]
+    SnapshotTooLarge {
+        /// Maximum combined key and value bytes.
         maximum: usize,
     },
     /// A key is not owned by the misspelled legacy namespace.

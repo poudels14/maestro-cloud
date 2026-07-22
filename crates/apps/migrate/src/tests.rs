@@ -32,6 +32,14 @@ fn snapshot_digest_is_order_independent_and_input_is_bounded() -> TestResult {
         .ok_or_else(|| std::io::Error::other("snapshot should contain an entry"))?;
     assert_eq!(first.key(), "/maetro/services/api/info");
     assert_eq!(first.value(), b"api");
+    let artifact = forward.encode_artifact()?;
+    assert_eq!(artifact, reverse.encode_artifact()?);
+    assert_eq!(LegacySnapshot::decode_artifact(&artifact)?, forward);
+    let tampered = String::from_utf8(artifact)?.replacen("YXBp", "d29ya2Vy", 1);
+    assert!(matches!(
+        LegacySnapshot::decode_artifact(tampered.as_bytes()),
+        Err(crate::SnapshotArtifactError::DigestMismatch { .. })
+    ));
     assert!(matches!(
         LegacySnapshot::new(vec![LegacyEntry::new("/maestro/services/api", Vec::new())]),
         Err(SnapshotError::OutsideLegacyNamespace { .. })
@@ -65,6 +73,17 @@ fn plan_orders_resources_and_rejects_destination_aliases() -> TestResult {
             .id()
             .as_str(),
         "api"
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&plan.report().encode()?)?,
+        serde_json::json!({
+            "schemaVersion": 1,
+            "clusterId": "production",
+            "sourceSha256": "07".repeat(32),
+            "totalResources": 1,
+            "resources": {"Service": 1},
+            "requestClaims": 0
+        })
     );
     assert!(matches!(
         MigrationPlan::new(
