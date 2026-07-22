@@ -4,11 +4,6 @@ export type Webhook = ApiSchemas["Webhook"];
 export type WebhookEvent = ApiSchemas["WebhookEvent"];
 export type ClusterSummary = ApiSchemas["ClusterInfo"];
 export type UpgradeRun = ApiSchemas["UpgradeRun"];
-export type Service = ApiSchemas["Service"] & {
-  previewResource?: ApiSchemas["Preview"];
-};
-export type Deployment = ApiSchemas["Deployment"];
-export type ReplicaState = ApiSchemas["ReplicaState"];
 
 export interface ClusterNode {
   nodeId: string;

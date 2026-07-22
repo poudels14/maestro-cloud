@@ -18,6 +18,7 @@
     "@maestro/logs": "workspace:*",
     "@maestro/metrics": "workspace:*",
     "@maestro/sdk": "workspace:*",
+    "@maestro/services": "workspace:*",
     "@solidjs/meta": "^0.29.4",
     "@tanstack/solid-query": "^5.101.2",
     "@tanstack/solid-router": "^1.170.18",

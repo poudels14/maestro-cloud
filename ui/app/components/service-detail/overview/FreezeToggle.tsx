@@ -1,16 +1,16 @@
 import clsx from "clsx";
 import { Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import type { Service } from "../../../lib/types";
-import { freezeService } from "../../../lib/api";
-import { queryKeys } from "../../../lib/queries";
+import type { Service } from "@maestro/services";
+import { serviceQueryKeys } from "@maestro/services";
+import { servicesApi } from "../../../features";
 
 function FreezeToggle(props: { service: Service }) {
   const queryClient = useQueryClient();
   const frozen = () => props.service.status.rollout === "frozen";
   const mutation = useMutation(() => ({
-    mutationFn: (next: boolean) => freezeService(props.service, next),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.services })
+    mutationFn: (next: boolean) => servicesApi.setFrozen(props.service, next),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: serviceQueryKeys.all })
   }));
 
   return (

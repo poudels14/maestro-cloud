@@ -2,13 +2,12 @@ import { createSignal, For, Show, Switch, Match } from "solid-js";
 import { Check, Copy, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
-import type { Deployment } from "../../lib/types";
-import { replicaFailure } from "../../lib/deploymentView";
-import { deploymentReplicasQuery } from "../../lib/queries";
+import type { Deployment } from "@maestro/services";
+import { deploymentReplicasQuery, replicaFailure } from "@maestro/services";
 import { useQuery } from "../../lib/useQuery";
 import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit";
 import { LogViewer } from "@maestro/logs";
-import { logsApi } from "../../features";
+import { logsApi, servicesApi } from "../../features";
 import { ReplicaRow } from "./DeploymentRow";
 
 type SheetTabId = "logs" | "build" | "details";
@@ -157,7 +156,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
 
 function DeploymentDetails(props: { deployment: Deployment }) {
   const deployment = () => props.deployment;
-  const replicas = useQuery(() => deploymentReplicasQuery(deployment()));
+  const replicas = useQuery(() => deploymentReplicasQuery(servicesApi, deployment()));
   const artifact = () => deployment().spec.service.artifact;
   const environment = () => Object.entries(deployment().spec.service.environment ?? {});
   const secretKeys = () => Object.keys(deployment().spec.service.secrets?.items ?? {}).sort();

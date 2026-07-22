@@ -4,8 +4,9 @@ import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
-import type { Service } from "../../lib/types";
-import { clusterInfoQuery, servicesQuery } from "../../lib/queries";
+import type { Service } from "@maestro/services";
+import { servicesQuery } from "@maestro/services";
+import { clusterInfoQuery } from "../../lib/queries";
 import { ServiceSidebar } from "../service-detail/Sidebar";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
@@ -16,11 +17,11 @@ import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
-import { panelFeatureRegistry } from "../../features";
+import { panelFeatureRegistry, servicesApi } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
   const navigate = useNavigate();
-  const services = useQuery(() => servicesQuery());
+  const services = useQuery(() => servicesQuery(servicesApi));
   const cluster = useQuery(() => clusterInfoQuery());
   const [drawerOpen, setDrawerOpen] = createSignal(false);
   const featureRoute = () => panelFeatureRegistry.routes.find((route) => route.path === props.path);

@@ -1,9 +1,13 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import type { ApiSchemas } from "@maestro/api-client";
 import type { Service } from "./types";
-import { servicePreviews, userServices } from "./previews.ts";
-import { attachPreviewResources, serviceDisplayStatus, serviceHasBuild } from "./serviceView.ts";
+import {
+  attachPreviewResources,
+  serviceDisplayStatus,
+  serviceHasBuild,
+  servicePreviews,
+  userServices
+} from "./serviceView";
 
 function serviceResource(id: string): ApiSchemas["Service"] {
   return {
@@ -48,11 +52,8 @@ test("attaches preview ownership and hides derived services from the primary lis
     [previewResource("preview-2", "api-pr-2", "api", 2)]
   );
 
-  assert.deepEqual(
-    userServices(services).map((service) => service.meta.id),
-    ["api"]
-  );
-  assert.equal(services[1]?.previewResource?.spec.baseServiceId, "api");
+  expect(userServices(services).map((service) => service.meta.id)).toEqual(["api"]);
+  expect(services[1]?.previewResource?.spec.baseServiceId).toBe("api");
 });
 
 test("groups previews under their base service in pull request order", () => {
@@ -65,10 +66,10 @@ test("groups previews under their base service in pull request order", () => {
     ]
   );
 
-  assert.deepEqual(
-    servicePreviews(services, "api").map((service) => service.meta.id),
-    ["api-pr-3", "api-pr-20"]
-  );
+  expect(servicePreviews(services, "api").map((service) => service.meta.id)).toEqual([
+    "api-pr-3",
+    "api-pr-20"
+  ]);
 });
 
 test("projects service status and artifact capabilities from resource fields", () => {
@@ -93,9 +94,9 @@ test("projects service status and artifact capabilities from resource fields", (
     }
   } satisfies Service;
 
-  assert.equal(serviceDisplayStatus(idle), "IDLE");
-  assert.equal(serviceDisplayStatus(ready), "READY");
-  assert.equal(serviceDisplayStatus(deleting), "TERMINATED");
-  assert.equal(serviceHasBuild(idle), false);
-  assert.equal(serviceHasBuild(build), true);
+  expect(serviceDisplayStatus(idle)).toBe("IDLE");
+  expect(serviceDisplayStatus(ready)).toBe("READY");
+  expect(serviceDisplayStatus(deleting)).toBe("TERMINATED");
+  expect(serviceHasBuild(idle)).toBe(false);
+  expect(serviceHasBuild(build)).toBe(true);
 });

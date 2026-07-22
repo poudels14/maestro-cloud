@@ -3,19 +3,14 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
-import {
-  cancelDeployment,
-  redeployService,
-  removeDeployment,
-  restartDeployment
-} from "../../lib/api";
-import { deploymentsQuery, queryKeys } from "../../lib/queries";
+import { deploymentsQuery, serviceQueryKeys } from "@maestro/services";
 import { ErrorBanner } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import { showErrorToast } from "../AppToasts";
-import type { Deployment, Service } from "../../lib/types";
+import type { Deployment, Service } from "@maestro/services";
+import { servicesApi } from "../../features";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
@@ -24,7 +19,7 @@ function DeploymentsTab(props: { service: Service }) {
   const queryClient = useQueryClient();
   const serviceId = () => props.service.meta.id;
   const deployFrozen = () => props.service.status.rollout === "frozen";
-  const deployments = useQuery(() => deploymentsQuery(serviceId()));
+  const deployments = useQuery(() => deploymentsQuery(servicesApi, serviceId()));
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -44,30 +39,30 @@ function DeploymentsTab(props: { service: Service }) {
   const sheetTab = () => search().tab ?? "logs";
 
   const invalidateDeployments = () =>
-    queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceId()) });
+    queryClient.invalidateQueries({ queryKey: serviceQueryKeys.deployments(serviceId()) });
   const invalidateService = () =>
     Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.services }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceId()) })
+      queryClient.invalidateQueries({ queryKey: serviceQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: serviceQueryKeys.deployments(serviceId()) })
     ]);
 
   const cancelMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => cancelDeployment(deployment),
+    mutationFn: (deployment: Deployment) => servicesApi.cancelDeployment(deployment),
     onSuccess: invalidateDeployments,
     onError: (error) => showErrorToast("Cancel failed", error)
   }));
   const removeMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => removeDeployment(deployment),
+    mutationFn: (deployment: Deployment) => servicesApi.removeDeployment(deployment),
     onSuccess: invalidateDeployments,
     onError: (error) => showErrorToast("Remove failed", error)
   }));
   const redeployMutation = useMutation(() => ({
-    mutationFn: () => redeployService(props.service),
+    mutationFn: () => servicesApi.redeployService(props.service),
     onSuccess: invalidateService,
     onError: (error) => showErrorToast("Redeploy failed", error)
   }));
   const restartMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => restartDeployment(deployment),
+    mutationFn: (deployment: Deployment) => servicesApi.restartDeployment(deployment),
     onSuccess: invalidateDeployments,
     onError: (error) => showErrorToast("Restart failed", error)
   }));

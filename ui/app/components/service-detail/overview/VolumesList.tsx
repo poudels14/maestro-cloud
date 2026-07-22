@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import type { Service } from "../../../lib/types";
+import type { Service } from "@maestro/services";
 
 function VolumesList(props: { service: Service }) {
   const volumes = () => props.service.spec.volumes ?? [];

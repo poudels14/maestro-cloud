@@ -49,6 +49,9 @@ importers:
       '@maestro/sdk':
         specifier: workspace:*
         version: link:packages/sdk
+      '@maestro/services':
+        specifier: workspace:*
+        version: link:packages/services
       '@solidjs/meta':
         specifier: ^0.29.4
         version: 0.29.4(solid-js@1.9.14)
@@ -299,6 +302,19 @@ importers:
       solid-js:
         specifier: ^1.9.14
         version: 1.9.14
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.21.0))
+
+  ui/packages/services:
+    dependencies:
+      '@maestro/api-client':
+        specifier: workspace:*
+        version: link:../api-client
     devDependencies:
       typescript:
         specifier: 5.9.3

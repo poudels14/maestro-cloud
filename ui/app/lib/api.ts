@@ -12,21 +12,6 @@ import type {
 } from "./types";
 import { apiClient, apiRequestError } from "./client";
 
-export {
-  clearServiceReplicasOverride,
-  deleteService,
-  freezeService,
-  getServices,
-  redeployService,
-  setServiceReplicas
-} from "./serviceApi";
-export {
-  cancelDeployment,
-  getDeploymentReplicas,
-  getDeployments,
-  removeDeployment,
-  restartDeployment
-} from "./deploymentApi";
 export interface ClusterInfo extends ClusterSummary {
   nodes: ClusterNode[];
   activeUpgrade: UpgradeRun | null;

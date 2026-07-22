@@ -3,10 +3,9 @@ import type { Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
-import type { Service } from "../../lib/types";
-import { serviceDisplayStatus } from "../../lib/serviceView";
+import type { Service } from "@maestro/services";
+import { serviceDisplayStatus, userServices as visibleUserServices } from "@maestro/services";
 import { StatusDot } from "@maestro/kit";
-import { userServices as visibleUserServices } from "../../lib/previews";
 
 function ServiceSidebar(props: {
   services: Service[];

@@ -1,13 +1,10 @@
 import type { ClusterInfo } from "./api";
-import type { ClusterStats, Deployment, MaskedConfig } from "./types";
+import type { ClusterStats, MaskedConfig } from "./types";
 import {
   getClusterConfig,
   getClusterInfo,
   getClusterNodes,
-  getDeployments,
-  getDeploymentReplicas,
   getClusterStats,
-  getServices,
   getUnschedulableReplicas,
   listWebhooks
 } from "./api";
@@ -24,10 +21,6 @@ const queryKeys = {
   clusterNodes: ["cluster", "nodes"] as const,
   unschedulable: ["cluster", "unschedulable"] as const,
   config: ["config"] as const,
-  services: ["services"] as const,
-  deployments: (serviceId: string) => ["deployments", serviceId] as const,
-  deploymentReplicas: (serviceId: string, deploymentId: string) =>
-    ["deployments", serviceId, deploymentId, "replicas"] as const,
   webhooks: ["webhooks"] as const
 };
 
@@ -62,30 +55,6 @@ const unschedulableQuery = () => ({
   refetchInterval: 5_000
 });
 
-const servicesQuery = () => ({
-  queryKey: queryKeys.services,
-  queryFn: ssrSafe(getServices, []),
-  refetchInterval: 15_000,
-  refetchOnWindowFocus: true,
-  staleTime: 5_000
-});
-
-const deploymentsQuery = (serviceId: string) => ({
-  queryKey: queryKeys.deployments(serviceId),
-  queryFn: ssrSafe(() => getDeployments(serviceId), []),
-  refetchInterval: 10_000,
-  refetchOnWindowFocus: true,
-  staleTime: 5_000
-});
-
-const deploymentReplicasQuery = (deployment: Deployment) => ({
-  queryKey: queryKeys.deploymentReplicas(deployment.spec.serviceId, deployment.meta.id),
-  queryFn: ssrSafe(() => getDeploymentReplicas(deployment), []),
-  refetchInterval: 5_000,
-  refetchOnWindowFocus: true,
-  staleTime: 2_000
-});
-
 const webhooksQuery = () => ({
   queryKey: queryKeys.webhooks,
   queryFn: ssrSafe(listWebhooks, [])
@@ -98,8 +67,5 @@ export {
   clusterStatsQuery,
   clusterNodesQuery,
   unschedulableQuery,
-  servicesQuery,
-  deploymentsQuery,
-  deploymentReplicasQuery,
   webhooksQuery
 };

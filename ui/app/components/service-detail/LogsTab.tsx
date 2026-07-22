@@ -1,10 +1,10 @@
 import { Show } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import type { Service } from "../../lib/types";
-import { deploymentsQuery } from "../../lib/queries";
+import type { Service } from "@maestro/services";
+import { deploymentsQuery } from "@maestro/services";
 import { LogViewer } from "@maestro/logs";
-import { logsApi } from "../../features";
+import { logsApi, servicesApi } from "../../features";
 
 function LogsTab(props: { service: Service }) {
   const location = useLocation();
@@ -12,7 +12,7 @@ function LogsTab(props: { service: Service }) {
   const navigate = useNavigate();
 
   const deployments = useQuery(() => ({
-    ...deploymentsQuery(props.service.meta.id)
+    ...deploymentsQuery(servicesApi, props.service.meta.id)
   }));
   const hasAnyDeployment = () => (deployments.data?.length ?? 0) > 0;
 

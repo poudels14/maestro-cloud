@@ -3,15 +3,15 @@ import { useQuery } from "../lib/useQuery";
 import { createSignal, Show } from "solid-js";
 import { Menu } from "lucide-solid";
 import clsx from "clsx";
-import type { Service } from "../lib/types";
-import { servicesQuery } from "../lib/queries";
+import type { Service } from "@maestro/services";
+import { servicesQuery } from "@maestro/services";
 import { TabButton } from "@maestro/kit";
 import { ServiceSidebar } from "../components/service-detail/Sidebar";
 import { NodeNavSection } from "../components/home/NodeNavSection";
 import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
 import { MetricsTab } from "@maestro/metrics";
-import { metricsApi } from "../features";
+import { metricsApi, servicesApi } from "../features";
 import { LogsTab } from "../components/service-detail/LogsTab";
 
 const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
@@ -41,7 +41,7 @@ export const Route = createFileRoute("/services/$serviceId/$tab")({
 function ServiceDetailPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const services = useQuery(() => servicesQuery());
+  const services = useQuery(() => servicesQuery(servicesApi));
   const [drawerOpen, setDrawerOpen] = createSignal(false);
 
   const tab = () => {

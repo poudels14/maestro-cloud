@@ -1,7 +1,6 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import type { Deployment, ReplicaState } from "./types";
-import { replicaDisplayName, replicaFailure, sortDeploymentHistory } from "./deploymentView.ts";
+import { replicaDisplayName, replicaFailure, sortDeploymentHistory } from "./deploymentView";
 
 function deployment(id: string, createdAt: number): Deployment {
   return {
@@ -48,11 +47,11 @@ test("deployment history sorts newest first without mutating API results", () =>
   const newer = deployment("deployment-b", 20);
   const source = [older, newer];
 
-  assert.deepEqual(
-    sortDeploymentHistory(source).map((entry) => entry.meta.id),
-    ["deployment-b", "deployment-a"]
-  );
-  assert.deepEqual(source, [older, newer]);
+  expect(sortDeploymentHistory(source).map((entry) => entry.meta.id)).toEqual([
+    "deployment-b",
+    "deployment-a"
+  ]);
+  expect(source).toEqual([older, newer]);
 });
 
 test("replica presentation prefers workload identity and surfaces failed conditions", () => {
@@ -76,7 +75,7 @@ test("replica presentation prefers workload identity and surfaces failed conditi
     }
   } satisfies ReplicaState;
 
-  assert.equal(replicaDisplayName(current, observed), "workload-api-0");
-  assert.equal(replicaDisplayName(current, pending), "api-0");
-  assert.equal(replicaFailure(pending), "health threshold exhausted");
+  expect(replicaDisplayName(current, observed)).toBe("workload-api-0");
+  expect(replicaDisplayName(current, pending)).toBe("api-0");
+  expect(replicaFailure(pending)).toBe("health threshold exhausted");
 });

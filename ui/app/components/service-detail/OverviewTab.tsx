@@ -1,8 +1,7 @@
 import { For, Show } from "solid-js";
 import { GitPullRequest } from "lucide-solid";
-import type { Service } from "../../lib/types";
-import { servicePreviews } from "../../lib/previews";
-import { serviceDisplayStatus } from "../../lib/serviceView";
+import type { Service } from "@maestro/services";
+import { serviceDisplayStatus, servicePreviews } from "@maestro/services";
 import { StatusBadge } from "@maestro/kit";
 import { IngressInfo } from "@maestro/ingress";
 import { ingressApi } from "../../features";

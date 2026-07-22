@@ -3,25 +3,28 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
-import type { Service } from "../../lib/types";
-import { deleteService } from "../../lib/api";
+import type { Service } from "@maestro/services";
+import {
+  serviceQueryKeys,
+  servicesQuery,
+  userServices as visibleUserServices
+} from "@maestro/services";
 import { ErrorBanner, SectionHeader } from "@maestro/kit";
-import { queryKeys, servicesQuery } from "../../lib/queries";
-import { userServices as visibleUserServices } from "../../lib/previews";
+import { servicesApi } from "../../features";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "@maestro/kit";
 
 function ServicesGrid() {
-  const services = useQuery(() => servicesQuery());
+  const services = useQuery(() => servicesQuery(servicesApi));
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [deleteTarget, setDeleteTarget] = createSignal<Service | null>(null);
 
   const deleteMutation = useMutation(() => ({
-    mutationFn: (service: Service) => deleteService(service),
+    mutationFn: (service: Service) => servicesApi.deleteService(service),
     onSuccess: () => {
       setDeleteTarget(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.services });
+      queryClient.invalidateQueries({ queryKey: serviceQueryKeys.all });
     }
   }));
 
