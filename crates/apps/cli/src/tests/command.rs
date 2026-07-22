@@ -68,6 +68,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
         .is_ok()
     );
     assert!(Cli::try_parse_from(["maestro-next", "services", "ls"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "services", "deployments", "api"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "maestro-next",

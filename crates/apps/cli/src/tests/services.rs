@@ -176,6 +176,10 @@ impl ServiceApi for RecordingServiceApi {
         Ok(self.deployment.clone())
     }
 
+    async fn list_deployments(&self, _service_id: &ServiceId) -> Result<Vec<Deployment>, CliError> {
+        Ok(vec![self.deployment.clone()])
+    }
+
     async fn command_service(
         &self,
         service_id: &ServiceId,

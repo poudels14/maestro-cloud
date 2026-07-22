@@ -174,6 +174,8 @@ pub(crate) trait ServiceApi {
         deployment_id: &DeploymentId,
     ) -> Result<Deployment, CliError>;
 
+    async fn list_deployments(&self, service_id: &ServiceId) -> Result<Vec<Deployment>, CliError>;
+
     async fn command_service(
         &self,
         service_id: &ServiceId,
@@ -238,6 +240,11 @@ impl ServiceApi for ApiClient {
             "/api/services/{service_id}/deployments/{deployment_id}"
         ))
         .await
+    }
+
+    async fn list_deployments(&self, service_id: &ServiceId) -> Result<Vec<Deployment>, CliError> {
+        self.get(&format!("/api/services/{service_id}/deployments"))
+            .await
     }
 
     async fn command_service(

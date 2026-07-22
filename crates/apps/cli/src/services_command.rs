@@ -44,6 +44,11 @@ pub(crate) enum ServiceCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// List retained deployment history for one service.
+    Deployments {
+        /// Owning service identity.
+        service_id: String,
+    },
     /// Trigger a new deployment generation for a service.
     Redeploy {
         /// Service identity.
@@ -180,6 +185,9 @@ pub(crate) async fn run(
                 &crate::config_source::SystemConfigSourceReader,
             )
             .await
+        }
+        ServiceCommand::Deployments { service_id } => {
+            crate::deployments::list(&client, service_id, output).await
         }
         ServiceCommand::Redeploy {
             service_id,

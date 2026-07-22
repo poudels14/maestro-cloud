@@ -53,6 +53,10 @@ impl ServiceApi for RecordingApi {
         Err(unexpected())
     }
 
+    async fn list_deployments(&self, _service_id: &ServiceId) -> Result<Vec<Deployment>, CliError> {
+        Err(unexpected())
+    }
+
     async fn command_service(
         &self,
         _service_id: &ServiceId,
