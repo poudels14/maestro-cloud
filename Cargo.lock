@@ -3431,6 +3431,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "flate2",
+ "futures-util",
  "kernel-api",
  "logql",
  "node-agent",

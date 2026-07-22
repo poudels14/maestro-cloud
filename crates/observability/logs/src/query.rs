@@ -134,6 +134,12 @@ impl LogReadQuery {
         self.order
     }
 
+    /// Replaces the display order while preserving filters and cursor state.
+    pub fn with_order(mut self, order: LogReadOrder) -> Self {
+        self.order = order;
+        self
+    }
+
     /// Returns the validated maximum row count.
     pub fn limit(&self) -> usize {
         self.limit
