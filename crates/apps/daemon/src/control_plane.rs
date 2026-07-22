@@ -14,7 +14,7 @@ use node_agent::{
     HostStatsReader, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
     WorkloadNetworkStatsReader,
 };
-use runtime::{NetworkProvider, WorkloadRuntime};
+use runtime::{ArtifactStore, NetworkProvider, WorkloadRuntime};
 use semver::Version;
 use server::ServerSettings;
 use tokio::sync::watch;
@@ -217,6 +217,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Native backend used for workload lifecycle, adoption, and events.
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
+    /// Native backend used for build artifacts and peer export/import streams.
+    pub artifact_store: Arc<dyn ArtifactStore>,
     /// Node-local durable store for content-addressed build context uploads.
     pub artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
     /// Owned normalized-log storage runtime for this node.
@@ -269,6 +271,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
+    pub(crate) artifact_store: Arc<dyn ArtifactStore>,
     pub(crate) artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
@@ -317,6 +320,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
+            artifact_store: dependencies.artifact_store,
             artifact_archives: dependencies.artifact_archives,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,

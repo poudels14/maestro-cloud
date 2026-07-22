@@ -185,6 +185,7 @@ where
         let server = server
             .with_cluster_config(masked_cluster_config(plan.cluster(), &spec.node_id))
             .with_artifact_archive_store(factory.artifact_archives.clone())
+            .with_artifact_store(factory.artifact_store.clone())
             .with_firewall_settings(factory.firewall_settings.clone())
             .with_log_query_store(local_log_queries)
             .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries)

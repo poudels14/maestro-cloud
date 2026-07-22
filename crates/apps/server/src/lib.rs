@@ -9,6 +9,7 @@ mod error;
 mod exec_service;
 mod mask;
 mod mutation;
+mod node_artifact_client;
 mod node_http_client;
 mod node_log_client;
 mod node_metric_client;
@@ -44,6 +45,7 @@ pub use error::{ApiError, ApiErrorBody, ServerError};
 pub use exec_service::{
     ClusterExecSessions, ExecSessionOpenError, HttpClusterExecSessions, HttpExecClientError,
 };
+pub use node_artifact_client::{HttpNodeArtifactClient, NodeArtifactTransferError};
 pub use node_http_client::NodeHttpClientError;
 pub use node_log_client::HttpNodeLogQueryStore;
 pub use node_metric_client::{
@@ -68,6 +70,7 @@ pub(crate) struct AppState {
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
+    pub(crate) artifacts: Option<Arc<dyn runtime::ArtifactStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
     pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,
     pub(crate) cluster_log_nodes: Arc<[NodeId]>,
@@ -113,6 +116,7 @@ impl ApiServer {
             cluster_id,
             cluster_config: None,
             artifact_archives: None,
+            artifacts: None,
             firewall_settings: None,
             log_queries: None,
             cluster_log_nodes: Arc::from([]),
@@ -156,6 +160,13 @@ impl ApiServer {
         store: Arc<dyn build::ArtifactArchiveStore>,
     ) -> Self {
         self.state.artifact_archives = Some(store);
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables authenticated node-to-node export of runtime-native artifact archives.
+    pub fn with_artifact_store(mut self, store: Arc<dyn runtime::ArtifactStore>) -> Self {
+        self.state.artifacts = Some(store);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

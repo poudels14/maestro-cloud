@@ -31,7 +31,9 @@ use node_agent::{
     WorkloadBridgeBackend, WorkloadBridgeBackendError, WorkloadNetworkStats,
     WorkloadNetworkStatsError, WorkloadNetworkStatsReader,
 };
-use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
+use runtime::{
+    ArtifactStore, CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime,
+};
 use semver::Version;
 use server::{ServerSettings, TlsIdentity};
 use tokio::sync::{Notify, watch};
@@ -41,6 +43,7 @@ use crate::{
     LeaderWorkload, OperatorSettings, RoleError,
 };
 
+use super::build_backend::FakeBuildBackend;
 use super::cluster_with_nodes;
 use super::control_plane_resources::{load_assignment, load_replica, seed_agent_resources};
 use super::control_plane_store::FakeProvider;
@@ -119,6 +122,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
                 bindings: dns_bindings.clone(),
             }),
             workload_runtime: workload_runtime.clone(),
+            artifact_store: Arc::new(FakeBuildBackend::default()) as Arc<dyn ArtifactStore>,
             artifact_archives: Arc::new(LocalBuildSourceProvider::new(
                 directory.path().join("archive-workspaces"),
                 directory.path().join("archives"),
@@ -425,6 +429,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),
             workload_runtime: workload_runtime.clone(),
+            artifact_store: Arc::new(FakeBuildBackend::default()) as Arc<dyn ArtifactStore>,
             artifact_archives: Arc::new(LocalBuildSourceProvider::new(
                 directory.path().join("archive-workspaces"),
                 directory.path().join("archives"),

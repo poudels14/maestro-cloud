@@ -33,6 +33,7 @@ mod firewall_policies;
 mod logs;
 mod metrics;
 mod network_observations;
+mod node_artifacts;
 mod node_commands;
 mod observations;
 mod service_commands;

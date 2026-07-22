@@ -11,6 +11,7 @@ mod firewall_policies;
 mod logs;
 mod metrics;
 mod network_observations;
+mod node_artifacts;
 mod observations;
 mod service_commands;
 mod service_diff;
@@ -58,6 +59,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         ));
     let node = logs::node_router()
         .merge(metrics::node_router())
+        .merge(node_artifacts::router())
         .merge(stats::node_router())
         .merge(exec::node_router())
         .merge(traffic::node_router())

@@ -56,7 +56,6 @@ impl NodeHttpClient {
             .https_only(true)
             .http1_only()
             .connect_timeout(DEFAULT_REQUEST_TIMEOUT)
-            .timeout(DEFAULT_REQUEST_TIMEOUT)
             .add_root_certificate(root)
             .identity(client_identity)
             .redirect(reqwest::redirect::Policy::none())
@@ -97,6 +96,18 @@ impl NodeHttpClient {
     where
         Response: DeserializeOwned,
     {
+        let response = self.get_response(node_id, path, parameters).await?;
+        tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, decode_response(response))
+            .await
+            .map_err(|_| NodeHttpRequestError::unavailable("node response timed out"))?
+    }
+
+    pub(crate) async fn get_response(
+        &self,
+        node_id: &NodeId,
+        path: &str,
+        parameters: &[(String, String)],
+    ) -> Result<reqwest::Response, NodeHttpRequestError> {
         let mut endpoint = self.endpoints.get(node_id).cloned().ok_or_else(|| {
             NodeHttpRequestError::unavailable(format!("node `{node_id}` has no query endpoint"))
         })?;
@@ -104,16 +115,16 @@ impl NodeHttpClient {
         endpoint
             .query_pairs_mut()
             .extend_pairs(parameters.iter().map(|(name, value)| (name, value)));
-        let response = self
-            .client
-            .get(endpoint)
-            .bearer_auth(self.node_token()?)
-            .send()
-            .await
-            .map_err(|error| {
-                NodeHttpRequestError::unavailable(format!("node request failed: {error}"))
-            })?;
-        decode_response(response).await
+        tokio::time::timeout(
+            DEFAULT_REQUEST_TIMEOUT,
+            self.client
+                .get(endpoint)
+                .bearer_auth(self.node_token()?)
+                .send(),
+        )
+        .await
+        .map_err(|_| NodeHttpRequestError::unavailable("node request timed out"))?
+        .map_err(|error| NodeHttpRequestError::unavailable(format!("node request failed: {error}")))
     }
 
     fn node_token(&self) -> Result<String, NodeHttpRequestError> {
@@ -147,7 +158,7 @@ struct NodeClaims<'a> {
     exp: u64,
 }
 
-async fn decode_response<Response>(
+pub(crate) async fn decode_response<Response>(
     mut response: reqwest::Response,
 ) -> Result<Response, NodeHttpRequestError>
 where
