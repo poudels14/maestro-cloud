@@ -29,9 +29,10 @@ use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 use crate::{
-    AgentStore, BuildOperatorBackends, Daemon, DaemonPlan, DaemonRoleDependencies,
-    DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig, LogBackupLaunchConfig,
-    NodeUpgradeDependencies, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
+    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig,
+    LogBackupLaunchConfig, NodeUpgradeDependencies, OperatorLeaderWorkload, OperatorSettings,
+    RunningDaemon,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -217,7 +218,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         etcd_binary,
         store_mode,
         security,
-        certificate_issuer: _,
+        certificate_issuer,
         operator_jwt_secret,
         store_encryption_secret,
         instance_id,
@@ -234,7 +235,12 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
-    let api_settings = api_settings(local_node, &security, operator_jwt_secret);
+    let api_settings = api_settings(local_node, &security, operator_jwt_secret.clone());
+    let admission = certificate_issuer.map(|authority| AdmissionDependencies {
+        authority,
+        operator_jwt_secret,
+        store_encryption_secret: store_encryption_secret.clone(),
+    });
     let agent_store = if local_node.role.is_control_plane() {
         let local_member = known_members
             .get(&node_id)
@@ -368,7 +374,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     .await?;
     let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     let network_stats_reader = Arc::new(HostNetworkStatsReader::production(containerd.clone()));
-    let factory = DaemonRoleFactory::new(
+    let mut factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
             mesh_backend: LinuxMeshBackend::new(),
@@ -407,6 +413,9 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     .with_log_maintenance(log_maintenance)
     .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
+    if let Some(admission) = admission {
+        factory = factory.with_admission_dependencies(admission);
+    }
     Daemon::new(plan, factory).start().await.map_err(Into::into)
 }
 

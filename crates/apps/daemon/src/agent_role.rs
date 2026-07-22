@@ -192,6 +192,26 @@ where
     } else {
         None
     };
+    let admission = match (&factory.admission, &factory.agent_store) {
+        (Some(dependencies), AgentStore::Managed { provider, .. }) => match dependencies
+            .coordinator(plan.cluster().clone(), provider.clone(), store.clone())
+        {
+            Ok(coordinator) => Some(coordinator),
+            Err(error) => {
+                return runtimes
+                    .fail(role_error("construct cluster admission coordinator", error))
+                    .await;
+            }
+        },
+        (Some(_), AgentStore::Remote(_)) => {
+            return runtimes
+                .fail(RoleError::new(
+                    "worker store clients cannot host cluster admission",
+                ))
+                .await;
+        }
+        (None, _) => None,
+    };
     let api_server = match server::ApiServer::new(
         store.clone(),
         plan.cluster().cluster_id.clone(),
@@ -225,6 +245,10 @@ where
             );
         let server = match exec_sessions {
             Some(sessions) => server.with_exec_sessions(sessions),
+            None => server,
+        };
+        let server = match &admission {
+            Some(coordinator) => server.with_admission_coordinator(coordinator.clone()),
             None => server,
         };
         match &factory.webhook_backend {

@@ -1,6 +1,7 @@
 mod artifact_archives;
 mod automation;
 mod cluster;
+mod cluster_admission;
 mod cluster_commands;
 mod config;
 mod deployment_commands;
@@ -35,6 +36,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(automation::router())
         .merge(artifact_archives::router())
         .merge(cluster::router())
+        .merge(cluster_admission::protected_router())
         .merge(cluster_commands::router())
         .merge(config::router())
         .merge(deployment_commands::router())
@@ -66,6 +68,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()
         .merge(system::router())
+        .merge(cluster_admission::public_router())
         .merge(protected)
         .merge(node)
         .with_state(state)

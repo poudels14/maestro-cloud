@@ -264,6 +264,7 @@ pub fn openapi_document() -> Value {
         ("/openapi.json".to_string(), openapi_operation()),
     ]);
     paths.extend(crate::openapi_logs::paths());
+    paths.extend(crate::openapi_admission::paths());
     paths.extend(crate::openapi_metrics::paths());
     paths.extend(crate::openapi_stats::paths());
     paths.extend(crate::openapi_traffic::paths());
@@ -282,6 +283,7 @@ pub fn openapi_document() -> Value {
             components.insert("securitySchemes".to_string(), security_schemes);
             if let Some(schemas) = components.get_mut("schemas").and_then(Value::as_object_mut) {
                 insert_command_schemas(schemas);
+                crate::openapi_admission::insert_schemas(schemas);
                 crate::openapi_logs::insert_schemas(schemas);
                 crate::openapi_metrics::insert_schemas(schemas);
                 crate::openapi_stats::insert_schemas(schemas);

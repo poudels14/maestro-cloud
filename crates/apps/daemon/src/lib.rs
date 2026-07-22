@@ -4,6 +4,7 @@
 //! topology. Production adapters implement the role factory; the composition
 //! runtime guarantees ordered startup, reverse shutdown, and rollback.
 
+mod admission;
 mod agent_lifecycle;
 mod agent_network;
 mod agent_role;
@@ -33,6 +34,7 @@ mod stats_metric_sampler;
 mod upgrade_config;
 mod workload_agents;
 
+pub use admission::AdmissionDependencies;
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
     NodeUpgradeDependencies,

@@ -582,6 +582,43 @@
         ],
         "type": "object"
       },
+      "CaDiscoveryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "clusterName": {
+            "type": "string"
+          },
+          "nonce": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clusterName",
+          "nonce"
+        ],
+        "type": "object"
+      },
+      "CaDiscoveryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "caCertificatePem": {
+            "type": "string"
+          },
+          "clusterId": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RequestSignature"
+          }
+        },
+        "required": [
+          "clusterId",
+          "caCertificatePem",
+          "proof"
+        ],
+        "type": "object"
+      },
       "ClusterId": {
         "description": "Stable identity of a Maestro cluster.",
         "type": "string"
@@ -659,6 +696,48 @@
         "required": [
           "entries",
           "cursor"
+        ],
+        "type": "object"
+      },
+      "ClusterPorts": {
+        "additionalProperties": false,
+        "properties": {
+          "formatVersion": {
+            "format": "uint8",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "gateway": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storeClient": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "storePeer": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "wireguard": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "formatVersion",
+          "gateway",
+          "storeClient",
+          "storePeer",
+          "wireguard"
         ],
         "type": "object"
       },
@@ -1398,6 +1477,33 @@
           }
         ]
       },
+      "EncryptedJoinResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ciphertext": {
+            "format": "byte",
+            "type": "string"
+          },
+          "clusterId": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "leaderPublicKey": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "nonce": {
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clusterId",
+          "leaderPublicKey",
+          "nonce",
+          "ciphertext"
+        ],
+        "type": "object"
+      },
       "ExecPolicy": {
         "description": "Whether API-initiated interactive execution is available to a workload.",
         "oneOf": [
@@ -2058,6 +2164,62 @@
         ],
         "type": "object"
       },
+      "JoinRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "clusterId": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "clusterName": {
+            "type": "string"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/NodeEndpoint"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "joinerPublicKey": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "nonce": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "ports": {
+            "$ref": "#/components/schemas/ClusterPorts"
+          },
+          "role": {
+            "$ref": "#/components/schemas/NodeRole"
+          },
+          "timestampUnixMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "workloadSubnet": {
+            "format": "ipv4-cidr",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clusterId",
+          "clusterName",
+          "nodeId",
+          "hostname",
+          "role",
+          "endpoint",
+          "workloadSubnet",
+          "ports",
+          "joinerPublicKey",
+          "timestampUnixMs",
+          "nonce"
+        ],
+        "type": "object"
+      },
       "LogHistogramBucket": {
         "properties": {
           "bucketAt": {
@@ -2282,6 +2444,26 @@
         },
         "type": "object"
       },
+      "NodeEndpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "apiPort": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "hostAddress": {
+            "format": "ipv4",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostAddress",
+          "apiPort"
+        ],
+        "type": "object"
+      },
       "NodeFirewall": {
         "$ref": "#/components/schemas/Object18"
       },
@@ -2356,6 +2538,60 @@
       },
       "NodeInstanceId": {
         "description": "Identity of one running daemon instance on a cluster node.",
+        "type": "string"
+      },
+      "NodeJoinApproval": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAtUnixMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "approvedAtUnixMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "publicKeySha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeJoinApprovalState"
+          }
+        },
+        "required": [
+          "nodeId",
+          "publicKeySha256",
+          "approvedAtUnixMs",
+          "state"
+        ],
+        "type": "object"
+      },
+      "NodeJoinApprovalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "publicKeySha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "publicKeySha256"
+        ],
+        "type": "object"
+      },
+      "NodeJoinApprovalState": {
+        "enum": [
+          "approved",
+          "admitted"
+        ],
         "type": "string"
       },
       "NodeNetwork": {
@@ -5068,6 +5304,10 @@
         ],
         "type": "object"
       },
+      "RequestSignature": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
       "ResourceId": {
         "description": "An open reference to a built-in or future custom resource.",
         "properties": {
@@ -5892,6 +6132,22 @@
         },
         "required": [
           "header"
+        ],
+        "type": "object"
+      },
+      "SignedJoinRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/JoinRequest"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/RequestSignature"
+          }
+        },
+        "required": [
+          "request",
+          "signature"
         ],
         "type": "object"
       },
@@ -7302,6 +7558,115 @@
         ]
       }
     },
+    "/api/cluster/admissions": {
+      "get": {
+        "operationId": "listClusterAdmissions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NodeJoinApproval"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Secret-free join approval list"
+          },
+          "503": {
+            "description": "Cluster admission is unavailable on this node"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "approveClusterAdmission",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeJoinApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeJoinApproval"
+                }
+              }
+            },
+            "description": "Approval created or replayed"
+          },
+          "400": {
+            "description": "Invalid approval"
+          },
+          "404": {
+            "description": "Node is absent from the declared topology"
+          },
+          "409": {
+            "description": "Another join key is already approved"
+          },
+          "503": {
+            "description": "Cluster admission is unavailable on this node"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/ca": {
+      "post": {
+        "operationId": "discoverClusterCa",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaDiscoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaDiscoveryResponse"
+                }
+              }
+            },
+            "description": "Authenticated cluster trust root"
+          },
+          "400": {
+            "description": "Malformed or topology-mismatched request"
+          },
+          "403": {
+            "description": "Join authentication or source address was rejected"
+          },
+          "409": {
+            "description": "One-time approval already admitted another request"
+          },
+          "503": {
+            "description": "Cluster admission is unavailable on this node"
+          }
+        }
+      }
+    },
     "/api/cluster/dns-records": {
       "get": {
         "operationId": "listDnsRecords",
@@ -7360,6 +7725,45 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/api/cluster/join": {
+      "post": {
+        "operationId": "joinCluster",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedJoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EncryptedJoinResponse"
+                }
+              }
+            },
+            "description": "Encrypted node-specific cluster grant"
+          },
+          "400": {
+            "description": "Malformed or topology-mismatched request"
+          },
+          "403": {
+            "description": "Join authentication or source address was rejected"
+          },
+          "409": {
+            "description": "One-time approval already admitted another request"
+          },
+          "503": {
+            "description": "Cluster admission is unavailable on this node"
+          }
+        }
       }
     },
     "/api/cluster/networks": {

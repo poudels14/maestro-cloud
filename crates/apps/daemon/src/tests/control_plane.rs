@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use build::LocalBuildSourceProvider;
-use cluster::StoreStartMode;
+use cluster::{
+    CaDiscoveryRequest, CertificateValidity, ClusterCertificateAuthority, StoreStartMode,
+};
 use kernel_api::{
     AssignmentPhase, DeploymentPhase, Node, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
     ResourceKind, ResourceName, SecretValue, Timestamp, WorkloadUserSpec,
@@ -36,11 +38,12 @@ use runtime::{
 };
 use semver::Version;
 use server::{ServerSettings, TlsIdentity};
+use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::sync::{Notify, watch};
 
 use crate::{
-    AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    LeaderWorkload, OperatorSettings, RoleError,
+    AdmissionDependencies, AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies,
+    DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload, OperatorSettings, RoleError,
 };
 
 use super::build_backend::FakeBuildBackend;
@@ -85,6 +88,17 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let api_address = api_probe.local_addr()?;
     drop(api_probe);
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
+    let now = OffsetDateTime::now_utc();
+    let admission = AdmissionDependencies {
+        authority: ClusterCertificateAuthority::generate(
+            &cluster.name,
+            CertificateValidity::new(now - TimeDuration::days(1), now + TimeDuration::days(3_650))?,
+        )?,
+        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
+        store_encryption_secret: SecretValue::new(
+            "storage-test-secret-with-at-least-32-characters",
+        ),
+    };
     let plan = DaemonPlan::new(
         cluster.clone(),
         NodeId::new("master")?,
@@ -155,11 +169,19 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             ..SinkWorkerSettings::default()
         })?,
     )
+    .with_admission_dependencies(admission)
     .with_leader_workload(workload.clone());
 
     let running = Daemon::new(plan, factory).start().await?;
     let api_health = reqwest::get(format!("http://{api_address}/healthz")).await?;
     assert_eq!(api_health.status(), reqwest::StatusCode::OK);
+    let discovery = reqwest::Client::new()
+        .post(format!("http://{api_address}/api/cluster/ca"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&CaDiscoveryRequest::new(&cluster.name))?)
+        .send()
+        .await?;
+    assert_eq!(discovery.status(), reqwest::StatusCode::OK);
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if host_metric_store

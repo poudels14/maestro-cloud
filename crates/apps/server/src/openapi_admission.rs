@@ -1,0 +1,254 @@
+use serde_json::{Map, Value, json};
+
+pub(crate) fn paths() -> Map<String, Value> {
+    Map::from_iter([
+        ("/api/cluster/ca".to_string(), discovery_operation()),
+        ("/api/cluster/join".to_string(), join_operation()),
+        (
+            "/api/cluster/admissions".to_string(),
+            admissions_operation(),
+        ),
+    ])
+}
+
+pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
+    schemas.extend(Map::from_iter([
+        (
+            "CaDiscoveryRequest".to_string(),
+            object_schema(
+                &["clusterName", "nonce"],
+                json!({
+                    "clusterName": {"type": "string"},
+                    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }),
+            ),
+        ),
+        (
+            "CaDiscoveryResponse".to_string(),
+            object_schema(
+                &["clusterId", "caCertificatePem", "proof"],
+                json!({
+                    "clusterId": {"$ref": "#/components/schemas/ClusterId"},
+                    "caCertificatePem": {"type": "string"},
+                    "proof": {"$ref": "#/components/schemas/RequestSignature"}
+                }),
+            ),
+        ),
+        (
+            "RequestSignature".to_string(),
+            json!({"type": "string", "pattern": "^[0-9a-f]{64}$"}),
+        ),
+        (
+            "ClusterPorts".to_string(),
+            object_schema(
+                &[
+                    "formatVersion",
+                    "gateway",
+                    "storeClient",
+                    "storePeer",
+                    "wireguard",
+                ],
+                json!({
+                    "formatVersion": {"type": "integer", "format": "uint8", "minimum": 1},
+                    "gateway": port_schema(),
+                    "storeClient": port_schema(),
+                    "storePeer": port_schema(),
+                    "wireguard": port_schema()
+                }),
+            ),
+        ),
+        (
+            "NodeEndpoint".to_string(),
+            object_schema(
+                &["hostAddress", "apiPort"],
+                json!({
+                    "hostAddress": {"type": "string", "format": "ipv4"},
+                    "apiPort": port_schema()
+                }),
+            ),
+        ),
+        (
+            "JoinRequest".to_string(),
+            object_schema(
+                &[
+                    "clusterId",
+                    "clusterName",
+                    "nodeId",
+                    "hostname",
+                    "role",
+                    "endpoint",
+                    "workloadSubnet",
+                    "ports",
+                    "joinerPublicKey",
+                    "timestampUnixMs",
+                    "nonce",
+                ],
+                json!({
+                    "clusterId": {"$ref": "#/components/schemas/ClusterId"},
+                    "clusterName": {"type": "string"},
+                    "nodeId": {"$ref": "#/components/schemas/NodeId"},
+                    "hostname": {"type": "string"},
+                    "role": {"$ref": "#/components/schemas/NodeRole"},
+                    "endpoint": {"$ref": "#/components/schemas/NodeEndpoint"},
+                    "workloadSubnet": {"type": "string", "format": "ipv4-cidr"},
+                    "ports": {"$ref": "#/components/schemas/ClusterPorts"},
+                    "joinerPublicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "timestampUnixMs": {"type": "integer", "format": "int64"},
+                    "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+                }),
+            ),
+        ),
+        (
+            "SignedJoinRequest".to_string(),
+            object_schema(
+                &["request", "signature"],
+                json!({
+                    "request": {"$ref": "#/components/schemas/JoinRequest"},
+                    "signature": {"$ref": "#/components/schemas/RequestSignature"}
+                }),
+            ),
+        ),
+        (
+            "EncryptedJoinResponse".to_string(),
+            object_schema(
+                &["clusterId", "leaderPublicKey", "nonce", "ciphertext"],
+                json!({
+                    "clusterId": {"$ref": "#/components/schemas/ClusterId"},
+                    "leaderPublicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "nonce": {"type": "string", "format": "byte"},
+                    "ciphertext": {"type": "string", "format": "byte"}
+                }),
+            ),
+        ),
+        (
+            "NodeJoinApprovalRequest".to_string(),
+            object_schema(
+                &["nodeId", "publicKeySha256"],
+                json!({
+                    "nodeId": {"$ref": "#/components/schemas/NodeId"},
+                    "publicKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }),
+            ),
+        ),
+        (
+            "NodeJoinApprovalState".to_string(),
+            json!({"type": "string", "enum": ["approved", "admitted"]}),
+        ),
+        (
+            "NodeJoinApproval".to_string(),
+            object_schema(
+                &["nodeId", "publicKeySha256", "approvedAtUnixMs", "state"],
+                json!({
+                    "nodeId": {"$ref": "#/components/schemas/NodeId"},
+                    "publicKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "approvedAtUnixMs": {"type": "integer", "format": "int64"},
+                    "state": {"$ref": "#/components/schemas/NodeJoinApprovalState"},
+                    "admittedAtUnixMs": {"type": "integer", "format": "int64"}
+                }),
+            ),
+        ),
+    ]));
+}
+
+fn discovery_operation() -> Value {
+    public_post_operation(
+        "discoverClusterCa",
+        "CaDiscoveryRequest",
+        "CaDiscoveryResponse",
+        "Authenticated cluster trust root",
+    )
+}
+
+fn join_operation() -> Value {
+    public_post_operation(
+        "joinCluster",
+        "SignedJoinRequest",
+        "EncryptedJoinResponse",
+        "Encrypted node-specific cluster grant",
+    )
+}
+
+fn admissions_operation() -> Value {
+    json!({
+        "get": {
+            "operationId": "listClusterAdmissions",
+            "security": [{"bearerAuth": []}],
+            "responses": {
+                "200": {
+                    "description": "Secret-free join approval list",
+                    "content": {"application/json": {"schema": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/NodeJoinApproval"}
+                    }}}
+                },
+                "503": {"description": "Cluster admission is unavailable on this node"}
+            }
+        },
+        "post": {
+            "operationId": "approveClusterAdmission",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {
+                "required": true,
+                "content": {"application/json": {"schema": {
+                    "$ref": "#/components/schemas/NodeJoinApprovalRequest"
+                }}}
+            },
+            "responses": {
+                "200": {
+                    "description": "Approval created or replayed",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/NodeJoinApproval"
+                    }}}
+                },
+                "400": {"description": "Invalid approval"},
+                "404": {"description": "Node is absent from the declared topology"},
+                "409": {"description": "Another join key is already approved"},
+                "503": {"description": "Cluster admission is unavailable on this node"}
+            }
+        }
+    })
+}
+
+fn public_post_operation(
+    operation_id: &str,
+    request_schema: &str,
+    response_schema: &str,
+    response_description: &str,
+) -> Value {
+    json!({
+        "post": {
+            "operationId": operation_id,
+            "requestBody": {
+                "required": true,
+                "content": {"application/json": {"schema": {
+                    "$ref": format!("#/components/schemas/{request_schema}")
+                }}}
+            },
+            "responses": {
+                "200": {
+                    "description": response_description,
+                    "content": {"application/json": {"schema": {
+                        "$ref": format!("#/components/schemas/{response_schema}")
+                    }}}
+                },
+                "400": {"description": "Malformed or topology-mismatched request"},
+                "403": {"description": "Join authentication or source address was rejected"},
+                "409": {"description": "One-time approval already admitted another request"},
+                "503": {"description": "Cluster admission is unavailable on this node"}
+            }
+        }
+    })
+}
+
+fn object_schema(required: &[&str], properties: Value) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties
+    })
+}
+
+fn port_schema() -> Value {
+    json!({"type": "integer", "format": "uint16", "minimum": 1, "maximum": 65_535})
+}

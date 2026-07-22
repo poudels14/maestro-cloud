@@ -24,6 +24,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 mod artifact_archives;
 mod automation;
 mod cluster;
+mod cluster_admission;
 mod config;
 mod deployment_commands;
 mod deployments;
@@ -208,6 +209,27 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .is_some()
     );
     assert!(document.pointer("/paths/~1api~1config/get").is_some());
+    assert!(document.pointer("/paths/~1api~1cluster~1ca/post").is_some());
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1join/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1admissions/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1admissions/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/components/schemas/SignedJoinRequest")
+            .is_some()
+    );
     assert!(
         document
             .pointer("/components/schemas/MaskedClusterConfig")

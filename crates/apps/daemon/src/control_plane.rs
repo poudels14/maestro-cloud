@@ -21,6 +21,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use upgrade::{NixosUpgradeStager, NodeRebooter};
 
+use crate::admission::AdmissionDependencies;
 use crate::agent_role::start_agent;
 use crate::join_activation::JoinActivationSettings;
 use crate::leadership::run_leadership;
@@ -303,6 +304,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) api_settings: ServerSettings,
     pub(crate) firewall_settings: firewall::FirewallSettings,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
+    pub(crate) admission: Option<AdmissionDependencies>,
     pub(crate) settings: DaemonRoleSettings,
     pub(crate) store: Mutex<Option<Arc<dyn Store>>>,
     leader_workload: Option<Arc<dyn LeaderWorkload>>,
@@ -352,6 +354,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             api_settings: dependencies.api_settings,
             firewall_settings: dependencies.firewall_settings,
             webhook_backend: None,
+            admission: None,
             settings,
             store: Mutex::new(None),
             leader_workload: None,
@@ -370,6 +373,12 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
         backend: Arc<dyn webhook::WebhookDeliveryBackend>,
     ) -> Self {
         self.webhook_backend = Some(backend);
+        self
+    }
+
+    /// Attaches control-plane certificate and cluster-secret material for joins.
+    pub fn with_admission_dependencies(mut self, dependencies: AdmissionDependencies) -> Self {
+        self.admission = Some(dependencies);
         self
     }
 

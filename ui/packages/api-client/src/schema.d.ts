@@ -36,6 +36,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/admissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listClusterAdmissions"];
+        put?: never;
+        post: operations["approveClusterAdmission"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster/ca": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["discoverClusterCa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/dns-records": {
         parameters: {
             query?: never;
@@ -62,6 +94,22 @@ export interface paths {
         get: operations["getDnsRecord"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["joinCluster"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1390,6 +1438,15 @@ export interface components {
             /** @description Poll the configured Git ref and roll out newly resolved commits. */
             watch?: boolean;
         };
+        CaDiscoveryRequest: {
+            clusterName: string;
+            nonce: string;
+        };
+        CaDiscoveryResponse: {
+            caCertificatePem: string;
+            clusterId: components["schemas"]["ClusterId"];
+            proof: components["schemas"]["RequestSignature"];
+        };
         /** @description Stable identity of a Maestro cluster. */
         ClusterId: string;
         ClusterInfo: {
@@ -1413,6 +1470,18 @@ export interface components {
         ClusterLogPage: {
             cursor: components["schemas"]["ClusterLogCursor"];
             entries: components["schemas"]["ClusterLogEntry"][];
+        };
+        ClusterPorts: {
+            /** Format: uint8 */
+            formatVersion: number;
+            /** Format: uint16 */
+            gateway: number;
+            /** Format: uint16 */
+            storeClient: number;
+            /** Format: uint16 */
+            storePeer: number;
+            /** Format: uint16 */
+            wireguard: number;
         };
         ClusterStatsResponse: {
             backup: components["schemas"]["BackupStatsSnapshot"];
@@ -1600,6 +1669,14 @@ export interface components {
                  */
                 weight: number;
             };
+        };
+        EncryptedJoinResponse: {
+            /** Format: byte */
+            ciphertext: string;
+            clusterId: components["schemas"]["ClusterId"];
+            leaderPublicKey: string;
+            /** Format: byte */
+            nonce: string;
         };
         /** @description Whether API-initiated interactive execution is available to a workload. */
         ExecPolicy: "allowed" | "denied";
@@ -1796,6 +1873,21 @@ export interface components {
             byIp: components["schemas"]["TrafficBreakdownEntry"][];
             byPath: components["schemas"]["TrafficBreakdownEntry"][];
         };
+        JoinRequest: {
+            clusterId: components["schemas"]["ClusterId"];
+            clusterName: string;
+            endpoint: components["schemas"]["NodeEndpoint"];
+            hostname: string;
+            joinerPublicKey: string;
+            nodeId: components["schemas"]["NodeId"];
+            nonce: string;
+            ports: components["schemas"]["ClusterPorts"];
+            role: components["schemas"]["NodeRole"];
+            /** Format: int64 */
+            timestampUnixMs: number;
+            /** Format: ipv4-cidr */
+            workloadSubnet: string;
+        };
         LogHistogramBucket: {
             bucketAt: components["schemas"]["Timestamp"];
             /** Format: int64 */
@@ -1875,6 +1967,12 @@ export interface components {
         NodeDiskMap: {
             [key: string]: components["schemas"]["DiskInfo"][];
         };
+        NodeEndpoint: {
+            /** Format: uint16 */
+            apiPort: number;
+            /** Format: ipv4 */
+            hostAddress: string;
+        };
         NodeFirewall: components["schemas"]["Object18"];
         /** @description Stable identity of a node's desired firewall ruleset. */
         NodeFirewallId: string;
@@ -1902,6 +2000,21 @@ export interface components {
         NodeId: string;
         /** @description Identity of one running daemon instance on a cluster node. */
         NodeInstanceId: string;
+        NodeJoinApproval: {
+            /** Format: int64 */
+            admittedAtUnixMs?: number;
+            /** Format: int64 */
+            approvedAtUnixMs: number;
+            nodeId: components["schemas"]["NodeId"];
+            publicKeySha256: string;
+            state: components["schemas"]["NodeJoinApprovalState"];
+        };
+        NodeJoinApprovalRequest: {
+            nodeId: components["schemas"]["NodeId"];
+            publicKeySha256: string;
+        };
+        /** @enum {string} */
+        NodeJoinApprovalState: "approved" | "admitted";
         NodeNetwork: components["schemas"]["Object3"];
         /** @description Stable identity of a node's published network configuration. */
         NodeNetworkId: string;
@@ -2703,6 +2816,7 @@ export interface components {
             /** @description Current runtime workload identity. */
             workloadId?: components["schemas"]["WorkloadId"] | (null);
         };
+        RequestSignature: string;
         /** @description An open reference to a built-in or future custom resource. */
         ResourceId: {
             /** @description Identity interpreted by the selected kind. */
@@ -2931,6 +3045,10 @@ export interface components {
         SessionAffinity: {
             /** @description HTTP header carrying the opaque affinity token. */
             header: string;
+        };
+        SignedJoinRequest: {
+            request: components["schemas"]["JoinRequest"];
+            signature: components["schemas"]["RequestSignature"];
         };
         SinkStatsSnapshot: {
             /** Format: int64 */
@@ -3361,6 +3479,137 @@ export interface operations {
             };
         };
     };
+    listClusterAdmissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Secret-free join approval list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeJoinApproval"][];
+                };
+            };
+            /** @description Cluster admission is unavailable on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approveClusterAdmission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeJoinApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Approval created or replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeJoinApproval"];
+                };
+            };
+            /** @description Invalid approval */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Node is absent from the declared topology */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Another join key is already approved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster admission is unavailable on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    discoverClusterCa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Authenticated cluster trust root */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaDiscoveryResponse"];
+                };
+            };
+            /** @description Malformed or topology-mismatched request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Join authentication or source address was rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One-time approval already admitted another request */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster admission is unavailable on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listDnsRecords: {
         parameters: {
             query?: never;
@@ -3403,6 +3652,58 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    joinCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignedJoinRequest"];
+            };
+        };
+        responses: {
+            /** @description Encrypted node-specific cluster grant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EncryptedJoinResponse"];
+                };
+            };
+            /** @description Malformed or topology-mismatched request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Join authentication or source address was rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One-time approval already admitted another request */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster admission is unavailable on this node */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

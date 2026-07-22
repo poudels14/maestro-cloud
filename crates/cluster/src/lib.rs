@@ -22,7 +22,8 @@ mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
 pub use admission_coordinator::{
-    AdmissionCoordinator, AdmissionCoordinatorError, NodeJoinApproval, NodeJoinApprovalState,
+    AdmissionCoordinator, AdmissionCoordinatorError, NodeJoinApproval, NodeJoinApprovalRequest,
+    NodeJoinApprovalState,
 };
 pub use certificates::{
     CertificateError, CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority,
@@ -31,8 +32,8 @@ pub use certificates::{
 pub use embedded_etcd::{EmbeddedEtcdProvider, EmbeddedEtcdSettings};
 pub use join::{
     CaDiscoveryRequest, CaDiscoveryResponse, JoinPrivateKey, JoinProtocolError, JoinRequest,
-    RequestSignature, create_ca_discovery_response, public_key_fingerprint, sign_join_request,
-    verify_ca_discovery_response, verify_join_request_signature,
+    RequestSignature, SignedJoinRequest, create_ca_discovery_response, public_key_fingerprint,
+    sign_join_request, verify_ca_discovery_response, verify_join_request_signature,
 };
 pub use join_crypto::{
     EncryptedJoinResponse, JoinPayload, JoinResponseStatus, decrypt_join_response,

@@ -15,6 +15,7 @@ mod node_log_client;
 mod node_metric_client;
 mod node_stats_client;
 mod openapi;
+mod openapi_admission;
 mod openapi_commands;
 mod openapi_logs;
 mod openapi_metrics;
@@ -69,6 +70,7 @@ pub(crate) struct AppState {
     pub(crate) cluster_config: Option<Arc<MaskedClusterConfig>>,
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
+    pub(crate) admission_coordinator: Option<Arc<cluster::AdmissionCoordinator>>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
     pub(crate) artifacts: Option<Arc<dyn runtime::ArtifactStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
@@ -112,6 +114,7 @@ impl ApiServer {
         let state = AppState {
             requests: RequestDeduplicator::new(store.clone()),
             timestamp_clock: Arc::new(SystemTimestampClock),
+            admission_coordinator: None,
             store,
             cluster_id,
             cluster_config: None,
@@ -150,6 +153,16 @@ impl ApiServer {
     /// Enables the secret-free configuration view for authenticated operators.
     pub fn with_cluster_config(mut self, config: MaskedClusterConfig) -> Self {
         self.state.cluster_config = Some(Arc::new(config));
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables public cluster discovery and join plus protected admission approval.
+    pub fn with_admission_coordinator(
+        mut self,
+        coordinator: Arc<cluster::AdmissionCoordinator>,
+    ) -> Self {
+        self.state.admission_coordinator = Some(coordinator);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }
@@ -400,14 +413,20 @@ impl BoundApiServer {
                 .map_err(ServerError::ListenerConfiguration)?
                 .map(VerifiedClientCertificateAcceptor::new)
                 .handle(handle.clone());
-            let serving = server.serve(self.router.into_make_service());
+            let serving = server.serve(
+                self.router
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            );
             tokio::pin!(serving);
             wait_for_server(&mut serving, handle, shutdown).await
         } else {
             let server = axum_server::from_tcp(listener)
                 .map_err(ServerError::ListenerConfiguration)?
                 .handle(handle.clone());
-            let serving = server.serve(self.router.into_make_service());
+            let serving = server.serve(
+                self.router
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            );
             tokio::pin!(serving);
             wait_for_server(&mut serving, handle, shutdown).await
         }

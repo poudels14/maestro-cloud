@@ -41,6 +41,16 @@ pub struct NodeJoinApproval {
     pub admitted_at_unix_ms: Option<i64>,
 }
 
+/// Operator request authorizing one persisted node join key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeJoinApprovalRequest {
+    /// Declared node allowed to submit the signed join request.
+    pub node_id: NodeId,
+    /// SHA-256 fingerprint printed by that node before admission.
+    pub public_key_sha256: String,
+}
+
 /// Store-backed coordinator for approval, signed admission, and encrypted grants.
 pub struct AdmissionCoordinator {
     config: ClusterConfig,

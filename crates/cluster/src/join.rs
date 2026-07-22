@@ -131,6 +131,16 @@ impl RequestSignature {
     }
 }
 
+/// Complete signed admission request submitted by a prospective node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignedJoinRequest {
+    /// Topology-bound node identity and one-time encryption key.
+    pub request: JoinRequest,
+    /// HMAC over the canonical request body using the bootstrap secret.
+    pub signature: RequestSignature,
+}
+
 /// Request used to discover a cluster trust root before sending node details.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
