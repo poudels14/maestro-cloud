@@ -4,6 +4,38 @@
  */
 
 export interface paths {
+    "/api/artifact-archives/{archiveId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["uploadArtifactArchive"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/dns-records": {
         parameters: {
             query?: never;
@@ -164,6 +196,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cluster/stats/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listClusterNodeStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/upgrades": {
         parameters: {
             query?: never;
@@ -191,6 +255,38 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["cancelUpgrade"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/disks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listLocalDisks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/disks/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNodeDisks"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -238,6 +334,150 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["dryRunFirewallPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingress/blocked-ips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIngressBlocklist"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["setBlockedIngressIp"];
+        trace?: never;
+    };
+    "/api/ingress/blocked-traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getBlockedIngressTraffic"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingress/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listActiveIngressRoutes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingress/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIngressTraffic"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/logs/histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getLogHistogram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics/cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listClusterMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics/node": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNodeMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listOperationalStatsMetrics"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -420,6 +660,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{serviceId}/deployments/{deploymentId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listDeploymentLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/deployments/{deploymentId}/logs/histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getDeploymentLogHistogram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services/{serviceId}/deployments/{deploymentId}/remove": {
         parameters: {
             query?: never;
@@ -484,6 +756,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{serviceId}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["diffService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services/{serviceId}/freeze": {
         parameters: {
             query?: never;
@@ -494,6 +782,70 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["freezeService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listServiceLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/logs/histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getServiceLogHistogram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listServiceMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/metrics/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listContainerMetrics"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -532,6 +884,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{serviceId}/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["applyServiceRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/rollout/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["diffServiceRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services/{serviceId}/routes": {
         parameters: {
             query?: never;
@@ -556,6 +940,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getIngressRoute"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{serviceId}/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getServiceTraffic"];
         put?: never;
         post?: never;
         delete?: never;
@@ -596,6 +996,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/services/{serviceId}/traffic/breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getServiceTrafficBreakdown"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services/{serviceId}/unfreeze": {
         parameters: {
             query?: never;
@@ -606,6 +1022,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["unfreezeService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSystemLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/logs/histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSystemLogHistogram"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -698,6 +1146,16 @@ export interface components {
     schemas: {
         /** @description Stable identity of one uploaded artifact source archive. */
         ArtifactArchiveId: string;
+        /** @description Result of accepting one content-addressed build context archive. */
+        ArtifactArchiveUploadResponse: {
+            /** @description Content address assigned to the archive bytes. */
+            archiveId: components["schemas"]["ArtifactArchiveId"];
+            /**
+             * Format: uint64
+             * @description Compressed bytes accepted by the archive store.
+             */
+            sizeBytes: number;
+        };
         /** @description Runtime artifact selected for a service deployment. */
         ArtifactTemplate: {
             /** @description Registry image reference. */
@@ -767,7 +1225,36 @@ export interface components {
             /** @description Runtime workload identity created for this assignment. */
             workloadId?: components["schemas"]["WorkloadId"] | (null);
         };
-        Build: components["schemas"]["Object11"];
+        BackupStatsSnapshot: {
+            /** Format: int64 */
+            completedPartitionsLastRun: number;
+            configured: boolean;
+            /** Format: int64 */
+            failedPartitionsLastRun: number;
+            /** Format: int64 */
+            lastAttemptAtMs: number | null;
+            lastError: string | null;
+            /** Format: int64 */
+            lastErrorAtMs: number | null;
+            /** Format: int64 */
+            lastSuccessAtMs: number | null;
+            /** Format: date */
+            oldestPendingDate: string | null;
+            /** Format: int64 */
+            pendingBytes: number;
+            /** Format: int64 */
+            pendingPartitions: number;
+            /** Format: int64 */
+            uploadedBytesLastRun: number;
+        };
+        BlockedIpRequest: {
+            blocked: boolean;
+            ip: string;
+        };
+        BlockedIpsResponse: {
+            blockedIps: string[];
+        };
+        Build: components["schemas"]["Object12"];
         /** @description Stable identity of an artifact build. */
         BuildId: string;
         /** @description Persisted phase of an artifact build. */
@@ -823,6 +1310,40 @@ export interface components {
             /** @description Poll the configured Git ref and roll out newly resolved commits. */
             watch?: boolean;
         };
+        /** @description Stable identity of a Maestro cluster. */
+        ClusterId: string;
+        ClusterInfo: {
+            clusterId: components["schemas"]["ClusterId"];
+            /** Format: uint64 */
+            controlPlaneNodeCount: number;
+            /** Format: uint64 */
+            nodeCount: number;
+            /** Format: uint64 */
+            workloadNodeCount: number;
+        };
+        ClusterLogCursor: {
+            [key: string]: number;
+        };
+        ClusterLogEntry: {
+            entry: components["schemas"]["IngestLogEntry"];
+            nodeId: string;
+            /** Format: int64 */
+            sequence: number;
+        };
+        ClusterLogPage: {
+            cursor: components["schemas"]["ClusterLogCursor"];
+            entries: components["schemas"]["ClusterLogEntry"][];
+        };
+        ClusterStatsResponse: {
+            backup: components["schemas"]["BackupStatsSnapshot"];
+            controller: components["schemas"]["ControllerStatsSnapshot"] | null;
+            /** Format: int64 */
+            controllerHeartbeatAgeMs: number | null;
+            /** Format: int64 */
+            generatedAtMs: number;
+            probe: components["schemas"]["ProbeStatsSnapshot"];
+            warnings: components["schemas"]["StatsWarning"][];
+        };
         CommandRequest: {
             expectedRevision: components["schemas"]["ResourceRevision"];
         };
@@ -854,6 +1375,28 @@ export interface components {
         ConditionState: "true" | "false" | "unknown";
         /** @description Stable machine-readable name of a status condition. */
         ConditionType: string;
+        ControllerStatsSnapshot: {
+            deadLetters: components["schemas"]["DeadLetterStatsSnapshot"];
+            /** Format: int64 */
+            reportedAtMs: number;
+            sinks: components["schemas"]["SinkStatsSnapshot"][];
+            spool: components["schemas"]["SpoolStatsSnapshot"];
+            /** Format: int64 */
+            uptimeMs: number;
+            version: string;
+        };
+        DeadLetterStatsSnapshot: {
+            /** Format: int64 */
+            capacity: number;
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            latestAtMs: number | null;
+            latestError: string | null;
+            latestStatus: number | null;
+            /** Format: int64 */
+            payloadBytes: number;
+        };
         Deployment: components["schemas"]["Object4"];
         DeploymentCommandResponse: {
             deploymentId: components["schemas"]["DeploymentId"];
@@ -903,7 +1446,16 @@ export interface components {
             /** @description Time the deployment first became ready. */
             readyAt?: components["schemas"]["Timestamp"] | (null);
         };
-        DnsRecord: components["schemas"]["Object10"];
+        DiskInfo: {
+            /** Format: int64 */
+            availableBytes: number;
+            fileSystem: string;
+            mountPoint: string;
+            name: string;
+            /** Format: int64 */
+            totalBytes: number;
+        };
+        DnsRecord: components["schemas"]["Object11"];
         /** @description Stable identity of a cluster DNS record. */
         DnsRecordId: string;
         /** @description Desired authoritative DNS record set. */
@@ -988,7 +1540,7 @@ export interface components {
             script: string;
             tableName: string;
         };
-        FirewallPolicy: components["schemas"]["Object9"];
+        FirewallPolicy: components["schemas"]["Object10"];
         FirewallPolicyCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
             generation: components["schemas"]["Generation"];
@@ -1087,6 +1639,42 @@ export interface components {
             /** @enum {string} */
             protocol: "tcp";
         };
+        IngestLogEntry: {
+            attributes?: {
+                [key: string]: string;
+            };
+            body: {
+                [key: string]: unknown;
+            };
+            eventAt: components["schemas"]["Timestamp"];
+            id: {
+                [key: string]: unknown;
+            };
+            observedAt: components["schemas"]["Timestamp"];
+            origin: {
+                [key: string]: unknown;
+            };
+            severity: string;
+            /** @enum {string} */
+            stream: "stdout" | "stderr" | "otlp" | "system";
+        };
+        IngressBlocklist: components["schemas"]["Object8"];
+        /** @description Stable identity of the cluster ingress blocklist. */
+        IngressBlocklistId: string;
+        /** @description Desired canonical client addresses denied before service routing. */
+        IngressBlocklistSpec: {
+            /** @description Unique addresses in deterministic network ordering. */
+            addresses: string[];
+        };
+        /** @description Observed publication state for the cluster ingress blocklist. */
+        IngressBlocklistStatus: {
+            /** @description Desired generation most recently published to the ingress backend. */
+            appliedGeneration: components["schemas"]["Generation"];
+            /** @description Generic publication and validation evidence. */
+            conditions?: components["schemas"]["Condition"][];
+            /** @description Digest of the exact rendered address set. */
+            configurationDigest?: string | null;
+        };
         IngressRoute: components["schemas"]["Object7"];
         /** @description Stable identity of an ingress route. */
         IngressRouteId: string;
@@ -1113,6 +1701,29 @@ export interface components {
             /** @description Generic publication and validation evidence. */
             conditions?: components["schemas"]["Condition"][];
         };
+        /** @description One logical route currently receiving public ingress traffic. */
+        IngressRouting: {
+            /** @description Public Traefik entry points evaluating the rule. */
+            entryPoints: string[];
+            /** @description Exact Traefik rule published for the route. */
+            rule: string;
+            /** @description Ready workload URLs selected by the active traffic generation. */
+            servers: string[];
+            /** @description Service receiving traffic through this route. */
+            serviceId: components["schemas"]["ServiceId"];
+        };
+        IngressTrafficBreakdown: {
+            byIp: components["schemas"]["TrafficBreakdownEntry"][];
+            byPath: components["schemas"]["TrafficBreakdownEntry"][];
+        };
+        LogHistogramBucket: {
+            bucketAt: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            count: number;
+            groups: {
+                [key: string]: number;
+            };
+        };
         Node: components["schemas"]["Object"];
         /** @description Workload access to the private node API mounted at `/run/maestro`. */
         NodeApiAccess: "disabled" | "identityAndTelemetry" | "privileged";
@@ -1120,7 +1731,10 @@ export interface components {
             draining: boolean;
             nodeId: components["schemas"]["NodeId"];
         };
-        NodeFirewall: components["schemas"]["Object15"];
+        NodeDiskMap: {
+            [key: string]: components["schemas"]["DiskInfo"][];
+        };
+        NodeFirewall: components["schemas"]["Object16"];
         /** @description Stable identity of a node's desired firewall ruleset. */
         NodeFirewallId: string;
         /** @description Complete generated nftables input desired on one node. */
@@ -1191,6 +1805,9 @@ export interface components {
                 [key: string]: string;
             };
         };
+        NodeStatsMap: {
+            [key: string]: components["schemas"]["ControllerStatsSnapshot"];
+        };
         /** @description Current reachability and lifecycle of a cluster node. */
         NodeStatus: {
             /** @description Generic readiness, availability, drain, and maintenance evidence. */
@@ -1237,50 +1854,59 @@ export interface components {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta10"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["DnsRecordSpec"];
+            spec: components["schemas"]["FirewallPolicySpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["DnsRecordStatus"];
+            status: components["schemas"]["FirewallPolicyStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object11: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta11"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["BuildSpec"];
+            spec: components["schemas"]["DnsRecordSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["BuildStatus"];
+            status: components["schemas"]["DnsRecordStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object12: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta12"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["PreviewSpec"];
+            spec: components["schemas"]["BuildSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["PreviewStatus"];
+            status: components["schemas"]["BuildStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object13: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta13"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["UpgradeRunSpec"];
+            spec: components["schemas"]["PreviewSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["UpgradeRunStatus"];
+            status: components["schemas"]["PreviewStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object14: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta14"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["WebhookSpec"];
+            spec: components["schemas"]["UpgradeRunSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["WebhookStatus"];
+            status: components["schemas"]["UpgradeRunStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object15: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta15"];
+            /** @description Desired state written by users or another controller. */
+            spec: components["schemas"]["WebhookSpec"];
+            /** @description Observed state written by the resource's owning controller. */
+            status: components["schemas"]["WebhookStatus"];
+        };
+        /** @description A typed Maestro resource with desired and observed state. */
+        Object16: {
+            /** @description Identity, concurrency, ownership, and deletion metadata. */
+            meta: components["schemas"]["ObjectMeta16"];
             /** @description Desired state written by users or another controller. */
             spec: components["schemas"]["NodeFirewallSpec"];
             /** @description Observed state written by the resource's owning controller. */
@@ -1345,18 +1971,18 @@ export interface components {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta8"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["TrafficGenerationSpec"];
+            spec: components["schemas"]["IngressBlocklistSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["TrafficGenerationStatus"];
+            status: components["schemas"]["IngressBlocklistStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
         Object9: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta9"];
             /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["FirewallPolicySpec"];
+            spec: components["schemas"]["TrafficGenerationSpec"];
             /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["FirewallPolicyStatus"];
+            status: components["schemas"]["TrafficGenerationStatus"];
         };
         /** @description Metadata shared by every resource kind. */
         ObjectMeta: {
@@ -1394,7 +2020,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["DnsRecordId"];
+            id: components["schemas"]["FirewallPolicyId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1417,7 +2043,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["BuildId"];
+            id: components["schemas"]["DnsRecordId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1440,7 +2066,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["PreviewId"];
+            id: components["schemas"]["BuildId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1463,7 +2089,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["UpgradeRunId"];
+            id: components["schemas"]["PreviewId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1486,7 +2112,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["WebhookId"];
+            id: components["schemas"]["UpgradeRunId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1498,6 +2124,29 @@ export interface components {
         };
         /** @description Metadata shared by every resource kind. */
         ObjectMeta15: {
+            /** @description Non-selecting metadata interpreted by named consumers. */
+            annotations?: {
+                [key: string]: string;
+            };
+            /** @description Time deletion was requested, or `None` while the resource is active. */
+            deletionTimestamp?: components["schemas"]["Timestamp"] | (null);
+            /** @description Controllers that must finish cleanup before physical deletion. */
+            finalizers?: components["schemas"]["FinalizerName"][];
+            /** @description Desired-state generation incremented when the specification changes. */
+            generation: components["schemas"]["Generation"];
+            /** @description Kind-specific stable resource identity. */
+            id: components["schemas"]["WebhookId"];
+            /** @description Labels used by selectors and grouping. */
+            labels?: {
+                [key: string]: string;
+            };
+            /** @description Resources whose lifecycle or provenance relates to this object. */
+            ownerRefs?: components["schemas"]["OwnerReference"][];
+            /** @description Store revision used for optimistic concurrency. */
+            revision: components["schemas"]["ResourceRevision"];
+        };
+        /** @description Metadata shared by every resource kind. */
+        ObjectMeta16: {
             /** @description Non-selecting metadata interpreted by named consumers. */
             annotations?: {
                 [key: string]: string;
@@ -1670,7 +2319,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["TrafficGenerationId"];
+            id: components["schemas"]["IngressBlocklistId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1693,7 +2342,7 @@ export interface components {
             /** @description Desired-state generation incremented when the specification changes. */
             generation: components["schemas"]["Generation"];
             /** @description Kind-specific stable resource identity. */
-            id: components["schemas"]["FirewallPolicyId"];
+            id: components["schemas"]["TrafficGenerationId"];
             /** @description Labels used by selectors and grouping. */
             labels?: {
                 [key: string]: string;
@@ -1734,7 +2383,7 @@ export interface components {
              */
             start: number;
         };
-        Preview: components["schemas"]["Object12"];
+        Preview: components["schemas"]["Object13"];
         /** @description Stable identity of a pull-request preview. */
         PreviewId: string;
         /** @description Persisted lifecycle of a pull-request preview. */
@@ -1793,13 +2442,10 @@ export interface components {
             /** @description Time teardown may proceed after a close event. */
             teardownAt?: components["schemas"]["Timestamp"] | (null);
         };
-        ReplicaOverrideRequest: {
-            expectedRevision: components["schemas"]["ResourceRevision"];
-            /**
-             * Format: uint32
-             * @description Temporary replica count, or null to clear the override
-             */
-            replicas: number | null;
+        ProbeStatsSnapshot: {
+            /** Format: int64 */
+            uptimeMs: number;
+            version: string;
         };
         ReplicaState: components["schemas"]["Object6"];
         /** @description Stable identity of a deployment replica's observed state. */
@@ -1855,6 +2501,21 @@ export interface components {
         };
         /** @description Open resource kind name used by generic registries and owner references. */
         ResourceKind: string;
+        ResourceMetricPoint: {
+            /** Format: double */
+            cpuPercent: number;
+            /** Format: int64 */
+            memoryBytes: number;
+            /** Format: int64 */
+            memoryLimitBytes: number;
+            /** Format: int64 */
+            netRxBytes: number;
+            /** Format: int64 */
+            netTxBytes: number;
+            source: string;
+            /** Format: int64 */
+            ts: number;
+        };
         /** @description Open resource identity used together with a resource kind. */
         ResourceName: string;
         /**
@@ -1875,6 +2536,11 @@ export interface components {
         };
         /** @description A secret-bearing wire value whose debug representation is always redacted. */
         SecretValue: string;
+        SequencedLogEntry: {
+            entry: components["schemas"]["IngestLogEntry"];
+            /** Format: int64 */
+            sequence: number;
+        };
         Service: components["schemas"]["Object3"];
         ServiceCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
@@ -1884,8 +2550,95 @@ export interface components {
             rollout: components["schemas"]["RolloutState"];
             serviceId: components["schemas"]["ServiceId"];
         };
+        /** @description One masked, operator-facing field change. */
+        ServiceDiffChange: {
+            /** @description Stable dotted path within the service spec. */
+            field: string;
+            /** @description Previous display value, absent when adding a field. */
+            from?: string | null;
+            /** @description Desired display value, absent when removing a field. */
+            to?: string | null;
+        };
+        /** @description Read-only desired-state comparison for one service. */
+        ServiceDiffRequest: {
+            /** @description Complete desired service state to compare without persisting it. */
+            spec: components["schemas"]["ServiceSpec"];
+        };
+        /** @description Masked comparison result and exact revision safe to submit on apply. */
+        ServiceDiffResponse: {
+            /** @description Ordered masked field changes. */
+            changes?: components["schemas"]["ServiceDiffChange"][];
+            /** @description Current revision, or absence when the service is new. */
+            expectedRevision?: components["schemas"]["ResourceRevision"] | (null);
+            /** @description Compared service identity. */
+            serviceId: components["schemas"]["ServiceId"];
+            /** @description Overall comparison classification. */
+            status: components["schemas"]["ServiceDiffStatus"];
+        };
+        /** @description Classification of one declarative service comparison. */
+        ServiceDiffStatus: "new" | "unchanged" | "changed";
         /** @description Stable identity of a deployable service. */
         ServiceId: string;
+        ServiceReplicaOverrideRequest: {
+            expectedRevision: components["schemas"]["ResourceRevision"];
+            /**
+             * Format: uint32
+             * @description Temporary replica count, or null to clear the override
+             */
+            replicas: number | null;
+        };
+        /** @description Read-only comparison of a complete declarative service resource set. */
+        ServiceRolloutDiffRequest: {
+            /** @description Desired resource set to compare. */
+            desired: components["schemas"]["ServiceRolloutSpec"];
+        };
+        /** @description Masked complete-resource comparison safe to submit on apply. */
+        ServiceRolloutDiffResponse: {
+            /** @description Ordered masked field changes. */
+            changes?: components["schemas"]["ServiceDiffChange"][];
+            /** @description Exact revisions observed during the comparison. */
+            expectedRevisions: components["schemas"]["ServiceRolloutRevisions"];
+            /** @description Compared service identity. */
+            serviceId: components["schemas"]["ServiceId"];
+            /** @description Overall comparison classification. */
+            status: components["schemas"]["ServiceDiffStatus"];
+        };
+        /** @description Optimistic atomic apply of a declarative service resource set. */
+        ServiceRolloutRequest: {
+            /** @description Complete desired resource set. */
+            desired: components["schemas"]["ServiceRolloutSpec"];
+            /** @description Revisions returned by the immediately preceding diff. */
+            expectedRevisions: components["schemas"]["ServiceRolloutRevisions"];
+        };
+        /** @description Accepted generations for an atomic declarative service apply. */
+        ServiceRolloutResponse: {
+            /** @description Managed egress generation, absent when the policy was removed. */
+            egressGeneration?: components["schemas"]["Generation"] | (null);
+            /** @description Managed ingress generation, absent when the route was removed. */
+            ingressGeneration?: components["schemas"]["Generation"] | (null);
+            /** @description Service generation after the apply. */
+            serviceGeneration: components["schemas"]["Generation"];
+            /** @description Service whose resource set was accepted. */
+            serviceId: components["schemas"]["ServiceId"];
+        };
+        /** @description Exact revisions observed for every managed rollout resource. */
+        ServiceRolloutRevisions: {
+            /** @description Current managed egress policy revision, or absence when missing. */
+            egress?: components["schemas"]["ResourceRevision"] | (null);
+            /** @description Current managed ingress route revision, or absence when missing. */
+            ingress?: components["schemas"]["ResourceRevision"] | (null);
+            /** @description Current service revision, or absence when missing. */
+            service?: components["schemas"]["ResourceRevision"] | (null);
+        };
+        /** @description Complete resource set managed by one declarative service document. */
+        ServiceRolloutSpec: {
+            /** @description Stable service egress policy, or absence to remove the managed policy. */
+            egress?: components["schemas"]["FirewallPolicySpec"] | (null);
+            /** @description Stable ingress route, or absence to remove the managed route. */
+            ingress?: components["schemas"]["IngressRouteSpec"] | (null);
+            /** @description Service workload and artifact desired state. */
+            service: components["schemas"]["ServiceSpec"];
+        };
         /** @description Desired service configuration used to create immutable deployments. */
         ServiceSpec: {
             /** @description Artifact selection or build template. */
@@ -1949,13 +2702,18 @@ export interface components {
             /** @description Whether new rollouts may begin. */
             rollout: components["schemas"]["RolloutState"];
         };
+        /** @description Optimistic desired-state replacement for one service. */
         ServiceWriteRequest: {
-            /** @description Required current revision; omit only when creating */
-            expectedRevision?: components["schemas"]["ResourceRevision"];
+            /** @description Revision observed by the caller, or absence when creating the service. */
+            expectedRevision?: components["schemas"]["ResourceRevision"] | (null);
+            /** @description Complete desired service state. */
             spec: components["schemas"]["ServiceSpec"];
         };
+        /** @description Accepted service desired-state generation. */
         ServiceWriteResponse: {
+            /** @description Desired generation after the write. */
             generation: components["schemas"]["Generation"];
+            /** @description Service whose desired state was accepted. */
             serviceId: components["schemas"]["ServiceId"];
         };
         /** @description Optional header-based affinity applied by ingress. */
@@ -1963,12 +2721,66 @@ export interface components {
             /** @description HTTP header carrying the opaque affinity token. */
             header: string;
         };
+        SinkStatsSnapshot: {
+            /** Format: int64 */
+            consecutiveFailures: number;
+            /** Format: int64 */
+            cursor: number;
+            /** Format: int64 */
+            filteredEntries: number;
+            id: string;
+            /** Format: int64 */
+            lastCursorAdvanceAtMs: number | null;
+            lastError: string | null;
+            /** Format: int64 */
+            lastErrorAtMs: number | null;
+            /** Format: int64 */
+            lastSuccessAtMs: number | null;
+            /** Format: int64 */
+            oldestPendingAtMs: number | null;
+            /** Format: int64 */
+            pendingEntries: number;
+        };
+        SpoolStatsSnapshot: {
+            /** Format: int64 */
+            databaseBytes: number;
+            /** Format: int64 */
+            highWatermark: number;
+            /** Format: int64 */
+            oldestEntryAtMs: number | null;
+            /** Format: int64 */
+            rowCount: number;
+        };
+        StatsMetricPoint: {
+            labels?: {
+                [key: string]: string;
+            };
+            name: string;
+            /** Format: int64 */
+            ts: number;
+            /** Format: double */
+            value: number;
+        };
+        StatsWarning: {
+            code: string;
+            message: string;
+            /** @enum {string} */
+            severity: "warning" | "error";
+        };
         /**
          * Format: int64
          * @description A UTC Unix timestamp represented in milliseconds.
          */
         Timestamp: number;
-        TrafficGeneration: components["schemas"]["Object8"];
+        TrafficBreakdownEntry: {
+            /** Format: int64 */
+            lastSeenAtMs: number;
+            /** Format: int64 */
+            requests: number;
+            statusCode: number;
+            value: string;
+        };
+        TrafficGeneration: components["schemas"]["Object9"];
         /** @description Stable identity of an ingress traffic generation. */
         TrafficGenerationId: string;
         /** @description Persisted cutover lifecycle of a traffic generation. */
@@ -2001,6 +2813,28 @@ export interface components {
             retiredAt?: components["schemas"]["Timestamp"] | (null);
             /** @description Time the immutable generation was staged. */
             stagedAt: components["schemas"]["Timestamp"];
+        };
+        TrafficMetricPoint: {
+            /** Format: int64 */
+            bytesIn: number;
+            /** Format: int64 */
+            bytesOut: number;
+            deploymentId: string | null;
+            /** Format: int64 */
+            latLe10s: number;
+            /** Format: int64 */
+            latLe1s: number;
+            /** Format: int64 */
+            latLe5s: number;
+            /** Format: int64 */
+            latTotal: number;
+            method: string;
+            /** Format: int64 */
+            requests: number;
+            serviceId: string;
+            statusCode: number;
+            /** Format: int64 */
+            ts: number;
         };
         /** @description Immutable route configuration captured for one traffic generation. */
         TrafficRoute: {
@@ -2045,7 +2879,7 @@ export interface components {
         UpgradeMode: "rolling" | "allNodes";
         /** @description Persisted lifecycle shared by rolling and all-node upgrade modes. */
         UpgradePhase: "pending" | "draining" | "applying" | "restarting" | "verifying" | "completed" | "failed" | "canceled";
-        UpgradeRun: components["schemas"]["Object13"];
+        UpgradeRun: components["schemas"]["Object14"];
         /** @description Stable identity of a persisted cluster upgrade run. */
         UpgradeRunId: string;
         /** @description Desired target and batching for one cluster upgrade. */
@@ -2091,7 +2925,7 @@ export interface components {
             /** @enum {string} */
             type: "managed";
         };
-        Webhook: components["schemas"]["Object14"];
+        Webhook: components["schemas"]["Object15"];
         WebhookCommandResponse: {
             generation: components["schemas"]["Generation"];
             webhookId: components["schemas"]["WebhookId"];
@@ -2195,6 +3029,82 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    uploadArtifactArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                archiveId: components["schemas"]["ArtifactArchiveId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Identical archive already stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactArchiveUploadResponse"];
+                };
+            };
+            /** @description Archive stored */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactArchiveUploadResponse"];
+                };
+            };
+            /** @description Invalid archive content or content address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive exceeds the upload limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive storage is unavailable on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getClusterInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterInfo"];
+                };
+            };
+        };
+    };
     listDnsRecords: {
         parameters: {
             query?: never;
@@ -2503,6 +3413,60 @@ export interface operations {
             };
         };
     };
+    getClusterStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live controller and observability health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterStatsResponse"];
+                };
+            };
+            /** @description One or more node observability stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listClusterNodeStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live controller and observability health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeStatsMap"];
+                };
+            };
+            /** @description One or more node observability stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listUpgrades: {
         parameters: {
             query?: never;
@@ -2655,6 +3619,60 @@ export interface operations {
             };
             /** @description Request body exceeds the command limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listLocalDisks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest complete disk inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiskInfo"][];
+                };
+            };
+            /** @description One or more host metric stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listNodeDisks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest complete disk inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDiskMap"];
+                };
+            };
+            /** @description One or more host metric stores are unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2869,6 +3887,407 @@ export interface operations {
                 content?: never;
             };
             /** @description Firewall planning is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getIngressBlocklist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical cluster ingress blocklist */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockedIpsResponse"];
+                };
+            };
+            /** @description Cluster state is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setBlockedIngressIp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockedIpRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated canonical cluster ingress blocklist */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockedIpsResponse"];
+                };
+            };
+            /** @description Invalid JSON or IP address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Concurrent blocklist updates did not converge */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster state is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getBlockedIngressTraffic: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                nodeId?: components["schemas"]["NodeId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ranked access-log traffic grouped by client IP and path */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressTrafficBreakdown"];
+                };
+            };
+            /** @description Invalid range, limit, service, or node selection */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more node traffic stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listActiveIngressRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logical routes receiving public ingress traffic */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressRouting"][];
+                };
+            };
+            /** @description Cluster state is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getIngressTraffic: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                nodeId?: components["schemas"]["NodeId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ranked access-log traffic grouped by client IP and path */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressTrafficBreakdown"];
+                };
+            };
+            /** @description Invalid range, limit, service, or node selection */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more node traffic stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listLogs: {
+        parameters: {
+            query?: {
+                tail?: number;
+                cursor?: string;
+                from?: number;
+                to?: number;
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered normalized logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterLogPage"];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getLogHistogram: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                bucketMs?: number;
+                groupBy?: "level" | "status";
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event-time log histogram */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogHistogramBucket"][];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listClusterMetrics: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                bucketMs?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded resource metric history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, bucket, limit, or service */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more metric stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listNodeMetrics: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded resource metric history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, bucket, limit, or service */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more metric stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listOperationalStatsMetrics: {
+        parameters: {
+            query?: {
+                name?: string;
+                from?: number;
+                to?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded controller and backup metric history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, name, or limit */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more node stats stores are unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3295,6 +4714,92 @@ export interface operations {
             };
         };
     };
+    listDeploymentLogs: {
+        parameters: {
+            query?: {
+                tail?: number;
+                cursor?: string;
+                from?: number;
+                to?: number;
+                query?: string;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+                deploymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered normalized logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterLogPage"];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getDeploymentLogHistogram: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                bucketMs?: number;
+                groupBy?: "level" | "status";
+                query?: string;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+                deploymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event-time log histogram */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogHistogramBucket"][];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     removeDeployment: {
         parameters: {
             query?: never;
@@ -3463,6 +4968,46 @@ export interface operations {
             };
         };
     };
+    diffService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Masked desired-state comparison */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceDiffResponse"];
+                };
+            };
+            /** @description Invalid service request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the service limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     freezeService: {
         parameters: {
             query?: never;
@@ -3512,6 +5057,185 @@ export interface operations {
             };
             /** @description Request body exceeds the command limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listServiceLogs: {
+        parameters: {
+            query?: {
+                tail?: number;
+                cursor?: string;
+                from?: number;
+                to?: number;
+                query?: string;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered normalized logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterLogPage"];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getServiceLogHistogram: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                bucketMs?: number;
+                groupBy?: "level" | "status";
+                query?: string;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event-time log histogram */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogHistogramBucket"][];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listServiceMetrics: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                bucketMs?: number;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded resource metric history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, bucket, limit, or service */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more metric stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listContainerMetrics: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded resource metric history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, bucket, limit, or service */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more metric stores are unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3588,7 +5312,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ReplicaOverrideRequest"];
+                "application/json": components["schemas"]["ServiceReplicaOverrideRequest"];
             };
         };
         responses: {
@@ -3623,6 +5347,102 @@ export interface operations {
                 content?: never;
             };
             /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    applyServiceRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceRolloutRequest"];
+            };
+        };
+        responses: {
+            /** @description Atomic desired resource set accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceRolloutResponse"];
+                };
+            };
+            /** @description Invalid rollout request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, route, policy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the service limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    diffServiceRollout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceRolloutDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Masked atomic rollout comparison */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceRolloutDiffResponse"];
+                };
+            };
+            /** @description Invalid rollout request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Route or policy ownership conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the service limit */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -3683,6 +5503,54 @@ export interface operations {
             };
         };
     };
+    getServiceTraffic: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                nodeId?: components["schemas"]["NodeId"];
+            };
+            header?: never;
+            path: {
+                serviceId: components["schemas"]["ServiceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Five-second service traffic intervals derived from access logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrafficMetricPoint"][];
+                };
+            };
+            /** @description Invalid range, limit, service, or node selection */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more node traffic stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listTrafficGenerations: {
         parameters: {
             query?: never;
@@ -3728,6 +5596,54 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getServiceTrafficBreakdown: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                limit?: number;
+                nodeId?: components["schemas"]["NodeId"];
+            };
+            header?: never;
+            path: {
+                serviceId: components["schemas"]["ServiceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ranked access-log traffic grouped by client IP and path */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressTrafficBreakdown"];
+                };
+            };
+            /** @description Invalid range, limit, service, or node selection */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more node traffic stores are unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3784,6 +5700,88 @@ export interface operations {
             };
             /** @description Request body exceeds the command limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listSystemLogs: {
+        parameters: {
+            query?: {
+                tail?: number;
+                cursor?: string;
+                from?: number;
+                to?: number;
+                query?: string;
+                component?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered normalized logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterLogPage"];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSystemLogHistogram: {
+        parameters: {
+            query?: {
+                from?: number;
+                to?: number;
+                bucketMs?: number;
+                groupBy?: "level" | "status";
+                query?: string;
+                component?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event-time log histogram */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogHistogramBucket"][];
+                };
+            };
+            /** @description Invalid scope, cursor, range, or LogQL expression */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One or more cluster log stores are unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

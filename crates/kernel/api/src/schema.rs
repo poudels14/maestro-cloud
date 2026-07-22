@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    ArtifactArchiveUploadResponse, Assignment, Build, CommandRequest, Deployment,
-    DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute, Node,
-    NodeFirewall, NodeNetwork, Preview, ReplicaState, ResourceKind, Service,
+    ArtifactArchiveUploadResponse, Assignment, Build, ClusterId, CommandRequest, Deployment,
+    DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute,
+    IngressRouting, Node, NodeFirewall, NodeNetwork, Preview, ReplicaState, ResourceKind, Service,
     ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse,
     ServiceDiffStatus, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
     ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
@@ -284,6 +284,8 @@ pub fn openapi_document() -> Value {
     register_schema::<UpgradeRun>(&mut generator, BuiltinKind::UpgradeRun);
     register_schema::<Webhook>(&mut generator, BuiltinKind::Webhook);
     register_schema::<NodeFirewall>(&mut generator, BuiltinKind::NodeFirewall);
+    register_named_schema::<ClusterId>(&mut generator, "ClusterId");
+    register_named_schema::<IngressRouting>(&mut generator, "IngressRouting");
     register_named_schema::<CommandRequest>(&mut generator, "CommandRequest");
     register_named_schema::<ArtifactArchiveUploadResponse>(
         &mut generator,

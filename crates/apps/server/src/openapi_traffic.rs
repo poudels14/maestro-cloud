@@ -6,6 +6,7 @@ pub(crate) fn paths() -> Map<String, Value> {
             "/api/ingress/traffic".to_owned(),
             breakdown_operation("getIngressTraffic", false),
         ),
+        ("/api/ingress/routes".to_owned(), ingress_routes_operation()),
         (
             "/api/ingress/blocked-traffic".to_owned(),
             breakdown_operation("getBlockedIngressTraffic", false),
@@ -106,6 +107,25 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
             }
         }),
     );
+}
+
+fn ingress_routes_operation() -> Value {
+    json!({
+        "get": {
+            "operationId": "listActiveIngressRoutes",
+            "security": [{"bearerAuth": []}],
+            "responses": {
+                "200": {
+                    "description": "Logical routes receiving public ingress traffic",
+                    "content": {"application/json": {"schema": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/IngressRouting"}
+                    }}}
+                },
+                "503": {"description": "Cluster state is unavailable"}
+            }
+        }
+    })
 }
 
 fn blocked_ips_operation() -> Value {

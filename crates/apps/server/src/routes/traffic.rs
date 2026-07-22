@@ -9,7 +9,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use kernel_api::{
     BuiltinKind, Generation, IngressBlocklist, IngressBlocklistId, IngressBlocklistSpec,
-    IngressBlocklistStatus, NodeId, Object, ObjectMeta, ResourceRevision, ServiceId, Timestamp,
+    IngressBlocklistStatus, IngressRouting, NodeId, Object, ObjectMeta, ResourceRevision,
+    ServiceId, Timestamp, TrafficGeneration,
 };
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest};
 use logs::{
@@ -31,6 +32,7 @@ const MAXIMUM_BLOCKLIST_CAS_ATTEMPTS: usize = 8;
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/ingress/traffic", get(ingress_traffic))
+        .route("/api/ingress/routes", get(ingress_routes))
         .route("/api/ingress/blocked-traffic", get(blocked_ingress_traffic))
         .route(
             "/api/ingress/blocked-ips",
@@ -96,6 +98,14 @@ async fn blocked_ips(State(state): State<AppState>) -> Result<Json<BlockedIpsRes
     Ok(Json(blocklist_response(
         read_blocklist(&state).await?.as_ref(),
     )))
+}
+
+async fn ingress_routes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<IngressRouting>>, ApiError> {
+    let generations: Vec<TrafficGeneration> =
+        resource::list(&state, BuiltinKind::TrafficGeneration).await?;
+    Ok(Json(ingress::active_routing(&generations)))
 }
 
 async fn set_blocked_ip(

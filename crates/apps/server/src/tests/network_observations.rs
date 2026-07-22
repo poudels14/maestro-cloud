@@ -2,13 +2,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::http::StatusCode;
 use kernel_api::{
-    DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, FirewallDirection,
-    FirewallPolicy, FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallSubject,
-    FirewallVerdict, Generation, IngressRoute, IngressRouteId, IngressRouteSpec,
-    IngressRouteStatus, NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId,
-    NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, Object, ServiceId,
-    TrafficGeneration, TrafficGenerationId, TrafficGenerationPhase, TrafficGenerationSpec,
-    TrafficGenerationStatus,
+    AssignmentId, DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue,
+    FirewallDirection, FirewallPolicy, FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus,
+    FirewallSubject, FirewallVerdict, Generation, IngressRoute, IngressRouteId, IngressRouteSpec,
+    IngressRouteStatus, IngressRouting, NodeFirewall, NodeFirewallId, NodeFirewallSpec,
+    NodeFirewallStatus, NodeId, NodeNetwork, NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus,
+    Object, ServiceId, TrafficGeneration, TrafficGenerationId, TrafficGenerationPhase,
+    TrafficGenerationSpec, TrafficGenerationStatus, TrafficRoute, TrafficTarget,
 };
 
 use crate::{ApiServer, ServerSettings};
@@ -66,6 +66,14 @@ async fn network_control_plane_observations_are_typed_revisioned_and_scoped()
     assert_revisioned_list::<IngressRoute>(&server, "/api/services/api/routes").await?;
     assert_revisioned_list::<TrafficGeneration>(&server, "/api/services/api/traffic-generations")
         .await?;
+    let routing: Vec<IngressRouting> =
+        decode(request(&server, "/api/ingress/routes", None).await?).await?;
+    assert_eq!(routing.len(), 1);
+    let active_route = routing.first().ok_or("active ingress route missing")?;
+    assert_eq!(active_route.service_id, ServiceId::new("api")?);
+    assert_eq!(active_route.rule, "Host(`api.example.test`)");
+    assert_eq!(active_route.entry_points, ["web"]);
+    assert_eq!(active_route.servers, ["http://10.42.1.10:8080"]);
 
     assert_eq!(
         request(&server, "/api/services/missing/routes/api-route", None)
@@ -212,8 +220,19 @@ fn traffic_generation() -> Result<TrafficGeneration, kernel_api::InvalidIdentifi
             service_id: ServiceId::new("api")?,
             deployment_id: kernel_api::DeploymentId::new("api-deployment-1")?,
             epoch: 1,
-            routes: Vec::new(),
-            targets: Vec::new(),
+            routes: vec![TrafficRoute {
+                route_id: IngressRouteId::new("api-route")?,
+                route_generation: Generation(1),
+                hosts: vec!["api.example.test".to_owned()],
+                path_prefix: None,
+                target_port: 8_080,
+                session_affinity: None,
+            }],
+            targets: vec![TrafficTarget {
+                assignment_id: AssignmentId::new("api-assignment-1")?,
+                node_id: NodeId::new("node-1")?,
+                endpoint: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10)), 8_080),
+            }],
         },
         status: TrafficGenerationStatus {
             phase: TrafficGenerationPhase::Active,

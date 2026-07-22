@@ -74,6 +74,20 @@ pub struct IngressBlocklistStatus {
 pub type IngressBlocklist =
     Object<IngressBlocklistId, IngressBlocklistSpec, IngressBlocklistStatus>;
 
+/// One logical route currently receiving public ingress traffic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressRouting {
+    /// Service receiving traffic through this route.
+    pub service_id: ServiceId,
+    /// Exact Traefik rule published for the route.
+    pub rule: String,
+    /// Public Traefik entry points evaluating the rule.
+    pub entry_points: Vec<String>,
+    /// Ready workload URLs selected by the active traffic generation.
+    pub servers: Vec<String>,
+}
+
 /// One cluster-routable workload selected for ingress traffic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

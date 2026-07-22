@@ -47,9 +47,9 @@ pub use network::{
     DnsRecord, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, FirewallDirection, FirewallPolicy,
     FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject, FirewallVerdict,
     IngressBlocklist, IngressBlocklistSpec, IngressBlocklistStatus, IngressRoute, IngressRouteSpec,
-    IngressRouteStatus, NetworkAddress, PortRange, SessionAffinity, TrafficGeneration,
-    TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus, TrafficRoute,
-    TrafficTarget, TransportProtocol,
+    IngressRouteStatus, IngressRouting, NetworkAddress, PortRange, SessionAffinity,
+    TrafficGeneration, TrafficGenerationPhase, TrafficGenerationSpec, TrafficGenerationStatus,
+    TrafficRoute, TrafficTarget, TransportProtocol,
 };
 pub use node::{
     ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,

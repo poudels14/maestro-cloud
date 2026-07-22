@@ -10,6 +10,7 @@ mod model;
 mod plan;
 mod reconciler;
 mod resource;
+mod routing;
 mod snapshot;
 mod target;
 mod traefik;
@@ -25,6 +26,7 @@ pub use model::{
 };
 pub use plan::{IngressPlanError, plan};
 pub use reconciler::{IngressBlocklistReconciler, IngressReconciler};
+pub use routing::active_routing;
 pub use traefik::{
     TRAEFIK_BLOCKED_ROUTER_PREFIX, TraefikBackend, TraefikBlocklistConfig, TraefikCutover,
     TraefikProvider, TraefikStage, traefik_service_router_prefix,

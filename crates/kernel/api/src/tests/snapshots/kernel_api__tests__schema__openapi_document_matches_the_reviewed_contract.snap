@@ -485,6 +485,10 @@ expression: openapi_document()
         ],
         "type": "object"
       },
+      "ClusterId": {
+        "description": "Stable identity of a Maestro cluster.",
+        "type": "string"
+      },
       "CommandRequest": {
         "additionalProperties": false,
         "description": "Optimistic lifecycle command targeting one exact resource revision.",
@@ -1555,6 +1559,44 @@ expression: openapi_document()
         },
         "required": [
           "appliedGeneration"
+        ],
+        "type": "object"
+      },
+      "IngressRouting": {
+        "description": "One logical route currently receiving public ingress traffic.",
+        "properties": {
+          "entryPoints": {
+            "description": "Public Traefik entry points evaluating the rule.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "description": "Exact Traefik rule published for the route.",
+            "type": "string"
+          },
+          "servers": {
+            "description": "Ready workload URLs selected by the active traffic generation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service receiving traffic through this route."
+          }
+        },
+        "required": [
+          "serviceId",
+          "rule",
+          "entryPoints",
+          "servers"
         ],
         "type": "object"
       },

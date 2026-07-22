@@ -5,6 +5,30 @@
         "description": "Stable identity of one uploaded artifact source archive.",
         "type": "string"
       },
+      "ArtifactArchiveUploadResponse": {
+        "description": "Result of accepting one content-addressed build context archive.",
+        "properties": {
+          "archiveId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactArchiveId"
+              }
+            ],
+            "description": "Content address assigned to the archive bytes."
+          },
+          "sizeBytes": {
+            "description": "Compressed bytes accepted by the archive store.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "archiveId",
+          "sizeBytes"
+        ],
+        "type": "object"
+      },
       "ArtifactTemplate": {
         "description": "Runtime artifact selected for a service deployment.",
         "oneOf": [
@@ -240,8 +264,109 @@
         ],
         "type": "object"
       },
+      "BackupStatsSnapshot": {
+        "properties": {
+          "completedPartitionsLastRun": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "failedPartitionsLastRun": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastAttemptAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "lastError": {
+            "nullable": true,
+            "type": "string"
+          },
+          "lastErrorAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "lastSuccessAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "oldestPendingDate": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "pendingBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pendingPartitions": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uploadedBytesLastRun": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "configured",
+          "lastAttemptAtMs",
+          "lastSuccessAtMs",
+          "lastErrorAtMs",
+          "lastError",
+          "pendingPartitions",
+          "pendingBytes",
+          "oldestPendingDate",
+          "uploadedBytesLastRun",
+          "completedPartitionsLastRun",
+          "failedPartitionsLastRun"
+        ],
+        "type": "object"
+      },
+      "BlockedIpRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "blocked": {
+            "type": "boolean"
+          },
+          "ip": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ip",
+          "blocked"
+        ],
+        "type": "object"
+      },
+      "BlockedIpsResponse": {
+        "properties": {
+          "blockedIps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "blockedIps"
+        ],
+        "type": "object"
+      },
       "Build": {
-        "$ref": "#/components/schemas/Object11"
+        "$ref": "#/components/schemas/Object12"
       },
       "BuildId": {
         "description": "Stable identity of an artifact build.",
@@ -457,6 +582,129 @@
         ],
         "type": "object"
       },
+      "ClusterId": {
+        "description": "Stable identity of a Maestro cluster.",
+        "type": "string"
+      },
+      "ClusterInfo": {
+        "properties": {
+          "clusterId": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "controlPlaneNodeCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodeCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workloadNodeCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clusterId",
+          "nodeCount",
+          "controlPlaneNodeCount",
+          "workloadNodeCount"
+        ],
+        "type": "object"
+      },
+      "ClusterLogCursor": {
+        "additionalProperties": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": "object"
+      },
+      "ClusterLogEntry": {
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/IngestLogEntry"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nodeId",
+          "sequence",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "ClusterLogPage": {
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/ClusterLogCursor"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterLogEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries",
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "ClusterStatsResponse": {
+        "properties": {
+          "backup": {
+            "$ref": "#/components/schemas/BackupStatsSnapshot"
+          },
+          "controller": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ControllerStatsSnapshot"
+              }
+            ],
+            "nullable": true
+          },
+          "controllerHeartbeatAgeMs": {
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "generatedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "probe": {
+            "$ref": "#/components/schemas/ProbeStatsSnapshot"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StatsWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "generatedAtMs",
+          "probe",
+          "controller",
+          "controllerHeartbeatAgeMs",
+          "backup",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "CommandRequest": {
         "additionalProperties": false,
         "properties": {
@@ -580,6 +828,86 @@
       "ConditionType": {
         "description": "Stable machine-readable name of a status condition.",
         "type": "string"
+      },
+      "ControllerStatsSnapshot": {
+        "properties": {
+          "deadLetters": {
+            "$ref": "#/components/schemas/DeadLetterStatsSnapshot"
+          },
+          "reportedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sinks": {
+            "items": {
+              "$ref": "#/components/schemas/SinkStatsSnapshot"
+            },
+            "type": "array"
+          },
+          "spool": {
+            "$ref": "#/components/schemas/SpoolStatsSnapshot"
+          },
+          "uptimeMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reportedAtMs",
+          "version",
+          "uptimeMs",
+          "spool",
+          "sinks",
+          "deadLetters"
+        ],
+        "type": "object"
+      },
+      "DeadLetterStatsSnapshot": {
+        "properties": {
+          "capacity": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latestAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "latestError": {
+            "nullable": true,
+            "type": "string"
+          },
+          "latestStatus": {
+            "maximum": 599,
+            "minimum": 100,
+            "nullable": true,
+            "type": "integer"
+          },
+          "payloadBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "capacity",
+          "payloadBytes",
+          "latestAtMs",
+          "latestStatus",
+          "latestError"
+        ],
+        "type": "object"
       },
       "Deployment": {
         "$ref": "#/components/schemas/Object4"
@@ -838,8 +1166,39 @@
         ],
         "type": "object"
       },
+      "DiskInfo": {
+        "properties": {
+          "availableBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fileSystem": {
+            "type": "string"
+          },
+          "mountPoint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "totalBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "mountPoint",
+          "totalBytes",
+          "availableBytes",
+          "fileSystem"
+        ],
+        "type": "object"
+      },
       "DnsRecord": {
-        "$ref": "#/components/schemas/Object10"
+        "$ref": "#/components/schemas/Object11"
       },
       "DnsRecordId": {
         "description": "Stable identity of a cluster DNS record.",
@@ -1135,7 +1494,7 @@
         "type": "object"
       },
       "FirewallPolicy": {
-        "$ref": "#/components/schemas/Object9"
+        "$ref": "#/components/schemas/Object10"
       },
       "FirewallPolicyCommandResponse": {
         "properties": {
@@ -1454,6 +1813,109 @@
           }
         ]
       },
+      "IngestLogEntry": {
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "body": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "eventAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "origin": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "stream": {
+            "enum": [
+              "stdout",
+              "stderr",
+              "otlp",
+              "system"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "observedAt",
+          "eventAt",
+          "severity",
+          "stream",
+          "origin",
+          "body"
+        ],
+        "type": "object"
+      },
+      "IngressBlocklist": {
+        "$ref": "#/components/schemas/Object8"
+      },
+      "IngressBlocklistId": {
+        "description": "Stable identity of the cluster ingress blocklist.",
+        "type": "string"
+      },
+      "IngressBlocklistSpec": {
+        "description": "Desired canonical client addresses denied before service routing.",
+        "properties": {
+          "addresses": {
+            "description": "Unique addresses in deterministic network ordering.",
+            "items": {
+              "format": "ip",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "type": "object"
+      },
+      "IngressBlocklistStatus": {
+        "description": "Observed publication state for the cluster ingress blocklist.",
+        "properties": {
+          "appliedGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation most recently published to the ingress backend."
+          },
+          "conditions": {
+            "description": "Generic publication and validation evidence.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "configurationDigest": {
+            "description": "Digest of the exact rendered address set.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "appliedGeneration"
+        ],
+        "type": "object"
+      },
       "IngressRoute": {
         "$ref": "#/components/schemas/Object7"
       },
@@ -1537,6 +1999,91 @@
         ],
         "type": "object"
       },
+      "IngressRouting": {
+        "description": "One logical route currently receiving public ingress traffic.",
+        "properties": {
+          "entryPoints": {
+            "description": "Public Traefik entry points evaluating the rule.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "description": "Exact Traefik rule published for the route.",
+            "type": "string"
+          },
+          "servers": {
+            "description": "Ready workload URLs selected by the active traffic generation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service receiving traffic through this route."
+          }
+        },
+        "required": [
+          "serviceId",
+          "rule",
+          "entryPoints",
+          "servers"
+        ],
+        "type": "object"
+      },
+      "IngressTrafficBreakdown": {
+        "properties": {
+          "byIp": {
+            "items": {
+              "$ref": "#/components/schemas/TrafficBreakdownEntry"
+            },
+            "type": "array"
+          },
+          "byPath": {
+            "items": {
+              "$ref": "#/components/schemas/TrafficBreakdownEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "byIp",
+          "byPath"
+        ],
+        "type": "object"
+      },
+      "LogHistogramBucket": {
+        "properties": {
+          "bucketAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "groups": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "bucketAt",
+          "count",
+          "groups"
+        ],
+        "type": "object"
+      },
       "Node": {
         "$ref": "#/components/schemas/Object"
       },
@@ -1581,8 +2128,17 @@
         ],
         "type": "object"
       },
+      "NodeDiskMap": {
+        "additionalProperties": {
+          "items": {
+            "$ref": "#/components/schemas/DiskInfo"
+          },
+          "type": "array"
+        },
+        "type": "object"
+      },
       "NodeFirewall": {
-        "$ref": "#/components/schemas/Object15"
+        "$ref": "#/components/schemas/Object16"
       },
       "NodeFirewallId": {
         "description": "Stable identity of a node's desired firewall ruleset.",
@@ -1796,6 +2352,12 @@
         ],
         "type": "object"
       },
+      "NodeStatsMap": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ControllerStatsSnapshot"
+        },
+        "type": "object"
+      },
       "NodeStatus": {
         "description": "Current reachability and lifecycle of a cluster node.",
         "properties": {
@@ -1949,6 +2511,41 @@
           "spec": {
             "allOf": [
               {
+                "$ref": "#/components/schemas/FirewallPolicySpec"
+              }
+            ],
+            "description": "Desired state written by users or another controller."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicyStatus"
+              }
+            ],
+            "description": "Observed state written by the resource's owning controller."
+          }
+        },
+        "required": [
+          "meta",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Object11": {
+        "description": "A typed Maestro resource with desired and observed state.",
+        "properties": {
+          "meta": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObjectMeta11"
+              }
+            ],
+            "description": "Identity, concurrency, ownership, and deletion metadata."
+          },
+          "spec": {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/DnsRecordSpec"
               }
             ],
@@ -1970,13 +2567,13 @@
         ],
         "type": "object"
       },
-      "Object11": {
+      "Object12": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta11"
+                "$ref": "#/components/schemas/ObjectMeta12"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2005,13 +2602,13 @@
         ],
         "type": "object"
       },
-      "Object12": {
+      "Object13": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta12"
+                "$ref": "#/components/schemas/ObjectMeta13"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2040,13 +2637,13 @@
         ],
         "type": "object"
       },
-      "Object13": {
+      "Object14": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta13"
+                "$ref": "#/components/schemas/ObjectMeta14"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2075,13 +2672,13 @@
         ],
         "type": "object"
       },
-      "Object14": {
+      "Object15": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta14"
+                "$ref": "#/components/schemas/ObjectMeta15"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2110,13 +2707,13 @@
         ],
         "type": "object"
       },
-      "Object15": {
+      "Object16": {
         "description": "A typed Maestro resource with desired and observed state.",
         "properties": {
           "meta": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ObjectMeta15"
+                "$ref": "#/components/schemas/ObjectMeta16"
               }
             ],
             "description": "Identity, concurrency, ownership, and deletion metadata."
@@ -2369,7 +2966,7 @@
           "spec": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationSpec"
+                "$ref": "#/components/schemas/IngressBlocklistSpec"
               }
             ],
             "description": "Desired state written by users or another controller."
@@ -2377,7 +2974,7 @@
           "status": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationStatus"
+                "$ref": "#/components/schemas/IngressBlocklistStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2404,7 +3001,7 @@
           "spec": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicySpec"
+                "$ref": "#/components/schemas/TrafficGenerationSpec"
               }
             ],
             "description": "Desired state written by users or another controller."
@@ -2412,7 +3009,7 @@
           "status": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicyStatus"
+                "$ref": "#/components/schemas/TrafficGenerationStatus"
               }
             ],
             "description": "Observed state written by the resource's owning controller."
@@ -2546,7 +3143,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/DnsRecordId"
+                "$ref": "#/components/schemas/FirewallPolicyId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2624,7 +3221,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/BuildId"
+                "$ref": "#/components/schemas/DnsRecordId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2702,7 +3299,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/PreviewId"
+                "$ref": "#/components/schemas/BuildId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2780,7 +3377,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/UpgradeRunId"
+                "$ref": "#/components/schemas/PreviewId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2858,7 +3455,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/WebhookId"
+                "$ref": "#/components/schemas/UpgradeRunId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -2894,6 +3491,84 @@
         "type": "object"
       },
       "ObjectMeta15": {
+        "description": "Metadata shared by every resource kind.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Non-selecting metadata interpreted by named consumers.",
+            "type": "object"
+          },
+          "deletionTimestamp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Time deletion was requested, or `None` while the resource is active."
+          },
+          "finalizers": {
+            "description": "Controllers that must finish cleanup before physical deletion.",
+            "items": {
+              "$ref": "#/components/schemas/FinalizerName"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "generation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired-state generation incremented when the specification changes."
+          },
+          "id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookId"
+              }
+            ],
+            "description": "Kind-specific stable resource identity."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels used by selectors and grouping.",
+            "type": "object"
+          },
+          "ownerRefs": {
+            "description": "Resources whose lifecycle or provenance relates to this object.",
+            "items": {
+              "$ref": "#/components/schemas/OwnerReference"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              }
+            ],
+            "description": "Store revision used for optimistic concurrency."
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "generation"
+        ],
+        "type": "object"
+      },
+      "ObjectMeta16": {
         "description": "Metadata shared by every resource kind.",
         "properties": {
           "annotations": {
@@ -3482,7 +4157,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/TrafficGenerationId"
+                "$ref": "#/components/schemas/IngressBlocklistId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -3560,7 +4235,7 @@
           "id": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FirewallPolicyId"
+                "$ref": "#/components/schemas/TrafficGenerationId"
               }
             ],
             "description": "Kind-specific stable resource identity."
@@ -3692,7 +4367,7 @@
         "type": "object"
       },
       "Preview": {
-        "$ref": "#/components/schemas/Object12"
+        "$ref": "#/components/schemas/Object13"
       },
       "PreviewId": {
         "description": "Stable identity of a pull-request preview.",
@@ -3878,23 +4553,20 @@
         ],
         "type": "object"
       },
-      "ReplicaOverrideRequest": {
-        "additionalProperties": false,
+      "ProbeStatsSnapshot": {
         "properties": {
-          "expectedRevision": {
-            "$ref": "#/components/schemas/ResourceRevision"
-          },
-          "replicas": {
-            "description": "Temporary replica count, or null to clear the override",
-            "format": "uint32",
+          "uptimeMs": {
+            "format": "int64",
             "minimum": 0,
-            "nullable": true,
             "type": "integer"
+          },
+          "version": {
+            "type": "string"
           }
         },
         "required": [
-          "expectedRevision",
-          "replicas"
+          "version",
+          "uptimeMs"
         ],
         "type": "object"
       },
@@ -4064,6 +4736,52 @@
         "description": "Open resource kind name used by generic registries and owner references.",
         "type": "string"
       },
+      "ResourceMetricPoint": {
+        "properties": {
+          "cpuPercent": {
+            "format": "double",
+            "minimum": 0,
+            "type": "number"
+          },
+          "memoryBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memoryLimitBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "netRxBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "netTxBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ts",
+          "source",
+          "cpuPercent",
+          "memoryBytes",
+          "memoryLimitBytes",
+          "netRxBytes",
+          "netTxBytes"
+        ],
+        "type": "object"
+      },
       "ResourceName": {
         "description": "Open resource identity used together with a resource kind.",
         "type": "string"
@@ -4117,6 +4835,23 @@
         "description": "A secret-bearing wire value whose debug representation is always redacted.",
         "type": "string"
       },
+      "SequencedLogEntry": {
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/IngestLogEntry"
+          },
+          "sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "entry"
+        ],
+        "type": "object"
+      },
       "Service": {
         "$ref": "#/components/schemas/Object3"
       },
@@ -4147,9 +4882,378 @@
         ],
         "type": "object"
       },
+      "ServiceDiffChange": {
+        "description": "One masked, operator-facing field change.",
+        "properties": {
+          "field": {
+            "description": "Stable dotted path within the service spec.",
+            "type": "string"
+          },
+          "from": {
+            "description": "Previous display value, absent when adding a field.",
+            "nullable": true,
+            "type": "string"
+          },
+          "to": {
+            "description": "Desired display value, absent when removing a field.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffRequest": {
+        "additionalProperties": false,
+        "description": "Read-only desired-state comparison for one service.",
+        "properties": {
+          "spec": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Complete desired service state to compare without persisting it."
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffResponse": {
+        "description": "Masked comparison result and exact revision safe to submit on apply.",
+        "properties": {
+          "changes": {
+            "description": "Ordered masked field changes.",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDiffChange"
+            },
+            "type": "array"
+          },
+          "expectedRevision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current revision, or absence when the service is new."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Compared service identity."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceDiffStatus"
+              }
+            ],
+            "description": "Overall comparison classification."
+          }
+        },
+        "required": [
+          "serviceId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ServiceDiffStatus": {
+        "description": "Classification of one declarative service comparison.",
+        "oneOf": [
+          {
+            "description": "The service does not exist yet.",
+            "enum": [
+              "new"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Desired state is equivalent after typed decoding.",
+            "enum": [
+              "unchanged"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "At least one desired field differs.",
+            "enum": [
+              "changed"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "ServiceId": {
         "description": "Stable identity of a deployable service.",
         "type": "string"
+      },
+      "ServiceReplicaOverrideRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision"
+          },
+          "replicas": {
+            "description": "Temporary replica count, or null to clear the override",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "replicas"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutDiffRequest": {
+        "additionalProperties": false,
+        "description": "Read-only comparison of a complete declarative service resource set.",
+        "properties": {
+          "desired": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutSpec"
+              }
+            ],
+            "description": "Desired resource set to compare."
+          }
+        },
+        "required": [
+          "desired"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutDiffResponse": {
+        "description": "Masked complete-resource comparison safe to submit on apply.",
+        "properties": {
+          "changes": {
+            "description": "Ordered masked field changes.",
+            "items": {
+              "$ref": "#/components/schemas/ServiceDiffChange"
+            },
+            "type": "array"
+          },
+          "expectedRevisions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutRevisions"
+              }
+            ],
+            "description": "Exact revisions observed during the comparison."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Compared service identity."
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceDiffStatus"
+              }
+            ],
+            "description": "Overall comparison classification."
+          }
+        },
+        "required": [
+          "serviceId",
+          "expectedRevisions",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutRequest": {
+        "additionalProperties": false,
+        "description": "Optimistic atomic apply of a declarative service resource set.",
+        "properties": {
+          "desired": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutSpec"
+              }
+            ],
+            "description": "Complete desired resource set."
+          },
+          "expectedRevisions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRolloutRevisions"
+              }
+            ],
+            "description": "Revisions returned by the immediately preceding diff."
+          }
+        },
+        "required": [
+          "expectedRevisions",
+          "desired"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutResponse": {
+        "description": "Accepted generations for an atomic declarative service apply.",
+        "properties": {
+          "egressGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Managed egress generation, absent when the policy was removed."
+          },
+          "ingressGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Managed ingress generation, absent when the route was removed."
+          },
+          "serviceGeneration": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Service generation after the apply."
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service whose resource set was accepted."
+          }
+        },
+        "required": [
+          "serviceId",
+          "serviceGeneration"
+        ],
+        "type": "object"
+      },
+      "ServiceRolloutRevisions": {
+        "description": "Exact revisions observed for every managed rollout resource.",
+        "properties": {
+          "egress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current managed egress policy revision, or absence when missing."
+          },
+          "ingress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current managed ingress route revision, or absence when missing."
+          },
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Current service revision, or absence when missing."
+          }
+        },
+        "type": "object"
+      },
+      "ServiceRolloutSpec": {
+        "additionalProperties": false,
+        "description": "Complete resource set managed by one declarative service document.",
+        "properties": {
+          "egress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FirewallPolicySpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Stable service egress policy, or absence to remove the managed policy."
+          },
+          "ingress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IngressRouteSpec"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Stable ingress route, or absence to remove the managed route."
+          },
+          "service": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Service workload and artifact desired state."
+          }
+        },
+        "required": [
+          "service"
+        ],
+        "type": "object"
       },
       "ServiceSpec": {
         "description": "Desired service configuration used to create immutable deployments.",
@@ -4360,13 +5464,29 @@
       },
       "ServiceWriteRequest": {
         "additionalProperties": false,
+        "description": "Optimistic desired-state replacement for one service.",
         "properties": {
           "expectedRevision": {
-            "$ref": "#/components/schemas/ResourceRevision",
-            "description": "Required current revision; omit only when creating"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceRevision"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Revision observed by the caller, or absence when creating the service."
           },
           "spec": {
-            "$ref": "#/components/schemas/ServiceSpec"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceSpec"
+              }
+            ],
+            "description": "Complete desired service state."
           }
         },
         "required": [
@@ -4375,12 +5495,23 @@
         "type": "object"
       },
       "ServiceWriteResponse": {
+        "description": "Accepted service desired-state generation.",
         "properties": {
           "generation": {
-            "$ref": "#/components/schemas/Generation"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              }
+            ],
+            "description": "Desired generation after the write."
           },
           "serviceId": {
-            "$ref": "#/components/schemas/ServiceId"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service whose desired state was accepted."
           }
         },
         "required": [
@@ -4402,13 +5533,187 @@
         ],
         "type": "object"
       },
+      "SinkStatsSnapshot": {
+        "properties": {
+          "consecutiveFailures": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cursor": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "filteredEntries": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastCursorAdvanceAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "lastError": {
+            "nullable": true,
+            "type": "string"
+          },
+          "lastErrorAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "lastSuccessAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "oldestPendingAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "pendingEntries": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "cursor",
+          "pendingEntries",
+          "oldestPendingAtMs",
+          "lastSuccessAtMs",
+          "lastErrorAtMs",
+          "lastError",
+          "consecutiveFailures",
+          "lastCursorAdvanceAtMs",
+          "filteredEntries"
+        ],
+        "type": "object"
+      },
+      "SpoolStatsSnapshot": {
+        "properties": {
+          "databaseBytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "highWatermark": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "oldestEntryAtMs": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "rowCount": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rowCount",
+          "highWatermark",
+          "oldestEntryAtMs",
+          "databaseBytes"
+        ],
+        "type": "object"
+      },
+      "StatsMetricPoint": {
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ts",
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "StatsWarning": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "warning",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
       "Timestamp": {
         "description": "A UTC Unix timestamp represented in milliseconds.",
         "format": "int64",
         "type": "integer"
       },
+      "TrafficBreakdownEntry": {
+        "properties": {
+          "lastSeenAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "requests": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "statusCode": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "statusCode",
+          "requests",
+          "lastSeenAtMs"
+        ],
+        "type": "object"
+      },
       "TrafficGeneration": {
-        "$ref": "#/components/schemas/Object8"
+        "$ref": "#/components/schemas/Object9"
       },
       "TrafficGenerationId": {
         "description": "Stable identity of an ingress traffic generation.",
@@ -4547,6 +5852,80 @@
         "required": [
           "phase",
           "stagedAt"
+        ],
+        "type": "object"
+      },
+      "TrafficMetricPoint": {
+        "properties": {
+          "bytesIn": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytesOut": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deploymentId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "latLe10s": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latLe1s": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latLe5s": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latTotal": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "requests": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "statusCode": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "ts": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ts",
+          "serviceId",
+          "deploymentId",
+          "statusCode",
+          "method",
+          "requests",
+          "bytesIn",
+          "bytesOut",
+          "latLe1s",
+          "latLe5s",
+          "latLe10s",
+          "latTotal"
         ],
         "type": "object"
       },
@@ -4787,7 +6166,7 @@
         ]
       },
       "UpgradeRun": {
-        "$ref": "#/components/schemas/Object13"
+        "$ref": "#/components/schemas/Object14"
       },
       "UpgradeRunId": {
         "description": "Stable identity of a persisted cluster upgrade run.",
@@ -4958,7 +6337,7 @@
         ]
       },
       "Webhook": {
-        "$ref": "#/components/schemas/Object14"
+        "$ref": "#/components/schemas/Object15"
       },
       "WebhookCommandResponse": {
         "properties": {
@@ -5344,6 +6723,90 @@
   },
   "openapi": "3.0.4",
   "paths": {
+    "/api/artifact-archives/{archiveId}": {
+      "put": {
+        "operationId": "uploadArtifactArchive",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "archiveId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactArchiveId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactArchiveUploadResponse"
+                }
+              }
+            },
+            "description": "Identical archive already stored"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactArchiveUploadResponse"
+                }
+              }
+            },
+            "description": "Archive stored"
+          },
+          "400": {
+            "description": "Invalid archive content or content address"
+          },
+          "413": {
+            "description": "Archive exceeds the upload limit"
+          },
+          "503": {
+            "description": "Archive storage is unavailable on this node"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster": {
+      "get": {
+        "operationId": "getClusterInfo",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterInfo"
+                }
+              }
+            },
+            "description": "Resource summary"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/cluster/dns-records": {
       "get": {
         "operationId": "listDnsRecords",
@@ -5708,6 +7171,56 @@
         ]
       }
     },
+    "/api/cluster/stats": {
+      "get": {
+        "operationId": "getClusterStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatsResponse"
+                }
+              }
+            },
+            "description": "Live controller and observability health"
+          },
+          "503": {
+            "description": "One or more node observability stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/stats/nodes": {
+      "get": {
+        "operationId": "listClusterNodeStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeStatsMap"
+                }
+              }
+            },
+            "description": "Live controller and observability health"
+          },
+          "503": {
+            "description": "One or more node observability stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/cluster/upgrades": {
       "get": {
         "operationId": "listUpgrades",
@@ -5871,6 +7384,59 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/disks": {
+      "get": {
+        "operationId": "listLocalDisks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiskInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Latest complete disk inventory"
+          },
+          "503": {
+            "description": "One or more host metric stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/disks/nodes": {
+      "get": {
+        "operationId": "listNodeDisks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeDiskMap"
+                }
+              }
+            },
+            "description": "Latest complete disk inventory"
+          },
+          "503": {
+            "description": "One or more host metric stores are unavailable"
           }
         },
         "security": [
@@ -6105,6 +7671,602 @@
           },
           "503": {
             "description": "Firewall planning is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/ingress/blocked-ips": {
+      "get": {
+        "operationId": "getIngressBlocklist",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockedIpsResponse"
+                }
+              }
+            },
+            "description": "Canonical cluster ingress blocklist"
+          },
+          "503": {
+            "description": "Cluster state is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "setBlockedIngressIp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockedIpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockedIpsResponse"
+                }
+              }
+            },
+            "description": "Updated canonical cluster ingress blocklist"
+          },
+          "400": {
+            "description": "Invalid JSON or IP address"
+          },
+          "409": {
+            "description": "Concurrent blocklist updates did not converge"
+          },
+          "503": {
+            "description": "Cluster state is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/ingress/blocked-traffic": {
+      "get": {
+        "operationId": "getBlockedIngressTraffic",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressTrafficBreakdown"
+                }
+              }
+            },
+            "description": "Ranked access-log traffic grouped by client IP and path"
+          },
+          "400": {
+            "description": "Invalid range, limit, service, or node selection"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more node traffic stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/ingress/routes": {
+      "get": {
+        "operationId": "listActiveIngressRoutes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IngressRouting"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Logical routes receiving public ingress traffic"
+          },
+          "503": {
+            "description": "Cluster state is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/ingress/traffic": {
+      "get": {
+        "operationId": "getIngressTraffic",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressTrafficBreakdown"
+                }
+              }
+            },
+            "description": "Ranked access-log traffic grouped by client IP and path"
+          },
+          "400": {
+            "description": "Invalid range, limit, service, or node selection"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more node traffic stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "operationId": "listLogs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogPage"
+                }
+              }
+            },
+            "description": "Ordered normalized logs"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/logs/histogram": {
+      "get": {
+        "operationId": "getLogHistogram",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "groupBy",
+            "required": false,
+            "schema": {
+              "enum": [
+                "level",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogHistogramBucket"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Event-time log histogram"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/metrics/cluster": {
+      "get": {
+        "operationId": "listClusterMetrics",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "maximum": 3600000,
+              "minimum": 1000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Bounded resource metric history"
+          },
+          "400": {
+            "description": "Invalid range, bucket, limit, or service"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more metric stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/metrics/node": {
+      "get": {
+        "operationId": "listNodeMetrics",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Bounded resource metric history"
+          },
+          "400": {
+            "description": "Invalid range, bucket, limit, or service"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more metric stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/metrics/stats": {
+      "get": {
+        "operationId": "listOperationalStatsMetrics",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StatsMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Bounded controller and backup metric history"
+          },
+          "400": {
+            "description": "Invalid range, name, or limit"
+          },
+          "503": {
+            "description": "One or more node stats stores are unavailable"
           }
         },
         "security": [
@@ -6671,6 +8833,195 @@
         ]
       }
     },
+    "/api/services/{serviceId}/deployments/{deploymentId}/logs": {
+      "get": {
+        "operationId": "listDeploymentLogs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogPage"
+                }
+              }
+            },
+            "description": "Ordered normalized logs"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/deployments/{deploymentId}/logs/histogram": {
+      "get": {
+        "operationId": "getDeploymentLogHistogram",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "groupBy",
+            "required": false,
+            "schema": {
+              "enum": [
+                "level",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogHistogramBucket"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Event-time log histogram"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/services/{serviceId}/deployments/{deploymentId}/remove": {
       "post": {
         "operationId": "removeDeployment",
@@ -6905,6 +9256,54 @@
         ]
       }
     },
+    "/api/services/{serviceId}/diff": {
+      "post": {
+        "operationId": "diffService",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceDiffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDiffResponse"
+                }
+              }
+            },
+            "description": "Masked desired-state comparison"
+          },
+          "400": {
+            "description": "Invalid service request"
+          },
+          "413": {
+            "description": "Request body exceeds the service limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/services/{serviceId}/freeze": {
       "post": {
         "operationId": "freezeService",
@@ -6958,6 +9357,333 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/logs": {
+      "get": {
+        "operationId": "listServiceLogs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogPage"
+                }
+              }
+            },
+            "description": "Ordered normalized logs"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/logs/histogram": {
+      "get": {
+        "operationId": "getServiceLogHistogram",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "groupBy",
+            "required": false,
+            "schema": {
+              "enum": [
+                "level",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogHistogramBucket"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Event-time log histogram"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/metrics": {
+      "get": {
+        "operationId": "listServiceMetrics",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "maximum": 3600000,
+              "minimum": 1000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Bounded resource metric history"
+          },
+          "400": {
+            "description": "Invalid range, bucket, limit, or service"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more metric stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/metrics/containers": {
+      "get": {
+        "operationId": "listContainerMetrics",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Bounded resource metric history"
+          },
+          "400": {
+            "description": "Invalid range, bucket, limit, or service"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more metric stores are unavailable"
           }
         },
         "security": [
@@ -7054,7 +9780,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReplicaOverrideRequest"
+                "$ref": "#/components/schemas/ServiceReplicaOverrideRequest"
               }
             }
           },
@@ -7082,6 +9808,116 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/rollout": {
+      "post": {
+        "operationId": "applyServiceRollout",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRolloutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRolloutResponse"
+                }
+              }
+            },
+            "description": "Atomic desired resource set accepted"
+          },
+          "400": {
+            "description": "Invalid rollout request"
+          },
+          "409": {
+            "description": "Revision, route, policy, or idempotency conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the service limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/rollout/diff": {
+      "post": {
+        "operationId": "diffServiceRollout",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRolloutDiffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRolloutDiffResponse"
+                }
+              }
+            },
+            "description": "Masked atomic rollout comparison"
+          },
+          "400": {
+            "description": "Invalid rollout request"
+          },
+          "409": {
+            "description": "Route or policy ownership conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the service limit"
           }
         },
         "security": [
@@ -7169,6 +10005,86 @@
         ]
       }
     },
+    "/api/services/{serviceId}/traffic": {
+      "get": {
+        "operationId": "getServiceTraffic",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ServiceId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrafficMetricPoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Five-second service traffic intervals derived from access logs"
+          },
+          "400": {
+            "description": "Invalid range, limit, service, or node selection"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more node traffic stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/services/{serviceId}/traffic-generations": {
       "get": {
         "operationId": "listTrafficGenerations",
@@ -7247,6 +10163,83 @@
         ]
       }
     },
+    "/api/services/{serviceId}/traffic/breakdown": {
+      "get": {
+        "operationId": "getServiceTrafficBreakdown",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ServiceId"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressTrafficBreakdown"
+                }
+              }
+            },
+            "description": "Ranked access-log traffic grouped by client IP and path"
+          },
+          "400": {
+            "description": "Invalid range, limit, service, or node selection"
+          },
+          "404": {
+            "description": "Service does not exist"
+          },
+          "503": {
+            "description": "One or more node traffic stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/services/{serviceId}/unfreeze": {
       "post": {
         "operationId": "unfreezeService",
@@ -7300,6 +10293,183 @@
           },
           "413": {
             "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/logs": {
+      "get": {
+        "operationId": "listSystemLogs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogPage"
+                }
+              }
+            },
+            "description": "Ordered normalized logs"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/system/logs/histogram": {
+      "get": {
+        "operationId": "getSystemLogHistogram",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "groupBy",
+            "required": false,
+            "schema": {
+              "enum": [
+                "level",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogHistogramBucket"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Event-time log histogram"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
           }
         },
         "security": [

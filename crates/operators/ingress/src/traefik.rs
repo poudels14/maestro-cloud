@@ -353,7 +353,7 @@ fn insert_router(
     ]);
 }
 
-fn route_rule(route: &TrafficRoute) -> String {
+pub(crate) fn route_rule(route: &TrafficRoute) -> String {
     let hosts = route
         .hosts
         .iter()

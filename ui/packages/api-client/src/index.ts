@@ -153,6 +153,7 @@ export interface MaestroApiClient {
     routeId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["IngressRoute"]>;
+  listActiveIngressRoutes(options?: ApiRequestOptions): Promise<ApiSchemas["IngressRouting"][]>;
   listTrafficGenerations(
     serviceId: string,
     options?: ApiRequestOptions
@@ -182,7 +183,7 @@ export interface MaestroApiClient {
   ): Promise<ApiSchemas["ServiceCommandResponse"]>;
   setServiceReplicas(
     serviceId: string,
-    request: ApiSchemas["ReplicaOverrideRequest"],
+    request: ApiSchemas["ServiceReplicaOverrideRequest"],
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ServiceCommandResponse"]>;
@@ -421,6 +422,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         `/api/services/${encodeURIComponent(serviceId)}/routes/${encodeURIComponent(routeId)}`,
         options
       ),
+    listActiveIngressRoutes: (options) => get("/api/ingress/routes", options),
     listTrafficGenerations: (serviceId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/traffic-generations`,
