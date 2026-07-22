@@ -8,10 +8,8 @@ const MAX_REPLICAS = 25;
 
 function ReplicasEditor(props: { service: Service }) {
   const queryClient = useQueryClient();
-  const configuredReplicas = () => props.service.deploy.replicas ?? 1;
-  const effectiveReplicas = () => props.service.replicasOverride ?? configuredReplicas();
-  const hasWritableVolume = () => (props.service.deploy.volumes ?? []).some((v) => !v.readOnly);
-  const scalingLocked = () => hasWritableVolume();
+  const configuredReplicas = () => props.service.spec.replicas;
+  const effectiveReplicas = () => props.service.status.replicaOverride ?? configuredReplicas();
 
   const [replicasInput, setReplicasInput] = createSignal(effectiveReplicas());
   const [replicasError, setReplicasError] = createSignal<string | null>(null);
@@ -23,12 +21,12 @@ function ReplicasEditor(props: { service: Service }) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.services });
 
   const applyMutation = useMutation(() => ({
-    mutationFn: (next: number) => setServiceReplicas(props.service.id, next),
+    mutationFn: (next: number) => setServiceReplicas(props.service, next),
     onSuccess: invalidate,
     onError: (err) => setReplicasError(err instanceof Error ? err.message : "failed to update")
   }));
   const revertMutation = useMutation(() => ({
-    mutationFn: () => clearServiceReplicasOverride(props.service.id),
+    mutationFn: () => clearServiceReplicasOverride(props.service),
     onSuccess: invalidate,
     onError: (err) => setReplicasError(err instanceof Error ? err.message : "failed to revert")
   }));
@@ -56,11 +54,8 @@ function ReplicasEditor(props: { service: Service }) {
     <div class="px-4 py-2.5 flex items-center justify-between gap-4">
       <div class="flex items-baseline gap-2 min-w-0">
         <span class="text-xs font-medium text-gray-700 shrink-0">Replicas</span>
-        <Show when={props.service.replicasOverride}>
+        <Show when={props.service.status.replicaOverride != null}>
           <span class="text-[11px] text-amber-600">override · config: {configuredReplicas()}</span>
-        </Show>
-        <Show when={scalingLocked() && !replicasError()}>
-          <span class="text-[11px] text-gray-400 truncate">locked at 1 (writable volume)</span>
         </Show>
         <Show when={replicasError()}>
           <span class="text-[11px] text-red-600 truncate">{replicasError()}</span>
@@ -97,8 +92,7 @@ function ReplicasEditor(props: { service: Service }) {
         <button
           type="button"
           onClick={() => setReplicasInput(Math.min(MAX_REPLICAS, replicasInput() + 1))}
-          disabled={busy() || replicasInput() >= MAX_REPLICAS || scalingLocked()}
-          title={scalingLocked() ? "writable volume — cannot scale" : undefined}
+          disabled={busy() || replicasInput() >= MAX_REPLICAS}
           class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
         >
           +
@@ -109,7 +103,7 @@ function ReplicasEditor(props: { service: Service }) {
             setReplicasError(null);
             revertMutation.mutate();
           }}
-          disabled={busy() || !props.service.replicasOverride}
+          disabled={busy() || props.service.status.replicaOverride == null}
           title="Revert to configured value"
           class="ml-1 size-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 rounded-md"
         >

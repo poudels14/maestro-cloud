@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../lib/useQuery";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { Menu } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../lib/types";
@@ -48,7 +48,7 @@ function ServiceDetailPage() {
     return VALID_TABS.has(raw) ? (raw as DetailTab) : "overview";
   };
 
-  const selected = () => services.data?.find((s) => s.id === params().serviceId);
+  const selected = () => services.data?.find((s) => s.meta.id === params().serviceId);
 
   const navigateTab = (next: DetailTab) =>
     navigate({
@@ -58,7 +58,10 @@ function ServiceDetailPage() {
 
   const navigateService = (service: Service) => {
     setDrawerOpen(false);
-    navigate({ to: "/services/$serviceId/$tab", params: { serviceId: service.id, tab: tab() } });
+    navigate({
+      to: "/services/$serviceId/$tab",
+      params: { serviceId: service.meta.id, tab: tab() }
+    });
   };
 
   const loading = () => services.isLoading;
@@ -115,12 +118,6 @@ function ServiceDetailPanel(props: {
   navigateTab: (t: DetailTab) => void;
   onOpenDrawer: () => void;
 }) {
-  createEffect(() => {
-    if (props.service.system && props.tab === "deployments") {
-      props.navigateTab("logs");
-    }
-  });
-
   const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
 
   return (
@@ -135,7 +132,9 @@ function ServiceDetailPanel(props: {
           >
             <Menu class="size-5" />
           </button>
-          <span class="text-sm font-semibold text-gray-900 truncate">{props.service.name}</span>
+          <span class="text-sm font-semibold text-gray-900 truncate">
+            {props.service.spec.name}
+          </span>
         </div>
         <div class="px-3 sm:px-6 pt-1.5 sm:pt-2.5 overflow-x-auto">
           <div
@@ -154,13 +153,11 @@ function ServiceDetailPanel(props: {
               active={props.tab === "metrics"}
               onClick={() => props.navigateTab("metrics")}
             />
-            <Show when={!props.service.system}>
-              <TabButton
-                label="Deployments"
-                active={props.tab === "deployments"}
-                onClick={() => props.navigateTab("deployments")}
-              />
-            </Show>
+            <TabButton
+              label="Deployments"
+              active={props.tab === "deployments"}
+              onClick={() => props.navigateTab("deployments")}
+            />
             <TabButton
               label="Logs"
               active={props.tab === "logs"}
@@ -185,9 +182,8 @@ function ServiceDetailPanel(props: {
           </Show>
           <Show when={props.tab === "deployments"}>
             <DeploymentsTab
-              serviceId={props.service.id}
-              hasBuild={!!props.service.build}
-              deployFrozen={!!props.service.deployFrozen}
+              service={props.service}
+              hasBuild={props.service.spec.artifact.type === "build"}
             />
           </Show>
           <Show when={props.tab === "metrics"}>

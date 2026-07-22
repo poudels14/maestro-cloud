@@ -1,14 +1,16 @@
 import type { Service } from "./types";
 
 function userServices(services: Service[]): Service[] {
-  return services.filter((service) => !service.system && !service.previewSource);
+  return services.filter((service) => service.previewResource == null);
 }
 
 function servicePreviews(services: Service[], baseServiceId: string): Service[] {
   return services
-    .filter((service) => service.previewSource?.baseServiceId === baseServiceId)
+    .filter((service) => service.previewResource?.spec.baseServiceId === baseServiceId)
     .sort(
-      (left, right) => (left.previewSource?.prNumber ?? 0) - (right.previewSource?.prNumber ?? 0)
+      (left, right) =>
+        (left.previewResource?.spec.pullRequestNumber ?? 0) -
+        (right.previewResource?.spec.pullRequestNumber ?? 0)
     );
 }
 

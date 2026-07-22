@@ -6,8 +6,7 @@ import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { deleteService } from "../../lib/api";
 import { ErrorBanner, SectionHeader } from "../../lib/ui";
-import { clusterInfoQuery, queryKeys, servicesQuery } from "../../lib/queries";
-import { visibleSystemServices } from "../../lib/systemServices";
+import { queryKeys, servicesQuery } from "../../lib/queries";
 import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -19,21 +18,19 @@ function ServicesGrid() {
   const [deleteTarget, setDeleteTarget] = createSignal<Service | null>(null);
 
   const deleteMutation = useMutation(() => ({
-    mutationFn: (serviceId: string) => deleteService(serviceId),
+    mutationFn: (service: Service) => deleteService(service),
     onSuccess: () => {
       setDeleteTarget(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.services });
     }
   }));
 
-  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => visibleUserServices(services.data ?? []);
-  const systemServices = () => visibleSystemServices(services.data ?? [], cluster.data);
 
   const openService = (service: Service) =>
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: service.id, tab: "overview" }
+      params: { serviceId: service.meta.id, tab: "overview" }
     });
 
   return (
@@ -71,23 +68,6 @@ function ServicesGrid() {
             </For>
           </div>
         </Show>
-
-        <Show when={systemServices().length > 0}>
-          <div class="flex items-baseline gap-2 mb-4 mt-10">
-            <SectionHeader>System</SectionHeader>
-          </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <For each={systemServices()}>
-              {(service) => (
-                <ServiceCard
-                  service={service}
-                  onClick={() => openService(service)}
-                  onDelete={() => {}}
-                />
-              )}
-            </For>
-          </div>
-        </Show>
       </Show>
 
       <ConfirmDialog
@@ -96,8 +76,8 @@ function ServicesGrid() {
         description={
           <>
             Are you sure you want to remove{" "}
-            <span class="font-medium text-gray-700">{deleteTarget()?.name}</span>? This will delete
-            all deployments and cannot be undone.
+            <span class="font-medium text-gray-700">{deleteTarget()?.spec.name}</span>? This will
+            delete all deployments and cannot be undone.
           </>
         }
         confirmLabel="Remove"
@@ -105,7 +85,7 @@ function ServicesGrid() {
         busy={deleteMutation.isPending}
         onConfirm={() => {
           const target = deleteTarget();
-          if (target) deleteMutation.mutate(target.id);
+          if (target) deleteMutation.mutate(target);
         }}
         onCancel={() => setDeleteTarget(null)}
       />

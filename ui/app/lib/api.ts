@@ -1,9 +1,4 @@
-import {
-  ApiHttpError,
-  createApiClient,
-  createFetchTransport,
-  type ApiSchemas
-} from "@maestro/api-client";
+import type { ApiSchemas } from "@maestro/api-client";
 import type {
   ClusterNode,
   ClusterSummary,
@@ -19,7 +14,6 @@ import type {
   MaskedConfig,
   MetricPoint,
   ClusterStats,
-  Service,
   StatsMetricPoint,
   TrafficPoint,
   UnschedulableReplica,
@@ -28,6 +22,16 @@ import type {
   WebhookEvent
 } from "./types";
 import { apiErrorFromResponse } from "./apiError";
+import { apiClient, apiRequestError } from "./client";
+
+export {
+  clearServiceReplicasOverride,
+  deleteService,
+  freezeService,
+  getServices,
+  redeployService,
+  setServiceReplicas
+} from "./serviceApi";
 
 export interface ClusterInfo extends ClusterSummary {
   nodes: ClusterNode[];
@@ -35,10 +39,6 @@ export interface ClusterInfo extends ClusterSummary {
 }
 
 const NODE_LIVENESS_WINDOW_MS = 30_000;
-
-function apiClient() {
-  return createApiClient(createFetchTransport(location.origin));
-}
 
 export function projectClusterNodes(
   nodes: ApiSchemas["Node"][],
@@ -209,12 +209,6 @@ export async function getClusterConfig(): Promise<MaskedConfig> {
   return res.json();
 }
 
-export async function getServices(): Promise<Service[]> {
-  const res = await fetch("/api/services");
-  if (!res.ok) throw new Error(`Failed to fetch services: ${res.statusText}`);
-  return res.json();
-}
-
 export async function getDeployments(serviceId: string): Promise<Deployment[]> {
   const url = `/api/services/${encodeURIComponent(serviceId)}/deployments`;
   const res = await fetch(url);
@@ -222,53 +216,11 @@ export async function getDeployments(serviceId: string): Promise<Deployment[]> {
   return res.json();
 }
 
-export async function deleteService(serviceId: string) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}`, {
-    method: "DELETE"
-  });
-  if (!res.ok) throw new Error(`Failed to delete service: ${res.statusText}`);
-}
-
-export async function redeployService(serviceId: string, force?: boolean) {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, location.origin);
-  if (force) url.searchParams.set("force", "true");
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw await apiErrorFromResponse(res, "Failed to redeploy");
-}
-
 export async function restartService(serviceId: string, force?: boolean) {
   const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/restart`, location.origin);
   if (force) url.searchParams.set("force", "true");
   const res = await fetch(url, { method: "POST" });
   if (!res.ok) throw await apiErrorFromResponse(res, "Failed to restart");
-}
-
-export async function freezeService(serviceId: string, frozen: boolean) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/freeze`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ frozen })
-  });
-  if (!res.ok) throw new Error(`Failed to update freeze status: ${res.statusText}`);
-}
-
-export async function setServiceReplicas(serviceId: string, replicas: number) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ replicas })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update replicas: ${res.statusText}`);
-  }
-}
-
-export async function clearServiceReplicasOverride(serviceId: string) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
-    method: "DELETE"
-  });
-  if (!res.ok) throw new Error(`Failed to clear replicas override: ${res.statusText}`);
 }
 
 export async function cancelDeployment(serviceId: string, deploymentId: string) {
@@ -671,22 +623,6 @@ export async function getContainerMetrics(
   } catch (error) {
     throw apiRequestError(error, "Failed to load container metrics");
   }
-}
-
-function apiRequestError(error: unknown, fallback: string): Error {
-  if (!(error instanceof ApiHttpError)) {
-    return error instanceof Error ? error : new Error(fallback);
-  }
-  let message = error.body || fallback;
-  try {
-    const payload = JSON.parse(error.body) as {
-      error?: { message?: string } | string;
-    };
-    message = typeof payload.error === "string" ? payload.error : payload.error?.message || message;
-  } catch {
-    // Preserve a non-JSON response body from the API proxy.
-  }
-  return new Error(message);
 }
 
 export async function listWebhooks(): Promise<Webhook[]> {

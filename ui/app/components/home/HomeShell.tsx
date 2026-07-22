@@ -31,7 +31,7 @@ function HomeShell(props: { tab: HomeTab }) {
     setDrawerOpen(false);
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: service.id, tab: "overview" }
+      params: { serviceId: service.meta.id, tab: "overview" }
     });
   };
 

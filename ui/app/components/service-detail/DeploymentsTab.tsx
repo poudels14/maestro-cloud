@@ -10,13 +10,16 @@ import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import { showErrorToast } from "../AppToasts";
+import type { Service } from "../../lib/types";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
+function DeploymentsTab(props: { service: Service; hasBuild: boolean }) {
   const queryClient = useQueryClient();
-  const deployments = useQuery(() => deploymentsQuery(props.serviceId));
+  const serviceId = () => props.service.meta.id;
+  const deployFrozen = () => props.service.status.rollout === "frozen";
+  const deployments = useQuery(() => deploymentsQuery(serviceId()));
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -29,7 +32,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
   const setUrlSheetState = (updates: { deployment?: string; tab?: SheetTabId }) =>
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: props.serviceId, tab: "deployments" },
+      params: { serviceId: serviceId(), tab: "deployments" },
       search: { ...search(), ...updates },
       replace: true
     });
@@ -37,25 +40,30 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
   const selectedId = () => search().deployment ?? null;
   const sheetTab = () => search().tab ?? "logs";
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: queryKeys.deployments(props.serviceId) });
+  const invalidateDeployments = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceId()) });
+  const invalidateService = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.services }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceId()) })
+    ]);
 
   const cancelMutation = useMutation(() => ({
-    mutationFn: (deploymentId: string) => cancelDeployment(props.serviceId, deploymentId),
-    onSuccess: invalidate
+    mutationFn: (deploymentId: string) => cancelDeployment(serviceId(), deploymentId),
+    onSuccess: invalidateDeployments
   }));
   const stopMutation = useMutation(() => ({
-    mutationFn: (deploymentId: string) => stopDeployment(props.serviceId, deploymentId),
-    onSuccess: invalidate
+    mutationFn: (deploymentId: string) => stopDeployment(serviceId(), deploymentId),
+    onSuccess: invalidateDeployments
   }));
   const redeployMutation = useMutation(() => ({
-    mutationFn: (force?: boolean) => redeployService(props.serviceId, force),
-    onSuccess: invalidate,
+    mutationFn: () => redeployService(props.service),
+    onSuccess: invalidateService,
     onError: (error) => showErrorToast("Redeploy failed", error)
   }));
   const restartMutation = useMutation(() => ({
-    mutationFn: (force?: boolean) => restartService(props.serviceId, force),
-    onSuccess: invalidate,
+    mutationFn: () => restartService(serviceId()),
+    onSuccess: invalidateDeployments,
     onError: (error) => showErrorToast("Restart failed", error)
   }));
 
@@ -82,17 +90,17 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
   };
 
   const handleRedeploy = () => {
-    if (props.deployFrozen) {
+    if (deployFrozen()) {
       setFreezeConfirmAction("redeploy");
     } else {
-      redeployMutation.mutate(undefined);
+      redeployMutation.mutate();
     }
   };
   const handleRestart = () => {
-    if (props.deployFrozen) {
+    if (deployFrozen()) {
       setFreezeConfirmAction("restart");
     } else {
-      restartMutation.mutate(undefined);
+      restartMutation.mutate();
     }
   };
 
@@ -103,7 +111,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
           <ErrorBanner message="Failed to load deployments" onRetry={() => deployments.refetch()} />
         </div>
       </Show>
-      <Show when={props.deployFrozen}>
+      <Show when={deployFrozen()}>
         <div class="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
           <span class="text-xs text-amber-700 font-medium">
             Deploy is frozen — auto-deploys from git watch are paused
@@ -115,18 +123,18 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
         title="Deploy is frozen"
         description={
           <>
-            Deploys are frozen for this service. Are you sure you want to force a{" "}
-            {freezeConfirmAction() === "restart" ? "restart" : "redeploy"}?
+            This service is frozen. The command will be accepted, but new rollout work remains
+            queued until you unfreeze it.
           </>
         }
-        confirmLabel={`Force ${freezeConfirmAction() === "restart" ? "restart" : "deploy"}`}
+        confirmLabel={freezeConfirmAction() === "restart" ? "Restart" : "Redeploy"}
         onConfirm={() => {
           const action = freezeConfirmAction();
           setFreezeConfirmAction(null);
           if (action === "restart") {
-            restartMutation.mutate(true);
+            restartMutation.mutate();
           } else if (action === "redeploy") {
-            redeployMutation.mutate(true);
+            redeployMutation.mutate();
           }
         }}
         onCancel={() => setFreezeConfirmAction(null)}
@@ -181,7 +189,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
       </Show>
       <DeploymentSheet
         deployment={selectedDeployment()}
-        serviceId={props.serviceId}
+        serviceId={serviceId()}
         hasBuild={props.hasBuild}
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}

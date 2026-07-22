@@ -24,8 +24,8 @@ const SCRAPE_INTERVAL_S = 5;
 function MetricsTab(props: { service: Service }) {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
 
-  const metrics = useQuery(() => serviceMetricsQuery(props.service.id, rangeMs()));
-  const traffic = useQuery(() => serviceTrafficQuery(props.service.id, rangeMs()));
+  const metrics = useQuery(() => serviceMetricsQuery(props.service.meta.id, rangeMs()));
+  const traffic = useQuery(() => serviceTrafficQuery(props.service.meta.id, rangeMs()));
 
   const metricsData = () => metrics.data ?? [];
   const xMax = () => Date.now();

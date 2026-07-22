@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import type { Service } from "../../../lib/types";
 
 function VolumesList(props: { service: Service }) {
-  const volumes = () => props.service.deploy.volumes ?? [];
+  const volumes = () => props.service.spec.volumes ?? [];
 
   return (
     <Show when={volumes().length > 0}>
@@ -13,19 +13,14 @@ function VolumesList(props: { service: Service }) {
             {(volume) => (
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
                 <span class="text-xs font-medium text-gray-700 shrink-0 truncate">
-                  {volume.hostPath}
+                  {volume.source.type === "hostPath"
+                    ? `${volume.source.nodeId}:${volume.source.path}`
+                    : volume.source.name}
                 </span>
                 <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                  {volume.mountPath}
-                  <Show when={volume.readOnly}>
+                  {volume.target}
+                  <Show when={volume.access === "readOnly"}>
                     <span class="ml-1.5 text-xs text-gray-400">(ro)</span>
-                  </Show>
-                  <Show when={volume.owner}>
-                    {(owner) => (
-                      <span class="ml-1.5 text-xs text-gray-400">
-                        {owner().uid}:{owner().gid ?? owner().uid}
-                      </span>
-                    )}
                   </Show>
                 </span>
               </div>

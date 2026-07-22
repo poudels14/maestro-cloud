@@ -96,7 +96,7 @@ export type FirewallPolicy = ApiSchemas["FirewallPolicy"];
 export type FirewallPolicySpec = ApiSchemas["FirewallPolicySpec"];
 export type FirewallDryRun = ApiSchemas["FirewallDryRunResponse"];
 
-export interface Service {
+interface LegacyServiceConfig {
   id: string;
   name: string;
   version: string;
@@ -111,6 +111,10 @@ export interface Service {
   preview?: Preview.Config | null;
   previewSource?: Preview.Source | null;
 }
+
+export type Service = ApiSchemas["Service"] & {
+  previewResource?: ApiSchemas["Preview"];
+};
 
 export interface ReplicaState {
   replicaIndex: number;
@@ -165,7 +169,7 @@ export interface Deployment {
   drainedAt?: number | null;
   status: string;
   replicas?: ReplicaState[];
-  config: Service;
+  config: LegacyServiceConfig;
   gitCommit: GitCommitInfo | null;
   build: DeploymentBuildInfo | null;
   uploadArchive?: string | null;

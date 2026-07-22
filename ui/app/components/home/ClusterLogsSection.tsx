@@ -20,13 +20,8 @@ function ClusterLogsSection() {
   const search = () => location().search as ClusterLogsSearch;
   const userServices = createMemo(() =>
     (services.data ?? [])
-      .filter((service) => !service.system)
-      .sort((left, right) => left.name.localeCompare(right.name))
-  );
-  const systemServices = createMemo(() =>
-    (services.data ?? [])
-      .filter((service) => service.system)
-      .sort((left, right) => left.name.localeCompare(right.name))
+      .filter((service) => service.previewResource == null)
+      .sort((left, right) => left.spec.name.localeCompare(right.spec.name))
   );
   const setUrlSearch = (updates: ClusterLogsSearch) =>
     navigate({
@@ -82,17 +77,8 @@ function ClusterLogsSection() {
               <optgroup label="User services">
                 <For each={userServices()}>
                   {(service) => (
-                    <option value={service.id} selected={service.id === search().service}>
-                      {service.name}
-                    </option>
-                  )}
-                </For>
-              </optgroup>
-              <optgroup label="System services">
-                <For each={systemServices()}>
-                  {(service) => (
-                    <option value={service.id} selected={service.id === search().service}>
-                      {service.name}
+                    <option value={service.meta.id} selected={service.meta.id === search().service}>
+                      {service.spec.name}
                     </option>
                   )}
                 </For>

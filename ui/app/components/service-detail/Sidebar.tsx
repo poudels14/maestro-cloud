@@ -1,13 +1,11 @@
 import { For, Show } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { useQuery } from "../../lib/useQuery";
 import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
+import { serviceDisplayStatus } from "../../lib/serviceView";
 import { StatusDot } from "../../lib/ui";
-import { clusterInfoQuery } from "../../lib/queries";
-import { visibleSystemServices } from "../../lib/systemServices";
 import { userServices as visibleUserServices } from "../../lib/previews";
 
 function ServiceSidebar(props: {
@@ -19,9 +17,7 @@ function ServiceSidebar(props: {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
-  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => visibleUserServices(props.services);
-  const systemServices = () => visibleSystemServices(props.services, cluster.data);
 
   return (
     <>
@@ -70,22 +66,8 @@ function ServiceSidebar(props: {
                 {(service) => (
                   <SidebarServiceItem
                     service={service}
-                    selected={service.id === props.selected?.id}
+                    selected={service.meta.id === props.selected?.meta.id}
                     onClick={() => props.onSelect(service)}
-                  />
-                )}
-              </For>
-            </SidebarSection>
-          </Show>
-          <Show when={systemServices().length > 0}>
-            <SidebarSection title="System" count={systemServices().length}>
-              <For each={systemServices()}>
-                {(service) => (
-                  <SidebarServiceItem
-                    service={service}
-                    selected={service.id === props.selected?.id}
-                    onClick={() => props.onSelect(service)}
-                    system
                   />
                 )}
               </For>
@@ -138,13 +120,8 @@ function SidebarNavItem(props: {
   );
 }
 
-function SidebarServiceItem(props: {
-  service: Service;
-  selected: boolean;
-  onClick: () => void;
-  system?: boolean;
-}) {
-  const status = () => (props.system ? "SYSTEM" : (props.service.status ?? "IDLE"));
+function SidebarServiceItem(props: { service: Service; selected: boolean; onClick: () => void }) {
+  const status = () => serviceDisplayStatus(props.service);
   return (
     <button
       type="button"
@@ -163,7 +140,7 @@ function SidebarServiceItem(props: {
       <span class="size-3.5 flex items-center justify-center shrink-0">
         <StatusDot status={status()} />
       </span>
-      <span class="truncate flex-1">{props.service.name}</span>
+      <span class="truncate flex-1">{props.service.spec.name}</span>
     </button>
   );
 }
