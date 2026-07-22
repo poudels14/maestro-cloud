@@ -12,6 +12,7 @@ use crate::LegacyEntry;
 use crate::legacy_convert::{
     LegacyPlanError, annotations, deployment_phase, invalid_generated, owner,
 };
+use crate::legacy_nodes::LegacyNodeCatalog;
 use crate::legacy_schema::{
     LegacyAssignment, LegacyAssignmentManifest, LegacyDeploymentStatus, LegacyImageAssignment,
     LegacyReplicaState,
@@ -24,6 +25,7 @@ const LEGACY_IMAGE_ASSIGNMENTS_ANNOTATION: &str = "migration.maestro.dev/legacy-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LegacyClusterCatalog {
+    manifest_nodes: BTreeSet<String>,
     assignments: BTreeMap<String, AssignmentRecord>,
     replicas: BTreeMap<String, ReplicaRecord>,
     images: Vec<ImageRecord>,
@@ -52,6 +54,7 @@ struct ImageRecord {
 impl LegacyClusterCatalog {
     pub(crate) fn decode(entries: &[LegacyEntry]) -> Result<Self, LegacyClusterError> {
         let mut assignments = BTreeMap::new();
+        let mut manifest_nodes = BTreeSet::new();
         let mut replicas = BTreeMap::new();
         let mut images = Vec::new();
         let mut unclaimed = Vec::new();
@@ -60,6 +63,7 @@ impl LegacyClusterCatalog {
         for entry in entries {
             match classify_key(entry.key())? {
                 Some(ClusterKey::Assignments { node_id }) => {
+                    manifest_nodes.insert(node_id.clone());
                     let manifest: LegacyAssignmentManifest = decode_json(entry)?;
                     validate_manifest_identity(entry.key(), &node_id, &manifest)?;
                     let mut manifest_images = BTreeSet::new();
@@ -167,6 +171,7 @@ impl LegacyClusterCatalog {
             }
         }
         Ok(Self {
+            manifest_nodes,
             assignments,
             replicas,
             images,
@@ -177,8 +182,10 @@ impl LegacyClusterCatalog {
     pub(crate) fn convert(
         &self,
         services: &LegacyServiceCatalog,
+        nodes: &LegacyNodeCatalog,
         resources: &mut [BuiltinResource],
     ) -> Result<Vec<BuiltinResource>, LegacyPlanError> {
+        self.validate_node_references(nodes)?;
         self.annotate_image_assignments(services, resources)?;
         let mut converted = Vec::new();
         for (assignment_id, record) in &self.assignments {
@@ -195,6 +202,26 @@ impl LegacyClusterCatalog {
             }
         }
         Ok(converted)
+    }
+
+    fn validate_node_references(&self, nodes: &LegacyNodeCatalog) -> Result<(), LegacyPlanError> {
+        for node_id in &self.manifest_nodes {
+            if !nodes.contains(node_id) {
+                return Err(invalid_assignment(
+                    node_id,
+                    "assignment manifest belongs to a missing durable node",
+                ));
+            }
+        }
+        for image in &self.images {
+            if !nodes.contains(&image.node_id) || !nodes.contains(&image.image.source_node_id) {
+                return Err(invalid_assignment(
+                    &image.image.deployment_id,
+                    "image placement refers to a missing destination or source node",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn annotate_image_assignments(

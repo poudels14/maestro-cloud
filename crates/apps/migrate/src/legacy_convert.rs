@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::legacy_cluster::LegacyClusterCatalog;
 use crate::legacy_config::{ConvertedServiceConfig, convert_service_config};
 use crate::legacy_network::LegacyNetworkCatalog;
+use crate::legacy_nodes::LegacyNodeCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
@@ -23,8 +24,8 @@ const DEPLOYMENT_KIND: &str = "Deployment";
 
 /// Converts one complete stopped-control-plane snapshot into canonical typed resources.
 ///
-/// The current implementation deliberately rejects legacy keys outside the service subtree;
-/// subsequent cutover slices add those key families to the same all-or-nothing planner.
+/// The current implementation deliberately rejects unclaimed legacy key families so every
+/// cutover slice remains all-or-nothing.
 pub fn plan_legacy_snapshot(
     snapshot: &LegacySnapshot,
     master_secret: &str,
@@ -34,7 +35,12 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
-    let cluster = LegacyClusterCatalog::decode(&catalog.unclaimed).map_err(|error| {
+    let nodes = LegacyNodeCatalog::decode(&catalog.unclaimed).map_err(|error| {
+        LegacyPlanError::DecodeLegacyState {
+            message: error.to_string(),
+        }
+    })?;
+    let cluster = LegacyClusterCatalog::decode(&nodes.unclaimed).map_err(|error| {
         LegacyPlanError::DecodeLegacyState {
             message: error.to_string(),
         }
@@ -56,7 +62,8 @@ pub fn plan_legacy_snapshot(
         });
     }
     let mut resources = convert_catalog(&catalog)?;
-    let cluster_resources = cluster.convert(&catalog, &mut resources)?;
+    resources.extend(nodes.convert()?);
+    let cluster_resources = cluster.convert(&catalog, &nodes, &mut resources)?;
     resources.extend(cluster_resources);
     let network_resources = network.convert(&resources)?;
     resources.extend(network_resources);

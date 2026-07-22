@@ -4,6 +4,7 @@ use kernel_api::{
 };
 use serde_json::json;
 
+use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -131,7 +132,7 @@ fn cutover_plan_rejects_noncanonical_blocklist_entries() -> TestResult {
 }
 
 fn workload_entries() -> Vec<LegacyEntry> {
-    vec![
+    let mut entries = vec![
         json_entry(
             "/maetro/services/api/info",
             json!({"config": service_config()}),
@@ -185,7 +186,9 @@ fn workload_entries() -> Vec<LegacyEntry> {
                 }
             }),
         ),
-    ]
+    ];
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries
 }
 
 fn service_config() -> serde_json::Value {
