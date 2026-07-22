@@ -103,6 +103,7 @@ pub(crate) fn provider_config(
         known_members,
         config.ports,
         data_directory,
+        SecretValue::new("test-store-encryption-secret-with-32-characters"),
         security,
     )?)
 }

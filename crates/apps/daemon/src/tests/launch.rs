@@ -17,6 +17,10 @@ fn launch_validation_binds_store_mode_to_local_role_and_ticket()
     let master = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     master.validate()?;
 
+    let mut weak_store_secret = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    weak_store_secret.store_encryption_secret = SecretValue::new("too-short");
+    assert!(weak_store_secret.validate().is_err());
+
     let joined_master = DaemonLaunchConfig {
         store_mode: StoreLaunchMode::Join {
             ticket: StoreJoinTicket::from_provider_data(NodeId::new("master")?, b"provider-ticket"),
@@ -247,6 +251,9 @@ fn config(
             },
         },
         operator_jwt_secret: SecretValue::new("operator-test-secret-with-32-characters"),
+        store_encryption_secret: SecretValue::new(
+            "store-encryption-test-secret-with-32-characters",
+        ),
         instance_id: Some(NodeInstanceId::new("instance-1")?),
         datadog: None,
         log_backup: None,

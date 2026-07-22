@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use kernel_api::{ClusterId, NodeId, NodeRole};
+use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, TokioClock};
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -402,6 +402,7 @@ fn three_member_configs(
                 members.clone(),
                 ports,
                 root.join(node_id.as_str()),
+                SecretValue::new("test-store-encryption-secret-with-32-characters"),
                 security,
             )
             .map_err(Into::into)
@@ -434,6 +435,7 @@ fn one_member_config(
         BTreeMap::from([(node_id, member)]),
         ports,
         root.join("store"),
+        SecretValue::new("test-store-encryption-secret-with-32-characters"),
         security,
     )
     .map_err(Into::into)

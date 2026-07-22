@@ -8,13 +8,17 @@ mod clock;
 mod encryption;
 mod error;
 mod etcd;
+mod etcd_value;
 mod key;
 mod memory;
 mod model;
 mod store;
 
 pub use clock::{Clock, MonotonicTime, TokioClock};
-pub use encryption::{EncryptedValue, EncryptionError, EncryptionKey, derive_key, open, seal};
+pub use encryption::{
+    EncryptedValue, EncryptionError, EncryptionKey, derive_key, open, open_with_context, seal,
+    seal_with_context,
+};
 pub use error::StoreError;
 pub use etcd::{EtcdStore, EtcdTlsConfig};
 pub use key::{Keyspace, StoreKey, StorePrefix};

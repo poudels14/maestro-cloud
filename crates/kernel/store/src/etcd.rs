@@ -13,17 +13,19 @@ use etcd_client::{
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
+use crate::etcd_value::ValueProtector;
 use crate::{
-    CasOutcome, Compare, DeleteRequest, ExpectedVersion, ListResult, Mutation, MutationResult,
-    PutRequest, Session, SessionBinding, SessionId, Store, StoreError, StoreKey, StorePrefix,
-    StoreWatch, StoredValue, Transaction, TransactionOutcome, Version, WatchCursor, WatchEvent,
-    WatchEventKind, WatchStart,
+    CasOutcome, Compare, DeleteRequest, EncryptionKey, ExpectedVersion, ListResult, Mutation,
+    MutationResult, PutRequest, Session, SessionBinding, SessionId, Store, StoreError, StoreKey,
+    StorePrefix, StoreWatch, StoredValue, Transaction, TransactionOutcome, Version, WatchCursor,
+    WatchEvent, WatchEventKind, WatchStart,
 };
 
 /// Production linearizable store backed by an etcd v3 cluster.
 #[derive(Clone)]
 pub struct EtcdStore {
     client: Arc<Mutex<Client>>,
+    values: ValueProtector,
 }
 
 /// Mutual-TLS material used to authenticate one etcd client connection.
@@ -79,7 +81,7 @@ impl Debug for EtcdTlsConfig {
 }
 
 impl EtcdStore {
-    /// Connects to one or more plaintext or URI-configured etcd endpoints.
+    /// Connects without value encryption for conformance tests and migration reads.
     ///
     /// Endpoint balancing and reconnect behavior are owned by `etcd-client`.
     /// Cluster provisioning supplies HTTPS endpoints once mutual TLS is active.
@@ -88,10 +90,25 @@ impl EtcdStore {
         E: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self::connect_with_options(endpoints, None).await
+        Self::connect_with_options(endpoints, None, None).await
     }
 
-    /// Connects with a pinned CA and client certificate identity.
+    /// Connects and protects internal values with one derived cluster key.
+    ///
+    /// The explicitly external Traefik provider subtree remains directly
+    /// readable and must never contain secret-bearing values.
+    pub async fn connect_encrypted<E, S>(
+        endpoints: E,
+        encryption_key: EncryptionKey,
+    ) -> Result<Self, StoreError>
+    where
+        E: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::connect_with_options(endpoints, None, Some(encryption_key)).await
+    }
+
+    /// Connects with mutual TLS but without application-level value encryption.
     pub async fn connect_with_tls<E, S>(
         endpoints: E,
         tls: EtcdTlsConfig,
@@ -108,13 +125,44 @@ impl EtcdStore {
         if let Some(server_name) = tls.server_name {
             tls_options = tls_options.domain_name(server_name);
         }
-        Self::connect_with_options(endpoints, Some(ConnectOptions::new().with_tls(tls_options)))
-            .await
+        Self::connect_with_options(
+            endpoints,
+            Some(ConnectOptions::new().with_tls(tls_options)),
+            None,
+        )
+        .await
+    }
+
+    /// Connects with mutual TLS and application-level value encryption.
+    pub async fn connect_with_tls_and_encryption<E, S>(
+        endpoints: E,
+        tls: EtcdTlsConfig,
+        encryption_key: EncryptionKey,
+    ) -> Result<Self, StoreError>
+    where
+        E: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let identity =
+            Identity::from_pem(tls.client_certificate, tls.client_private_key.as_slice());
+        let mut tls_options = TlsOptions::new()
+            .ca_certificate(Certificate::from_pem(tls.certificate_authority))
+            .identity(identity);
+        if let Some(server_name) = tls.server_name {
+            tls_options = tls_options.domain_name(server_name);
+        }
+        Self::connect_with_options(
+            endpoints,
+            Some(ConnectOptions::new().with_tls(tls_options)),
+            Some(encryption_key),
+        )
+        .await
     }
 
     async fn connect_with_options<E, S>(
         endpoints: E,
         options: Option<ConnectOptions>,
+        encryption_key: Option<EncryptionKey>,
     ) -> Result<Self, StoreError>
     where
         E: IntoIterator<Item = S>,
@@ -126,6 +174,7 @@ impl EtcdStore {
             .map_err(unavailable)?;
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
+            values: ValueProtector::new(encryption_key),
         })
     }
 
@@ -149,7 +198,7 @@ impl EtcdStore {
         let mutations = transaction.mutations;
         let operations = mutations
             .iter()
-            .map(etcd_operation)
+            .map(|mutation| etcd_operation(mutation, &self.values))
             .collect::<Result<Vec<_>, _>>()?;
         let response = self
             .client
@@ -236,7 +285,7 @@ impl Store for EtcdStore {
             .map_err(unavailable)?;
         match response.kvs() {
             [] => Ok(None),
-            [value] => Ok(Some(stored_value(value)?)),
+            [value] => Ok(Some(stored_value(value, &self.values)?)),
             values => Err(StoreError::Contract {
                 message: format!("etcd returned {} values for one exact key", values.len()),
             }),
@@ -255,7 +304,7 @@ impl Store for EtcdStore {
         let values = response
             .kvs()
             .iter()
-            .map(stored_value)
+            .map(|value| stored_value(value, &self.values))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ListResult {
             values,
@@ -332,6 +381,7 @@ impl Store for EtcdStore {
         };
         Ok(Box::new(EtcdWatch {
             client: self.client.clone(),
+            values: self.values.clone(),
             prefix,
             resume_after,
             stream: None,
@@ -363,6 +413,7 @@ impl Store for EtcdStore {
 
 struct EtcdWatch {
     client: Arc<Mutex<Client>>,
+    values: ValueProtector,
     prefix: StorePrefix,
     resume_after: Option<WatchCursor>,
     stream: Option<WatchStream>,
@@ -429,7 +480,7 @@ impl StoreWatch for EtcdWatch {
                     continue;
                 }
                 let kind = match event.event_type() {
-                    EventType::Put => WatchEventKind::Put(stored_value(kv)?),
+                    EventType::Put => WatchEventKind::Put(stored_value(kv, &self.values)?),
                     EventType::Delete => {
                         let previous = event.prev_kv().ok_or_else(|| StoreError::Contract {
                             message: "etcd delete watch event omitted its previous value"
@@ -563,7 +614,7 @@ fn etcd_compare(compare: Compare) -> Result<EtcdCompare, StoreError> {
     }
 }
 
-fn etcd_operation(mutation: &Mutation) -> Result<TxnOp, StoreError> {
+fn etcd_operation(mutation: &Mutation, values: &ValueProtector) -> Result<TxnOp, StoreError> {
     match mutation {
         Mutation::Put {
             key,
@@ -574,7 +625,8 @@ fn etcd_operation(mutation: &Mutation) -> Result<TxnOp, StoreError> {
                 .map(|binding| session_i64(binding.session_id))
                 .transpose()?
                 .map(|lease| PutOptions::new().with_lease(lease));
-            Ok(TxnOp::put(key.as_str(), value.clone(), options))
+            let value = values.protect(key, value)?;
+            Ok(TxnOp::put(key.as_str(), value, options))
         }
         Mutation::Delete { key } => Ok(TxnOp::delete(
             key.as_str(),
@@ -583,10 +635,11 @@ fn etcd_operation(mutation: &Mutation) -> Result<TxnOp, StoreError> {
     }
 }
 
-fn stored_value(value: &KeyValue) -> Result<StoredValue, StoreError> {
+fn stored_value(value: &KeyValue, values: &ValueProtector) -> Result<StoredValue, StoreError> {
+    let key = StoreKey::from_backend(value.key())?;
     Ok(StoredValue {
-        key: StoreKey::from_backend(value.key())?,
-        value: value.value().to_vec(),
+        value: values.unprotect(&key, value.value())?,
+        key,
         version: version(value.mod_revision())?,
     })
 }

@@ -7,8 +7,84 @@ use kernel_api::{ClusterId, ResourceKind, ResourceName};
 
 use crate::{
     CasOutcome, Compare, DeleteRequest, EtcdStore, ExpectedVersion, Keyspace, Mutation, PutRequest,
-    SessionBinding, Store, Transaction, TransactionOutcome, WatchStart,
+    SessionBinding, Store, StoreError, Transaction, TransactionOutcome, WatchStart, derive_key,
 };
+
+#[tokio::test]
+#[ignore = "requires MAESTRO_ETCD_ENDPOINTS or a local etcd on 127.0.0.1:2379"]
+async fn encrypted_etcd_never_persists_plaintext_and_binds_the_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = std::env::var("MAESTRO_ETCD_ENDPOINTS")
+        .unwrap_or_else(|_| "http://127.0.0.1:2379".to_string());
+    let endpoints = endpoint.split(',').map(str::to_string).collect::<Vec<_>>();
+    let store = EtcdStore::connect_encrypted(
+        endpoints.clone(),
+        derive_key("etcd-test-encryption-secret-with-32-characters")?,
+    )
+    .await?;
+    let keys = Keyspace::new(&ClusterId::new("etcd-encrypted")?);
+    let kind = ResourceKind::new("Service")?;
+    let key = keys.resource(&kind, &ResourceName::new("secret")?);
+    let mut raw = etcd_client::Client::connect(endpoints.clone(), None).await?;
+    raw.delete(key.as_str(), None).await?;
+
+    let outcome = store
+        .put_cas(PutRequest {
+            key: key.clone(),
+            value: b"database-password".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(outcome, CasOutcome::Applied(_)));
+    let response = raw.get(key.as_str(), None).await?;
+    let persisted = response.kvs().first().ok_or("encrypted key should exist")?;
+    assert_ne!(persisted.value(), b"database-password");
+    assert!(persisted.value().starts_with(b"MAE1"));
+    assert_eq!(
+        store
+            .get(&key)
+            .await?
+            .ok_or("decrypted key should exist")?
+            .value,
+        b"database-password"
+    );
+
+    let wrong_key_store = EtcdStore::connect_encrypted(
+        endpoints,
+        derive_key("different-etcd-test-secret-with-32-characters")?,
+    )
+    .await?;
+    assert!(matches!(
+        wrong_key_store.get(&key).await,
+        Err(StoreError::Protection { .. })
+    ));
+
+    let traefik_key = keys.traefik_entry("http/routers/api/rule")?;
+    raw.delete(traefik_key.as_str(), None).await?;
+    let outcome = store
+        .put_cas(PutRequest {
+            key: traefik_key.clone(),
+            value: b"Host(`api.example.test`)".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(outcome, CasOutcome::Applied(_)));
+    let response = raw.get(traefik_key.as_str(), None).await?;
+    assert_eq!(
+        response
+            .kvs()
+            .first()
+            .ok_or("Traefik key should exist")?
+            .value(),
+        b"Host(`api.example.test`)"
+    );
+
+    raw.delete(key.as_str(), None).await?;
+    raw.delete(traefik_key.as_str(), None).await?;
+    Ok(())
+}
 
 #[tokio::test]
 #[ignore = "requires MAESTRO_ETCD_ENDPOINTS or a local etcd on 127.0.0.1:2379"]

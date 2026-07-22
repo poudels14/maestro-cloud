@@ -278,6 +278,9 @@ impl RealProcessCluster {
             operator_jwt_secret: kernel_api::SecretValue::new(
                 "real-cluster-operator-secret-with-32-characters",
             ),
+            store_encryption_secret: SecretValue::new(
+                "real-cluster-store-secret-with-32-characters",
+            ),
             instance_id: Some(
                 NodeInstanceId::new(format!("{}-process-{launch_sequence}", node.node_id))
                     .map_err(RealClusterError::from_display)?,
@@ -397,6 +400,7 @@ impl RealProcessCluster {
             known,
             self.cluster.ports,
             node.data_directory.join("store"),
+            SecretValue::new("real-cluster-store-secret-with-32-characters"),
             security,
         )
         .map_err(RealClusterError::from_display)

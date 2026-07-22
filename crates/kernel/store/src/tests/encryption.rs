@@ -1,4 +1,6 @@
-use crate::{EncryptedValue, EncryptionError, derive_key, open, seal};
+use crate::{
+    EncryptedValue, EncryptionError, derive_key, open, open_with_context, seal, seal_with_context,
+};
 
 #[test]
 fn encrypted_values_round_trip_without_exposing_key_or_ciphertext() {
@@ -29,4 +31,24 @@ fn wrong_keys_and_truncated_envelopes_fail_closed() {
         EncryptedValue::from_bytes(vec![0; 11]),
         Err(EncryptionError::InvalidEnvelope)
     );
+}
+
+#[test]
+fn encrypted_values_are_bound_to_their_storage_context() {
+    let key = derive_key("operator master secret").expect("derive encryption key");
+    let encrypted =
+        seal_with_context(&key, b"secret", b"/maestro/first").expect("encrypt contextual value");
+
+    assert_eq!(
+        open_with_context(&key, &encrypted, b"/maestro/first").expect("decrypt contextual value"),
+        b"secret"
+    );
+    assert!(matches!(
+        open_with_context(&key, &encrypted, b"/maestro/second"),
+        Err(EncryptionError::Authentication)
+    ));
+    assert!(matches!(
+        EncryptedValue::from_bytes(vec![0; 64]),
+        Err(EncryptionError::InvalidEnvelope)
+    ));
 }

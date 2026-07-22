@@ -21,6 +21,12 @@ pub enum StoreError {
         /// Backend detail suitable for an operator-facing condition.
         message: String,
     },
+    /// A value could not be encrypted, authenticated, or decrypted.
+    #[error("store value protection failed: {message}")]
+    Protection {
+        /// Non-secret failure detail.
+        message: String,
+    },
     /// A backend returned state that violates the store contract.
     #[error("store backend violated its contract: {message}")]
     Contract {

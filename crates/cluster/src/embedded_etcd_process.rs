@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
-use kernel_store::{Clock, EtcdStore, EtcdTlsConfig, Store};
+use kernel_store::{Clock, EtcdStore, EtcdTlsConfig, Store, derive_key};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -228,7 +228,13 @@ pub(crate) async fn connect_store(
             .as_bytes()
             .to_vec(),
     );
-    EtcdStore::connect_with_tls([local_client_url], tls)
+    let encryption_key =
+        derive_key(config.store_encryption_secret().expose()).map_err(|error| {
+            StoreProviderError::InvalidConfiguration {
+                reason: error.to_string(),
+            }
+        })?;
+    EtcdStore::connect_with_tls_and_encryption([local_client_url], tls, encryption_key)
         .await
         .map_err(Into::into)
 }

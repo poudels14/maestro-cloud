@@ -11,7 +11,7 @@ use cluster::{
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 use kernel_controller::SystemTimestampClock;
-use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock};
+use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use node_agent::{
     CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxHostDiskReader,
@@ -78,6 +78,8 @@ pub struct DaemonLaunchConfig {
     pub security: NodeCertificateBundle,
     /// Cluster-wide HS256 key used to authenticate operator API requests.
     pub operator_jwt_secret: SecretValue,
+    /// Cluster-wide master secret used to encrypt internal persisted values.
+    pub store_encryption_secret: SecretValue,
     /// Optional deterministic process identity, primarily for cluster tests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<NodeInstanceId>,
@@ -121,6 +123,11 @@ impl DaemonLaunchConfig {
             ))
         })?;
         api_settings(node, &self.security, self.operator_jwt_secret.clone()).validate()?;
+        if self.store_encryption_secret.expose().chars().count() < 32 {
+            return Err(invalid(
+                "store encryption secret must contain at least 32 characters",
+            ));
+        }
         match (&self.etcd_binary, node.role.is_control_plane()) {
             (Some(path), true) if path.is_absolute() => {}
             (Some(_), true) => {
@@ -187,6 +194,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         store_mode,
         security,
         operator_jwt_secret,
+        store_encryption_secret,
         instance_id,
         datadog,
         log_backup,
@@ -213,6 +221,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             known_members.clone(),
             cluster.ports,
             data_directory.join("store"),
+            store_encryption_secret.clone(),
             security,
         )?;
         let provider = Arc::new(EmbeddedEtcdProvider::new(
@@ -229,7 +238,15 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             })?,
         }
     } else {
-        AgentStore::Remote(connect_worker_store(&cluster, &known_members, &security).await?)
+        AgentStore::Remote(
+            connect_worker_store(
+                &cluster,
+                &known_members,
+                &security,
+                &store_encryption_secret,
+            )
+            .await?,
+        )
     };
     let mesh_identity = MeshIdentity::load_or_generate(&data_directory.join("agent").join("mesh"))?;
     let containerd = Arc::new(
@@ -410,6 +427,7 @@ async fn connect_worker_store(
     cluster: &ClusterConfig,
     members: &BTreeMap<NodeId, StoreMember>,
     security: &NodeCertificateBundle,
+    store_encryption_secret: &SecretValue,
 ) -> Result<Arc<dyn Store>, DaemonLaunchError> {
     let endpoints = members
         .values()
@@ -435,7 +453,9 @@ async fn connect_worker_store(
             .as_bytes()
             .to_vec(),
     );
-    EtcdStore::connect_with_tls(endpoints, tls)
+    let encryption_key =
+        derive_key(store_encryption_secret.expose()).map_err(|error| invalid(error.to_string()))?;
+    EtcdStore::connect_with_tls_and_encryption(endpoints, tls, encryption_key)
         .await
         .map(|store| Arc::new(store) as Arc<dyn Store>)
         .map_err(|error| DaemonLaunchError::RemoteStore {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use kernel_api::{ClusterId, NodeId};
+use kernel_api::{ClusterId, NodeId, SecretValue};
 use kernel_store::{MonotonicTime, Store, StoreError};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,7 @@ pub struct StoreProviderConfig {
     client_port: u16,
     membership_port: u16,
     data_directory: PathBuf,
+    store_encryption_secret: SecretValue,
     security: NodeCertificateBundle,
 }
 
@@ -42,6 +43,7 @@ impl StoreProviderConfig {
         known_members: BTreeMap<NodeId, StoreMember>,
         ports: ClusterPorts,
         data_directory: PathBuf,
+        store_encryption_secret: SecretValue,
         security: NodeCertificateBundle,
     ) -> Result<Self, StoreProviderError> {
         ports
@@ -91,6 +93,11 @@ impl StoreProviderConfig {
                 reason: "store data directory cannot be empty".to_owned(),
             });
         }
+        if store_encryption_secret.expose().chars().count() < 32 {
+            return Err(StoreProviderError::InvalidConfiguration {
+                reason: "store encryption secret must contain at least 32 characters".to_owned(),
+            });
+        }
         Ok(Self {
             cluster_id,
             local_member,
@@ -98,6 +105,7 @@ impl StoreProviderConfig {
             client_port: ports.store_client,
             membership_port: ports.store_peer,
             data_directory,
+            store_encryption_secret,
             security,
         })
     }
@@ -130,6 +138,11 @@ impl StoreProviderConfig {
     /// Returns the provider-owned local persistence directory.
     pub fn data_directory(&self) -> &Path {
         &self.data_directory
+    }
+
+    /// Returns the cluster-wide master secret used only for store value protection.
+    pub fn store_encryption_secret(&self) -> &SecretValue {
+        &self.store_encryption_secret
     }
 
     /// Returns the node identity and cluster trust root for mutual TLS.

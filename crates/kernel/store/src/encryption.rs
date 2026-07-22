@@ -1,7 +1,7 @@
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::rand_core::RngCore,
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit, OsRng, Payload},
 };
 use argon2::Argon2;
 use sha2::{Digest, Sha256};
@@ -10,6 +10,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 const KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 12;
+const ENVELOPE_MAGIC: &[u8; 4] = b"MAE1";
+const ENVELOPE_HEADER_LENGTH: usize = ENVELOPE_MAGIC.len() + NONCE_LENGTH;
 
 /// A derived AES-256 key that zeroizes its bytes on drop.
 ///
@@ -24,14 +26,14 @@ impl std::fmt::Debug for EncryptionKey {
     }
 }
 
-/// Nonce-prefixed authenticated ciphertext safe to persist as store bytes.
+/// Versioned authenticated ciphertext safe to persist as store bytes.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EncryptedValue(Vec<u8>);
 
 impl EncryptedValue {
-    /// Parses a persisted nonce-prefixed ciphertext envelope.
+    /// Parses a persisted versioned ciphertext envelope.
     pub fn from_bytes(value: Vec<u8>) -> Result<Self, EncryptionError> {
-        if value.len() < NONCE_LENGTH {
+        if value.len() < ENVELOPE_HEADER_LENGTH || !value.starts_with(ENVELOPE_MAGIC) {
             Err(EncryptionError::InvalidEnvelope)
         } else {
             Ok(Self(value))
@@ -70,8 +72,8 @@ pub enum EncryptionError {
     /// Randomized authenticated encryption failed.
     #[error("could not encrypt the secret-bearing store value")]
     Encryption,
-    /// Persisted data is shorter than the v1 nonce prefix.
-    #[error("encrypted store value is shorter than its nonce prefix")]
+    /// Persisted data is not a supported versioned envelope.
+    #[error("encrypted store value has an invalid or unsupported envelope")]
     InvalidEnvelope,
     /// Ciphertext authentication failed, including when the wrong key is used.
     #[error("encrypted store value failed authentication")]
@@ -90,13 +92,29 @@ pub fn derive_key(master_secret: &str) -> Result<EncryptionKey, EncryptionError>
 
 /// Encrypts plaintext with a fresh nonce and authenticated AES-256-GCM.
 pub fn seal(key: &EncryptionKey, plaintext: &[u8]) -> Result<EncryptedValue, EncryptionError> {
+    seal_with_context(key, plaintext, &[])
+}
+
+/// Encrypts plaintext and authenticates it against non-secret storage context.
+pub fn seal_with_context(
+    key: &EncryptionKey,
+    plaintext: &[u8],
+    context: &[u8],
+) -> Result<EncryptedValue, EncryptionError> {
     let cipher = Aes256Gcm::new_from_slice(&key.0).map_err(|_| EncryptionError::InvalidKey)?;
     let mut nonce_bytes = [0; NONCE_LENGTH];
     OsRng.fill_bytes(&mut nonce_bytes);
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: plaintext,
+                aad: context,
+            },
+        )
         .map_err(|_| EncryptionError::Encryption)?;
-    let mut envelope = Vec::with_capacity(NONCE_LENGTH + ciphertext.len());
+    let mut envelope = Vec::with_capacity(ENVELOPE_HEADER_LENGTH + ciphertext.len());
+    envelope.extend_from_slice(ENVELOPE_MAGIC);
     envelope.extend_from_slice(&nonce_bytes);
     envelope.extend(ciphertext);
     Ok(EncryptedValue(envelope))
@@ -104,9 +122,25 @@ pub fn seal(key: &EncryptionKey, plaintext: &[u8]) -> Result<EncryptedValue, Enc
 
 /// Authenticates and decrypts one v1 nonce-prefixed store value.
 pub fn open(key: &EncryptionKey, encrypted: &EncryptedValue) -> Result<Vec<u8>, EncryptionError> {
-    let (nonce, ciphertext) = encrypted.0.split_at(NONCE_LENGTH);
+    open_with_context(key, encrypted, &[])
+}
+
+/// Authenticates storage context and decrypts one v1 envelope.
+pub fn open_with_context(
+    key: &EncryptionKey,
+    encrypted: &EncryptedValue,
+    context: &[u8],
+) -> Result<Vec<u8>, EncryptionError> {
+    let (_, body) = encrypted.0.split_at(ENVELOPE_MAGIC.len());
+    let (nonce, ciphertext) = body.split_at(NONCE_LENGTH);
     let cipher = Aes256Gcm::new_from_slice(&key.0).map_err(|_| EncryptionError::InvalidKey)?;
     cipher
-        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad: context,
+            },
+        )
         .map_err(|_| EncryptionError::Authentication)
 }
