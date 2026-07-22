@@ -8,7 +8,8 @@ use crate::{
     LogDeliveryStoreError, LogQueryStore, LogQueryStoreError, LogRecordId, LogSequence,
     LogSinkCursorStats, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
     LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
-    SinkDeadLetterSnapshot, SinkDeadLetterStats,
+    SinkDeadLetterSnapshot, SinkDeadLetterStats, StatsMetricAppendReport, StatsMetricPoint,
+    StatsMetricQuery, StatsMetricStore, StatsMetricStoreError, validate_stats_metric_point,
 };
 
 /// Deterministic idempotent log store for pipeline and composition tests.
@@ -23,6 +24,24 @@ struct InMemoryLogState {
     last_sequence: u64,
     cursors: BTreeMap<LogSinkId, LogSequence>,
     dead_letters: BTreeMap<(LogSinkId, LogSequence), SinkDeadLetter>,
+    stats_metrics: BTreeMap<StatsMetricIdentity, StatsMetricPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct StatsMetricIdentity {
+    ts: i64,
+    name: String,
+    labels: BTreeMap<String, String>,
+}
+
+impl From<&StatsMetricPoint> for StatsMetricIdentity {
+    fn from(point: &StatsMetricPoint) -> Self {
+        Self {
+            ts: point.ts,
+            name: point.name.clone(),
+            labels: point.labels.clone(),
+        }
+    }
 }
 
 impl InMemoryLogStore {
@@ -312,6 +331,64 @@ impl LogStatsStore for InMemoryLogStore {
     }
 }
 
+#[async_trait]
+impl StatsMetricStore for InMemoryLogStore {
+    async fn append_stats_metrics(
+        &self,
+        points: &[StatsMetricPoint],
+    ) -> Result<StatsMetricAppendReport, StatsMetricStoreError> {
+        for point in points {
+            validate_stats_metric_point(point)?;
+        }
+        let mut state = lock_state_for_stats_metrics(&self.state)?;
+        let mut pending = BTreeMap::<StatsMetricIdentity, StatsMetricPoint>::new();
+        let mut deduplicated = 0_usize;
+        for point in points {
+            let identity = StatsMetricIdentity::from(point);
+            let existing = pending
+                .get(&identity)
+                .or_else(|| state.stats_metrics.get(&identity));
+            match existing {
+                Some(existing) if existing.value.to_bits() == point.value.to_bits() => {
+                    deduplicated = deduplicated.saturating_add(1);
+                }
+                Some(_) => {
+                    return Err(StatsMetricStoreError::Rejected {
+                        message: "stats metric identity was reused with a different value"
+                            .to_owned(),
+                    });
+                }
+                None => {
+                    pending.insert(identity, point.clone());
+                }
+            }
+        }
+        let committed = pending.len();
+        state.stats_metrics.extend(pending);
+        Ok(StatsMetricAppendReport {
+            committed,
+            deduplicated,
+        })
+    }
+
+    async fn query_stats_metrics(
+        &self,
+        query: &StatsMetricQuery,
+    ) -> Result<Vec<StatsMetricPoint>, StatsMetricStoreError> {
+        Ok(lock_state_for_stats_metrics(&self.state)?
+            .stats_metrics
+            .values()
+            .filter(|point| {
+                point.ts >= query.from()
+                    && point.ts <= query.to()
+                    && query.name().is_none_or(|name| point.name == name)
+            })
+            .take(query.limit())
+            .cloned()
+            .collect())
+    }
+}
+
 /// No-op lifecycle owner for an in-memory log store used by composition tests.
 pub struct InMemoryLogStoreRuntime {
     store: Arc<InMemoryLogStore>,
@@ -359,6 +436,10 @@ impl LogStoreRuntime for InMemoryLogStoreRuntime {
         self.store.clone()
     }
 
+    fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
         Ok(())
     }
@@ -388,4 +469,14 @@ fn lock_state_for_dead_letters(
     state.lock().map_err(|_| DeadLetterStoreError::Unavailable {
         message: "in-memory dead-letter lock was poisoned".to_owned(),
     })
+}
+
+fn lock_state_for_stats_metrics(
+    state: &Mutex<InMemoryLogState>,
+) -> Result<MutexGuard<'_, InMemoryLogState>, StatsMetricStoreError> {
+    state
+        .lock()
+        .map_err(|_| StatsMetricStoreError::Unavailable {
+            message: "in-memory stats metric lock was poisoned".to_owned(),
+        })
 }

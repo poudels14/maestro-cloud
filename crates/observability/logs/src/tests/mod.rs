@@ -4,6 +4,7 @@ mod cluster_query;
 mod cluster_stats;
 mod datadog;
 mod filter;
+mod operational_metrics;
 #[cfg(unix)]
 mod otlp;
 mod parser;

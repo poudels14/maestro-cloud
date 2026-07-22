@@ -6,7 +6,8 @@ use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogBody,
     LogDeliveryStore, LogDeliveryStoreError, LogOrigin, LogProducer, LogRecordId, LogSequence,
     LogSinkId, LogSinkIdError, LogStatsStore, LogStatsStoreError, LogStore, LogStoreError,
-    LogStream, OriginCursor, SequencedLogEntry, SinkDeadLetter,
+    LogStream, OriginCursor, SequencedLogEntry, SinkDeadLetter, StatsMetricAppendReport,
+    StatsMetricPoint, StatsMetricQuery, StatsMetricStore, StatsMetricStoreError,
 };
 
 /// Runs the reusable append, replay, collision, and atomicity battery on a fresh store.
@@ -221,6 +222,73 @@ pub async fn check_log_stats_store(
     Ok(())
 }
 
+/// Runs replay, collision, atomicity, ordering, filtering, and bounds checks on fresh history.
+pub async fn check_stats_metric_store(
+    store: &dyn StatsMetricStore,
+) -> Result<(), StatsMetricConformanceError> {
+    let first = stats_point(20, "z.metric", 1.0, "b");
+    let second = stats_point(10, "a.metric", 2.0, "a");
+    require_stats_report(
+        "initial append",
+        store
+            .append_stats_metrics(&[first.clone(), second.clone()])
+            .await?,
+        StatsMetricAppendReport {
+            committed: 2,
+            deduplicated: 0,
+        },
+    )?;
+    require_stats_report(
+        "exact replay",
+        store
+            .append_stats_metrics(std::slice::from_ref(&first))
+            .await?,
+        StatsMetricAppendReport {
+            committed: 0,
+            deduplicated: 1,
+        },
+    )?;
+
+    let mut collision = first.clone();
+    collision.value = 9.0;
+    let third = stats_point(30, "new.metric", 3.0, "c");
+    if !matches!(
+        store
+            .append_stats_metrics(&[third.clone(), collision])
+            .await,
+        Err(StatsMetricStoreError::Rejected { .. })
+    ) {
+        return Err(StatsMetricConformanceError::CollisionAccepted);
+    }
+    if !store
+        .query_stats_metrics(&StatsMetricQuery::new(None, 0, 100, 8)?)
+        .await?
+        .iter()
+        .all(|point| point.name != third.name)
+    {
+        return Err(StatsMetricConformanceError::PartialBatchCommitted);
+    }
+
+    let ordered = store
+        .query_stats_metrics(&StatsMetricQuery::new(None, 0, 100, 8)?)
+        .await?;
+    if ordered != vec![second.clone(), first.clone()] {
+        return Err(StatsMetricConformanceError::UnexpectedPoints);
+    }
+    let filtered = store
+        .query_stats_metrics(&StatsMetricQuery::new(
+            Some(first.name.clone()),
+            first.ts,
+            first.ts,
+            1,
+        )?)
+        .await?;
+    if filtered != vec![first] {
+        return Err(StatsMetricConformanceError::UnexpectedPoints);
+    }
+    Ok(())
+}
+
 fn require_report(
     stage: &'static str,
     actual: LogAppendReport,
@@ -234,6 +302,31 @@ fn require_report(
             expected,
             actual,
         })
+    }
+}
+
+fn require_stats_report(
+    stage: &'static str,
+    actual: StatsMetricAppendReport,
+    expected: StatsMetricAppendReport,
+) -> Result<(), StatsMetricConformanceError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(StatsMetricConformanceError::UnexpectedReport {
+            stage,
+            expected,
+            actual,
+        })
+    }
+}
+
+fn stats_point(ts: i64, name: &str, value: f64, node: &str) -> StatsMetricPoint {
+    StatsMetricPoint {
+        ts,
+        name: name.to_owned(),
+        value,
+        labels: BTreeMap::from([("node".to_owned(), node.to_owned())]),
     }
 }
 
@@ -358,4 +451,31 @@ pub enum LogStatsConformanceError {
     /// Statistics did not describe the durable fixture state.
     #[error("log stats store returned an unexpected snapshot")]
     UnexpectedStats,
+}
+
+/// A store violated durable operational-history behavior.
+#[derive(Debug, thiserror::Error)]
+pub enum StatsMetricConformanceError {
+    /// History storage failed valid conformance input.
+    #[error(transparent)]
+    Store(#[from] StatsMetricStoreError),
+    /// A replay identity was accepted with a different value.
+    #[error("stats metric store accepted an identity collision")]
+    CollisionAccepted,
+    /// A rejected batch left an earlier point committed.
+    #[error("stats metric store partially committed a rejected batch")]
+    PartialBatchCommitted,
+    /// Query ordering, filtering, or bounds differed from the contract.
+    #[error("stats metric store returned unexpected points")]
+    UnexpectedPoints,
+    /// Append accounting did not describe the tested operation.
+    #[error("{stage} returned {actual:?}, expected {expected:?}")]
+    UnexpectedReport {
+        /// Conformance stage that produced the mismatch.
+        stage: &'static str,
+        /// Required accounting.
+        expected: StatsMetricAppendReport,
+        /// Store-provided accounting.
+        actual: StatsMetricAppendReport,
+    },
 }

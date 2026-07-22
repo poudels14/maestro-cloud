@@ -9,7 +9,8 @@ use logs::{
     LogDeliveryStoreError, LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadQuery,
     LogSequence, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
     LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
-    SinkDeadLetterStats,
+    SinkDeadLetterStats, StatsMetricAppendReport, StatsMetricPoint, StatsMetricQuery,
+    StatsMetricStore, StatsMetricStoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -96,6 +97,14 @@ pub(crate) enum Command {
     QueryHistogram {
         query: LogHistogramQuery,
         response: oneshot::Sender<Result<Vec<LogHistogramBucket>, LogQueryStoreError>>,
+    },
+    AppendStatsMetrics {
+        points: Vec<StatsMetricPoint>,
+        response: oneshot::Sender<Result<StatsMetricAppendReport, StatsMetricStoreError>>,
+    },
+    QueryStatsMetrics {
+        query: StatsMetricQuery,
+        response: oneshot::Sender<Result<Vec<StatsMetricPoint>, StatsMetricStoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -465,6 +474,43 @@ impl LogStatsStore for DuckLogStore {
 }
 
 #[async_trait]
+impl StatsMetricStore for DuckLogStore {
+    async fn append_stats_metrics(
+        &self,
+        points: &[StatsMetricPoint],
+    ) -> Result<StatsMetricAppendReport, StatsMetricStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::AppendStatsMetrics {
+                points: points.to_vec(),
+                response,
+            })
+            .await
+            .map_err(|_| stats_metric_worker_stopped("accepting append"))?;
+        result
+            .await
+            .map_err(|_| stats_metric_worker_stopped("completing append"))?
+    }
+
+    async fn query_stats_metrics(
+        &self,
+        query: &StatsMetricQuery,
+    ) -> Result<Vec<StatsMetricPoint>, StatsMetricStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::QueryStatsMetrics {
+                query: query.clone(),
+                response,
+            })
+            .await
+            .map_err(|_| stats_metric_worker_stopped("accepting query"))?;
+        result
+            .await
+            .map_err(|_| stats_metric_worker_stopped("completing query"))?
+    }
+}
+
+#[async_trait]
 impl LogStoreRuntime for DuckLogStoreRuntime {
     fn store(&self) -> Arc<dyn LogStore> {
         self.store.clone()
@@ -486,6 +532,10 @@ impl LogStoreRuntime for DuckLogStoreRuntime {
         self.store.clone()
     }
 
+    fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
+        self.store.clone()
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError> {
         DuckLogStoreRuntime::shutdown(*self)
             .await
@@ -500,4 +550,10 @@ async fn join(worker: JoinHandle<()>) -> Result<(), DuckStoreError> {
         .await
         .map_err(|_| DuckStoreError::WorkerPanicked)?
         .map_err(|_| DuckStoreError::WorkerPanicked)
+}
+
+fn stats_metric_worker_stopped(action: &'static str) -> StatsMetricStoreError {
+    StatsMetricStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
 }

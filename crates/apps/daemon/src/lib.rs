@@ -25,6 +25,7 @@ mod plan;
 mod preview_config;
 mod runtime;
 mod s3_backup;
+mod stats_metric_sampler;
 mod upgrade_config;
 mod workload_agents;
 

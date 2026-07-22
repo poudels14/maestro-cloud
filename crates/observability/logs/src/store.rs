@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::{DeadLetterStore, IngestLogEntry, LogDeliveryStore, LogQueryStore, LogStatsStore};
+use crate::{
+    DeadLetterStore, IngestLogEntry, LogDeliveryStore, LogQueryStore, LogStatsStore,
+    StatsMetricStore,
+};
 
 /// Outcome of one atomic idempotent append batch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -39,6 +42,9 @@ pub trait LogStoreRuntime: Send {
 
     /// Returns node-local reads and histograms backed by the same committed records.
     fn query_store(&self) -> Arc<dyn LogQueryStore>;
+
+    /// Returns durable controller and backup time-series history.
+    fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore>;
 
     /// Drains accepted writes and releases the store's owned resources.
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError>;

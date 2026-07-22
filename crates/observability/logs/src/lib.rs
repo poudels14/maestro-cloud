@@ -20,6 +20,7 @@ mod fake_query;
 mod filter;
 mod http;
 mod model;
+mod operational_metrics;
 #[cfg(unix)]
 mod otlp;
 mod parser;
@@ -68,6 +69,10 @@ pub use http::{
 pub use logql::{LogQuery, LogQueryParseError};
 pub use model::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStream, OriginCursor,
+};
+pub use operational_metrics::{
+    MAXIMUM_STATS_METRIC_QUERY_LIMIT, StatsMetricAppendReport, StatsMetricQuery, StatsMetricStore,
+    StatsMetricStoreError, validate_stats_metric_point,
 };
 #[cfg(unix)]
 pub use otlp::OtlpLogHandler;

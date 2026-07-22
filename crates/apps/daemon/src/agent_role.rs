@@ -17,6 +17,7 @@ use crate::cluster_query_clients;
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
+use crate::stats_metric_sampler::StatsMetricSampler;
 use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_host_telemetry_agent, build_log_agent,
     build_node_registry_agent, build_node_upgrade_agent, build_stats_agent,
@@ -105,6 +106,30 @@ where
     let backup_stats = log_maintenance
         .as_ref()
         .map(|worker| Arc::new(worker.stats_handle()) as Arc<dyn logs::BackupStatsProvider>);
+    let stats_metric_sampler = match StatsMetricSampler::new(
+        spec.node_id.clone(),
+        runtimes.stats_metric_store(),
+        controller_stats.clone(),
+        backup_stats.clone(),
+        factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
+        factory.settings.stats_poll_interval,
+    ) {
+        Ok(sampler) => sampler,
+        Err(error) => {
+            return runtimes
+                .fail(role_error("construct operational stats sampler", error))
+                .await;
+        }
+    };
+    if let Err(error) = stats_metric_sampler.collect_once().await {
+        return runtimes
+            .fail(role_error(
+                "establish initial operational stats sample",
+                error,
+            ))
+            .await;
+    }
     let workload_metric_queries = runtimes.metric_query_store();
     let host_metric_queries = runtimes.host_metric_query_store();
     let cluster_log_queries = match cluster_query_clients::log_query_store(
@@ -407,6 +432,7 @@ where
     let node_upgrade_shutdown = bridge_shutdown.clone();
     let node_registry_shutdown = bridge_shutdown.clone();
     let api_shutdown = bridge_shutdown.clone();
+    let stats_metric_shutdown = bridge_shutdown.clone();
     let api_task = tokio::spawn(async move {
         api_server
             .serve(api_shutdown)
@@ -457,6 +483,10 @@ where
         dns_server_task,
         node_registry_task,
         api_task,
+        tokio::spawn(async move {
+            stats_metric_sampler.run(stats_metric_shutdown).await;
+            Ok(())
+        }),
     ];
     if let Some(agent) = assignment_agent {
         tasks.push(tokio::spawn(async move {

@@ -161,6 +161,14 @@ pub(crate) fn run_worker(
                     &query,
                 ));
             }
+            Command::AppendStatsMetrics { points, response } => {
+                let _ignored =
+                    response.send(crate::stats_metric_schema::append(&mut connection, &points));
+            }
+            Command::QueryStatsMetrics { query, response } => {
+                let _ignored =
+                    response.send(crate::stats_metric_schema::query(&connection, &query));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());

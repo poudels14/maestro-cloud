@@ -4,7 +4,7 @@ use kernel_api::{ClusterId, NodeId, Timestamp};
 use logs::{
     DeadLetterStore, IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer,
     LogRecordId, LogSequence, LogSinkId, LogStatsStore, LogStore, LogStream, OriginCursor,
-    SinkDeadLetter,
+    SinkDeadLetter, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
 };
 
 use crate::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
@@ -66,6 +66,20 @@ async fn duck_store_passes_operational_stats_conformance() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn duck_store_passes_operational_metric_history_conformance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
+        temporary.path().join("logs.duckdb"),
+        8,
+    )?)
+    .await?;
+    logs::conformance::check_stats_metric_store(runtime.store().as_ref()).await?;
+    runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn duck_store_replays_persisted_entries_after_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
@@ -87,6 +101,48 @@ async fn duck_store_replays_persisted_entries_after_restart()
         restarted
             .store()
             .append(std::slice::from_ref(&entry))
+            .await?
+            .deduplicated,
+        1
+    );
+    restarted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_store_replays_operational_metric_history_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
+    let point = StatsMetricPoint {
+        ts: 1_700_000_000_000,
+        name: "logs.spool.bytes".to_owned(),
+        value: 42.0,
+        labels: BTreeMap::from([("node".to_owned(), "node-1".to_owned())]),
+    };
+    let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
+    assert_eq!(
+        runtime
+            .store()
+            .append_stats_metrics(std::slice::from_ref(&point))
+            .await?
+            .committed,
+        1
+    );
+    runtime.shutdown().await?;
+
+    let restarted = DuckLogStoreRuntime::open(settings).await?;
+    assert_eq!(
+        restarted
+            .store()
+            .query_stats_metrics(&StatsMetricQuery::new(None, point.ts, point.ts, 8)?)
+            .await?,
+        vec![point.clone()]
+    );
+    assert_eq!(
+        restarted
+            .store()
+            .append_stats_metrics(&[point])
             .await?
             .deduplicated,
         1
@@ -250,7 +306,7 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        4
+        5
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
@@ -329,7 +385,45 @@ async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        4
+        5
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_store_migrates_v4_to_operational_metric_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("logs.duckdb");
+    let connection = duckdb::Connection::open(&path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version BIGINT NOT NULL);
+         INSERT INTO schema_version VALUES (4);",
+    )?;
+    drop(connection);
+
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(path.clone(), 8)?).await?;
+    let point = StatsMetricPoint {
+        ts: 10,
+        name: "controller.uptime_seconds".to_owned(),
+        value: 1.0,
+        labels: BTreeMap::new(),
+    };
+    runtime.store().append_stats_metrics(&[point]).await?;
+    runtime.shutdown().await?;
+
+    let connection = duckdb::Connection::open(path)?;
+    assert_eq!(
+        connection.query_row("SELECT version FROM schema_version", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        5
+    );
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM stats_metrics", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
     );
     Ok(())
 }

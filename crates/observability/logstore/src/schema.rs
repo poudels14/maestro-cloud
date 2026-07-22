@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -22,18 +22,24 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v4(&mut connection)?,
+        (0, _) => initialize_v5(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, 1) => {
             migrate_v1_to_v2(&mut connection)?;
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
+            crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
         }
         (1, 2) => {
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
+            crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
         }
-        (1, 3) => migrate_v3_to_v4(&mut connection)?,
+        (1, 3) => {
+            migrate_v3_to_v4(&mut connection)?;
+            crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
+        }
+        (1, 4) => crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -131,7 +137,7 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v5(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -183,7 +189,16 @@ fn initialize_v4(connection: &mut Connection) -> Result<(), String> {
                  value_json VARCHAR NOT NULL,
                  updated_at_ms BIGINT NOT NULL
              );
-             INSERT INTO schema_version (version) VALUES (4);",
+             CREATE TABLE stats_metrics (
+                 ts BIGINT NOT NULL,
+                 name VARCHAR NOT NULL,
+                 value DOUBLE NOT NULL,
+                 labels_json VARCHAR NOT NULL,
+                 PRIMARY KEY (ts, name, labels_json)
+             );
+             CREATE INDEX stats_metrics_name_ts
+                 ON stats_metrics(name, ts, labels_json);
+             INSERT INTO schema_version (version) VALUES (5);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

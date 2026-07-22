@@ -27,6 +27,7 @@ mod orchestration_upgrade_backend;
 mod plan;
 mod runtime;
 mod s3_backup;
+mod stats_metric_sampler;
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
