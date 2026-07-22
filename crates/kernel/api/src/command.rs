@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ArtifactArchiveId, DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation,
-    IngressRouteSpec, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
+    IngressRouteSpec, NodeId, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
 };
 
 /// Maximum compressed bytes accepted for one uploaded build context archive.
@@ -17,6 +17,16 @@ pub const MAXIMUM_ARTIFACT_ARCHIVE_BYTES: usize = 64 * 1_024 * 1_024;
 pub struct CommandRequest {
     /// Revision the operator observed before choosing the mutation.
     pub expected_revision: ResourceRevision,
+}
+
+/// Accepted node scheduling-state command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeCommandResponse {
+    /// Node whose scheduling state was accepted.
+    pub node_id: NodeId,
+    /// Whether new workload placement is disabled for the node.
+    pub draining: bool,
 }
 
 /// Optimistic temporary replica override for one service.

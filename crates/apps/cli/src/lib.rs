@@ -6,6 +6,8 @@
 
 mod api_client;
 mod archive;
+mod cluster;
+mod cluster_command;
 mod cluster_config;
 mod command;
 mod config;

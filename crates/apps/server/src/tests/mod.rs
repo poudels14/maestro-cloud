@@ -23,6 +23,7 @@ use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 mod artifact_archives;
 mod automation;
+mod cluster;
 mod deployment_commands;
 mod deployments;
 mod firewall_dry_run;

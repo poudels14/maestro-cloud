@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::CliError;
+use crate::cluster_command::ClusterCommand;
 use crate::config::{self, ConfigKind};
 use crate::contexts::ContextStore;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
@@ -19,6 +20,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Inspect and operate the active Maestro cluster.
+    Cluster {
+        #[command(subcommand)]
+        command: ClusterCommand,
+    },
     /// Create and validate Maestro configuration files.
     Config {
         #[command(subcommand)]
@@ -93,6 +99,7 @@ pub async fn run(
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     match cli.command {
+        Command::Cluster { command } => crate::cluster_command::run(command, output).await,
         Command::Config { command } => match command {
             ConfigCommand::Init { kind, output: path } => {
                 let kind = match kind {

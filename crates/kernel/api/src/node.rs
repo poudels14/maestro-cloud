@@ -4,7 +4,23 @@ use std::net::{IpAddr, SocketAddr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Condition, NodeFirewallId, NodeId, NodeInstanceId, NodeNetworkId, Object, Timestamp};
+use crate::{
+    ClusterId, Condition, NodeFirewallId, NodeId, NodeInstanceId, NodeNetworkId, Object, Timestamp,
+};
+
+/// Operator-facing summary of one cluster's durable node topology.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterInfo {
+    /// Stable identity that namespaces every cluster resource.
+    pub cluster_id: ClusterId,
+    /// Number of declared node resources.
+    pub node_count: u64,
+    /// Nodes capable of running cluster controllers.
+    pub control_plane_node_count: u64,
+    /// Nodes eligible to receive workload assignments.
+    pub workload_node_count: u64,
+}
 
 /// Scheduling and control-plane capability assigned to a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

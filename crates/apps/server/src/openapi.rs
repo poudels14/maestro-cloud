@@ -10,6 +10,10 @@ pub fn openapi_document() -> Value {
     let mut document = kernel_api::openapi_document();
     let paths = Value::Object(Map::from_iter([
         (
+            "/api/cluster".to_string(),
+            singleton_operation("getClusterInfo", "ClusterInfo"),
+        ),
+        (
             "/api/cluster/nodes".to_string(),
             list_operation("listNodes", "Node"),
         ),
@@ -302,6 +306,23 @@ fn artifact_archive_operation() -> Value {
                 "400": {"description": "Invalid archive content or content address"},
                 "413": {"description": "Archive exceeds the upload limit"},
                 "503": {"description": "Archive storage is unavailable on this node"}
+            }
+        }
+    })
+}
+
+fn singleton_operation(operation_id: &str, schema: &str) -> Value {
+    json!({
+        "get": {
+            "operationId": operation_id,
+            "security": [{"bearerAuth": []}],
+            "responses": {
+                "200": {
+                    "description": "Resource summary",
+                    "content": {"application/json": {"schema": {
+                        "$ref": format!("#/components/schemas/{schema}")
+                    }}}
+                }
             }
         }
     })

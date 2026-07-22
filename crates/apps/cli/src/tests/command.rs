@@ -24,6 +24,21 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(Cli::try_parse_from(["maestro-next", "contexts", "ls"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "contexts", "remove", "dev"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "contexts", "login", "--days", "30"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "info"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "nodes"]).is_ok());
+    for command in ["drain", "restore"] {
+        assert!(
+            Cli::try_parse_from([
+                "maestro-next",
+                "cluster",
+                command,
+                "node-a",
+                "--idempotency-key",
+                "node-command-1",
+            ])
+            .is_ok()
+        );
+    }
     assert!(Cli::try_parse_from(["maestro-next", "services", "ls"]).is_ok());
     assert!(
         Cli::try_parse_from([

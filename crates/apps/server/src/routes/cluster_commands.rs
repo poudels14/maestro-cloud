@@ -4,11 +4,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, Condition, ConditionReason, ConditionState, ConditionType, Node, NodeId,
-    ResourceKind, ResourceRevision, Timestamp,
+    BuiltinKind, CommandRequest, Condition, ConditionReason, ConditionState, ConditionType, Node,
+    NodeCommandResponse, NodeId, ResourceKind, Timestamp,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
-use serde::{Deserialize, Serialize};
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
@@ -27,7 +26,7 @@ async fn drain(
     path: Path<String>,
     operator: Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<NodeCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<NodeCommandResponse>), ApiError> {
     command(
         state,
@@ -48,7 +47,7 @@ async fn restore(
     path: Path<String>,
     operator: Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<NodeCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<NodeCommandResponse>), ApiError> {
     command(
         state,
@@ -69,7 +68,7 @@ async fn command(
     Path(node_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<NodeCommandRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
     command: NodeCommandKind,
 ) -> Result<(StatusCode, Json<NodeCommandResponse>), ApiError> {
     let node_id = NodeId::new(node_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -178,19 +177,6 @@ fn set_draining(node: &mut Node, draining: bool, now: Timestamp) -> Result<bool,
         last_transition_time: now,
     });
     Ok(true)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NodeCommandRequest {
-    expected_revision: ResourceRevision,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NodeCommandResponse {
-    node_id: NodeId,
-    draining: bool,
 }
 
 struct NodeCommandKind {

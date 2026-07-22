@@ -23,8 +23,8 @@ pub use automation::{
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,
-    MAXIMUM_ARTIFACT_ARCHIVE_BYTES, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
-    ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    MAXIMUM_ARTIFACT_ARCHIVE_BYTES, NodeCommandResponse, ServiceCommandResponse, ServiceDiffChange,
+    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
     ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
     ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
     ServiceWriteResponse,
@@ -48,8 +48,8 @@ pub use network::{
     TrafficRoute, TrafficTarget, TransportProtocol,
 };
 pub use node::{
-    Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork, NodeNetworkSpec,
-    NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
+    ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,
+    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
 };
 pub use resource::Object;
 pub use schema::{
