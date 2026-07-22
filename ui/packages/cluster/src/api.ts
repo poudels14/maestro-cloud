@@ -8,7 +8,8 @@ import type {
   StatsMetricPoint,
   UnschedulableReplica,
   Webhook,
-  WebhookCreateRequest
+  WebhookCreateRequest,
+  WebhookUpdateRequest
 } from "./types";
 
 type ClusterErrorMapper = (error: unknown, fallback: string) => Error;
@@ -23,6 +24,7 @@ interface ClusterApi {
   getConfig: () => Promise<MaskedConfig>;
   listWebhooks: () => Promise<Webhook[]>;
   createWebhook: (request: WebhookCreateRequest) => Promise<void>;
+  updateWebhook: (webhook: Webhook, request: WebhookUpdateRequest) => Promise<void>;
   deleteWebhook: (webhook: Webhook) => Promise<void>;
   testWebhook: (id: string) => Promise<void>;
 }
@@ -93,13 +95,34 @@ function createClusterApi(
         await client().putWebhook(
           request.id,
           {
+            name: request.name,
             endpoint: request.endpoint,
             events: request.events,
-            signingSecret: request.signingSecret
+            categories: request.categories,
+            enabled: request.enabled,
+            format: request.format,
+            ...(request.signingSecret ? { signingSecret: request.signingSecret } : {})
           },
           crypto.randomUUID()
         );
       }, "Failed to create webhook"),
+    updateWebhook: (webhook, request) =>
+      mapped(async () => {
+        await client().putWebhook(
+          webhook.meta.id,
+          {
+            expectedRevision: webhook.meta.revision,
+            name: request.name,
+            events: request.events,
+            categories: request.categories,
+            enabled: request.enabled,
+            format: request.format,
+            ...(request.endpoint ? { endpoint: request.endpoint } : {}),
+            ...(request.signingSecret ? { signingSecret: request.signingSecret } : {})
+          },
+          crypto.randomUUID()
+        );
+      }, "Failed to update webhook"),
     deleteWebhook: (webhook) =>
       mapped(async () => {
         await client().deleteWebhook(

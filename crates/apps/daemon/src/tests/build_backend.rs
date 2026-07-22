@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use build::{BuildRevisionResolver, BuildSourceError, BuildSourceProvider, PreparedBuildSource};
 use ingress::IngressBackend;
-use kernel_api::{BuildId, BuildSource, SecretValue};
+use kernel_api::{BuildId, BuildSource, SecretValue, WebhookFormat};
 use runtime::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
@@ -72,7 +72,8 @@ impl WebhookDeliveryBackend for AcceptingWebhookBackend {
     async fn deliver(
         &self,
         _endpoint: &str,
-        _signing_secret: &SecretValue,
+        _format: WebhookFormat,
+        _signing_secret: Option<&SecretValue>,
         _delivery: &WebhookDelivery,
     ) -> Result<(), WebhookDeliveryError> {
         Ok(())

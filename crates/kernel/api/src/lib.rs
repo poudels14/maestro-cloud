@@ -20,8 +20,9 @@ mod workload;
 
 pub use automation::{
     NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, UpgradeMode,
-    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookEvent,
-    WebhookNodeAvailability, WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
+    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookCategory,
+    WebhookEvent, WebhookFormat, WebhookNodeAvailability, WebhookObservation, WebhookObservedState,
+    WebhookSpec, WebhookStatus,
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,

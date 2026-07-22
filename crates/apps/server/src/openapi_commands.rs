@@ -195,22 +195,36 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["endpoint", "events"],
+            "required": ["events"],
             "properties": {
                 "expectedRevision": {
                     "$ref": "#/components/schemas/ResourceRevision",
                     "description": "Required current revision; omit only when creating"
                 },
-                "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
+                "name": {"type": "string", "minLength": 1, "maxLength": 256},
+                "endpoint": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "description": "Required on create; omit on update to preserve the secret endpoint"
+                },
                 "events": {
                     "type": "array",
                     "minItems": 1,
                     "uniqueItems": true,
                     "items": {"$ref": "#/components/schemas/WebhookEvent"}
                 },
+                "categories": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {"$ref": "#/components/schemas/WebhookCategory"}
+                },
+                "enabled": {"type": "boolean"},
+                "format": {"$ref": "#/components/schemas/WebhookFormat"},
                 "signingSecret": {
                     "$ref": "#/components/schemas/SecretValue",
-                    "description": "Required when creating; omit on update to preserve the current secret"
+                    "description": "Required when creating a native Maestro webhook; omit on update to preserve the current secret; Slack does not use it"
                 }
             }
         }),

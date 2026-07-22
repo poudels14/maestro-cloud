@@ -10,8 +10,8 @@ use kernel_api::{
     DeploymentSpec, DeploymentStatus, ExecPolicy, Generation, Node, NodeApiAccess, NodeId,
     NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, PlacementConstraint,
     ResourceKind, ResourceName, ResourceRevision, SecretValue, ServiceId, ServiceSpec, Timestamp,
-    Webhook, WebhookEvent, WebhookId, WebhookNodeAvailability, WebhookObservedState, WebhookSpec,
-    WebhookStatus,
+    Webhook, WebhookCategory, WebhookEvent, WebhookFormat, WebhookId, WebhookNodeAvailability,
+    WebhookObservedState, WebhookSpec, WebhookStatus,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -149,6 +149,26 @@ async fn transitions_baseline_retry_and_acknowledge_without_anonymous_duplicates
         availability.current,
         WebhookObservedState::NodeAvailability(WebhookNodeAvailability::Available)
     );
+
+    replace_webhook_categories(&store, &keys, vec![WebhookCategory::Error]).await?;
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    replace_deployment(&store, &keys, DeploymentPhase::Draining).await?;
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert_eq!(backend.deliveries().len(), 3);
+    let filtered: Webhook = get(&store, &keys, "Webhook", "deployments").await?;
+    assert!(
+        filtered
+            .status
+            .conditions
+            .iter()
+            .any(|condition| condition.reason.0 == "DeliveryFiltered")
+    );
+
+    replace_deployment(&store, &keys, DeploymentPhase::Crashed).await?;
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    let deliveries = backend.deliveries();
+    let crashed = deliveries.get(3).ok_or("crash delivery is missing")?;
+    assert_eq!(crashed.category(), WebhookCategory::Error);
     Ok(())
 }
 
@@ -176,7 +196,8 @@ impl WebhookDeliveryBackend for RecordingBackend {
     async fn deliver(
         &self,
         _endpoint: &str,
-        _signing_secret: &SecretValue,
+        _format: WebhookFormat,
+        _signing_secret: Option<&SecretValue>,
         delivery: &WebhookDelivery,
     ) -> Result<(), WebhookDeliveryError> {
         lock(&self.deliveries).push(delivery.clone());
@@ -188,12 +209,16 @@ fn webhook() -> Result<Webhook, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(WebhookId::new("deployments")?),
         spec: WebhookSpec {
-            endpoint: "https://hooks.example.test/events".to_string(),
+            name: "Deployments".to_string(),
+            endpoint: SecretValue::new("https://hooks.example.test/events"),
             events: vec![
                 WebhookEvent::DeploymentTransition,
                 WebhookEvent::NodeAvailability,
             ],
-            signing_secret: SecretValue::new("0123456789abcdef0123456789abcdef"),
+            categories: vec![WebhookCategory::Info, WebhookCategory::Error],
+            enabled: true,
+            format: WebhookFormat::Maestro,
+            signing_secret: Some(SecretValue::new("0123456789abcdef0123456789abcdef")),
         },
         status: WebhookStatus {
             last_success_at: None,
@@ -327,6 +352,34 @@ async fn replace_deployment(
         Ok(())
     } else {
         Err("Deployment update conflicted".into())
+    }
+}
+
+async fn replace_webhook_categories(
+    store: &InMemoryStore,
+    keys: &Keyspace,
+    categories: Vec<WebhookCategory>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let key = keys.resource(
+        &ResourceKind::new("Webhook")?,
+        &ResourceName::new("deployments")?,
+    );
+    let stored = store.get(&key).await?.ok_or("Webhook is missing")?;
+    let mut webhook: Webhook = serde_json::from_slice(&stored.value)?;
+    webhook.meta.generation = Generation(webhook.meta.generation.0.saturating_add(1));
+    webhook.spec.categories = categories;
+    let outcome = store
+        .put_cas(PutRequest {
+            key,
+            value: serde_json::to_vec(&webhook)?,
+            expected: ExpectedVersion::Exact(stored.version),
+            session: None,
+        })
+        .await?;
+    if matches!(outcome, CasOutcome::Applied(_)) {
+        Ok(())
+    } else {
+        Err("Webhook update conflicted".into())
     }
 }
 

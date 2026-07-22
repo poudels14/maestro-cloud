@@ -3585,6 +3585,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "hex",
+ "http 1.4.2",
  "ipnet",
  "kernel-api",
  "kernel-store",

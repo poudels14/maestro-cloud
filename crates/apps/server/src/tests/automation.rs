@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use kernel_api::{
     Preview, PreviewId, PreviewPhase, PreviewSpec, PreviewStatus, ResourceKind, ResourceName,
-    ResourceRevision, ServiceId, Timestamp, Webhook,
+    ResourceRevision, ServiceId, Timestamp, Webhook, WebhookFormat,
 };
 use kernel_store::{Keyspace, Store};
 use serde_json::{Value, json};
@@ -139,7 +139,15 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
     let response = request(&server, "/api/webhooks/deployments", None).await?;
     assert_eq!(response.status(), StatusCode::OK);
     let fetched: Webhook = decode(response).await?;
-    assert_eq!(fetched.spec.signing_secret.expose(), "••••cdef");
+    assert_eq!(fetched.spec.endpoint.expose(), "••••ents");
+    assert_eq!(
+        fetched
+            .spec
+            .signing_secret
+            .as_ref()
+            .map(kernel_api::SecretValue::expose),
+        Some("••••cdef")
+    );
     let listed: Vec<Webhook> = decode(request(&server, "/api/webhooks", None).await?).await?;
     assert_eq!(listed.len(), 1);
     assert_eq!(
@@ -148,8 +156,9 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
             .ok_or("webhook is missing")?
             .spec
             .signing_secret
-            .expose(),
-        "••••cdef"
+            .as_ref()
+            .map(kernel_api::SecretValue::expose),
+        Some("••••cdef")
     );
 
     let update = webhook_request(
@@ -168,7 +177,14 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
     );
     let current: Webhook =
         decode(request(&server, "/api/webhooks/deployments", None).await?).await?;
-    assert_eq!(current.spec.signing_secret.expose(), "••••cdef");
+    assert_eq!(
+        current
+            .spec
+            .signing_secret
+            .as_ref()
+            .map(kernel_api::SecretValue::expose),
+        Some("••••cdef")
+    );
     let stored = store
         .get(&Keyspace::new(&cluster_id).resource(
             &ResourceKind::new("Webhook")?,
@@ -177,13 +193,24 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
         .await?
         .ok_or("stored Webhook is missing")?;
     let stored: Webhook = serde_json::from_slice(&stored.value)?;
-    assert_eq!(stored.spec.signing_secret.expose(), SIGNING_SECRET);
+    assert_eq!(
+        stored
+            .spec
+            .signing_secret
+            .as_ref()
+            .map(kernel_api::SecretValue::expose),
+        Some(SIGNING_SECRET)
+    );
 
-    let no_op = webhook_request(
+    let mut no_op = webhook_request(
         Some(current.meta.revision),
         "https://hooks.example.test/v2/events",
         None,
     );
+    no_op
+        .as_object_mut()
+        .ok_or("webhook request is not an object")?
+        .remove("endpoint");
     assert_eq!(
         mutate(&server, Method::PUT, "no-op-webhook", no_op)
             .await?
@@ -212,6 +239,67 @@ async fn webhook_writes_validate_mask_preserve_and_delete() -> Result<(), Box<dy
             .await?
             .status(),
         StatusCode::ACCEPTED
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn slack_webhooks_preserve_legacy_controls_without_a_signing_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store.clone(),
+        cluster_id.clone(),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+    let payload = json!({
+        "name": "  Operations  ",
+        "endpoint": "https://hooks.slack.test/services/example",
+        "events": ["deploymentTransition", "nodeAvailability"],
+        "categories": ["error"],
+        "enabled": false,
+        "format": "slack"
+    });
+    let mut unnamed = payload.clone();
+    unnamed
+        .as_object_mut()
+        .ok_or("Slack webhook request is not an object")?
+        .remove("name");
+    assert_eq!(
+        mutate(&server, Method::PUT, "unnamed-slack-webhook", unnamed)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    assert_eq!(
+        mutate(&server, Method::PUT, "create-slack-webhook", payload)
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    let webhook: Webhook =
+        decode(request(&server, "/api/webhooks/deployments", None).await?).await?;
+    assert_eq!(webhook.spec.name, "Operations");
+    assert_eq!(webhook.spec.endpoint.expose(), "••••mple");
+    assert_eq!(webhook.spec.format, WebhookFormat::Slack);
+    assert_eq!(
+        webhook.spec.categories,
+        vec![kernel_api::WebhookCategory::Error]
+    );
+    assert!(!webhook.spec.enabled);
+    assert!(webhook.spec.signing_secret.is_none());
+    let stored = store
+        .get(&Keyspace::new(&cluster_id).resource(
+            &ResourceKind::new("Webhook")?,
+            &ResourceName::new("deployments")?,
+        ))
+        .await?
+        .ok_or("stored Slack webhook is missing")?;
+    let stored: Webhook = serde_json::from_slice(&stored.value)?;
+    assert_eq!(
+        stored.spec.endpoint.expose(),
+        "https://hooks.slack.test/services/example"
     );
     Ok(())
 }
@@ -291,6 +379,7 @@ async fn webhook_test_retries_failures_and_replays_success()
     assert_eq!(first.delivery.delivery_id, second.delivery.delivery_id);
     assert!(second.delivery.test);
     assert_eq!(second.endpoint, "https://hooks.example.test/events");
+    assert_eq!(second.format, WebhookFormat::Maestro);
     assert_eq!(second.signing_secret, SIGNING_SECRET);
     Ok(())
 }
@@ -303,6 +392,7 @@ struct RecordingWebhookBackend {
 
 struct RecordedWebhook {
     endpoint: String,
+    format: WebhookFormat,
     signing_secret: String,
     delivery: WebhookDelivery,
 }
@@ -312,9 +402,13 @@ impl WebhookDeliveryBackend for RecordingWebhookBackend {
     async fn deliver(
         &self,
         endpoint: &str,
-        signing_secret: &kernel_api::SecretValue,
+        format: WebhookFormat,
+        signing_secret: Option<&kernel_api::SecretValue>,
         delivery: &WebhookDelivery,
     ) -> Result<(), WebhookDeliveryError> {
+        let signing_secret = signing_secret.ok_or_else(|| WebhookDeliveryError::Rejected {
+            message: "test backend expected a signing secret".to_string(),
+        })?;
         self.attempts
             .lock()
             .map_err(|_| WebhookDeliveryError::Unavailable {
@@ -322,6 +416,7 @@ impl WebhookDeliveryBackend for RecordingWebhookBackend {
             })?
             .push(RecordedWebhook {
                 endpoint: endpoint.to_string(),
+                format,
                 signing_secret: signing_secret.expose().to_string(),
                 delivery: delivery.clone(),
             });

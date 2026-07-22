@@ -202,16 +202,60 @@ pub enum WebhookEvent {
     UpgradeTransition,
 }
 
+/// Wire representation used by an outbound webhook endpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WebhookFormat {
+    /// Signed Maestro transition document with deterministic delivery identity.
+    #[default]
+    Maestro,
+    /// Slack incoming-webhook document containing only the human-readable text.
+    Slack,
+}
+
+/// Notification severity selected independently from event classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WebhookCategory {
+    /// Normal lifecycle progress and recovery.
+    Info,
+    /// Failed deployments, unavailable nodes, and failed automation.
+    Error,
+}
+
+fn default_webhook_categories() -> Vec<WebhookCategory> {
+    vec![WebhookCategory::Info, WebhookCategory::Error]
+}
+
+const fn webhook_enabled() -> bool {
+    true
+}
+
 /// Desired endpoint, event selection, and signing material for a webhook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WebhookSpec {
-    /// HTTPS endpoint receiving event deliveries.
-    pub endpoint: String,
+    /// Operator-facing display name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// HTTPS endpoint receiving event deliveries, potentially including credentials.
+    pub endpoint: SecretValue,
     /// Event classes delivered to the endpoint.
     pub events: Vec<WebhookEvent>,
-    /// Secret used to sign delivery payloads.
-    pub signing_secret: SecretValue,
+    /// Notification severities delivered within the selected event classes.
+    #[serde(default = "default_webhook_categories")]
+    #[schemars(default = "default_webhook_categories")]
+    pub categories: Vec<WebhookCategory>,
+    /// Whether transitions are delivered or only baselined.
+    #[serde(default = "webhook_enabled")]
+    #[schemars(default = "webhook_enabled")]
+    pub enabled: bool,
+    /// Endpoint-specific wire representation.
+    #[serde(default)]
+    pub format: WebhookFormat,
+    /// Secret used to sign native Maestro payloads; Slack does not use it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<SecretValue>,
 }
 
 /// Observed delivery health of a webhook.

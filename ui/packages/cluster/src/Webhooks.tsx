@@ -2,24 +2,19 @@ import { createSignal, For, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
-import { Plus, Send, Trash2 } from "lucide-solid";
+import { Pencil, Plus, Send, Trash2 } from "lucide-solid";
 import type { ClusterApi } from "./api";
 import { clusterQueryKeys, webhooksQuery } from "./queries";
-import type { Webhook, WebhookEvent } from "./types";
+import type { Webhook } from "./types";
+import { EVENT_OPTIONS, WebhookForm } from "./WebhookForm";
 import { SectionHeader } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
-
-const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
-  { value: "deploymentTransition", label: "Deployments" },
-  { value: "nodeAvailability", label: "Nodes" },
-  { value: "previewTransition", label: "Previews" },
-  { value: "upgradeTransition", label: "Upgrades" }
-];
 
 function Webhooks(props: { api: ClusterApi }) {
   const queryClient = useQueryClient();
   const webhooks = useQuery(() => webhooksQuery(props.api));
   const [showForm, setShowForm] = createSignal(false);
+  const [editing, setEditing] = createSignal<Webhook | null>(null);
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [pendingDelete, setPendingDelete] = createSignal<Webhook | null>(null);
 
@@ -42,7 +37,8 @@ function Webhooks(props: { api: ClusterApi }) {
       <div class="mb-4">
         <SectionHeader>Webhooks</SectionHeader>
         <p class="mt-1 text-xs text-gray-400">
-          Deliver signed deployment, node, preview, and upgrade transitions to an HTTPS endpoint.
+          Deliver deployment and node notifications to Slack, or signed transition documents to
+          another HTTPS endpoint.
         </p>
       </div>
       <Show when={actionError()}>
@@ -61,6 +57,11 @@ function Webhooks(props: { api: ClusterApi }) {
                 api={props.api}
                 webhook={webhook}
                 onError={(msg) => setActionError(msg)}
+                onRequestEdit={() => {
+                  setActionError(null);
+                  setShowForm(false);
+                  setEditing(webhook);
+                }}
                 onRequestDelete={() => {
                   setActionError(null);
                   setPendingDelete(webhook);
@@ -70,12 +71,14 @@ function Webhooks(props: { api: ClusterApi }) {
           </For>
         </Show>
         <Show
-          when={showForm()}
+          keyed
+          when={editing() ?? (showForm() ? ("new" as const) : null)}
           fallback={
             <button
               type="button"
               onClick={() => {
                 setActionError(null);
+                setEditing(null);
                 setShowForm(true);
               }}
               class="w-full px-4 py-2.5 flex items-center gap-2 text-xs font-medium text-indigo-600 hover:bg-indigo-50 transition-colors outline-none"
@@ -85,15 +88,22 @@ function Webhooks(props: { api: ClusterApi }) {
             </button>
           }
         >
-          <WebhookForm
-            api={props.api}
-            onCancel={() => setShowForm(false)}
-            onSaved={() => {
-              setShowForm(false);
-              setActionError(null);
-            }}
-            onError={(msg) => setActionError(msg)}
-          />
+          {(target) => (
+            <WebhookForm
+              api={props.api}
+              {...(target === "new" ? {} : { webhook: target })}
+              onCancel={() => {
+                setShowForm(false);
+                setEditing(null);
+              }}
+              onSaved={() => {
+                setShowForm(false);
+                setEditing(null);
+                setActionError(null);
+              }}
+              onError={(msg) => setActionError(msg)}
+            />
+          )}
         </Show>
       </div>
       <ConfirmDialog
@@ -123,6 +133,7 @@ function WebhookRow(props: {
   api: ClusterApi;
   webhook: Webhook;
   onError: (msg: string) => void;
+  onRequestEdit: () => void;
   onRequestDelete: () => void;
 }) {
   const testMutation = useMutation(() => ({
@@ -135,7 +146,18 @@ function WebhookRow(props: {
     <div class="px-4 py-3 flex items-center justify-between gap-4">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-gray-800 truncate">{props.webhook.meta.id}</span>
+          <span class="text-sm font-medium text-gray-800 truncate">
+            {props.webhook.spec.name || props.webhook.meta.id}
+          </span>
+          <Show when={props.webhook.spec.name}>
+            <span class="text-[11px] font-mono text-gray-400">{props.webhook.meta.id}</span>
+          </Show>
+          <span class="text-[11px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
+            {props.webhook.spec.format === "slack" ? "Slack" : "Maestro"}
+          </span>
+          <Show when={!props.webhook.spec.enabled}>
+            <span class="text-[11px] font-medium text-gray-500">Disabled</span>
+          </Show>
           <For each={props.webhook.spec.events}>
             {(event) => (
               <span
@@ -160,8 +182,22 @@ function WebhookRow(props: {
           </Show>
         </div>
         <p class="text-xs font-mono text-gray-400 truncate mt-0.5">{props.webhook.spec.endpoint}</p>
+        <p class="text-[11px] text-gray-400 mt-0.5">
+          {props.webhook.spec.categories
+            .map((category) => (category === "error" ? "Errors" : "Info"))
+            .join(" · ")}
+        </p>
       </div>
       <div class="flex items-center gap-1 shrink-0">
+        <button
+          type="button"
+          onClick={() => props.onRequestEdit()}
+          disabled={busy()}
+          title="Edit webhook"
+          class="size-7 flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md disabled:opacity-50"
+        >
+          <Pencil class="size-3.5" />
+        </button>
         <button
           type="button"
           onClick={() => testMutation.mutate()}
@@ -180,131 +216,6 @@ function WebhookRow(props: {
         >
           <Trash2 class="size-3.5" />
         </button>
-      </div>
-    </div>
-  );
-}
-
-function WebhookForm(props: {
-  api: ClusterApi;
-  onCancel: () => void;
-  onSaved: () => void;
-  onError: (msg: string) => void;
-}) {
-  const queryClient = useQueryClient();
-  const [id, setId] = createSignal("");
-  const [endpoint, setEndpoint] = createSignal("");
-  const [signingSecret, setSigningSecret] = createSignal("");
-  const [events, setEvents] = createSignal<WebhookEvent[]>(
-    EVENT_OPTIONS.map((option) => option.value)
-  );
-
-  const createMutation = useMutation(() => ({
-    mutationFn: () =>
-      props.api.createWebhook({
-        id: id().trim(),
-        endpoint: endpoint().trim(),
-        events: events(),
-        signingSecret: signingSecret()
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: clusterQueryKeys.webhooks });
-      props.onSaved();
-    },
-    onError: (err) => props.onError(err instanceof Error ? err.message : "create failed")
-  }));
-
-  const toggleEvent = (event: WebhookEvent) => {
-    setEvents((current) =>
-      current.includes(event)
-        ? current.filter((candidate) => candidate !== event)
-        : [...current, event]
-    );
-  };
-
-  const save = () => {
-    if (!id().trim()) {
-      props.onError("Webhook ID is required");
-      return;
-    }
-    if (!endpoint().trim()) {
-      props.onError("Endpoint is required");
-      return;
-    }
-    if (events().length === 0) {
-      props.onError("Select at least one event");
-      return;
-    }
-    if (signingSecret().length < 32) {
-      props.onError("Signing secret must contain at least 32 characters");
-      return;
-    }
-    createMutation.mutate();
-  };
-
-  return (
-    <div class="px-4 py-3 bg-gray-50">
-      <div class="grid gap-2.5">
-        <input
-          type="text"
-          placeholder="Webhook ID (e.g. deployments)"
-          value={id()}
-          onInput={(e) => setId(e.currentTarget.value)}
-          disabled={createMutation.isPending}
-          class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
-        />
-        <input
-          type="url"
-          placeholder="https://events.example.com/maestro"
-          value={endpoint()}
-          onInput={(e) => setEndpoint(e.currentTarget.value)}
-          disabled={createMutation.isPending}
-          class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
-        />
-        <input
-          type="password"
-          placeholder="Signing secret (at least 32 characters)"
-          value={signingSecret()}
-          onInput={(e) => setSigningSecret(e.currentTarget.value)}
-          disabled={createMutation.isPending}
-          autocomplete="new-password"
-          class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
-        />
-        <div class="flex items-center gap-2">
-          <span class="text-xs text-gray-500">Events:</span>
-          <For each={EVENT_OPTIONS}>
-            {(option) => (
-              <label class="inline-flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={events().includes(option.value)}
-                  onChange={() => toggleEvent(option.value)}
-                  disabled={createMutation.isPending}
-                  class="size-3.5"
-                />
-                {option.label}
-              </label>
-            )}
-          </For>
-        </div>
-        <div class="flex items-center gap-2 mt-1">
-          <button
-            type="button"
-            onClick={save}
-            disabled={createMutation.isPending}
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300"
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={props.onCancel}
-            disabled={createMutation.isPending}
-            class="px-3 py-1.5 text-xs font-medium rounded-md text-gray-600 hover:bg-gray-100"
-          >
-            Cancel
-          </button>
-        </div>
       </div>
     </div>
   );

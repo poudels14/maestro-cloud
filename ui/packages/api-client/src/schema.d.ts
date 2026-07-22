@@ -3065,12 +3065,16 @@ export interface components {
             type: "managed";
         };
         Webhook: components["schemas"]["Object15"];
+        /** @description Notification severity selected independently from event classes. */
+        WebhookCategory: "info" | "error";
         WebhookCommandResponse: {
             generation: components["schemas"]["Generation"];
             webhookId: components["schemas"]["WebhookId"];
         };
         /** @description Built-in event that may be delivered to an outbound webhook. */
         WebhookEvent: "deploymentTransition" | "nodeAvailability" | "previewTransition" | "upgradeTransition";
+        /** @description Wire representation used by an outbound webhook endpoint. */
+        WebhookFormat: "maestro" | "slack";
         /** @description Stable identity of a webhook configuration. */
         WebhookId: string;
         /** @description Availability state derived from a node's session-bound liveness key. */
@@ -3104,12 +3108,32 @@ export interface components {
         };
         /** @description Desired endpoint, event selection, and signing material for a webhook. */
         WebhookSpec: {
-            /** @description HTTPS endpoint receiving event deliveries. */
-            endpoint: string;
+            /**
+             * @description Notification severities delivered within the selected event classes.
+             * @default [
+             *       "info",
+             *       "error"
+             *     ]
+             */
+            categories: components["schemas"]["WebhookCategory"][];
+            /**
+             * @description Whether transitions are delivered or only baselined.
+             * @default true
+             */
+            enabled: boolean;
+            /** @description HTTPS endpoint receiving event deliveries, potentially including credentials. */
+            endpoint: components["schemas"]["SecretValue"];
             /** @description Event classes delivered to the endpoint. */
             events: components["schemas"]["WebhookEvent"][];
-            /** @description Secret used to sign delivery payloads. */
-            signingSecret: components["schemas"]["SecretValue"];
+            /**
+             * @description Endpoint-specific wire representation.
+             * @default maestro
+             */
+            format: components["schemas"]["WebhookFormat"];
+            /** @description Operator-facing display name. */
+            name?: string;
+            /** @description Secret used to sign native Maestro payloads; Slack does not use it. */
+            signingSecret?: components["schemas"]["SecretValue"] | (null);
         };
         /** @description Observed delivery health of a webhook. */
         WebhookStatus: {
@@ -3136,12 +3160,19 @@ export interface components {
             webhookId: components["schemas"]["WebhookId"];
         };
         WebhookWriteRequest: {
-            /** Format: uri */
-            endpoint: string;
+            categories?: components["schemas"]["WebhookCategory"][];
+            enabled?: boolean;
+            /**
+             * Format: uri
+             * @description Required on create; omit on update to preserve the secret endpoint
+             */
+            endpoint?: string;
             events: components["schemas"]["WebhookEvent"][];
             /** @description Required current revision; omit only when creating */
             expectedRevision?: components["schemas"]["ResourceRevision"];
-            /** @description Required when creating; omit on update to preserve the current secret */
+            format?: components["schemas"]["WebhookFormat"];
+            name?: string;
+            /** @description Required when creating a native Maestro webhook; omit on update to preserve the current secret; Slack does not use it */
             signingSecret?: components["schemas"]["SecretValue"];
         };
         /** @description Stable identity of one runtime-managed workload instance. */

@@ -15,6 +15,7 @@ use crate::legacy_network::LegacyNetworkCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
+use crate::legacy_webhooks::LegacyWebhookCatalog;
 use crate::{LegacySnapshot, MigrationPlan, PlanError};
 
 const SERVICE_KIND: &str = "Service";
@@ -43,7 +44,13 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
-    if let Some(entry) = network.unclaimed.first() {
+    let webhooks =
+        LegacyWebhookCatalog::decode(&network.unclaimed, master_secret).map_err(|error| {
+            LegacyPlanError::DecodeLegacyState {
+                message: error.to_string(),
+            }
+        })?;
+    if let Some(entry) = webhooks.unclaimed.first() {
         return Err(LegacyPlanError::UnsupportedLegacyKey {
             key: entry.key().to_owned(),
         });
@@ -53,6 +60,7 @@ pub fn plan_legacy_snapshot(
     resources.extend(cluster_resources);
     let network_resources = network.convert(&resources)?;
     resources.extend(network_resources);
+    resources.extend(webhooks.convert());
     MigrationPlan::new(snapshot.digest(), resources).map_err(Into::into)
 }
 

@@ -11,7 +11,11 @@ pub(crate) fn service(mut service: Service) -> Service {
 }
 
 pub(crate) fn webhook(mut webhook: Webhook) -> Webhook {
-    webhook.spec.signing_secret = SecretValue::new(webhook.spec.signing_secret.masked().as_str());
+    webhook.spec.endpoint = SecretValue::new(webhook.spec.endpoint.masked().as_str());
+    webhook.spec.signing_secret = webhook
+        .spec
+        .signing_secret
+        .map(|secret| SecretValue::new(secret.masked().as_str()));
     webhook
 }
 

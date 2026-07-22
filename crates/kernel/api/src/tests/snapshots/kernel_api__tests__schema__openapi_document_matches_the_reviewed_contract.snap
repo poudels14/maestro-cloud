@@ -5677,6 +5677,25 @@ expression: openapi_document()
       "Webhook": {
         "$ref": "#/components/schemas/Object15"
       },
+      "WebhookCategory": {
+        "description": "Notification severity selected independently from event classes.",
+        "oneOf": [
+          {
+            "description": "Normal lifecycle progress and recovery.",
+            "enum": [
+              "info"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Failed deployments, unavailable nodes, and failed automation.",
+            "enum": [
+              "error"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "WebhookEvent": {
         "description": "Built-in event that may be delivered to an outbound webhook.",
         "oneOf": [
@@ -5705,6 +5724,25 @@ expression: openapi_document()
             "description": "An upgrade run changed lifecycle phase.",
             "enum": [
               "upgradeTransition"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "WebhookFormat": {
+        "description": "Wire representation used by an outbound webhook endpoint.",
+        "oneOf": [
+          {
+            "description": "Signed Maestro transition document with deterministic delivery identity.",
+            "enum": [
+              "maestro"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Slack incoming-webhook document containing only the human-readable text.",
+            "enum": [
+              "slack"
             ],
             "type": "string"
           }
@@ -5852,9 +5890,29 @@ expression: openapi_document()
       "WebhookSpec": {
         "description": "Desired endpoint, event selection, and signing material for a webhook.",
         "properties": {
+          "categories": {
+            "default": [
+              "info",
+              "error"
+            ],
+            "description": "Notification severities delivered within the selected event classes.",
+            "items": {
+              "$ref": "#/components/schemas/WebhookCategory"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether transitions are delivered or only baselined.",
+            "type": "boolean"
+          },
           "endpoint": {
-            "description": "HTTPS endpoint receiving event deliveries.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              }
+            ],
+            "description": "HTTPS endpoint receiving event deliveries, potentially including credentials."
           },
           "events": {
             "description": "Event classes delivered to the endpoint.",
@@ -5863,19 +5921,37 @@ expression: openapi_document()
             },
             "type": "array"
           },
-          "signingSecret": {
+          "format": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/SecretValue"
+                "$ref": "#/components/schemas/WebhookFormat"
               }
             ],
-            "description": "Secret used to sign delivery payloads."
+            "default": "maestro",
+            "description": "Endpoint-specific wire representation."
+          },
+          "name": {
+            "description": "Operator-facing display name.",
+            "type": "string"
+          },
+          "signingSecret": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Secret used to sign native Maestro payloads; Slack does not use it."
           }
         },
         "required": [
           "endpoint",
-          "events",
-          "signingSecret"
+          "events"
         ],
         "type": "object"
       },

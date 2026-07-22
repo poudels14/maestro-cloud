@@ -20,9 +20,13 @@ const node = {
 const webhook = {
   meta: { id: "deployments", generation: 1, revision: 9 },
   spec: {
-    endpoint: "https://events.example.com/maestro",
+    name: "Deployments",
+    endpoint: "••••stro",
     events: ["deploymentTransition"],
-    signingSecret: "********"
+    categories: ["info", "error"],
+    enabled: true,
+    format: "maestro",
+    signingSecret: "••••aaaa"
   },
   status: { consecutiveFailures: 0 }
 } satisfies Webhook;
@@ -54,9 +58,20 @@ test("passes node, metrics, and webhook operations to the generated client", asy
   await api.listStatsMetrics("controller.reconciles", 10, 20);
   await api.createWebhook({
     id: "deployments",
+    name: "Deployments",
     endpoint: "https://events.example.com/maestro",
     events: ["deploymentTransition"],
+    categories: ["info", "error"],
+    enabled: true,
+    format: "maestro",
     signingSecret: "a".repeat(32)
+  });
+  await api.updateWebhook(webhook, {
+    name: "Slack alerts",
+    events: ["deploymentTransition", "nodeAvailability"],
+    categories: ["error"],
+    enabled: false,
+    format: "slack"
   });
   await api.deleteWebhook(webhook);
   await api.testWebhook("deployments");
@@ -74,9 +89,27 @@ test("passes node, metrics, and webhook operations to the generated client", asy
       args: [
         "deployments",
         {
+          name: "Deployments",
           endpoint: "https://events.example.com/maestro",
           events: ["deploymentTransition"],
+          categories: ["info", "error"],
+          enabled: true,
+          format: "maestro",
           signingSecret: "a".repeat(32)
+        }
+      ]
+    },
+    {
+      operation: "create-webhook",
+      args: [
+        "deployments",
+        {
+          expectedRevision: 9,
+          name: "Slack alerts",
+          events: ["deploymentTransition", "nodeAvailability"],
+          categories: ["error"],
+          enabled: false,
+          format: "slack"
         }
       ]
     },

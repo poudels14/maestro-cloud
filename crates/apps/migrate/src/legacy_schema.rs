@@ -360,6 +360,24 @@ pub(crate) struct LegacyTrafficGeneration {
     pub(crate) drain_old_after_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LegacySlackCategory {
+    Info,
+    Error,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacySlackWebhook {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) url: kernel_api::SecretValue,
+    pub(crate) categories: Vec<LegacySlackCategory>,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+}
+
 const fn default_healthcheck_interval() -> u32 {
     60
 }

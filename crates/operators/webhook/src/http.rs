@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
-use kernel_api::SecretValue;
+use kernel_api::{SecretValue, WebhookFormat};
 use reqwest::header::{CONTENT_TYPE, HeaderValue, USER_AGENT};
 use sha2::Sha256;
 
@@ -34,13 +34,31 @@ impl HttpWebhookBackend {
     pub(crate) fn request(
         &self,
         endpoint: &str,
-        signing_secret: &SecretValue,
+        format: WebhookFormat,
+        signing_secret: Option<&SecretValue>,
         delivery: &WebhookDelivery,
     ) -> Result<reqwest::RequestBuilder, WebhookDeliveryError> {
-        let body =
-            serde_json::to_vec(delivery).map_err(|error| WebhookDeliveryError::Rejected {
-                message: format!("failed to encode webhook payload: {error}"),
-            })?;
+        let body = match format {
+            WebhookFormat::Maestro => serde_json::to_vec(delivery),
+            WebhookFormat::Slack => serde_json::to_vec(&serde_json::json!({
+                "text": delivery.text,
+            })),
+        }
+        .map_err(|error| WebhookDeliveryError::Rejected {
+            message: format!("failed to encode webhook payload: {error}"),
+        })?;
+        let request = self
+            .client
+            .post(endpoint)
+            .header(CONTENT_TYPE, "application/json")
+            .header(USER_AGENT, "maestro-webhook/1")
+            .body(body.clone());
+        if format == WebhookFormat::Slack {
+            return Ok(request);
+        }
+        let signing_secret = signing_secret.ok_or_else(|| WebhookDeliveryError::Rejected {
+            message: "native Maestro webhooks require a signing secret".to_owned(),
+        })?;
         let signature = sign(signing_secret, &body)?;
         let event = serde_json::to_value(delivery.event)
             .ok()
@@ -61,15 +79,10 @@ impl HttpWebhookBackend {
             HeaderValue::from_str(&signature).map_err(|error| WebhookDeliveryError::Rejected {
                 message: format!("invalid webhook signature header: {error}"),
             })?;
-        Ok(self
-            .client
-            .post(endpoint)
-            .header(CONTENT_TYPE, "application/json")
-            .header(USER_AGENT, "maestro-webhook/1")
+        Ok(request
             .header(EVENT_HEADER, event)
             .header(DELIVERY_HEADER, delivery_id)
-            .header(SIGNATURE_HEADER, signature)
-            .body(body))
+            .header(SIGNATURE_HEADER, signature))
     }
 }
 
@@ -78,11 +91,12 @@ impl WebhookDeliveryBackend for HttpWebhookBackend {
     async fn deliver(
         &self,
         endpoint: &str,
-        signing_secret: &SecretValue,
+        format: WebhookFormat,
+        signing_secret: Option<&SecretValue>,
         delivery: &WebhookDelivery,
     ) -> Result<(), WebhookDeliveryError> {
         let response = self
-            .request(endpoint, signing_secret, delivery)?
+            .request(endpoint, format, signing_secret, delivery)?
             .send()
             .await
             .map_err(|error| WebhookDeliveryError::Unavailable {

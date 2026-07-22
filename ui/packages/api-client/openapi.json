@@ -6522,6 +6522,25 @@
       "Webhook": {
         "$ref": "#/components/schemas/Object15"
       },
+      "WebhookCategory": {
+        "description": "Notification severity selected independently from event classes.",
+        "oneOf": [
+          {
+            "description": "Normal lifecycle progress and recovery.",
+            "enum": [
+              "info"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Failed deployments, unavailable nodes, and failed automation.",
+            "enum": [
+              "error"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "WebhookCommandResponse": {
         "properties": {
           "generation": {
@@ -6565,6 +6584,25 @@
             "description": "An upgrade run changed lifecycle phase.",
             "enum": [
               "upgradeTransition"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "WebhookFormat": {
+        "description": "Wire representation used by an outbound webhook endpoint.",
+        "oneOf": [
+          {
+            "description": "Signed Maestro transition document with deterministic delivery identity.",
+            "enum": [
+              "maestro"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Slack incoming-webhook document containing only the human-readable text.",
+            "enum": [
+              "slack"
             ],
             "type": "string"
           }
@@ -6712,9 +6750,29 @@
       "WebhookSpec": {
         "description": "Desired endpoint, event selection, and signing material for a webhook.",
         "properties": {
+          "categories": {
+            "default": [
+              "info",
+              "error"
+            ],
+            "description": "Notification severities delivered within the selected event classes.",
+            "items": {
+              "$ref": "#/components/schemas/WebhookCategory"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether transitions are delivered or only baselined.",
+            "type": "boolean"
+          },
           "endpoint": {
-            "description": "HTTPS endpoint receiving event deliveries.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              }
+            ],
+            "description": "HTTPS endpoint receiving event deliveries, potentially including credentials."
           },
           "events": {
             "description": "Event classes delivered to the endpoint.",
@@ -6723,19 +6781,37 @@
             },
             "type": "array"
           },
-          "signingSecret": {
+          "format": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/SecretValue"
+                "$ref": "#/components/schemas/WebhookFormat"
               }
             ],
-            "description": "Secret used to sign delivery payloads."
+            "default": "maestro",
+            "description": "Endpoint-specific wire representation."
+          },
+          "name": {
+            "description": "Operator-facing display name.",
+            "type": "string"
+          },
+          "signingSecret": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Secret used to sign native Maestro payloads; Slack does not use it."
           }
         },
         "required": [
           "endpoint",
-          "events",
-          "signingSecret"
+          "events"
         ],
         "type": "object"
       },
@@ -6836,7 +6912,19 @@
       "WebhookWriteRequest": {
         "additionalProperties": false,
         "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookCategory"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
           "endpoint": {
+            "description": "Required on create; omit on update to preserve the secret endpoint",
             "format": "uri",
             "maxLength": 2048,
             "type": "string"
@@ -6853,13 +6941,20 @@
             "$ref": "#/components/schemas/ResourceRevision",
             "description": "Required current revision; omit only when creating"
           },
+          "format": {
+            "$ref": "#/components/schemas/WebhookFormat"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
           "signingSecret": {
             "$ref": "#/components/schemas/SecretValue",
-            "description": "Required when creating; omit on update to preserve the current secret"
+            "description": "Required when creating a native Maestro webhook; omit on update to preserve the current secret; Slack does not use it"
           }
         },
         "required": [
-          "endpoint",
           "events"
         ],
         "type": "object"

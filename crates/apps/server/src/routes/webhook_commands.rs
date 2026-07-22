@@ -7,7 +7,8 @@ use axum::routing::{delete, post, put};
 use axum::{Json, Router};
 use kernel_api::{
     BuiltinKind, Generation, Object, ObjectMeta, ResourceKind, ResourceRevision, SecretValue,
-    Timestamp, Webhook, WebhookEvent, WebhookId, WebhookSpec, WebhookStatus,
+    Timestamp, Webhook, WebhookCategory, WebhookEvent, WebhookFormat, WebhookId, WebhookSpec,
+    WebhookStatus,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,7 @@ use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 const MINIMUM_SIGNING_SECRET_BYTES: usize = 32;
 const MAXIMUM_SIGNING_SECRET_BYTES: usize = 4_096;
 const MAXIMUM_ENDPOINT_BYTES: usize = 2_048;
+const MAXIMUM_NAME_BYTES: usize = 256;
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -198,8 +200,9 @@ async fn test_webhook(
     .map_err(|error| ApiError::internal(error.to_string()))?;
     backend
         .deliver(
-            &webhook.spec.endpoint,
-            &webhook.spec.signing_secret,
+            webhook.spec.endpoint.expose(),
+            webhook.spec.format,
+            webhook.spec.signing_secret.as_ref(),
             &delivery,
         )
         .await
@@ -236,11 +239,20 @@ fn plan_write(
 ) -> Result<(Webhook, ExpectedVersion, bool), ApiError> {
     match (current, payload.expected_revision) {
         (None, None) => {
-            let secret = payload.signing_secret.clone().ok_or_else(|| {
-                ApiError::bad_request("signingSecret is required when creating a webhook")
+            let format = payload.format.unwrap_or_default();
+            let endpoint = payload.endpoint.clone().ok_or_else(|| {
+                ApiError::bad_request("endpoint is required when creating a webhook")
             })?;
+            let secret = payload.signing_secret.clone();
+            if format == WebhookFormat::Maestro && secret.is_none() {
+                return Err(ApiError::bad_request(
+                    "signingSecret is required when creating a native Maestro webhook",
+                ));
+            }
+            let spec = payload.spec(None, endpoint, secret);
+            validate_spec(&spec)?;
             Ok((
-                new_webhook(webhook_id, payload.spec(secret)),
+                new_webhook(webhook_id, spec),
                 ExpectedVersion::Missing,
                 true,
             ))
@@ -260,8 +272,18 @@ fn plan_write(
             let secret = payload
                 .signing_secret
                 .clone()
-                .unwrap_or_else(|| current.spec.signing_secret.clone());
-            let spec = payload.spec(secret);
+                .or_else(|| current.spec.signing_secret.clone());
+            let endpoint = payload
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| current.spec.endpoint.clone());
+            let spec = payload.spec(Some(&current.spec), endpoint, secret);
+            if spec.format == WebhookFormat::Maestro && spec.signing_secret.is_none() {
+                return Err(ApiError::bad_request(
+                    "native Maestro webhooks require a signing secret",
+                ));
+            }
+            validate_spec(&spec)?;
             if current.spec == spec {
                 Ok((current, ExpectedVersion::Exact(stored.version), false))
             } else {
@@ -273,26 +295,45 @@ fn plan_write(
     }
 }
 
+fn validate_spec(spec: &WebhookSpec) -> Result<(), ApiError> {
+    if spec.format == WebhookFormat::Slack && spec.name.is_empty() {
+        Err(ApiError::bad_request("Slack webhooks require a name"))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_payload(payload: &WebhookWriteRequest) -> Result<(), ApiError> {
-    if payload.endpoint.len() > MAXIMUM_ENDPOINT_BYTES {
-        return Err(ApiError::bad_request("webhook endpoint is too long"));
+    if let Some(name) = &payload.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("webhook name cannot be empty"));
+        }
+        if name.len() > MAXIMUM_NAME_BYTES {
+            return Err(ApiError::bad_request("webhook name is too long"));
+        }
     }
-    let endpoint = payload
-        .endpoint
-        .parse::<Uri>()
-        .map_err(|error| ApiError::bad_request(format!("invalid webhook endpoint: {error}")))?;
-    if endpoint.scheme_str() != Some("https") || endpoint.authority().is_none() {
-        return Err(ApiError::bad_request(
-            "webhook endpoint must be an absolute https URL",
-        ));
-    }
-    if endpoint
-        .authority()
-        .is_some_and(|authority| authority.as_str().contains('@'))
-    {
-        return Err(ApiError::bad_request(
-            "webhook endpoint must not contain credentials",
-        ));
+    if let Some(raw_endpoint) = &payload.endpoint {
+        if raw_endpoint.expose().len() > MAXIMUM_ENDPOINT_BYTES {
+            return Err(ApiError::bad_request("webhook endpoint is too long"));
+        }
+        let endpoint = raw_endpoint
+            .expose()
+            .parse::<Uri>()
+            .map_err(|error| ApiError::bad_request(format!("invalid webhook endpoint: {error}")))?;
+        if endpoint.scheme_str() != Some("https") || endpoint.authority().is_none() {
+            return Err(ApiError::bad_request(
+                "webhook endpoint must be an absolute https URL",
+            ));
+        }
+        if endpoint
+            .authority()
+            .is_some_and(|authority| authority.as_str().contains('@'))
+        {
+            return Err(ApiError::bad_request(
+                "webhook endpoint must not contain credentials",
+            ));
+        }
     }
     if payload.events.is_empty() {
         return Err(ApiError::bad_request(
@@ -309,6 +350,24 @@ fn validate_payload(payload: &WebhookWriteRequest) -> Result<(), ApiError> {
             return Err(ApiError::bad_request(
                 "webhook events must not contain duplicates",
             ));
+        }
+    }
+    if let Some(categories) = &payload.categories {
+        if categories.is_empty() {
+            return Err(ApiError::bad_request(
+                "webhook must select at least one notification category",
+            ));
+        }
+        for (index, category) in categories.iter().enumerate() {
+            if categories
+                .iter()
+                .take(index)
+                .any(|existing| existing == category)
+            {
+                return Err(ApiError::bad_request(
+                    "webhook categories must not contain duplicates",
+                ));
+            }
         }
     }
     if let Some(secret) = &payload.signing_secret {
@@ -365,17 +424,51 @@ fn webhook_kind() -> Result<ResourceKind, ApiError> {
 struct WebhookWriteRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_revision: Option<ResourceRevision>,
-    endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint: Option<SecretValue>,
     events: Vec<WebhookEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    categories: Option<Vec<WebhookCategory>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<WebhookFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signing_secret: Option<SecretValue>,
 }
 
 impl WebhookWriteRequest {
-    fn spec(&self, signing_secret: SecretValue) -> WebhookSpec {
+    fn spec(
+        &self,
+        current: Option<&WebhookSpec>,
+        endpoint: SecretValue,
+        signing_secret: Option<SecretValue>,
+    ) -> WebhookSpec {
         WebhookSpec {
-            endpoint: self.endpoint.clone(),
+            name: self
+                .name
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_owned)
+                .or_else(|| current.map(|spec| spec.name.clone()))
+                .unwrap_or_default(),
+            endpoint,
             events: self.events.clone(),
+            categories: self
+                .categories
+                .clone()
+                .or_else(|| current.map(|spec| spec.categories.clone()))
+                .unwrap_or_else(|| vec![WebhookCategory::Info, WebhookCategory::Error]),
+            enabled: self
+                .enabled
+                .or_else(|| current.map(|spec| spec.enabled))
+                .unwrap_or(true),
+            format: self
+                .format
+                .or_else(|| current.map(|spec| spec.format))
+                .unwrap_or_default(),
             signing_secret,
         }
     }

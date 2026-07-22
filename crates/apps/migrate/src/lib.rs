@@ -8,6 +8,7 @@ mod legacy_network;
 mod legacy_resources;
 mod legacy_schema;
 mod legacy_services;
+mod legacy_webhooks;
 mod plan;
 mod runner;
 mod snapshot;
@@ -23,5 +24,7 @@ mod legacy_cluster_tests;
 mod legacy_network_tests;
 #[cfg(test)]
 mod legacy_tests;
+#[cfg(test)]
+mod legacy_webhook_tests;
 #[cfg(test)]
 mod tests;

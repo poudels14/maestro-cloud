@@ -134,11 +134,31 @@ impl WebhookReconciler {
                 reason: "DeliveryEncodingFailed".to_string(),
                 message: error.to_string(),
             })?;
+            if !webhook.spec.enabled || !webhook.spec.categories.contains(&delivery.category()) {
+                webhook.status.retry_at = None;
+                webhook.status.observations =
+                    snapshot.acknowledge(&webhook.status.observations, &current.observation);
+                self.set_condition(
+                    &mut webhook,
+                    ConditionState::True,
+                    "DeliveryFiltered",
+                    "the latest transition was baselined without delivery",
+                );
+                return self
+                    .persist(
+                        context,
+                        &webhook,
+                        vec![current.source_compare.clone()],
+                        Action::Requeue(Duration::ZERO),
+                    )
+                    .await;
+            }
             return match self
                 .backend
                 .deliver(
-                    &webhook.spec.endpoint,
-                    &webhook.spec.signing_secret,
+                    webhook.spec.endpoint.expose(),
+                    webhook.spec.format,
+                    webhook.spec.signing_secret.as_ref(),
                     &delivery,
                 )
                 .await

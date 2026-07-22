@@ -1,7 +1,9 @@
 import type { ApiSchemas } from "@maestro/api-client";
 
 type Webhook = ApiSchemas["Webhook"];
+type WebhookCategory = ApiSchemas["WebhookCategory"];
 type WebhookEvent = ApiSchemas["WebhookEvent"];
+type WebhookFormat = ApiSchemas["WebhookFormat"];
 type ClusterSummary = ApiSchemas["ClusterInfo"];
 type UpgradeRun = ApiSchemas["UpgradeRun"];
 type UnschedulableReplica = ApiSchemas["UnschedulableReplica"];
@@ -39,9 +41,23 @@ interface ClusterInfo extends ClusterSummary {
 
 interface WebhookCreateRequest {
   id: string;
+  name: string;
   endpoint: string;
   events: WebhookEvent[];
-  signingSecret: string;
+  categories: WebhookCategory[];
+  enabled: boolean;
+  format: WebhookFormat;
+  signingSecret?: string;
+}
+
+interface WebhookUpdateRequest {
+  name: string;
+  endpoint?: string;
+  events: WebhookEvent[];
+  categories: WebhookCategory[];
+  enabled: boolean;
+  format: WebhookFormat;
+  signingSecret?: string;
 }
 
 export type {
@@ -58,6 +74,9 @@ export type {
   UnschedulableReplica,
   UpgradeRun,
   Webhook,
+  WebhookCategory,
   WebhookCreateRequest,
-  WebhookEvent
+  WebhookEvent,
+  WebhookFormat,
+  WebhookUpdateRequest
 };

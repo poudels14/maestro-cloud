@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use kernel_api::{
     ClusterId, DeploymentPhase, PreviewPhase, RequestId, ResourceName, ResourceRevision,
-    SecretValue, Timestamp, UpgradePhase, WebhookEvent, WebhookId, WebhookNodeAvailability,
-    WebhookObservedState,
+    SecretValue, Timestamp, UpgradePhase, WebhookCategory, WebhookEvent, WebhookFormat, WebhookId,
+    WebhookNodeAvailability, WebhookObservedState,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -106,6 +106,19 @@ impl WebhookDelivery {
             observed_at,
         })
     }
+
+    /// Classifies the transition using the legacy-compatible info/error split.
+    pub const fn category(&self) -> WebhookCategory {
+        match self.current {
+            WebhookObservedState::DeploymentTransition(DeploymentPhase::Crashed)
+            | WebhookObservedState::NodeAvailability(WebhookNodeAvailability::Unavailable)
+            | WebhookObservedState::PreviewTransition(PreviewPhase::Failed)
+            | WebhookObservedState::UpgradeTransition(UpgradePhase::Failed) => {
+                WebhookCategory::Error
+            }
+            _ => WebhookCategory::Info,
+        }
+    }
 }
 
 const fn test_state(event: WebhookEvent) -> WebhookObservedState {
@@ -169,7 +182,8 @@ pub trait WebhookDeliveryBackend: Send + Sync {
     async fn deliver(
         &self,
         endpoint: &str,
-        signing_secret: &SecretValue,
+        format: WebhookFormat,
+        signing_secret: Option<&SecretValue>,
         delivery: &WebhookDelivery,
     ) -> Result<(), WebhookDeliveryError>;
 }
