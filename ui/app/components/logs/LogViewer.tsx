@@ -21,6 +21,7 @@ import {
   getServiceLogs,
   getSystemLogHistogram,
   getSystemLogs,
+  type ClusterLogHistogram,
   type LogHistogram,
   type LogHistogramBucket
 } from "../../lib/api";
@@ -76,6 +77,12 @@ type SelectedLogBucket = {
   from: number;
   to: number;
 };
+
+function isClusterLogHistogram(
+  histogram: LogHistogram
+): histogram is ClusterLogHistogram {
+  return "unavailableNodes" in histogram;
+}
 
 function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
   const existing = new Set(current.map(logEntryKey));
@@ -485,7 +492,7 @@ function LogViewer(props: {
       )
         return;
       setHistogram(result);
-      if ("unavailableNodes" in result) {
+      if (isClusterLogHistogram(result)) {
         setUnavailableNodes(result.unavailableNodes.map(clusterLogNodeLabel));
       }
       setHistogramError(null);

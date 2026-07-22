@@ -17,7 +17,7 @@ function AppToasts() {
 function showErrorToast(title: string, cause: unknown) {
   const message = cause instanceof Error ? cause.message : String(cause);
   toaster.show((props) => (
-    <Toast.Root
+    <Toast
       toastId={props.toastId}
       priority="high"
       class="rounded-xl border border-red-200 bg-white p-4 shadow-xl"
@@ -37,7 +37,7 @@ function showErrorToast(title: string, cause: unknown) {
           <X class="size-3.5" />
         </Toast.CloseButton>
       </div>
-    </Toast.Root>
+    </Toast>
   ));
 }
 
