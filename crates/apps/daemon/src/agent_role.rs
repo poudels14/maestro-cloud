@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use cluster::WIREGUARD_MTU_BYTES;
 use kernel_store::Store;
+use logs::{LogQueryStore, NodeLogQueryStore};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
@@ -88,6 +89,13 @@ where
     };
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
+    let local_log_queries = runtimes.log_query_store();
+    let cluster_log_queries =
+        match cluster_log_query_store(plan, &factory.api_settings, local_log_queries.clone()) {
+            Ok(queries) => Arc::new(queries) as Arc<dyn NodeLogQueryStore>,
+            Err(error) => return runtimes.fail(error).await,
+        };
+    let cluster_log_nodes = plan.cluster().nodes.keys().cloned().collect::<Vec<_>>();
     let api_server = match server::ApiServer::new(
         store.clone(),
         plan.cluster().cluster_id.clone(),
@@ -97,7 +105,8 @@ where
         let server = server
             .with_artifact_archive_store(factory.artifact_archives.clone())
             .with_firewall_settings(factory.firewall_settings.clone())
-            .with_log_query_store(runtimes.log_query_store());
+            .with_log_query_store(local_log_queries)
+            .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries);
         match &factory.webhook_backend {
             Some(backend) => server.with_webhook_backend(backend.clone()),
             None => server,
@@ -468,6 +477,48 @@ where
         factory.monotonic_clock.clone(),
         factory.settings.store_shutdown_grace,
     )))
+}
+
+fn cluster_log_query_store(
+    plan: &DaemonPlan,
+    settings: &server::ServerSettings,
+    local: Arc<dyn LogQueryStore>,
+) -> Result<server::HttpNodeLogQueryStore, RoleError> {
+    let trust_root = settings
+        .cluster_trust_root_pem
+        .as_deref()
+        .ok_or_else(|| RoleError::new("cluster log proxy has no trust root"))?;
+    let identity = settings
+        .cluster_client_identity
+        .as_ref()
+        .ok_or_else(|| RoleError::new("cluster log proxy has no TLS identity"))?;
+    let jwt_secret = settings
+        .jwt_secret_key
+        .as_ref()
+        .ok_or_else(|| RoleError::new("cluster log proxy has no JWT secret"))?;
+    let endpoints = plan
+        .cluster()
+        .nodes
+        .iter()
+        .map(|(node_id, node)| {
+            (
+                node_id.clone(),
+                SocketAddr::new(
+                    IpAddr::V4(node.endpoint.host_address),
+                    node.endpoint.api_port,
+                ),
+            )
+        })
+        .collect();
+    server::HttpNodeLogQueryStore::new(
+        plan.node_id().clone(),
+        endpoints,
+        trust_root,
+        identity,
+        jwt_secret,
+        local,
+    )
+    .map_err(|error| role_error("construct cluster log proxy", error))
 }
 
 fn build_bridge_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(

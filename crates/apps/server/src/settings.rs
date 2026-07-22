@@ -30,6 +30,10 @@ pub struct ServerSettings {
     pub jwt_secret_key: Option<SecretValue>,
     /// HTTPS identity; plaintext is allowed only on loopback.
     pub tls_identity: Option<TlsIdentity>,
+    /// Cluster CA used by this node's internal mutual-TLS clients.
+    pub cluster_trust_root_pem: Option<String>,
+    /// Node identity presented only by internal mutual-TLS clients.
+    pub cluster_client_identity: Option<TlsIdentity>,
 }
 
 impl ServerSettings {
@@ -39,12 +43,26 @@ impl ServerSettings {
             bind_address,
             jwt_secret_key,
             tls_identity: None,
+            cluster_trust_root_pem: None,
+            cluster_client_identity: None,
         }
     }
 
     /// Requires the listener to present the supplied HTTPS identity.
     pub fn with_tls_identity(mut self, identity: TlsIdentity) -> Self {
         self.tls_identity = Some(identity);
+        self
+    }
+
+    /// Makes the cluster trust root available to internal node clients.
+    pub fn with_cluster_trust_root(mut self, trust_root_pem: impl Into<String>) -> Self {
+        self.cluster_trust_root_pem = Some(trust_root_pem.into());
+        self
+    }
+
+    /// Configures the node certificate presented to cluster peers.
+    pub fn with_cluster_client_identity(mut self, identity: TlsIdentity) -> Self {
+        self.cluster_client_identity = Some(identity);
         self
     }
 
@@ -67,7 +85,18 @@ impl ServerSettings {
         {
             return Err(ServerSettingsError::WeakJwtSecret);
         }
+        if self
+            .cluster_trust_root_pem
+            .as_ref()
+            .is_some_and(|trust_root| trust_root.trim().is_empty())
+        {
+            return Err(ServerSettingsError::EmptyClusterTrustRoot);
+        }
         Ok(self)
+    }
+
+    pub(crate) fn requires_node_client_certificate(&self) -> bool {
+        self.tls_identity.is_some() && self.cluster_trust_root_pem.is_some()
     }
 }
 
@@ -83,4 +112,7 @@ pub enum ServerSettingsError {
     /// Short symmetric keys do not provide the expected HS256 security margin.
     #[error("JWT secret key must contain at least 32 bytes")]
     WeakJwtSecret,
+    /// A present trust root must contain certificate material.
+    #[error("cluster trust root cannot be empty")]
+    EmptyClusterTrustRoot,
 }

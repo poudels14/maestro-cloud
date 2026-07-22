@@ -8,7 +8,7 @@ use build::LocalBuildSourceProvider;
 use cluster::StoreStartMode;
 use kernel_api::{
     AssignmentPhase, DeploymentPhase, Node, NodeFirewallSpec, NodeId, NodeInstanceId, NodeRole,
-    ResourceKind, ResourceName, Timestamp, WorkloadUserSpec,
+    ResourceKind, ResourceName, SecretValue, Timestamp, WorkloadUserSpec,
 };
 use kernel_controller::{FencedStore, LeaderIdentity};
 use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, Store};
@@ -33,7 +33,7 @@ use node_agent::{
 };
 use runtime::{CgroupPath, FakeNetworkProvider, FakeRuntime, LogSource, WorkloadRuntime};
 use semver::Version;
-use server::ServerSettings;
+use server::{ServerSettings, TlsIdentity};
 use tokio::sync::{Notify, watch};
 
 use crate::{
@@ -143,7 +143,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
-            api_settings: ServerSettings::new(api_address, None),
+            api_settings: test_api_settings(api_address)?,
             firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {
@@ -449,7 +449,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             monotonic_clock: clock,
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
-            api_settings: ServerSettings::new("127.0.0.1:0".parse()?, None),
+            api_settings: test_api_settings("127.0.0.1:0".parse()?)?,
             firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default(),
@@ -479,6 +479,22 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
     );
     running.shutdown().await?;
     Ok(())
+}
+
+fn test_api_settings(bind_address: std::net::SocketAddr) -> Result<ServerSettings, rcgen::Error> {
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])?;
+    let certificate_pem = certified.cert.pem();
+    Ok(ServerSettings::new(
+        bind_address,
+        Some(SecretValue::new(
+            "daemon-test-cluster-log-secret-key".to_owned(),
+        )),
+    )
+    .with_cluster_trust_root(certificate_pem.clone())
+    .with_cluster_client_identity(TlsIdentity::new(
+        certificate_pem,
+        SecretValue::new(certified.signing_key.serialize_pem()),
+    )))
 }
 
 #[test]

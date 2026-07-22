@@ -43,6 +43,39 @@ pub(crate) fn paths() -> Map<String, Value> {
 
 pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert(
+        "ClusterLogCursor".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}
+        }),
+    );
+    schemas.insert(
+        "ClusterLogEntry".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["nodeId", "sequence", "entry"],
+            "properties": {
+                "nodeId": {"type": "string"},
+                "sequence": {"type": "integer", "format": "int64", "minimum": 0},
+                "entry": {"$ref": "#/components/schemas/IngestLogEntry"}
+            }
+        }),
+    );
+    schemas.insert(
+        "ClusterLogPage".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["entries", "cursor"],
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/ClusterLogEntry"}
+                },
+                "cursor": {"$ref": "#/components/schemas/ClusterLogCursor"}
+            }
+        }),
+    );
+    schemas.insert(
         "SequencedLogEntry".to_owned(),
         json!({
             "type": "object",
@@ -97,8 +130,7 @@ fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Valu
             "tail",
             json!({"type": "integer", "minimum": 1, "maximum": 10000}),
         ),
-        query_parameter("after", json!({"type": "integer", "minimum": 0})),
-        query_parameter("before", json!({"type": "integer", "minimum": 0})),
+        query_parameter("cursor", json!({"type": "string", "maxLength": 65536})),
         query_parameter("from", json!({"type": "integer", "format": "int64"})),
         query_parameter("to", json!({"type": "integer", "format": "int64"})),
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),
@@ -113,7 +145,8 @@ fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Valu
         operation_id,
         parameters,
         "Ordered normalized logs",
-        "SequencedLogEntry",
+        "ClusterLogPage",
+        false,
     )
 }
 
@@ -140,10 +173,25 @@ fn histogram_operation(operation_id: &str, path_names: &[&str], system: bool) ->
         parameters,
         "Event-time log histogram",
         "LogHistogramBucket",
+        true,
     )
 }
 
-fn operation(operation_id: &str, parameters: Vec<Value>, description: &str, schema: &str) -> Value {
+fn operation(
+    operation_id: &str,
+    parameters: Vec<Value>,
+    description: &str,
+    schema: &str,
+    array: bool,
+) -> Value {
+    let response_schema = if array {
+        json!({
+            "type": "array",
+            "items": {"$ref": format!("#/components/schemas/{schema}")}
+        })
+    } else {
+        json!({"$ref": format!("#/components/schemas/{schema}")})
+    };
     json!({
         "get": {
             "operationId": operation_id,
@@ -152,13 +200,10 @@ fn operation(operation_id: &str, parameters: Vec<Value>, description: &str, sche
             "responses": {
                 "200": {
                     "description": description,
-                    "content": {"application/json": {"schema": {
-                        "type": "array",
-                        "items": {"$ref": format!("#/components/schemas/{schema}")}
-                    }}}
+                    "content": {"application/json": {"schema": response_schema}}
                 },
                 "400": {"description": "Invalid scope, cursor, range, or LogQL expression"},
-                "503": {"description": "Node-local log query storage is unavailable"}
+                "503": {"description": "One or more cluster log stores are unavailable"}
             }
         }
     })

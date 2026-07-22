@@ -6,9 +6,10 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use kernel_api::SecretValue;
 use serde_json::Value;
 
-use crate::ApiError;
+use crate::{ApiError, VerifiedNodeCertificate};
 
 const OPERATOR_SCOPE: &str = "operator";
+const NODE_SCOPE: &str = "node";
 
 /// Authenticated operator identity attached to protected requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,11 +18,15 @@ pub struct OperatorIdentity(pub String);
 #[derive(Clone)]
 pub(crate) struct AuthPolicy {
     secret: Option<SecretValue>,
+    require_node_certificate: bool,
 }
 
 impl AuthPolicy {
-    pub(crate) fn new(secret: Option<SecretValue>) -> Self {
-        Self { secret }
+    pub(crate) fn new(secret: Option<SecretValue>, require_node_certificate: bool) -> Self {
+        Self {
+            secret,
+            require_node_certificate,
+        }
     }
 }
 
@@ -32,13 +37,38 @@ pub(crate) async fn require_operator(
 ) -> Result<Response, ApiError> {
     let identity = match &policy.secret {
         None => OperatorIdentity("loopback-operator".to_string()),
-        Some(secret) => authenticate(&request, secret)?,
+        Some(secret) => OperatorIdentity(authenticate(&request, secret, OPERATOR_SCOPE)?),
     };
     request.extensions_mut().insert(identity);
     Ok(next.run(request).await)
 }
 
-fn authenticate(request: &Request, secret: &SecretValue) -> Result<OperatorIdentity, ApiError> {
+pub(crate) async fn require_node(
+    State(policy): State<AuthPolicy>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    if policy.require_node_certificate
+        && request
+            .extensions()
+            .get::<VerifiedNodeCertificate>()
+            .is_none()
+    {
+        return Err(ApiError::forbidden(
+            "node endpoint requires a verified cluster client certificate",
+        ));
+    }
+    if let Some(secret) = &policy.secret {
+        authenticate(&request, secret, NODE_SCOPE)?;
+    }
+    Ok(next.run(request).await)
+}
+
+fn authenticate(
+    request: &Request,
+    secret: &SecretValue,
+    required_scope: &str,
+) -> Result<String, ApiError> {
     let token = request
         .headers()
         .get(AUTHORIZATION)
@@ -58,19 +88,19 @@ fn authenticate(request: &Request, secret: &SecretValue) -> Result<OperatorIdent
     let scopes = claims
         .get("scope")
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::forbidden("operator token has no scope claim"))?;
+        .ok_or_else(|| ApiError::forbidden("token has no scope claim"))?;
     if !scopes
         .split_ascii_whitespace()
-        .any(|scope| scope == OPERATOR_SCOPE)
+        .any(|scope| scope == required_scope)
     {
-        return Err(ApiError::forbidden(
-            "operator token does not grant the operator scope",
-        ));
+        return Err(ApiError::forbidden(format!(
+            "token does not grant the `{required_scope}` scope"
+        )));
     }
     let subject = claims
         .get("sub")
         .and_then(Value::as_str)
         .filter(|subject| !subject.trim().is_empty())
-        .ok_or_else(|| ApiError::unauthorized("operator token has no subject"))?;
-    Ok(OperatorIdentity(subject.to_string()))
+        .ok_or_else(|| ApiError::unauthorized("token has no subject"))?;
+    Ok(subject.to_string())
 }

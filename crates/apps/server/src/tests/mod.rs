@@ -323,7 +323,7 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     );
     assert!(
         document
-            .pointer("/components/schemas/SequencedLogEntry/properties/entry/$ref")
+            .pointer("/components/schemas/ClusterLogPage/properties/entries/items/$ref")
             .is_some()
     );
     assert_eq!(

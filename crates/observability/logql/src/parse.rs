@@ -47,7 +47,10 @@ impl FromStr for LogQuery {
                 label(token)
             )));
         }
-        Ok(Self { expression })
+        Ok(Self {
+            source: value.to_owned(),
+            expression,
+        })
     }
 }
 

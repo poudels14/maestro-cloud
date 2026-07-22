@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use clap::{Args, ValueEnum};
 use kernel_api::{DeploymentId, ServiceId};
-use logs::{IngestLogEntry, LogBody, LogOrigin, SequencedLogEntry};
+use logs::{ClusterLogEntry, ClusterLogPage, IngestLogEntry, LogBody, LogOrigin};
 
 use crate::CliError;
 use crate::api_client::ApiClient;
@@ -61,15 +61,10 @@ pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(
     let contexts = ContextStore::from_environment()?;
     let client = ApiClient::new(contexts.active()?)?;
     let mut request = initial_request(&command)?;
-    let mut entries: Vec<SequencedLogEntry> =
-        client.get_query(&request.path, &request.parameters).await?;
-    entries.reverse();
-    let mut cursor = entries
-        .iter()
-        .map(|entry| entry.sequence)
-        .max()
-        .unwrap_or(logs::LogSequence(0));
-    write_entries(&entries, command.output, output)?;
+    let mut page: ClusterLogPage = client.get_query(&request.path, &request.parameters).await?;
+    page.entries.reverse();
+    write_entries(&page.entries, command.output, output)?;
+    let mut cursor = page.cursor;
     if command.no_follow {
         return Ok(());
     }
@@ -78,19 +73,16 @@ pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(
         tokio::time::sleep(POLL_INTERVAL).await;
         request
             .parameters
-            .retain(|(name, _)| name != "tail" && name != "after");
+            .retain(|(name, _)| name != "tail" && name != "cursor");
         request
             .parameters
             .push(("tail".to_owned(), FOLLOW_BATCH.to_string()));
         request
             .parameters
-            .push(("after".to_owned(), cursor.0.to_string()));
-        let entries: Vec<SequencedLogEntry> =
-            client.get_query(&request.path, &request.parameters).await?;
-        if let Some(latest) = entries.iter().map(|entry| entry.sequence).max() {
-            cursor = cursor.max(latest);
-        }
-        write_entries(&entries, command.output, output)?;
+            .push(("cursor".to_owned(), encode_cursor(&cursor)?));
+        let page: ClusterLogPage = client.get_query(&request.path, &request.parameters).await?;
+        cursor = page.cursor;
+        write_entries(&page.entries, command.output, output)?;
         output
             .flush()
             .map_err(|source| CliError::io("failed to flush log output", source))?;
@@ -158,7 +150,7 @@ fn initial_request(command: &LogCommand) -> Result<LogRequest, CliError> {
 }
 
 fn write_entries(
-    entries: &[SequencedLogEntry],
+    entries: &[ClusterLogEntry],
     format: LogOutput,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
@@ -169,7 +161,7 @@ fn write_entries(
                 "{} {:<5} {:<32} {}",
                 stored.entry.event_at.0,
                 stored.entry.severity,
-                source(&stored.entry),
+                format!("{}/{}", stored.node_id, source(&stored.entry)),
                 body(&stored.entry.body),
             )
             .map_err(output_error)?,
@@ -181,6 +173,11 @@ fn write_entries(
         }
     }
     Ok(())
+}
+
+fn encode_cursor(cursor: &logs::ClusterLogCursor) -> Result<String, CliError> {
+    serde_json::to_string(cursor)
+        .map_err(|source| CliError::json("failed to encode cluster log cursor", source))
 }
 
 fn source(entry: &IngestLogEntry) -> String {
@@ -245,11 +242,13 @@ mod tests {
     #[test]
     fn text_and_json_outputs_keep_chronology_and_structured_details()
     -> Result<(), Box<dyn std::error::Error>> {
-        let entry = SequencedLogEntry {
+        let node_id = NodeId::new("node-one")?;
+        let entry = ClusterLogEntry {
+            node_id: node_id.clone(),
             sequence: LogSequence(7),
             entry: IngestLogEntry {
                 id: LogRecordId {
-                    node_id: NodeId::new("node-one")?,
+                    node_id: node_id.clone(),
                     producer: LogProducer::System("daemon".to_owned()),
                     cursor: OriginCursor::new("7"),
                 },
@@ -259,7 +258,7 @@ mod tests {
                 stream: LogStream::System,
                 origin: LogOrigin::System {
                     cluster_id: ClusterId::new("cluster-one")?,
-                    node_id: Some(NodeId::new("node-one")?),
+                    node_id: Some(node_id),
                     component: "daemon".to_owned(),
                 },
                 body: LogBody::Text("careful".to_owned()),
@@ -270,12 +269,16 @@ mod tests {
         write_entries(std::slice::from_ref(&entry), LogOutput::Text, &mut text)?;
         assert_eq!(
             String::from_utf8(text)?.trim(),
-            "123 warn  daemon                           careful"
+            "123 warn  node-one/daemon                  careful"
         );
 
         let mut json = Vec::new();
         write_entries(&[entry], LogOutput::Json, &mut json)?;
         let value: serde_json::Value = serde_json::from_slice(&json)?;
+        assert_eq!(
+            value.pointer("/nodeId"),
+            Some(&serde_json::json!("node-one"))
+        );
         assert_eq!(value.pointer("/sequence"), Some(&serde_json::json!(7)));
         assert_eq!(
             value.pointer("/entry/attributes/attempt"),

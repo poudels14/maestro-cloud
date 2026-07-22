@@ -371,6 +371,10 @@ fn api_settings(
     security: &NodeCertificateBundle,
     operator_jwt_secret: SecretValue,
 ) -> ServerSettings {
+    let identity = TlsIdentity::new(
+        security.identity.certificate_pem.clone(),
+        security.identity.private_key_pem.clone(),
+    );
     ServerSettings::new(
         SocketAddr::new(
             IpAddr::V4(node.endpoint.host_address),
@@ -378,10 +382,9 @@ fn api_settings(
         ),
         Some(operator_jwt_secret),
     )
-    .with_tls_identity(TlsIdentity::new(
-        security.identity.certificate_pem.clone(),
-        security.identity.private_key_pem.clone(),
-    ))
+    .with_tls_identity(identity.clone())
+    .with_cluster_trust_root(security.trust_root_pem.clone())
+    .with_cluster_client_identity(identity)
 }
 
 async fn open_observability_stores(

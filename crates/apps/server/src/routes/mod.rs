@@ -22,7 +22,7 @@ use axum::Router;
 use axum::middleware;
 
 use crate::AppState;
-use crate::auth::{AuthPolicy, require_operator};
+use crate::auth::{AuthPolicy, require_node, require_operator};
 
 pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
     let protected = Router::new()
@@ -42,9 +42,14 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(services::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())
-        .route_layer(middleware::from_fn_with_state(auth, require_operator));
+        .route_layer(middleware::from_fn_with_state(
+            auth.clone(),
+            require_operator,
+        ));
+    let node = logs::node_router().route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()
         .merge(system::router())
         .merge(protected)
+        .merge(node)
         .with_state(state)
 }

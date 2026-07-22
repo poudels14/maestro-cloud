@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
 build = { version = "0.1.0", path = "../../operators/build" }
@@ -16,6 +17,7 @@ kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 logs = { version = "0.1.0", path = "../../observability/logs" }
+reqwest.workspace = true
 rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true
@@ -23,17 +25,15 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { version = "=1.52.3", features = ["net", "rt", "sync"] }
+tower = { version = "=0.5.3", features = ["util"] }
 webhook = { version = "0.1.0", path = "../../operators/webhook" }
 
 [dev-dependencies]
-async-trait.workspace = true
 http-body-util = "=0.1.4"
 logs = { path = "../../observability/logs", features = ["test-util"] }
 rcgen = { version = "=0.14.8", features = ["pem"] }
 runtime = { path = "../../runtime", default-features = false }
-reqwest.workspace = true
 tempfile = "=3.27.0"
-tower = { version = "=0.5.3", features = ["util"] }
 
 [lints]
 workspace = true

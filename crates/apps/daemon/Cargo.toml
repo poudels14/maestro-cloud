@@ -53,6 +53,7 @@ clustertest = { path = "../../clustertest" }
 logs = { path = "../../observability/logs", features = ["test-util"] }
 metrics = { path = "../../observability/metrics", features = ["test-util"] }
 reqwest.workspace = true
+rcgen = { version = "=0.14.8", features = ["pem"] }
 runtime = { path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 time = "=0.3.53"

@@ -1877,6 +1877,7 @@ dependencies = [
  "metrics",
  "node-agent",
  "preview",
+ "rcgen",
  "reqwest",
  "runtime",
  "scheduler",

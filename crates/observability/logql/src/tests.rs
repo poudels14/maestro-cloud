@@ -68,6 +68,17 @@ fn backend_compilation_receives_only_a_validated_ast() -> Result<(), Box<dyn std
 }
 
 #[test]
+fn retains_validated_source_for_transport_without_recompiling_the_ast()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"message:\"x & y\" AND @attempt:>=2"#;
+    let query = source.parse::<LogQuery>()?;
+
+    assert_eq!(query.as_str(), source);
+    assert_eq!("error warn".parse::<LogQuery>()?, "error AND warn".parse()?);
+    Ok(())
+}
+
+#[test]
 fn rejects_malformed_unsupported_and_unbounded_queries() {
     for query in [
         "",

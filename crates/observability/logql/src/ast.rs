@@ -1,10 +1,22 @@
 /// Parsed log query with boolean precedence and validated field names.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct LogQuery {
+    pub(crate) source: String,
     pub(crate) expression: Expression,
 }
 
+impl PartialEq for LogQuery {
+    fn eq(&self, other: &Self) -> bool {
+        self.expression == other.expression
+    }
+}
+
 impl LogQuery {
+    /// Returns the validated source text for forwarding to another query endpoint.
+    pub fn as_str(&self) -> &str {
+        &self.source
+    }
+
     /// Returns the backend-neutral expression tree.
     pub fn expression(&self) -> &Expression {
         &self.expression
