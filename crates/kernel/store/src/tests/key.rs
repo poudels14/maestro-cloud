@@ -37,6 +37,11 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/control/requests/request-42"
     );
     assert_eq!(
+        keys.migration_marker(&ResourceName::new("legacy-v1").expect("migration id"))
+            .as_str(),
+        "/maestro/clusters/production/control/migrations/legacy-v1"
+    );
+    assert_eq!(
         keys.leader().as_str(),
         "/maestro/clusters/production/control/leader"
     );

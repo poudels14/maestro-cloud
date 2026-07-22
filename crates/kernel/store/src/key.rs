@@ -107,6 +107,11 @@ impl Keyspace {
         self.key(&format!("control/requests/{request_id}"))
     }
 
+    /// Durable completion marker for one explicitly named cutover migration.
+    pub fn migration_marker(&self, migration_id: &ResourceName) -> StoreKey {
+        self.key(&format!("control/migrations/{migration_id}"))
+    }
+
     /// Scheduler-owned generation fence advanced with every assignment-set mutation.
     pub fn scheduler_generation(&self) -> StoreKey {
         self.key("control/scheduler-generation")

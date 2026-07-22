@@ -3578,6 +3578,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "migrate"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "kernel-api",
+ "kernel-store",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
