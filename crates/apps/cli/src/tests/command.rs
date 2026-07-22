@@ -20,6 +20,22 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro-next",
             "cluster",
+            "bootstrap",
+            "--config",
+            "maestro.jsonc",
+            "--data-dir",
+            "/var/lib/maestro",
+            "--etcd-binary",
+            "/run/current-system/sw/bin/etcd",
+            "--output",
+            "/var/lib/maestro/launch.json",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
             "join",
             "https://10.20.0.11:3000",
             "--config",

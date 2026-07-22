@@ -4,17 +4,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cluster::{
     CaDiscoveryRequest, CaDiscoveryResponse, ClusterConfig, EncryptedJoinResponse, JoinPayload,
-    JoinPrivateKey, JoinRequest, JoinResponseStatus, NodeCertificateBundle, SignedJoinRequest,
-    StoreJoinTicket, decrypt_join_response, load_or_create_join_key, sign_join_request,
-    verify_ca_discovery_response, verify_join_request_signature,
+    JoinPrivateKey, JoinRequest, JoinResponseStatus, SignedJoinRequest, decrypt_join_response,
+    load_or_create_join_key, sign_join_request, verify_ca_discovery_response,
+    verify_join_request_signature,
 };
-use kernel_api::{NodeId, NodeRole, SecretValue};
-use serde::Serialize;
+use kernel_api::{NodeId, NodeRole};
 
 use crate::CliError;
 use crate::api_client::decode_response_with_limit;
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
+use crate::launch_document::{DaemonLaunchDocument, validate_etcd_binary};
 use crate::private_document::{persist_private_exact, persist_private_new, read_private};
 
 const ADMISSION_RESPONSE_LIMIT_BYTES: usize = 64 * 1_024;
@@ -114,10 +114,12 @@ pub(crate) async fn join_with_transport(
     )
     .map_err(|error| cluster_error("failed to authenticate cluster join grant", error))?;
     validate_grant_trust(&discovery, &payload)?;
-    let launch = JoinedLaunchDocument::from_grant(
-        &options,
+    let launch = DaemonLaunchDocument::joined(
         loaded.node_id,
         loaded.cluster.join_secret,
+        options.data_directory.clone(),
+        options.containerd_socket.clone(),
+        options.etcd_binary.clone(),
         payload,
     )?;
     let destination = options
@@ -128,7 +130,7 @@ pub(crate) async fn join_with_transport(
         output,
         "[maestro]: {} joined launch document for node `{}`",
         persisted.verb(),
-        launch.node_id,
+        launch.node_id(),
     )
     .map_err(output_error)?;
     writeln!(output, "Launch config: {}", destination.display()).map_err(output_error)?;
@@ -268,22 +270,6 @@ fn validate_paths(options: &JoinOptions) -> Result<(), CliError> {
     Ok(())
 }
 
-fn validate_etcd_binary(role: NodeRole, path: Option<&Path>) -> Result<(), CliError> {
-    match (role.is_control_plane(), path) {
-        (true, Some(path)) if path.is_absolute() => Ok(()),
-        (true, Some(_)) => Err(CliError::invalid_input(
-            "control-plane nodes require an absolute --etcd-binary path",
-        )),
-        (true, None) => Err(CliError::invalid_input(
-            "control-plane nodes require --etcd-binary",
-        )),
-        (false, None) => Ok(()),
-        (false, Some(_)) => Err(CliError::invalid_input(
-            "worker nodes must not configure --etcd-binary",
-        )),
-    }
-}
-
 fn load_or_create_request(
     path: &Path,
     key: &JoinPrivateKey,
@@ -349,95 +335,6 @@ fn validate_grant_trust(
         ));
     }
     Ok(())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JoinedLaunchDocument {
-    cluster: ClusterConfig,
-    node_id: NodeId,
-    data_directory: PathBuf,
-    containerd_socket: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    etcd_binary: Option<PathBuf>,
-    store_mode: JoinedStoreMode,
-    security: NodeCertificateBundle,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    certificate_issuer: Option<cluster::ClusterCertificateAuthority>,
-    operator_jwt_secret: SecretValue,
-    store_encryption_secret: SecretValue,
-}
-
-impl JoinedLaunchDocument {
-    fn from_grant(
-        options: &JoinOptions,
-        node_id: NodeId,
-        join_secret: SecretValue,
-        payload: JoinPayload,
-    ) -> Result<Self, CliError> {
-        let cluster = ClusterConfig {
-            cluster_id: payload.cluster_id,
-            name: payload.cluster_name,
-            nodes: payload.nodes,
-            control_allow_cidrs: payload.control_allow_cidrs,
-            ports: payload.ports,
-            join_secret,
-        };
-        cluster
-            .preflight()
-            .map_err(|error| cluster_error("join grant topology failed preflight", error))?;
-        let role = cluster
-            .nodes
-            .get(&node_id)
-            .ok_or_else(|| CliError::invalid_api_response("join grant omitted the local node"))?
-            .role;
-        match (&payload.certificate_issuer, role.is_control_plane()) {
-            (Some(issuer), true)
-                if issuer.certificate_pem == payload.certificates.trust_root_pem => {}
-            (None, false) => {}
-            _ => {
-                return Err(CliError::invalid_api_response(
-                    "join grant certificate issuer does not match the local node role and trust root",
-                ));
-            }
-        }
-        let store_mode = JoinedStoreMode::from_grant(&node_id, role, payload.store_join_ticket)?;
-        Ok(Self {
-            cluster,
-            node_id,
-            data_directory: options.data_directory.clone(),
-            containerd_socket: options.containerd_socket.clone(),
-            etcd_binary: options.etcd_binary.clone(),
-            store_mode,
-            security: payload.certificates,
-            certificate_issuer: payload.certificate_issuer,
-            operator_jwt_secret: payload.operator_jwt_secret,
-            store_encryption_secret: payload.store_encryption_secret,
-        })
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-enum JoinedStoreMode {
-    Join { ticket: StoreJoinTicket },
-    Client,
-}
-
-impl JoinedStoreMode {
-    fn from_grant(
-        node_id: &NodeId,
-        role: NodeRole,
-        ticket: Option<StoreJoinTicket>,
-    ) -> Result<Self, CliError> {
-        match (role.is_control_plane(), ticket) {
-            (true, Some(ticket)) if ticket.node_id() == node_id => Ok(Self::Join { ticket }),
-            (false, None) => Ok(Self::Client),
-            _ => Err(CliError::invalid_api_response(
-                "join grant store ticket does not match the local node role",
-            )),
-        }
-    }
 }
 
 fn cluster_error(action: &str, error: impl std::fmt::Display) -> CliError {

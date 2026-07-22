@@ -24,6 +24,28 @@ pub(crate) enum ClusterCommand {
         #[arg(long, value_name = "PATH")]
         data_dir: PathBuf,
     },
+    /// Initialize the master and create its private daemon bootstrap document.
+    Bootstrap {
+        /// Cluster configuration source.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected absolute data directory that will own daemon state.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+        /// Absolute containerd gRPC socket path.
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "/run/containerd/containerd.sock"
+        )]
+        containerd_socket: PathBuf,
+        /// Absolute etcd executable used by the embedded store provider.
+        #[arg(long, value_name = "PATH")]
+        etcd_binary: PathBuf,
+        /// Create the private daemon launch document at this path.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
     /// Issue a private certificate bundle for one declared cluster node.
     IssueNode {
         /// Cluster configuration source.
@@ -159,6 +181,24 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
     match command {
         ClusterCommand::InitCa { config, data_dir } => {
             cluster_formation::init_ca(&config, &data_dir, output, &SystemConfigSourceReader).await
+        }
+        ClusterCommand::Bootstrap {
+            config,
+            data_dir,
+            containerd_socket,
+            etcd_binary,
+            output: destination,
+        } => {
+            cluster_formation::bootstrap(
+                &config,
+                &data_dir,
+                &containerd_socket,
+                &etcd_binary,
+                destination.as_deref(),
+                output,
+                &SystemConfigSourceReader,
+            )
+            .await
         }
         ClusterCommand::IssueNode {
             config,

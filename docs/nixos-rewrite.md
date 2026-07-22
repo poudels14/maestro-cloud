@@ -49,6 +49,36 @@ selected etcd package into the system profile, enables native containerd, and
 starts the containerd-backed BuildKit worker. It also exposes the nftables,
 network, Git, and NixOS tools used by rewrite adapters.
 
+Create a new master document directly from the validated cluster config:
+
+```sh
+sudo maestro cluster bootstrap \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro \
+  --etcd-binary /run/current-system/sw/bin/etcd \
+  --output /run/maestro/launch.json
+```
+
+For another declared node, prepare its stable private join key, approve the
+printed fingerprint through an authenticated operator context, then join over
+the cluster's HTTPS endpoint:
+
+```sh
+sudo maestro cluster prepare-join \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro
+maestro cluster approve-node node-2 <printed-sha256>
+sudo maestro cluster join https://10.20.0.11:3000 \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro \
+  --output /run/maestro/launch.json
+```
+
+Add `--etcd-binary /run/current-system/sw/bin/etcd` to the join command for a
+control-plane node. Bootstrap and join documents are create-only and
+owner-only; retrying the same completed operation verifies and reuses the
+existing document.
+
 Build or inspect the release bundle with:
 
 ```sh

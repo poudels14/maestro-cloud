@@ -5,12 +5,14 @@ use cluster::{
     CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
     certificate_fingerprint, load_or_create_join_key, public_key_fingerprint,
 };
-use kernel_api::{NodeId, NodeRole};
+use kernel_api::{NodeId, NodeRole, SecretValue};
 use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
+use crate::launch_document::DaemonLaunchDocument;
+use crate::private_document::{Persisted, persist_private_exact, read_private};
 
 const AUTHORITY_VALIDITY_DAYS: i64 = 3_650;
 const NODE_VALIDITY_DAYS: i64 = 825;
@@ -121,6 +123,124 @@ pub(crate) async fn prepare_join(
         loaded.node_id
     )
     .map_err(output_error)
+}
+
+pub(crate) async fn bootstrap(
+    config_source: &str,
+    data_directory: &Path,
+    containerd_socket: &Path,
+    etcd_binary: &Path,
+    destination: Option<&Path>,
+    output: &mut dyn Write,
+    reader: &impl ConfigSourceReader,
+) -> Result<(), CliError> {
+    if !data_directory.is_absolute()
+        || !containerd_socket.is_absolute()
+        || !etcd_binary.is_absolute()
+    {
+        return Err(CliError::invalid_input(
+            "bootstrap data directory, containerd socket, and etcd binary must be absolute paths",
+        ));
+    }
+    let loaded = load_cluster(config_source, reader).await?;
+    let node =
+        loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
+            CliError::invalid_input("selected node disappeared from the topology")
+        })?;
+    if node.role != NodeRole::Master {
+        return Err(CliError::invalid_input(format!(
+            "cluster bootstrap must run for the declared master, not `{}`",
+            loaded.node_id
+        )));
+    }
+    let authority_directory = authority_directory(data_directory);
+    let authority = ClusterCertificateAuthority::load_or_initialize(
+        &authority_directory,
+        &loaded.cluster.name,
+        validity(AUTHORITY_VALIDITY_DAYS)?,
+    )
+    .map_err(|error| CliError::cluster("failed to initialize cluster CA", error.to_string()))?;
+    let launch_path = destination
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| data_directory.join("launch.json"));
+
+    let (launch, persisted) = match read_private(&launch_path, "daemon launch document") {
+        Ok(encoded) => {
+            let launch =
+                serde_json::from_slice::<DaemonLaunchDocument>(&encoded).map_err(|source| {
+                    CliError::json("failed to decode daemon launch document", source)
+                })?;
+            launch.validate()?;
+            if !launch.matches_bootstrap(
+                &loaded.cluster,
+                &loaded.node_id,
+                data_directory,
+                containerd_socket,
+                etcd_binary,
+                &authority,
+            ) {
+                return Err(CliError::invalid_input(format!(
+                    "existing daemon launch document `{}` does not match this bootstrap request",
+                    launch_path.display()
+                )));
+            }
+            (launch, Persisted::Reused)
+        }
+        Err(CliError::NotFound { .. }) => {
+            let security = authority
+                .issue_node_certificate(
+                    &loaded.node_id,
+                    &node.hostname,
+                    node.endpoint.host_address,
+                    node.role,
+                    validity(NODE_VALIDITY_DAYS)?,
+                )
+                .map_err(|error| {
+                    CliError::cluster("failed to issue master certificate", error.to_string())
+                })?;
+            let launch = DaemonLaunchDocument::bootstrap(
+                loaded.cluster.clone(),
+                loaded.node_id.clone(),
+                data_directory.to_path_buf(),
+                containerd_socket.to_path_buf(),
+                etcd_binary.to_path_buf(),
+                security,
+                authority.clone(),
+                generated_secret(),
+                generated_secret(),
+            )?;
+            let persisted = persist_private_exact(&launch_path, &launch, "daemon launch document")?;
+            (launch, persisted)
+        }
+        Err(error) => return Err(error),
+    };
+    let fingerprint = certificate_fingerprint(&authority.certificate_pem).map_err(|error| {
+        CliError::cluster("failed to fingerprint cluster CA", error.to_string())
+    })?;
+    writeln!(output, "Cluster: {}", loaded.cluster.cluster_id).map_err(output_error)?;
+    writeln!(output, "CA SHA-256: {fingerprint}").map_err(output_error)?;
+    writeln!(
+        output,
+        "[maestro]: {} bootstrap launch document for node `{}`",
+        persisted.verb(),
+        launch.node_id(),
+    )
+    .map_err(output_error)?;
+    writeln!(output, "Launch config: {}", launch_path.display()).map_err(output_error)?;
+    writeln!(
+        output,
+        "Start with: maestro-daemon start {}",
+        launch_path.display()
+    )
+    .map_err(output_error)
+}
+
+fn generated_secret() -> SecretValue {
+    SecretValue::new(format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    ))
 }
 
 fn authority_directory(data_directory: &Path) -> PathBuf {

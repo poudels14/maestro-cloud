@@ -1,7 +1,7 @@
 use cluster::{ClusterCertificateAuthority, NodeCertificateBundle, certificate_fingerprint};
 
 use crate::CliError;
-use crate::cluster_formation::{init_ca, issue_node, prepare_join};
+use crate::cluster_formation::{bootstrap, init_ca, issue_node, prepare_join};
 use crate::config_source::ConfigSourceReader;
 
 struct MemoryReader {
@@ -138,6 +138,67 @@ async fn join_preparation_persists_one_private_key_and_prints_approval_command()
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             std::fs::metadata(key_path)?.permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let reader = MemoryReader {
+        source: cluster_document(),
+    };
+    let containerd_socket = std::path::Path::new("/run/containerd/containerd.sock");
+    let etcd_binary = std::path::Path::new("/run/current-system/sw/bin/etcd");
+    let mut first_output = Vec::new();
+    bootstrap(
+        "maestro.jsonc",
+        directory.path(),
+        containerd_socket,
+        etcd_binary,
+        None,
+        &mut first_output,
+        &reader,
+    )
+    .await?;
+    let launch_path = directory.path().join("launch.json");
+    let first_launch = std::fs::read(&launch_path)?;
+    let mut second_output = Vec::new();
+    bootstrap(
+        "maestro.jsonc",
+        directory.path(),
+        containerd_socket,
+        etcd_binary,
+        None,
+        &mut second_output,
+        &reader,
+    )
+    .await?;
+    assert_eq!(std::fs::read(&launch_path)?, first_launch);
+    let launch: serde_json::Value = serde_json::from_slice(&first_launch)?;
+    assert_eq!(launch.pointer("/nodeId"), Some(&"node-1".into()));
+    assert_eq!(launch.pointer("/storeMode/kind"), Some(&"bootstrap".into()));
+    assert_eq!(
+        launch.pointer("/etcdBinary"),
+        Some(&"/run/current-system/sw/bin/etcd".into())
+    );
+    assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
+    assert!(launch.pointer("/operatorJwtSecret").is_some());
+    assert!(launch.pointer("/storeEncryptionSecret").is_some());
+    let first_output = String::from_utf8(first_output)?;
+    assert!(first_output.contains("created bootstrap launch document"));
+    assert!(!first_output.contains("operatorJwtSecret"));
+    assert!(
+        String::from_utf8(second_output)?.contains("verified existing bootstrap launch document")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(launch_path)?.permissions().mode() & 0o777,
             0o600
         );
     }
