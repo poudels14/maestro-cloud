@@ -11,7 +11,8 @@ use kernel_api::{
     ExecPolicy, Generation, Node, NodeApiAccess, NodeId, NodeInstanceId, NodeNetwork,
     NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, ObjectMeta,
     PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState, Service,
-    ServiceId, ServiceSpec, ServiceStatus, Timestamp, VolumeAccess, VolumeMountSpec, VolumeSource,
+    ServiceId, ServiceSpec, ServiceStatus, Timestamp, UnschedulableReplica, VolumeAccess,
+    VolumeMountSpec, VolumeSource,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -36,6 +37,11 @@ async fn scheduler_scales_one_service_across_three_nodes_atomically()
             (node_id("node-3"), 1),
         ])
     );
+    let first_observation = world.scheduler_observation().await?;
+    assert_eq!(
+        serde_json::from_slice::<Vec<UnschedulableReplica>>(&first_observation.value)?,
+        Vec::new()
+    );
     let original_zero = assignment_for_slot(&world.assignments().await?, 0)?
         .meta
         .id
@@ -43,6 +49,10 @@ async fn scheduler_scales_one_service_across_three_nodes_atomically()
 
     let unchanged = world.reconcile(Timestamp(2_000)).await?;
     assert_eq!((unchanged.created, unchanged.deleted), (0, 0));
+    assert_eq!(
+        world.scheduler_observation().await?.version,
+        first_observation.version
+    );
 
     world.set_replica_override(2).await?;
     let reduced = world.reconcile(Timestamp(3_000)).await?;
@@ -115,6 +125,17 @@ async fn host_volumes_pin_placement_and_invalid_changes_preserve_running_work()
     assert_eq!((invalid.created, invalid.deleted), (0, 0));
     assert_eq!(invalid.unschedulable.len(), 1);
     assert_eq!(world.assignments().await?, vec![pinned]);
+    assert_eq!(
+        serde_json::from_slice::<Vec<UnschedulableReplica>>(
+            &world.scheduler_observation().await?.value
+        )?,
+        vec![UnschedulableReplica {
+            service_id: service_id(),
+            deployment_id: deployment_id(),
+            replica_index: 0,
+            reason: "host-backed volumes require different nodes".to_string(),
+        }]
+    );
     Ok(())
 }
 
@@ -232,6 +253,15 @@ impl World {
             .into_iter()
             .map(|stored| serde_json::from_slice(&stored.value).map_err(Into::into))
             .collect()
+    }
+
+    async fn scheduler_observation(
+        &self,
+    ) -> Result<kernel_store::StoredValue, Box<dyn std::error::Error>> {
+        self.store
+            .get(&self.keys.scheduler_observation())
+            .await?
+            .ok_or_else(|| "scheduler observation missing".into())
     }
 
     pub(super) async fn set_replica_override(

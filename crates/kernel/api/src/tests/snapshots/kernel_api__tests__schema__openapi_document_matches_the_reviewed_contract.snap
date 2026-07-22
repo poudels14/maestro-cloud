@@ -5240,6 +5240,44 @@ expression: openapi_document()
           }
         ]
       },
+      "UnschedulableReplica": {
+        "description": "One requested replica slot for which the scheduler found no valid placement.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Deployment owning the replica."
+          },
+          "reason": {
+            "description": "Human-readable placement failure suitable for operator diagnostics.",
+            "type": "string"
+          },
+          "replicaIndex": {
+            "description": "Stable replica slot within the deployment.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service owning the replica."
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "replicaIndex",
+          "reason"
+        ],
+        "type": "object"
+      },
       "UpgradeMode": {
         "description": "Node batching strategy for one cluster upgrade run.",
         "oneOf": [

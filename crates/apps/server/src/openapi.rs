@@ -18,6 +18,10 @@ pub fn openapi_document() -> Value {
             list_operation("listNodes", "Node"),
         ),
         (
+            "/api/cluster/unschedulable".to_string(),
+            list_operation("listUnschedulableReplicas", "UnschedulableReplica"),
+        ),
+        (
             "/api/artifact-archives/{archiveId}".to_string(),
             artifact_archive_operation(),
         ),

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel_api::{
     Assignment, AssignmentId, ClusterId, InvalidIdentifier, ResourceKind, ResourceName,
+    UnschedulableReplica,
 };
 use kernel_controller::{ControllerError, FencedStore};
 use kernel_store::{
@@ -40,6 +41,7 @@ impl AssignmentWriter {
         fenced_store: &FencedStore,
         current: &[StoredValue],
         desired: &[Assignment],
+        observation: &[UnschedulableReplica],
         scheduler_generation: ExpectedVersion,
         dependency_compares: Vec<Compare>,
     ) -> Result<AssignmentWriteReport, AssignmentWriteError> {
@@ -95,13 +97,16 @@ impl AssignmentWriter {
             key: self.keyspace.scheduler_generation(),
             expected: scheduler_generation,
         });
-        if !mutations.is_empty() {
+        let assignments_changed = !mutations.is_empty();
+        if assignments_changed {
             mutations.push(Mutation::Put {
                 key: self.keyspace.scheduler_generation(),
                 value: b"assignment generation".to_vec(),
                 session: None,
             });
         }
+        self.append_observation(fenced_store, observation, &mut compares, &mut mutations)
+            .await?;
 
         let outcome = fenced_store
             .txn(Transaction {
@@ -179,6 +184,47 @@ impl AssignmentWriter {
             &ResourceName::from(assignment_id.clone()),
         )
     }
+
+    async fn append_observation(
+        &self,
+        fenced_store: &FencedStore,
+        observation: &[UnschedulableReplica],
+        compares: &mut Vec<Compare>,
+        mutations: &mut Vec<Mutation>,
+    ) -> Result<(), AssignmentWriteError> {
+        let key = self.keyspace.scheduler_observation();
+        let value = serde_json::to_vec(observation).map_err(|error| {
+            AssignmentWriteError::SerializeObservation {
+                message: error.to_string(),
+            }
+        })?;
+        match fenced_store.get(&key).await? {
+            Some(stored) if stored.value == value => {}
+            Some(stored) => {
+                compares.push(Compare {
+                    key: key.clone(),
+                    expected: ExpectedVersion::Exact(stored.version),
+                });
+                mutations.push(Mutation::Put {
+                    key,
+                    value,
+                    session: None,
+                });
+            }
+            None => {
+                compares.push(Compare {
+                    key: key.clone(),
+                    expected: ExpectedVersion::Missing,
+                });
+                mutations.push(Mutation::Put {
+                    key,
+                    value,
+                    session: None,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 struct StoredAssignment {
@@ -219,4 +265,7 @@ pub enum AssignmentWriteError {
         assignment_id: AssignmentId,
         message: String,
     },
+    /// The scheduler observation could not be serialized for persistence.
+    #[error("failed to serialize scheduler observation: {message}")]
+    SerializeObservation { message: String },
 }

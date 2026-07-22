@@ -112,6 +112,11 @@ impl Keyspace {
         self.key("control/scheduler-generation")
     }
 
+    /// Latest successfully fenced scheduler failures exposed to operators.
+    pub fn scheduler_observation(&self) -> StoreKey {
+        self.key("observations/scheduler")
+    }
+
     /// Root watched by Traefik's cluster-scoped dynamic configuration provider.
     pub fn traefik(&self) -> StorePrefix {
         self.prefix("integrations/traefik")

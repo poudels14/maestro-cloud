@@ -45,6 +45,10 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/control/scheduler-generation"
     );
     assert_eq!(
+        keys.scheduler_observation().as_str(),
+        "/maestro/clusters/production/observations/scheduler"
+    );
+    assert_eq!(
         keys.traefik().as_str(),
         "/maestro/clusters/production/integrations/traefik/"
     );

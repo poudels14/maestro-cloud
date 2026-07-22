@@ -122,12 +122,23 @@ impl Scheduler {
                 .then_with(|| left.replica_index.cmp(&right.replica_index))
         });
         snapshot.dependency_compares.extend(liveness_compares);
+        let observation = schedule
+            .unschedulable
+            .iter()
+            .map(|failure| kernel_api::UnschedulableReplica {
+                service_id: failure.service_id.clone(),
+                deployment_id: failure.deployment_id.clone(),
+                replica_index: failure.replica_index,
+                reason: failure.reason.to_string(),
+            })
+            .collect::<Vec<_>>();
         let write = self
             .writer
             .apply(
                 fenced_store,
                 &snapshot.assignment_values,
                 &schedule.assignments,
+                &observation,
                 generation_before,
                 snapshot.dependency_compares,
             )

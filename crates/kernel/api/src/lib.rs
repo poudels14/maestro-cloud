@@ -53,7 +53,7 @@ pub use network::{
 };
 pub use node::{
     ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,
-    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus,
+    NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, UnschedulableReplica,
 };
 pub use resource::Object;
 pub use schema::{

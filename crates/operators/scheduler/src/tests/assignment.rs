@@ -34,6 +34,7 @@ async fn assignment_writer_applies_create_and_delete_as_one_generation()
             &world.fenced,
             &current,
             std::slice::from_ref(&replacement),
+            &[],
             generation,
             Vec::new(),
         )
@@ -66,6 +67,7 @@ async fn assignment_writer_preserves_agent_status_for_retained_specs()
             &world.fenced,
             &current,
             &[stale_planner_copy],
+            &[],
             generation,
             Vec::new(),
         )
@@ -94,6 +96,7 @@ async fn assignment_writer_conflict_commits_no_partial_generation()
             &world.fenced,
             &current,
             &[replacement],
+            &[],
             generation,
             Vec::new(),
         )
@@ -119,6 +122,7 @@ async fn assignment_writer_rejects_identity_collision_and_malformed_ownership()
                 &world.fenced,
                 &current,
                 &[conflicting],
+                &[],
                 generation,
                 Vec::new(),
             )
@@ -138,7 +142,14 @@ async fn assignment_writer_rejects_identity_collision_and_malformed_ownership()
     assert!(matches!(
         world
             .writer
-            .apply(&world.fenced, &[malformed], &[], generation, Vec::new(),)
+            .apply(
+                &world.fenced,
+                &[malformed],
+                &[],
+                &[],
+                generation,
+                Vec::new(),
+            )
             .await,
         Err(AssignmentWriteError::ResourceIdentityMismatch { .. })
     ));

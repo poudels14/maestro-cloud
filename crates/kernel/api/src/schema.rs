@@ -12,7 +12,7 @@ use crate::{
     ServiceDiffStatus, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
     ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
     ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest, ServiceWriteResponse,
-    TrafficGeneration, UpgradeRun, Webhook,
+    TrafficGeneration, UnschedulableReplica, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -286,6 +286,7 @@ pub fn openapi_document() -> Value {
     register_schema::<NodeFirewall>(&mut generator, BuiltinKind::NodeFirewall);
     register_named_schema::<ClusterId>(&mut generator, "ClusterId");
     register_named_schema::<IngressRouting>(&mut generator, "IngressRouting");
+    register_named_schema::<UnschedulableReplica>(&mut generator, "UnschedulableReplica");
     register_named_schema::<CommandRequest>(&mut generator, "CommandRequest");
     register_named_schema::<ArtifactArchiveUploadResponse>(
         &mut generator,

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::{Display, Formatter};
 
 use kernel_api::{
     Assignment, AssignmentId, ClusterId, DeploymentId, NodeId, NodeRole, PlacementConstraint,
@@ -115,6 +116,36 @@ pub enum UnschedulableReason {
         /// Different node required by service placement.
         placement_node_id: NodeId,
     },
+}
+
+impl Display for UnschedulableReason {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AffinityMatchesNoNode => formatter.write_str("affinity matches no node"),
+            Self::NoSchedulableNode => formatter.write_str("no schedulable node"),
+            Self::NoAlternateNode => {
+                formatter.write_str("no alternate schedulable node for replacement")
+            }
+            Self::InvalidWorkloadSubnet { node_id, subnet } => write!(
+                formatter,
+                "node `{node_id}` published invalid workload subnet `{subnet}`"
+            ),
+            Self::WorkloadAddressCapacityExhausted { node_id } => write!(
+                formatter,
+                "workload address capacity exhausted on node `{node_id}`"
+            ),
+            Self::ConflictingHostVolumeNodes => {
+                formatter.write_str("host-backed volumes require different nodes")
+            }
+            Self::HostVolumePlacementMismatch {
+                volume_node_id,
+                placement_node_id,
+            } => write!(
+                formatter,
+                "placement node `{placement_node_id}` conflicts with host-volume node `{volume_node_id}`"
+            ),
+        }
+    }
 }
 
 /// One replica slot that the planner could not place.

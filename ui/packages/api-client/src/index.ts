@@ -14,6 +14,9 @@ import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transp
 
 export interface MaestroApiClient {
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
+  listUnschedulableReplicas(
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["UnschedulableReplica"][]>;
   getNode(nodeId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Node"]>;
   drainNode(
     nodeId: string,
@@ -283,6 +286,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
 
   return {
     listNodes: (options) => get("/api/cluster/nodes", options),
+    listUnschedulableReplicas: (options) => get("/api/cluster/unschedulable", options),
     getNode: (nodeId, options) =>
       get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
     drainNode: (nodeId, request, idempotencyKey, options) =>

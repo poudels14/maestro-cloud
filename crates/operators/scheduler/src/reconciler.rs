@@ -127,6 +127,9 @@ fn terminal_reason(error: &SchedulerError) -> &'static str {
             AssignmentWriteError::DuplicateAssignment { .. } => "DuplicateAssignment",
             AssignmentWriteError::IdentityCollision { .. } => "AssignmentIdentityCollision",
             AssignmentWriteError::Serialize { .. } => "AssignmentSerializationFailed",
+            AssignmentWriteError::SerializeObservation { .. } => {
+                "SchedulerObservationSerializationFailed"
+            }
             AssignmentWriteError::Controller(_) => "SchedulerInfrastructureFailed",
         },
         SchedulerError::Controller(_) => "SchedulerInfrastructureFailed",

@@ -6047,6 +6047,44 @@
           }
         ]
       },
+      "UnschedulableReplica": {
+        "description": "One requested replica slot for which the scheduler found no valid placement.",
+        "properties": {
+          "deploymentId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentId"
+              }
+            ],
+            "description": "Deployment owning the replica."
+          },
+          "reason": {
+            "description": "Human-readable placement failure suitable for operator diagnostics.",
+            "type": "string"
+          },
+          "replicaIndex": {
+            "description": "Stable replica slot within the deployment.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serviceId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              }
+            ],
+            "description": "Service owning the replica."
+          }
+        },
+        "required": [
+          "serviceId",
+          "deploymentId",
+          "replicaIndex",
+          "reason"
+        ],
+        "type": "object"
+      },
       "UpgradeCommandResponse": {
         "properties": {
           "deletionTimestamp": {
@@ -7212,6 +7250,31 @@
           },
           "503": {
             "description": "One or more node observability stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/unschedulable": {
+      "get": {
+        "operationId": "listUnschedulableReplicas",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UnschedulableReplica"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Ordered resource list"
           }
         },
         "security": [

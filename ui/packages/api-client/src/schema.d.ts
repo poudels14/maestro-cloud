@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/unschedulable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUnschedulableReplicas"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/upgrades": {
         parameters: {
             query?: never;
@@ -2865,6 +2881,20 @@ export interface components {
         };
         /** @description Transport protocol selected by a firewall rule. */
         TransportProtocol: "tcp" | "udp" | "any";
+        /** @description One requested replica slot for which the scheduler found no valid placement. */
+        UnschedulableReplica: {
+            /** @description Deployment owning the replica. */
+            deploymentId: components["schemas"]["DeploymentId"];
+            /** @description Human-readable placement failure suitable for operator diagnostics. */
+            reason: string;
+            /**
+             * Format: uint32
+             * @description Stable replica slot within the deployment.
+             */
+            replicaIndex: number;
+            /** @description Service owning the replica. */
+            serviceId: components["schemas"]["ServiceId"];
+        };
         UpgradeCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
             generation: components["schemas"]["Generation"];
@@ -3464,6 +3494,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    listUnschedulableReplicas: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered resource list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnschedulableReplica"][];
+                };
             };
         };
     };

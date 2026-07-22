@@ -5,7 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ClusterId, Condition, NodeFirewallId, NodeId, NodeInstanceId, NodeNetworkId, Object, Timestamp,
+    ClusterId, Condition, DeploymentId, NodeFirewallId, NodeId, NodeInstanceId, NodeNetworkId,
+    Object, ServiceId, Timestamp,
 };
 
 /// Operator-facing summary of one cluster's durable node topology.
@@ -20,6 +21,20 @@ pub struct ClusterInfo {
     pub control_plane_node_count: u64,
     /// Nodes eligible to receive workload assignments.
     pub workload_node_count: u64,
+}
+
+/// One requested replica slot for which the scheduler found no valid placement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UnschedulableReplica {
+    /// Service owning the replica.
+    pub service_id: ServiceId,
+    /// Deployment owning the replica.
+    pub deployment_id: DeploymentId,
+    /// Stable replica slot within the deployment.
+    pub replica_index: u32,
+    /// Human-readable placement failure suitable for operator diagnostics.
+    pub reason: String,
 }
 
 /// Scheduling and control-plane capability assigned to a node.
