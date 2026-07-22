@@ -9,7 +9,7 @@ import { ErrorBanner, SectionHeader } from "@maestro/kit";
 import { queryKeys, servicesQuery } from "../../lib/queries";
 import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "@maestro/kit";
 
 function ServicesGrid() {
   const services = useQuery(() => servicesQuery());

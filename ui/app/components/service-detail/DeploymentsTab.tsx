@@ -11,7 +11,7 @@ import {
 } from "../../lib/api";
 import { deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "@maestro/kit";
-import { ConfirmDialog } from "../home/ConfirmDialog";
+import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import { showErrorToast } from "../AppToasts";

@@ -12,6 +12,7 @@
     "@kobalte/core": "^0.13.12",
     "@maestro/api-client": "workspace:*",
     "@maestro/charts": "workspace:*",
+    "@maestro/firewall": "workspace:*",
     "@maestro/kit": "workspace:*",
     "@maestro/sdk": "workspace:*",
     "@solidjs/meta": "^0.29.4",

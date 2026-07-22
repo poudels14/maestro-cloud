@@ -1,20 +1,19 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import {
   emptyFirewallPolicy,
   firewallPolicyDraft,
   firewallPolicySpec,
   parsePortRanges
-} from "./firewallPolicyEditor.ts";
-import type { FirewallPolicy } from "./types";
+} from "./editor";
+import type { FirewallPolicy } from "./api";
 
 test("parses, deduplicates, and sorts port ranges", () => {
-  assert.deepEqual(parsePortRanges("443, 8000-8080, 443, 53", 0), [
+  expect(parsePortRanges("443, 8000-8080, 443, 53", 0)).toEqual([
     { start: 53, end: 53 },
     { start: 443, end: 443 },
     { start: 8000, end: 8080 }
   ]);
-  assert.throws(() => parsePortRanges("0, 90-80", 1), /Rule 2 ports/);
+  expect(() => parsePortRanges("0, 90-80", 1)).toThrow(/Rule 2 ports/);
 });
 
 test("builds a typed service egress policy", () => {
@@ -24,7 +23,7 @@ test("builds a typed service egress policy", () => {
   draft.subjectId = "api";
   draft.rules = [{ cidr: "10.0.0.0/8", protocol: "tcp", ports: "443", verdict: "allow" }];
 
-  assert.deepEqual(firewallPolicySpec(draft), {
+  expect(firewallPolicySpec(draft)).toEqual({
     direction: "egress",
     subject: { type: "service", id: "api" },
     defaultVerdict: "deny",
@@ -58,7 +57,7 @@ test("round trips an existing node host-input policy", () => {
     status: { appliedGeneration: 2 }
   } satisfies FirewallPolicy;
 
-  assert.deepEqual(firewallPolicyDraft(policy), {
+  expect(firewallPolicyDraft(policy)).toEqual({
     id: "worker-input",
     direction: "hostInput",
     subjectType: "node",

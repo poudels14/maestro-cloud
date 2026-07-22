@@ -1,5 +1,5 @@
 import type { ApiSchemas } from "@maestro/api-client";
-import type { FirewallPolicy, FirewallPolicySpec } from "./types";
+import type { FirewallPolicy, FirewallPolicySpec } from "./api";
 
 type FirewallDirection = ApiSchemas["FirewallDirection"];
 type FirewallVerdict = ApiSchemas["FirewallVerdict"];

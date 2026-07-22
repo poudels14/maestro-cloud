@@ -10,5 +10,5 @@ export const Route = createFileRoute("/cluster_/logs")({
     ...(typeof search.query === "string" && search.query ? { query: search.query } : {}),
     ...(typeof search.range === "string" && search.range ? { range: search.range } : {})
   }),
-  component: () => <HomeShell tab="cluster-logs" />
+  component: () => <HomeShell path="/cluster/logs" />
 });

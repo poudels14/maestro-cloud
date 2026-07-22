@@ -1,10 +1,6 @@
 import { For, Show } from "solid-js";
 import { Plus, Trash2 } from "lucide-solid";
-import type {
-  FirewallPolicyDraft,
-  FirewallRuleDraft,
-  FirewallSubjectType
-} from "../../lib/firewallPolicyEditor";
+import type { FirewallPolicyDraft, FirewallRuleDraft, FirewallSubjectType } from "./editor";
 
 function FirewallPolicyForm(props: {
   draft: FirewallPolicyDraft;

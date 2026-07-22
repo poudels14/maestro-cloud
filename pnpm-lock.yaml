@@ -31,6 +31,9 @@ importers:
       '@maestro/charts':
         specifier: workspace:*
         version: link:packages/charts
+      '@maestro/firewall':
+        specifier: workspace:*
+        version: link:packages/firewall
       '@maestro/kit':
         specifier: workspace:*
         version: link:packages/kit
@@ -118,8 +121,39 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  ui/packages/firewall:
+    dependencies:
+      '@maestro/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@maestro/kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@maestro/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-solid:
+        specifier: ^0.577.0
+        version: 0.577.0(solid-js@1.9.14)
+      solid-js:
+        specifier: ^1.9.14
+        version: 1.9.14
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.21.0))
+
   ui/packages/kit:
     dependencies:
+      '@kobalte/core':
+        specifier: ^0.13.12
+        version: 0.13.12(solid-js@1.9.14)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1

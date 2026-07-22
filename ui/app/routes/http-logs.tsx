@@ -6,5 +6,5 @@ export const Route = createFileRoute("/http-logs")({
     ...(typeof search.query === "string" && search.query ? { query: search.query } : {}),
     ...(typeof search.range === "string" && search.range ? { range: search.range } : {})
   }),
-  component: () => <HomeShell tab="http-logs" />
+  component: () => <HomeShell path="/http-logs" />
 });

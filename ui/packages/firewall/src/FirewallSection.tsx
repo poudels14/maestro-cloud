@@ -2,18 +2,16 @@ import { For, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { FlaskConical, Loader2, Plus, ShieldCheck, Trash2 } from "lucide-solid";
 import clsx from "clsx";
-import { useQuery } from "../../lib/useQuery";
-import { firewallPoliciesQuery } from "../../lib/queries";
-import { deleteFirewallPolicy, dryRunFirewallPolicy, saveFirewallPolicy } from "../../lib/api";
+import { useQuery } from "@maestro/sdk";
+import { ConfirmDialog } from "@maestro/kit";
 import {
   emptyFirewallPolicy,
   emptyFirewallRule,
   firewallPolicyDraft,
   firewallPolicySpec
-} from "../../lib/firewallPolicyEditor";
-import type { FirewallPolicyDraft, FirewallRuleDraft } from "../../lib/firewallPolicyEditor";
-import type { FirewallDryRun, FirewallPolicy } from "../../lib/types";
-import { ConfirmDialog } from "../home/ConfirmDialog";
+} from "./editor";
+import type { FirewallPolicyDraft, FirewallRuleDraft } from "./editor";
+import type { FirewallApi, FirewallDryRun, FirewallPolicy } from "./api";
 import { FirewallDryRunPanel } from "./FirewallDryRunPanel";
 import { FirewallPolicyForm } from "./FirewallPolicyForm";
 
@@ -30,8 +28,12 @@ interface EditorState {
   confirmDelete: boolean;
 }
 
-function FirewallSection() {
-  const policies = useQuery(() => firewallPoliciesQuery());
+function FirewallSection(props: { api: FirewallApi }) {
+  const policies = useQuery(() => ({
+    queryKey: ["firewall", "policies"] as const,
+    queryFn: typeof window === "undefined" ? () => Promise.resolve([]) : props.api.listPolicies,
+    refetchInterval: 10_000
+  }));
   const [editor, setEditor] = createStore<EditorState>({
     selectedId: null,
     expectedRevision: null,
@@ -107,9 +109,9 @@ function FirewallSection() {
       const spec = firewallPolicySpec(editor.draft);
       const policyId = editor.draft.id.trim();
       if (operation === "dry-run") {
-        setEditor("dryRun", await dryRunFirewallPolicy(policyId, spec));
+        setEditor("dryRun", await props.api.dryRunPolicy(policyId, spec));
       } else {
-        await saveFirewallPolicy(policyId, spec, editor.expectedRevision ?? undefined);
+        await props.api.savePolicy(policyId, spec, editor.expectedRevision ?? undefined);
         const refreshed = await policies.refetch();
         setEditor("selectedId", policyId);
         setEditor(
@@ -132,7 +134,7 @@ function FirewallSection() {
     setEditor("operation", "delete");
     setEditor("error", null);
     try {
-      await deleteFirewallPolicy(policy.meta.id, editor.expectedRevision);
+      await props.api.deletePolicy(policy.meta.id, editor.expectedRevision);
       await policies.refetch();
       setEditor({
         selectedId: null,

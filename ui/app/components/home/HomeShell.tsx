@@ -1,4 +1,5 @@
 import { createSignal, Match, Show, Switch } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
@@ -7,7 +8,7 @@ import type { Service } from "../../lib/types";
 import { clusterInfoQuery, servicesQuery } from "../../lib/queries";
 import { ServiceSidebar } from "../service-detail/Sidebar";
 import { NodeNavSection } from "./NodeNavSection";
-import type { HomeTab } from "./NodeNavSection";
+import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
 import { NodeMetricsSection } from "./NodeMetricsSection";
 import { DisksSection } from "./DisksSection";
@@ -19,13 +20,20 @@ import { NodesSection } from "./NodesSection";
 import { HttpLogsSection } from "./HttpLogsSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
 import { IngressTrafficTab } from "../ingress/TrafficTab";
-import { FirewallSection } from "../firewall/FirewallSection";
+import { panelFeatureRegistry } from "../../features";
 
-function HomeShell(props: { tab: HomeTab }) {
+function HomeShell(props: { path: HomePath }) {
   const navigate = useNavigate();
   const services = useQuery(() => servicesQuery());
   const cluster = useQuery(() => clusterInfoQuery());
   const [drawerOpen, setDrawerOpen] = createSignal(false);
+  const featureRoute = () => panelFeatureRegistry.routes.find((route) => route.path === props.path);
+  const fullPage = () =>
+    props.path === "/http-logs" ||
+    props.path === "/cluster/logs" ||
+    featureRoute()?.layout === "full";
+  const widePage = () =>
+    props.path === "/traffic" || fullPage() || featureRoute()?.layout === "wide";
 
   const navigateService = (service: Service) => {
     setDrawerOpen(false);
@@ -45,7 +53,7 @@ function HomeShell(props: { tab: HomeTab }) {
           setDrawerOpen(false);
           navigate({ to: "/" });
         }}
-        topSection={<NodeNavSection active={props.tab} onNavigate={() => setDrawerOpen(false)} />}
+        topSection={<NodeNavSection active={props.path} onNavigate={() => setDrawerOpen(false)} />}
         mobileOpen={drawerOpen()}
         onCloseMobile={() => setDrawerOpen(false)}
       />
@@ -67,30 +75,22 @@ function HomeShell(props: { tab: HomeTab }) {
         </div>
         <div
           class={clsx("flex-1 py-5 sm:py-6", {
-            "min-h-0 overflow-hidden": props.tab === "http-logs" || props.tab === "cluster-logs",
-            "overflow-y-auto": props.tab !== "http-logs" && props.tab !== "cluster-logs"
+            "min-h-0 overflow-hidden": fullPage(),
+            "overflow-y-auto": !fullPage()
           })}
         >
           <div
             class={clsx("mx-auto px-4 sm:px-6", {
-              "max-w-6xl":
-                props.tab === "traffic" ||
-                props.tab === "firewall" ||
-                props.tab === "http-logs" ||
-                props.tab === "cluster-logs",
-              "max-w-4xl":
-                props.tab !== "traffic" &&
-                props.tab !== "firewall" &&
-                props.tab !== "http-logs" &&
-                props.tab !== "cluster-logs",
-              "h-full min-h-0": props.tab === "http-logs" || props.tab === "cluster-logs"
+              "max-w-6xl": widePage(),
+              "max-w-4xl": !widePage(),
+              "h-full min-h-0": fullPage()
             })}
           >
             <ClientOnly
               fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}
             >
               <Switch>
-                <Match when={props.tab === "info"}>
+                <Match when={props.path === "/"}>
                   <div class="space-y-8">
                     <ClusterHero />
                     <ClusterStatsSection />
@@ -98,29 +98,29 @@ function HomeShell(props: { tab: HomeTab }) {
                     <Webhooks />
                   </div>
                 </Match>
-                <Match when={props.tab === "metrics"}>
+                <Match when={props.path === "/metrics"}>
                   <div class="space-y-8">
                     <DisksSection />
                     <NodeMetricsSection />
                   </div>
                 </Match>
-                <Match when={props.tab === "traffic"}>
+                <Match when={props.path === "/traffic"}>
                   <IngressTrafficTab />
                 </Match>
-                <Match when={props.tab === "http-logs"}>
+                <Match when={props.path === "/http-logs"}>
                   <HttpLogsSection />
                 </Match>
-                <Match when={props.tab === "services"}>
+                <Match when={props.path === "/services"}>
                   <ServicesGrid />
                 </Match>
-                <Match when={props.tab === "cluster"}>
+                <Match when={props.path === "/cluster"}>
                   <NodesSection />
                 </Match>
-                <Match when={props.tab === "cluster-logs"}>
+                <Match when={props.path === "/cluster/logs"}>
                   <ClusterLogsSection />
                 </Match>
-                <Match when={props.tab === "firewall"}>
-                  <FirewallSection />
+                <Match when={featureRoute()}>
+                  {(route) => <Dynamic component={route().component} />}
                 </Match>
               </Switch>
             </ClientOnly>

@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import type { FirewallDryRun } from "../../lib/types";
+import type { FirewallDryRun } from "./api";
 
 function FirewallDryRunPanel(props: { result: FirewallDryRun | null }) {
   return (

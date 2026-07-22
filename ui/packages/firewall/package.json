@@ -1,23 +1,26 @@
 {
-  "name": "@maestro/kit",
+  "name": "@maestro/firewall",
   "version": "0.1.0",
   "private": true,
-  "description": "Shared Maestro panel primitives",
+  "description": "Maestro firewall policy feature",
   "type": "module",
   "main": "./src/index.tsx",
   "types": "./src/index.tsx",
   "scripts": {
-    "test": "pnpm typecheck",
+    "test": "vitest run && pnpm typecheck",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@kobalte/core": "^0.13.12",
+    "@maestro/api-client": "workspace:*",
+    "@maestro/kit": "workspace:*",
+    "@maestro/sdk": "workspace:*",
     "clsx": "^2.1.1",
     "lucide-solid": "^0.577.0",
     "solid-js": "^1.9.14"
   },
   "devDependencies": {
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@10.11.1"
 }

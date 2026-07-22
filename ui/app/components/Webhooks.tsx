@@ -7,7 +7,7 @@ import type { Webhook, WebhookEvent } from "../lib/types";
 import { createWebhook, deleteWebhook, testWebhook } from "../lib/api";
 import { queryKeys, webhooksQuery } from "../lib/queries";
 import { SectionHeader } from "@maestro/kit";
-import { ConfirmDialog } from "./home/ConfirmDialog";
+import { ConfirmDialog } from "@maestro/kit";
 
 const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
   { value: "deploymentTransition", label: "Deployments" },

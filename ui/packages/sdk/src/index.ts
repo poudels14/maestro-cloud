@@ -4,6 +4,7 @@ export type {
   FeatureManifest,
   FeaturePath,
   FeatureRegistry,
+  ComposedFeatureRegistry,
   NavEntry,
   NavSection,
   ResourceViewDefinition,

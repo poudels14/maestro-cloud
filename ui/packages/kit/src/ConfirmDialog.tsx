@@ -1,6 +1,5 @@
 import { Dialog } from "@kobalte/core/dialog";
-import { Show } from "solid-js";
-import type { JSX } from "solid-js";
+import { Show, type JSX } from "solid-js";
 
 function ConfirmDialog(props: {
   open: boolean;

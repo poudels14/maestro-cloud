@@ -35,13 +35,21 @@ interface FeatureRegistry {
   resourceViews: ResourceViewDefinition[];
 }
 
+type ComposedFeatureRegistry<Manifests extends readonly FeatureManifest[]> = {
+  routes: Array<Manifests[number]["routes"][number]>;
+  nav: Array<Manifests[number]["nav"][number]>;
+  resourceViews: ResourceViewDefinition[];
+};
+
 function defineFeatureManifest<const Manifest extends FeatureManifest>(
   manifest: Manifest
 ): Manifest {
   return manifest;
 }
 
-function composeFeatureManifests(manifests: readonly FeatureManifest[]): FeatureRegistry {
+function composeFeatureManifests<const Manifests extends readonly FeatureManifest[]>(
+  manifests: Manifests
+): ComposedFeatureRegistry<Manifests> {
   const routes: RouteDefinition[] = [];
   const nav: NavEntry[] = [];
   const resourceViews: ResourceViewDefinition[] = [];
@@ -73,7 +81,7 @@ function composeFeatureManifests(manifests: readonly FeatureManifest[]): Feature
   }
 
   nav.sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
-  return { routes, nav, resourceViews };
+  return { routes, nav, resourceViews } as ComposedFeatureRegistry<Manifests>;
 }
 
 export { composeFeatureManifests, defineFeatureManifest };
@@ -82,6 +90,7 @@ export type {
   FeatureManifest,
   FeaturePath,
   FeatureRegistry,
+  ComposedFeatureRegistry,
   NavEntry,
   NavSection,
   ResourceViewDefinition,

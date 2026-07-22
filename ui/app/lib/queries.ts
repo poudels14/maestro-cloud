@@ -16,7 +16,6 @@ import {
   getNodeMetrics,
   getClusterStats,
   getIngressBlocklist,
-  listFirewallPolicies,
   getServiceMetrics,
   getServiceTraffic,
   getServices,
@@ -53,8 +52,7 @@ const queryKeys = {
   ingressBlocklist: ["ingress", "blocklist"] as const,
   containerMetrics: (serviceId: string, range: number) =>
     ["metrics", "containers", serviceId, range] as const,
-  webhooks: ["webhooks"] as const,
-  firewallPolicies: ["firewall", "policies"] as const
+  webhooks: ["webhooks"] as const
 };
 
 const clusterInfoQuery = (opts?: { pollForMaintenance?: boolean }) => ({
@@ -211,12 +209,6 @@ const webhooksQuery = () => ({
   queryFn: ssrSafe(listWebhooks, [])
 });
 
-const firewallPoliciesQuery = () => ({
-  queryKey: queryKeys.firewallPolicies,
-  queryFn: ssrSafe(listFirewallPolicies, []),
-  refetchInterval: 10_000
-});
-
 export {
   queryKeys,
   clusterInfoQuery,
@@ -237,6 +229,5 @@ export {
   blockedIngressTrafficQuery,
   ingressBlocklistQuery,
   containerMetricsQuery,
-  webhooksQuery,
-  firewallPoliciesQuery
+  webhooksQuery
 };
