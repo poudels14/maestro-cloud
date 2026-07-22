@@ -14,7 +14,7 @@ use runtime::{
     TokioRuntimeClock, WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 
-use super::workload_fixture::{LOG_STDERR_MARKER, LOG_STDOUT_MARKER, WORKLOAD_IMAGE, put_service};
+use super::workload_fixture::{LOG_STDERR_MARKER, LOG_STDOUT_MARKER, put_service};
 use super::*;
 
 const WORKLOAD_TIMEOUT: Duration = Duration::from_secs(90);
@@ -25,7 +25,6 @@ async fn real_process_workload_adopts_and_recovers_after_runtime_loss()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster = RealProcessCluster::new(1)?;
     cluster.bootstrap_seed().await?;
-    cluster.pull_workload_image()?;
 
     let store = cluster.wait_store().await?;
     put_service(&store, &cluster.cluster.cluster_id).await?;
@@ -83,45 +82,6 @@ struct ReadyWorkload {
 impl RealProcessCluster {
     fn runtime_namespace(&self) -> String {
         format!("maestro-{}", self.cluster.cluster_id)
-    }
-
-    fn pull_workload_image(&self) -> Result<(), RealClusterError> {
-        let platform = match std::env::consts::ARCH {
-            "x86_64" => "linux/amd64",
-            "aarch64" => "linux/arm64",
-            architecture => {
-                return Err(RealClusterError::new(format!(
-                    "unsupported workload test architecture `{architecture}`"
-                )));
-            }
-        };
-        let socket = self
-            .containerd_socket
-            .to_str()
-            .ok_or_else(|| RealClusterError::new("containerd socket is not UTF-8"))?;
-        let output = Command::new("ctr")
-            .args([
-                "--address",
-                socket,
-                "--namespace",
-                &self.runtime_namespace(),
-                "images",
-                "pull",
-                "--platform",
-                platform,
-                WORKLOAD_IMAGE,
-            ])
-            .output()
-            .map_err(RealClusterError::from_display)?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(RealClusterError::new(format!(
-                "pull workload image failed with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )))
-        }
     }
 
     async fn stop_daemon(&mut self, index: usize) -> Result<(), RealClusterError> {

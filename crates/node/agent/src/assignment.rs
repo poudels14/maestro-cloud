@@ -117,6 +117,8 @@ impl AssignmentAgent {
             .now()
             .saturating_add(self.settings.resync_interval);
         let mut runtime_cursor: Option<EventCursor> = None;
+        let mut runtime_events = None;
+        let mut runtime_reconnect_at = self.monotonic_clock.now();
         loop {
             if *shutdown.borrow() {
                 #[cfg(unix)]
@@ -176,26 +178,26 @@ impl AssignmentAgent {
                 }
                 Err(error) => return Err(error.into()),
             };
-            let mut runtime_stream_ended = false;
-            let mut runtime_reconnect_at = self
-                .monotonic_clock
-                .now()
-                .saturating_add(RUNTIME_STREAM_RECONNECT_DELAY);
-            let mut runtime_events = match self
-                .runtime
-                .events(EventRequest {
-                    cluster_id: self.settings.cluster_id.clone(),
-                    node_id: self.settings.node_id.clone(),
-                    after: runtime_cursor.clone(),
-                })
-                .await
-            {
-                Ok(events) => Some(events),
-                Err(_) => {
-                    runtime_stream_ended = true;
-                    None
-                }
-            };
+            if runtime_events.is_none() && self.monotonic_clock.now() >= runtime_reconnect_at {
+                runtime_events = match self
+                    .runtime
+                    .events(EventRequest {
+                        cluster_id: self.settings.cluster_id.clone(),
+                        node_id: self.settings.node_id.clone(),
+                        after: runtime_cursor.clone(),
+                    })
+                    .await
+                {
+                    Ok(events) => Some(events),
+                    Err(_) => {
+                        runtime_reconnect_at = self
+                            .monotonic_clock
+                            .now()
+                            .saturating_add(RUNTIME_STREAM_RECONNECT_DELAY);
+                        None
+                    }
+                };
+            }
             loop {
                 tokio::select! {
                     changed = shutdown.changed() => {
@@ -224,7 +226,7 @@ impl AssignmentAgent {
                             Some(events) => events.next().await,
                             None => std::future::pending().await,
                         }
-                    }, if !runtime_stream_ended => {
+                    }, if runtime_events.is_some() && retry_at.is_none() => {
                         match event {
                             Ok(Some(event)) => {
                                 runtime_cursor = Some(event.cursor);
@@ -232,7 +234,6 @@ impl AssignmentAgent {
                             }
                             Ok(None) | Err(_) => {
                                 runtime_events = None;
-                                runtime_stream_ended = true;
                                 runtime_reconnect_at = self
                                     .monotonic_clock
                                     .now()
@@ -240,7 +241,7 @@ impl AssignmentAgent {
                             }
                         }
                     }
-                    () = self.monotonic_clock.sleep_until(runtime_reconnect_at), if runtime_stream_ended => {
+                    () = self.monotonic_clock.sleep_until(runtime_reconnect_at), if runtime_events.is_none() => {
                         break;
                     }
                     () = async {

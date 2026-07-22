@@ -460,6 +460,23 @@ struct ControllerRoleRuntime {
 
 #[async_trait]
 impl RoleRuntime for ControllerRoleRuntime {
+    fn is_finished(&self) -> bool {
+        self.task.as_ref().is_some_and(JoinHandle::is_finished)
+    }
+
+    async fn take_failure(&mut self) -> RoleError {
+        let Some(task) = self.task.take() else {
+            return RoleError::new(
+                "controller runtime reported a failure without a leadership worker",
+            );
+        };
+        match task.await {
+            Ok(Ok(())) => RoleError::new("controller leadership worker exited unexpectedly"),
+            Ok(Err(error)) => error,
+            Err(error) => RoleError::new(format!("leadership task failed: {error}")),
+        }
+    }
+
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
         let failures = match self.task.take() {

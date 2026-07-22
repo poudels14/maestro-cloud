@@ -25,10 +25,10 @@ use runtime::{
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 #[tokio::test]
-#[ignore = "requires containerd and MAESTRO_CONTAINERD_TEST_IMAGE already pulled and unpacked"]
+#[ignore = "requires containerd and registry access for MAESTRO_CONTAINERD_TEST_IMAGE"]
 async fn containerd_backend_passes_workload_runtime_conformance() {
     let image = std::env::var("MAESTRO_CONTAINERD_TEST_IMAGE")
-        .expect("MAESTRO_CONTAINERD_TEST_IMAGE must name an unpacked local image");
+        .expect("MAESTRO_CONTAINERD_TEST_IMAGE must name a pullable image");
     let temporary_root = tempfile::tempdir().unwrap();
     let process_id = std::process::id();
     let settings = ContainerdRuntimeSettings {

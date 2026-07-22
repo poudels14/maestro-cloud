@@ -18,6 +18,7 @@ async fn startup_failure_rolls_back_already_started_roles() -> Result<(), Box<dy
         state: state.clone(),
         fail_start: Some(DaemonRole::Controller),
         fail_shutdown: None,
+        fail_runtime: None,
     };
     let plan = plan()?;
     let error = match Daemon::new(plan, factory).start().await {
@@ -51,6 +52,7 @@ async fn shutdown_is_reverse_ordered_and_continues_after_failure()
         state: state.clone(),
         fail_start: None,
         fail_shutdown: Some(DaemonRole::Controller),
+        fail_runtime: None,
     };
     let running = Daemon::new(plan()?, factory).start().await?;
     assert_eq!(
@@ -75,6 +77,32 @@ async fn shutdown_is_reverse_ordered_and_continues_after_failure()
     Ok(())
 }
 
+#[tokio::test]
+async fn background_role_failure_is_observed() -> Result<(), Box<dyn std::error::Error>> {
+    let state = Arc::new(Mutex::new(Recorded::default()));
+    let factory = RecordingFactory {
+        state,
+        fail_start: None,
+        fail_shutdown: None,
+        fail_runtime: Some(DaemonRole::Agent),
+    };
+    let mut running = Daemon::new(plan()?, factory).start().await?;
+    let failure = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        running.wait_for_failure(),
+    )
+    .await?;
+    assert!(matches!(
+        failure,
+        DaemonError::Runtime {
+            role: DaemonRole::Agent,
+            ..
+        }
+    ));
+    running.shutdown().await?;
+    Ok(())
+}
+
 fn plan() -> Result<DaemonPlan, Box<dyn std::error::Error>> {
     Ok(DaemonPlan::new(
         cluster_with_nodes(&[("master", NodeRole::Master)])?,
@@ -92,6 +120,7 @@ struct RecordingFactory {
     state: Arc<Mutex<Recorded>>,
     fail_start: Option<DaemonRole>,
     fail_shutdown: Option<DaemonRole>,
+    fail_runtime: Option<DaemonRole>,
 }
 
 #[async_trait]
@@ -109,6 +138,7 @@ impl RoleFactory for RecordingFactory {
             role: spec.role,
             state: self.state.clone(),
             fail_shutdown: self.fail_shutdown == Some(spec.role),
+            fail_runtime: self.fail_runtime == Some(spec.role),
         }))
     }
 }
@@ -117,10 +147,19 @@ struct RecordingRuntime {
     role: DaemonRole,
     state: Arc<Mutex<Recorded>>,
     fail_shutdown: bool,
+    fail_runtime: bool,
 }
 
 #[async_trait]
 impl RoleRuntime for RecordingRuntime {
+    fn is_finished(&self) -> bool {
+        self.fail_runtime
+    }
+
+    async fn take_failure(&mut self) -> RoleError {
+        RoleError::new("injected runtime failure")
+    }
+
     async fn shutdown(self: Box<Self>) -> Result<(), RoleError> {
         record(&self.state, format!("stop:{}", role_name(self.role)))?;
         if self.fail_shutdown {

@@ -28,8 +28,8 @@ use crate::containerd_support::{
 };
 use crate::file_log::FileLogStream;
 use crate::{
-    Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest, LogStream,
-    ObservedWorkload, RuntimeCapability, RuntimeClock, RuntimeError, RuntimeEventStream,
+    ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest,
+    LogStream, ObservedWorkload, RuntimeCapability, RuntimeClock, RuntimeError, RuntimeEventStream,
     ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
 };
 
@@ -147,6 +147,9 @@ impl WorkloadRuntime for ContainerdRuntime {
             Err(RuntimeError::NotFound { .. }) => {}
             Err(error) => return Err(error),
         }
+        self.ensure_local(&workload.image)
+            .await
+            .map_err(|error| crate::artifact::workload_artifact_error(&workload.image, error))?;
         let image = load_image(
             self.channel.clone(),
             &self.settings.namespace,

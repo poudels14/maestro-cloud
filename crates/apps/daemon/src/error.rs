@@ -49,6 +49,9 @@ pub enum DaemonError {
         error: RoleError,
         rollback_failures: Vec<RoleFailure>,
     },
+    /// A role-owned worker terminated while the daemon was expected to run.
+    #[error("{role} role terminated: {error}")]
+    Runtime { role: DaemonRole, error: RoleError },
     /// Every role was asked to stop, but one or more returned an error.
     #[error("daemon role shutdown failed: {failures:?}")]
     Shutdown { failures: Vec<RoleFailure> },

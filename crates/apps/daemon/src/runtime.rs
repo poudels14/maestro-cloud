@@ -1,10 +1,17 @@
 use async_trait::async_trait;
+use std::time::Duration;
 
 use crate::{DaemonError, DaemonPlan, DaemonRole, RoleError, RoleFailure, RoleSpec};
 
 /// Owned lifetime of one started daemon role.
 #[async_trait]
 pub trait RoleRuntime: Send {
+    /// Reports whether a role-owned worker has terminated unexpectedly.
+    fn is_finished(&self) -> bool;
+
+    /// Collects one already-finished worker failure.
+    async fn take_failure(&mut self) -> RoleError;
+
     /// Stops all role-owned work and waits for completion.
     ///
     /// Dropping a runtime without calling this method must still cancel or
@@ -79,6 +86,22 @@ impl RunningDaemon {
     /// Returns active roles in their original startup order.
     pub fn active_roles(&self) -> Vec<DaemonRole> {
         self.roles.iter().map(|active| active.role).collect()
+    }
+
+    /// Waits until one role-owned worker terminates instead of silently
+    /// leaving a partially functioning daemon alive.
+    pub async fn wait_for_failure(&mut self) -> DaemonError {
+        loop {
+            for active in &mut self.roles {
+                if active.runtime.is_finished() {
+                    return DaemonError::Runtime {
+                        role: active.role,
+                        error: active.runtime.take_failure().await,
+                    };
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Stops roles in reverse order and attempts every shutdown after errors.

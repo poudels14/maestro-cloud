@@ -193,6 +193,18 @@ pub trait ArtifactStore: Send + Sync {
         reference: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError>;
 
+    /// Ensures a referenced artifact is present in the local runtime store.
+    ///
+    /// Backends may avoid a remote transfer when the reference already resolves
+    /// locally. The default preserves compatibility for stores whose resolver
+    /// already materializes missing content.
+    async fn ensure_local(
+        &self,
+        reference: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.resolve_digest(reference).await
+    }
+
     /// Opens a bounded byte stream for one immutable local artifact.
     async fn export(
         &self,
@@ -210,4 +222,27 @@ pub trait ArtifactStore: Send + Sync {
         &self,
         policy: &ArtifactPrunePolicy,
     ) -> Result<ArtifactPruneReport, ArtifactStoreError>;
+}
+
+#[cfg(any(feature = "containerd", feature = "docker"))]
+pub(crate) fn workload_artifact_error(
+    reference: &ArtifactReference,
+    error: ArtifactStoreError,
+) -> crate::RuntimeError {
+    match error {
+        ArtifactStoreError::Unavailable { message } | ArtifactStoreError::Stream { message } => {
+            crate::RuntimeError::Unavailable {
+                message: format!(
+                    "failed to materialize workload artifact `{}`: {message}",
+                    reference.as_str()
+                ),
+            }
+        }
+        error => crate::RuntimeError::Rejected {
+            message: format!(
+                "failed to materialize workload artifact `{}`: {error}",
+                reference.as_str()
+            ),
+        },
+    }
 }

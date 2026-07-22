@@ -21,9 +21,10 @@ use crate::docker_support::{
     process_id, runtime_error, validate_existing, workload_status,
 };
 use crate::{
-    Capabilities, CgroupPath, EventRequest, ExecMode, ExecRequest, ExecSession, LogMode,
-    LogRequest, LogStream, ObservedWorkload, RuntimeCapability, RuntimeError, RuntimeEventStream,
-    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
+    ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecMode, ExecRequest, ExecSession,
+    LogMode, LogRequest, LogStream, ObservedWorkload, RuntimeCapability, RuntimeError,
+    RuntimeEventStream, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec,
+    WorkloadState, WorkloadStatus,
 };
 
 /// Docker Engine workload backend using Bollard's native daemon API.
@@ -86,6 +87,14 @@ impl WorkloadRuntime for DockerRuntime {
         {
             Ok(inspect) => validate_existing(&inspect, workload_id, &config.fingerprint),
             Err(error) if is_not_found(&error) => {
+                let WorkloadSpec::Container(workload) = spec else {
+                    return Err(RuntimeError::InvalidSpec {
+                        message: "Docker runtime accepts only container workloads".to_owned(),
+                    });
+                };
+                self.ensure_local(&workload.image).await.map_err(|error| {
+                    crate::artifact::workload_artifact_error(&workload.image, error)
+                })?;
                 let options = CreateContainerOptionsBuilder::default()
                     .name(&config.name)
                     .build();

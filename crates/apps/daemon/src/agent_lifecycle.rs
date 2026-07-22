@@ -156,6 +156,21 @@ impl AgentRoleRuntime {
 
 #[async_trait]
 impl RoleRuntime for AgentRoleRuntime {
+    fn is_finished(&self) -> bool {
+        self.tasks.iter().any(JoinHandle::is_finished)
+    }
+
+    async fn take_failure(&mut self) -> RoleError {
+        let Some(index) = self.tasks.iter().position(JoinHandle::is_finished) else {
+            return RoleError::new("agent runtime reported a failure without a finished worker");
+        };
+        match self.tasks.swap_remove(index).await {
+            Ok(Ok(())) => RoleError::new("node agent worker exited unexpectedly"),
+            Ok(Err(error)) => error,
+            Err(error) => RoleError::new(format!("node agent task failed: {error}")),
+        }
+    }
+
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
         let mut failures = Vec::new();

@@ -1,6 +1,5 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -24,7 +23,7 @@ use crate::{
 /// Production linearizable store backed by an etcd v3 cluster.
 #[derive(Clone)]
 pub struct EtcdStore {
-    client: Arc<Mutex<Client>>,
+    client: Client,
     values: ValueProtector,
 }
 
@@ -173,7 +172,7 @@ impl EtcdStore {
             .await
             .map_err(unavailable)?;
         Ok(Self {
-            client: Arc::new(Mutex::new(client)),
+            client,
             values: ValueProtector::new(encryption_key),
         })
     }
@@ -202,8 +201,7 @@ impl EtcdStore {
             .collect::<Result<Vec<_>, _>>()?;
         let response = self
             .client
-            .lock()
-            .await
+            .clone()
             .txn(Txn::new().when(compares).and_then(operations))
             .await
             .map_err(|error| operation_error(error, session))?;
@@ -278,8 +276,7 @@ impl Store for EtcdStore {
     async fn get(&self, key: &StoreKey) -> Result<Option<StoredValue>, StoreError> {
         let response = self
             .client
-            .lock()
-            .await
+            .clone()
             .get(key.as_str(), None)
             .await
             .map_err(unavailable)?;
@@ -295,8 +292,7 @@ impl Store for EtcdStore {
     async fn list(&self, prefix: &StorePrefix) -> Result<ListResult, StoreError> {
         let response = self
             .client
-            .lock()
-            .await
+            .clone()
             .get(prefix.as_str(), Some(GetOptions::new().with_prefix()))
             .await
             .map_err(unavailable)?;
@@ -395,8 +391,7 @@ impl Store for EtcdStore {
         let ttl_seconds = duration_to_ttl(ttl)?;
         let response = self
             .client
-            .lock()
-            .await
+            .clone()
             .lease_grant(ttl_seconds, None)
             .await
             .map_err(unavailable)?;
@@ -412,7 +407,7 @@ impl Store for EtcdStore {
 }
 
 struct EtcdWatch {
-    client: Arc<Mutex<Client>>,
+    client: Client,
     values: ValueProtector,
     prefix: StorePrefix,
     resume_after: Option<WatchCursor>,
@@ -436,8 +431,6 @@ impl StoreWatch for EtcdWatch {
                 }
                 let stream = self
                     .client
-                    .lock()
-                    .await
                     .watch(self.prefix.as_str(), Some(options))
                     .await
                     .map_err(unavailable)?;
@@ -503,7 +496,7 @@ impl StoreWatch for EtcdWatch {
 }
 
 struct EtcdSession {
-    client: Arc<Mutex<Client>>,
+    client: Client,
     id: SessionId,
     ttl: Duration,
     closed: AtomicBool,
@@ -530,8 +523,7 @@ impl Session for EtcdSession {
         if keepalive.is_none() {
             let pair = self
                 .client
-                .lock()
-                .await
+                .clone()
                 .lease_keep_alive(session_i64(self.id)?)
                 .await
                 .map_err(|error| {
@@ -586,8 +578,7 @@ impl Session for EtcdSession {
             });
         }
         self.client
-            .lock()
-            .await
+            .clone()
             .lease_revoke(session_i64(self.id)?)
             .await
             .map_err(|error| {

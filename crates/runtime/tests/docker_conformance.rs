@@ -22,10 +22,10 @@ use runtime::conformance::{
 
 #[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
 #[tokio::test]
-#[ignore = "requires a Docker daemon and MAESTRO_DOCKER_TEST_IMAGE already present locally"]
+#[ignore = "requires a Docker daemon and registry access for MAESTRO_DOCKER_TEST_IMAGE"]
 async fn docker_backend_passes_workload_runtime_conformance() {
     let image = std::env::var("MAESTRO_DOCKER_TEST_IMAGE")
-        .expect("MAESTRO_DOCKER_TEST_IMAGE must name a local image");
+        .expect("MAESTRO_DOCKER_TEST_IMAGE must name a pullable image");
     let workload_id = format!("docker-conformance-{}", std::process::id());
     let spec = container_spec(&image, &workload_id, "docker-conformance");
     let conflicting_spec = container_spec(&image, &workload_id, "docker-conflict");

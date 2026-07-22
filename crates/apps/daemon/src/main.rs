@@ -85,10 +85,20 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn start(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = tokio::task::spawn_blocking(move || load_launch_config(&path)).await??;
-    let running = launch_daemon(config).await?;
-    shutdown_signal().await?;
-    running.shutdown().await?;
-    Ok(())
+    let mut running = launch_daemon(config).await?;
+    tokio::select! {
+        signal = shutdown_signal() => {
+            signal?;
+            running.shutdown().await?;
+            Ok(())
+        }
+        failure = running.wait_for_failure() => {
+            if let Err(error) = running.shutdown().await {
+                eprintln!("maestro daemon cleanup after role failure failed: {error}");
+            }
+            Err(failure.into())
+        }
+    }
 }
 
 fn admin_command(

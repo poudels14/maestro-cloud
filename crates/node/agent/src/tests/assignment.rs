@@ -227,7 +227,7 @@ async fn assignment_reconcile_stops_after_restart_budget_is_exhausted()
 }
 
 #[tokio::test]
-async fn assignment_run_restarts_an_exit_delivered_after_event_subscription()
+async fn assignment_run_restarts_an_exit_with_one_persistent_event_subscription()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     world.seed(&deployment(), &assignment()).await?;
@@ -252,7 +252,7 @@ async fn assignment_run_restarts_an_exit_delivered_after_event_subscription()
                 .into_iter()
                 .filter(|call| call.operation == FakeRuntimeOperation::Events)
                 .count();
-            if subscriptions >= 3 {
+            if subscriptions == 1 {
                 return;
             }
             tokio::task::yield_now().await;
@@ -303,6 +303,13 @@ async fn assignment_run_restarts_an_exit_delivered_after_event_subscription()
         .filter(|call| call.operation == FakeRuntimeOperation::Start)
         .count();
     assert_eq!(starts, 2);
+    let subscriptions = world
+        .runtime
+        .calls()?
+        .into_iter()
+        .filter(|call| call.operation == FakeRuntimeOperation::Events)
+        .count();
+    assert_eq!(subscriptions, 1);
     Ok(())
 }
 

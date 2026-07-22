@@ -144,6 +144,17 @@ impl ArtifactStore for DockerRuntime {
         }
     }
 
+    async fn ensure_local(
+        &self,
+        reference: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        match self.client.inspect_image(reference.as_str()).await {
+            Ok(inspect) => inspect_digest(&inspect, reference.as_str()),
+            Err(error) if is_not_found(&error) => self.pull(reference).await,
+            Err(error) => Err(operation_error("resolve", Some(reference.as_str()), error)),
+        }
+    }
+
     async fn export(
         &self,
         digest: &ArtifactDigest,

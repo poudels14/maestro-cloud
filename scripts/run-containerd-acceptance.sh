@@ -15,12 +15,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 case "$(uname -m)" in
-  x86_64)
-    platform=linux/amd64
-    ;;
-  aarch64 | arm64)
-    platform=linux/arm64
-    ;;
+  x86_64 | aarch64 | arm64) ;;
   *)
     echo "unsupported containerd acceptance architecture: $(uname -m)" >&2
     exit 1
@@ -129,17 +124,6 @@ for attempt in {1..30}; do
 done
 
 image=mirror.gcr.io/library/busybox:1.36.1
-if ! ctr \
-  --address "$containerd_socket" \
-  --namespace maestro-test \
-  images pull \
-  --platform "$platform" \
-  "$image" \
-  >"$acceptance_root/image-pull.log" 2>&1; then
-  echo "failed to pull the containerd conformance image" >&2
-  exit 1
-fi
-
 MAESTRO_CONTAINERD_SOCKET="$containerd_socket" \
   MAESTRO_CONTAINERD_NAMESPACE=maestro-test \
   MAESTRO_CONTAINERD_SNAPSHOTTER=overlayfs \
