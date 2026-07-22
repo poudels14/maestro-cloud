@@ -15,6 +15,8 @@ pub(crate) enum ClusterCommand {
     Info,
     /// List durable cluster nodes and their scheduling state.
     Nodes,
+    /// Show the active cluster configuration with secrets omitted.
+    Config,
     /// Stop new workload placement on a node and drain its assignments.
     Drain {
         /// Stable cluster node identity.
@@ -91,6 +93,7 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
     match command {
         ClusterCommand::Info => cluster::info(&client, output).await,
         ClusterCommand::Nodes => cluster::list_nodes(&client, output).await,
+        ClusterCommand::Config => cluster::show_config(&client, output).await,
         ClusterCommand::Drain {
             node_id,
             idempotency_key,

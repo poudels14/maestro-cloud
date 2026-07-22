@@ -1,8 +1,8 @@
 use std::io::Write;
 
 use kernel_api::{
-    ClusterInfo, CommandRequest, ConditionState, Node, NodeCommandResponse, NodeId, NodeRole,
-    RequestId,
+    ClusterInfo, CommandRequest, ConditionState, MaskedClusterConfig, Node, NodeCommandResponse,
+    NodeId, NodeRole, RequestId,
 };
 
 use crate::CliError;
@@ -63,6 +63,16 @@ pub(crate) async fn list_nodes(
     Ok(())
 }
 
+pub(crate) async fn show_config(
+    client: &impl ClusterApi,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let config = client.cluster_config().await?;
+    serde_json::to_writer_pretty(&mut *output, &config)
+        .map_err(|source| CliError::json("failed to format cluster configuration", source))?;
+    writeln!(output).map_err(output_error)
+}
+
 pub(crate) async fn node_lifecycle(
     client: &impl ClusterApi,
     node_id: String,
@@ -119,6 +129,8 @@ impl NodeLifecycleAction {
 pub(crate) trait ClusterApi {
     async fn cluster_info(&self) -> Result<ClusterInfo, CliError>;
 
+    async fn cluster_config(&self) -> Result<MaskedClusterConfig, CliError>;
+
     async fn list_nodes(&self) -> Result<Vec<Node>, CliError>;
 
     async fn get_node(&self, node_id: &NodeId) -> Result<Node, CliError>;
@@ -135,6 +147,10 @@ pub(crate) trait ClusterApi {
 impl ClusterApi for ApiClient {
     async fn cluster_info(&self) -> Result<ClusterInfo, CliError> {
         self.get("/api/cluster").await
+    }
+
+    async fn cluster_config(&self) -> Result<MaskedClusterConfig, CliError> {
+        self.get("/api/config").await
     }
 
     async fn list_nodes(&self) -> Result<Vec<Node>, CliError> {

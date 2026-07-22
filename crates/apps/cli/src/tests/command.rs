@@ -26,6 +26,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(Cli::try_parse_from(["maestro-next", "contexts", "login", "--days", "30"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "info"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "nodes"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "config"]).is_ok());
     for command in ["drain", "restore"] {
         assert!(
             Cli::try_parse_from([

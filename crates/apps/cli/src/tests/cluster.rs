@@ -1,15 +1,19 @@
 use std::sync::Mutex;
 
 use kernel_api::{
-    ClusterId, ClusterInfo, CommandRequest, Node, NodeCommandResponse, NodeId, RequestId,
+    ClusterId, ClusterInfo, CommandRequest, MaskedClusterConfig, MaskedClusterConfigNode,
+    MaskedClusterConfigPorts, Node, NodeCommandResponse, NodeId, NodeRole, RequestId,
 };
 use serde_json::json;
 
 use crate::CliError;
-use crate::cluster::{ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle};
+use crate::cluster::{
+    ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle, show_config,
+};
 
 struct RecordingClusterApi {
     info: ClusterInfo,
+    config: MaskedClusterConfig,
     nodes: Vec<Node>,
     commands: Mutex<Vec<(NodeId, RequestId, NodeLifecycleAction, CommandRequest)>>,
 }
@@ -17,6 +21,10 @@ struct RecordingClusterApi {
 impl ClusterApi for RecordingClusterApi {
     async fn cluster_info(&self) -> Result<ClusterInfo, CliError> {
         Ok(self.info.clone())
+    }
+
+    async fn cluster_config(&self) -> Result<MaskedClusterConfig, CliError> {
+        Ok(self.config.clone())
     }
 
     async fn list_nodes(&self) -> Result<Vec<Node>, CliError> {
@@ -49,6 +57,19 @@ impl ClusterApi for RecordingClusterApi {
             draining: action == NodeLifecycleAction::Drain,
         })
     }
+}
+
+#[tokio::test]
+async fn cluster_config_prints_the_secret_free_api_contract()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    let mut output = Vec::new();
+    show_config(&api, &mut output).await?;
+    let document = String::from_utf8(output)?;
+    let decoded: MaskedClusterConfig = serde_json::from_str(&document)?;
+    assert_eq!(decoded, api.config);
+    assert!(!document.contains("joinSecret"));
+    Ok(())
 }
 
 #[tokio::test]
@@ -117,6 +138,26 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
             node_count: 2,
             control_plane_node_count: 1,
             workload_node_count: 2,
+        },
+        config: MaskedClusterConfig {
+            cluster_id: ClusterId::new("test-cluster")?,
+            name: "Test Cluster".to_string(),
+            local_node_id: NodeId::new("node-a")?,
+            nodes: vec![MaskedClusterConfigNode {
+                node_id: NodeId::new("node-a")?,
+                hostname: "master-a".to_string(),
+                role: NodeRole::Master,
+                host_address: "10.0.0.10".to_string(),
+                api_port: 3_000,
+                workload_subnet: "10.1.0.0/24".to_string(),
+            }],
+            control_allow_cidrs: vec!["10.0.0.0/24".to_string()],
+            ports: MaskedClusterConfigPorts {
+                gateway: 3_001,
+                store_client: 2_379,
+                store_peer: 2_380,
+                wireguard: 51_820,
+            },
         },
         nodes: vec![
             node("node-z", "worker-z", "worker", "10.0.0.12", 3, false)?,
