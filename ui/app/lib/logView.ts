@@ -16,10 +16,7 @@ export interface LogEntry {
   attrs?: [string, string][];
 }
 
-type OriginView = Pick<
-  LogEntry,
-  "origin" | "source" | "hostname" | "serviceId" | "tier" | "tags"
->;
+type OriginView = Pick<LogEntry, "origin" | "source" | "hostname" | "serviceId" | "tier" | "tags">;
 
 function mapClusterLogEntry(wire: ApiSchemas["ClusterLogEntry"]): LogEntry {
   const origin = mapOrigin(wire.entry.origin);
@@ -39,8 +36,9 @@ function mapClusterLogEntry(wire: ApiSchemas["ClusterLogEntry"]): LogEntry {
 }
 
 function sortLogEntries(entries: LogEntry[]): LogEntry[] {
-  return entries.sort((left, right) =>
-    left.ts - right.ts || left.nodeId.localeCompare(right.nodeId) || left.seq - right.seq
+  return entries.sort(
+    (left, right) =>
+      left.ts - right.ts || left.nodeId.localeCompare(right.nodeId) || left.seq - right.seq
   );
 }
 
@@ -108,7 +106,9 @@ function stringRecord(value: unknown): Record<string, string> {
   const record = objectValue(value);
   if (!record) return {};
   return Object.fromEntries(
-    Object.entries(record).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    Object.entries(record).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string"
+    )
   );
 }
 

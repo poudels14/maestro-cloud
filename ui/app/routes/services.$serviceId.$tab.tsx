@@ -5,7 +5,7 @@ import { Menu } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../lib/types";
 import { servicesQuery } from "../lib/queries";
-import { TabButton } from "../lib/ui";
+import { TabButton } from "@maestro/kit";
 import { ServiceSidebar } from "../components/service-detail/Sidebar";
 import { NodeNavSection } from "../components/home/NodeNavSection";
 import { OverviewTab } from "../components/service-detail/OverviewTab";

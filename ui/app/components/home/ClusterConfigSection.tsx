@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import type { MaskedConfig } from "../../lib/types";
 import { clusterConfigQuery } from "../../lib/queries";
-import { ErrorBanner, SectionHeader } from "../../lib/ui";
+import { ErrorBanner, SectionHeader } from "@maestro/kit";
 
 function ClusterConfigSection() {
   const config = useQuery(() => clusterConfigQuery());

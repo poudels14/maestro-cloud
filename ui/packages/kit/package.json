@@ -1,0 +1,22 @@
+{
+  "name": "@maestro/kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared Maestro panel primitives",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "test": "pnpm typecheck",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "^1.9.14"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "packageManager": "pnpm@10.11.1"
+}

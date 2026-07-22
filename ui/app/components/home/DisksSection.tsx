@@ -4,7 +4,7 @@ import { useQuery } from "../../lib/useQuery";
 import { disksQuery } from "../../lib/queries";
 import type { DiskInfo } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
-import { Card, SectionHeader } from "../../lib/ui";
+import { Card, SectionHeader } from "@maestro/kit";
 
 function DisksSection() {
   const disks = useQuery(() => disksQuery());

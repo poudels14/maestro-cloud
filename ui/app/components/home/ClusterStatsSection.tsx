@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
 import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
-import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
+import { ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
 import { clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";

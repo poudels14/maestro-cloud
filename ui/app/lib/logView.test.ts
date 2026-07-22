@@ -64,7 +64,10 @@ test("binary build logs remain readable and pages sort chronologically", () => {
 
   assert.equal(later.text, "build");
   assert.equal(later.source, "build-1/build");
-  assert.deepEqual(sortLogEntries([later, earlier]).map((entry) => entry.text), ["start", "build"]);
+  assert.deepEqual(
+    sortLogEntries([later, earlier]).map((entry) => entry.text),
+    ["start", "build"]
+  );
 });
 
 function clusterEntry(

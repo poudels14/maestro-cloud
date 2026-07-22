@@ -28,6 +28,9 @@ importers:
       '@maestro/api-client':
         specifier: workspace:*
         version: link:packages/api-client
+      '@maestro/kit':
+        specifier: workspace:*
+        version: link:packages/kit
       '@solidjs/meta':
         specifier: ^0.29.4
         version: 0.29.4(solid-js@1.9.14)
@@ -95,6 +98,22 @@ importers:
       openapi-typescript:
         specifier: 7.13.0
         version: 7.13.0(typescript@5.9.3)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  ui/packages/kit:
+    dependencies:
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-solid:
+        specifier: ^0.577.0
+        version: 0.577.0(solid-js@1.9.14)
+      solid-js:
+        specifier: ^1.9.14
+        version: 1.9.14
+    devDependencies:
       typescript:
         specifier: 5.9.3
         version: 5.9.3

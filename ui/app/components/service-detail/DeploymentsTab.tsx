@@ -10,7 +10,7 @@ import {
   restartDeployment
 } from "../../lib/api";
 import { deploymentsQuery, queryKeys } from "../../lib/queries";
-import { ErrorBanner } from "../../lib/ui";
+import { ErrorBanner } from "@maestro/kit";
 import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";

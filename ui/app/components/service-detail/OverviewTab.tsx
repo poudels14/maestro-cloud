@@ -3,7 +3,7 @@ import { GitPullRequest } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { servicePreviews } from "../../lib/previews";
 import { serviceDisplayStatus } from "../../lib/serviceView";
-import { StatusBadge } from "../../lib/ui";
+import { StatusBadge } from "@maestro/kit";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { IngressInfo } from "./overview/IngressInfo";

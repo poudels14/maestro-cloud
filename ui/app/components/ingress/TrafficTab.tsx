@@ -13,7 +13,7 @@ import {
   ingressBlocklistQuery
 } from "../../lib/queries";
 import type { TrafficBreakdownEntry } from "../../lib/types";
-import { Card, ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
+import { Card, ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
 import { LogHistogramChart } from "../logs/LogHistogram";
 import { LogViewer } from "../logs/LogViewer";
 

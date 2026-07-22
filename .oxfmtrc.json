@@ -1,5 +1,10 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "ui/app/routeTree.gen.ts",
+    "ui/packages/api-client/openapi.json",
+    "ui/packages/api-client/src/schema.d.ts"
+  ],
   "trailingComma": "none",
   "overrides": [
     {

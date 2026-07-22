@@ -6,7 +6,7 @@ import type { Deployment } from "../../lib/types";
 import { replicaFailure } from "../../lib/deploymentView";
 import { deploymentReplicasQuery } from "../../lib/queries";
 import { useQuery } from "../../lib/useQuery";
-import { ErrorBanner, StatusBadge, timeAgo } from "../../lib/ui";
+import { ErrorBanner, StatusBadge, timeAgo } from "@maestro/kit";
 import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
 import { ReplicaRow } from "./DeploymentRow";

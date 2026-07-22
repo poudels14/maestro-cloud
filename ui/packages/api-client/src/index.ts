@@ -33,12 +33,8 @@ export type ContainerMetricQuery = NonNullable<
   operations["listContainerMetrics"]["parameters"]["query"]
 >;
 export type LogReadQuery = NonNullable<operations["listLogs"]["parameters"]["query"]>;
-export type SystemLogReadQuery = NonNullable<
-  operations["listSystemLogs"]["parameters"]["query"]
->;
-export type LogHistogramQuery = NonNullable<
-  operations["getLogHistogram"]["parameters"]["query"]
->;
+export type SystemLogReadQuery = NonNullable<operations["listSystemLogs"]["parameters"]["query"]>;
+export type LogHistogramQuery = NonNullable<operations["getLogHistogram"]["parameters"]["query"]>;
 export type SystemLogHistogramQuery = NonNullable<
   operations["getSystemLogHistogram"]["parameters"]["query"]
 >;
@@ -575,8 +571,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
         ),
         options
       ),
-    getLogHistogram: (query, options) =>
-      get(withQuery("/api/logs/histogram", query), options),
+    getLogHistogram: (query, options) => get(withQuery("/api/logs/histogram", query), options),
     getSystemLogHistogram: (query, options) =>
       get(withQuery("/api/system/logs/histogram", query), options),
     getServiceLogHistogram: (serviceId, query, options) =>

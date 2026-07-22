@@ -99,15 +99,15 @@ function readQuery(request: LogPageRequest): LogReadQuery {
   };
 }
 
-function readScope(
-  scope: LogScope,
-  query: LogReadQuery
-): Promise<ApiSchemas["ClusterLogPage"]> {
+function readScope(scope: LogScope, query: LogReadQuery): Promise<ApiSchemas["ClusterLogPage"]> {
   switch (scope.type) {
     case "all":
       return apiClient().listLogs(query);
     case "system":
-      return apiClient().listSystemLogs({ ...query, ...(scope.component ? { component: scope.component } : {}) });
+      return apiClient().listSystemLogs({
+        ...query,
+        ...(scope.component ? { component: scope.component } : {})
+      });
     case "service":
       return apiClient().listServiceLogs(scope.serviceId, query);
     case "deployment":

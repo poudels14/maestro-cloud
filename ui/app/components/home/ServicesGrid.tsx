@@ -5,7 +5,7 @@ import { useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { deleteService } from "../../lib/api";
-import { ErrorBanner, SectionHeader } from "../../lib/ui";
+import { ErrorBanner, SectionHeader } from "@maestro/kit";
 import { queryKeys, servicesQuery } from "../../lib/queries";
 import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";

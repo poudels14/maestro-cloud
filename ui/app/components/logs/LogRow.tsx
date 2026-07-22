@@ -50,10 +50,10 @@ function LogRow(props: {
       }}
     >
       <div
-        class={clsx(
-          "flex flex-col gap-1 pr-2 py-1.5 sm:flex-row sm:items-start sm:gap-0 sm:py-1",
-          { "pl-2": !props.stream, "pl-4": props.stream }
-        )}
+        class={clsx("flex flex-col gap-1 pr-2 py-1.5 sm:flex-row sm:items-start sm:gap-0 sm:py-1", {
+          "pl-2": !props.stream,
+          "pl-4": props.stream
+        })}
       >
         <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 sm:contents">
           <Show when={!props.stream}>
@@ -70,10 +70,7 @@ function LogRow(props: {
           </div>
           <Show when={props.showHost}>
             <div
-              class={clsx(
-                "min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px",
-                LOG_COLUMNS.host
-              )}
+              class={clsx("min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px", LOG_COLUMNS.host)}
             >
               <HostCell value={host()} />
             </div>

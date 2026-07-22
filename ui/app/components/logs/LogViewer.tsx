@@ -20,7 +20,7 @@ import {
   type LogPage,
   type LogScope
 } from "../../lib/api";
-import { ErrorBanner } from "../../lib/ui";
+import { ErrorBanner } from "@maestro/kit";
 import { dateFormatter, httpFields } from "../../lib/logFormat";
 import { LogHistogramChart } from "./LogHistogram";
 import { LOG_COLUMNS, LogRow } from "./LogRow";
@@ -612,10 +612,7 @@ function LogViewer(props: {
                   </span>
                 </Show>
                 <span
-                  class={clsx(
-                    LOG_COLUMNS.level,
-                    "shrink-0 px-2 truncate border-l border-gray-300"
-                  )}
+                  class={clsx(LOG_COLUMNS.level, "shrink-0 px-2 truncate border-l border-gray-300")}
                 >
                   Level
                 </span>

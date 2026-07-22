@@ -5,7 +5,7 @@ import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
 import { serviceDisplayStatus } from "../../lib/serviceView";
-import { StatusDot } from "../../lib/ui";
+import { StatusDot } from "@maestro/kit";
 import { userServices as visibleUserServices } from "../../lib/previews";
 
 function ServiceSidebar(props: {

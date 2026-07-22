@@ -4,7 +4,7 @@ import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
 import { formatBytes, formatPercent } from "../../lib/format";
-import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
+import { Card, ErrorBanner, SectionHeader } from "@maestro/kit";
 import { TimelineChart } from "../TimelineChart";
 
 const TIME_RANGES = [
