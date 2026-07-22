@@ -26,6 +26,7 @@ mod automation;
 mod cluster;
 mod deployment_commands;
 mod deployments;
+mod exec;
 mod firewall_dry_run;
 mod firewall_policies;
 mod logs;

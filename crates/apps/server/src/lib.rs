@@ -6,6 +6,7 @@
 
 mod auth;
 mod error;
+mod exec_service;
 mod mask;
 mod mutation;
 mod node_log_client;
@@ -28,11 +29,15 @@ use kernel_api::{ClusterId, NodeId};
 use kernel_controller::{RequestDeduplicator, SystemTimestampClock, TimestampClock};
 use kernel_store::Store;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use auth::AuthPolicy;
 pub use auth::OperatorIdentity;
 pub use error::{ApiError, ApiErrorBody, ServerError};
+pub use exec_service::{
+    ClusterExecSessions, ExecSessionOpenError, HttpClusterExecSessions, HttpExecClientError,
+};
 pub use node_log_client::{HttpNodeLogQueryStore, NodeLogClientError};
 pub use openapi::openapi_document;
 pub use settings::{ServerSettings, ServerSettingsError, TlsIdentity};
@@ -53,6 +58,8 @@ pub(crate) struct AppState {
     pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,
     pub(crate) cluster_log_nodes: Arc<[NodeId]>,
     pub(crate) cluster_log_queries: Option<Arc<logs::ClusterLogQueryCoordinator>>,
+    pub(crate) exec_sessions: Option<Arc<dyn ClusterExecSessions>>,
+    pub(crate) exec_relays: Arc<Semaphore>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
 }
 
@@ -81,6 +88,8 @@ impl ApiServer {
             log_queries: None,
             cluster_log_nodes: Arc::from([]),
             cluster_log_queries: None,
+            exec_sessions: None,
+            exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
         };
         let router = routes::router(state.clone(), auth_policy(&settings));
@@ -126,6 +135,13 @@ impl ApiServer {
         self.state.cluster_log_nodes = Arc::from(node_ids);
         self.state.cluster_log_queries =
             Some(Arc::new(logs::ClusterLogQueryCoordinator::new(nodes)));
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables local and cross-node interactive exec session routing.
+    pub fn with_exec_sessions(mut self, sessions: Arc<dyn ClusterExecSessions>) -> Self {
+        self.state.exec_sessions = Some(sessions);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

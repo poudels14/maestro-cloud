@@ -4,6 +4,7 @@ mod cluster;
 mod cluster_commands;
 mod deployment_commands;
 mod deployments;
+mod exec;
 mod firewall_dry_run;
 mod firewall_policies;
 mod logs;
@@ -32,6 +33,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(cluster_commands::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())
+        .merge(exec::router())
         .merge(firewall_dry_run::router())
         .merge(firewall_policies::router())
         .merge(logs::router())
@@ -46,7 +48,9 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
             auth.clone(),
             require_operator,
         ));
-    let node = logs::node_router().route_layer(middleware::from_fn_with_state(auth, require_node));
+    let node = logs::node_router()
+        .merge(exec::node_router())
+        .route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()
         .merge(system::router())
         .merge(protected)

@@ -6,8 +6,9 @@ use kernel_store::Store;
 use logs::{LogQueryStore, NodeLogQueryStore};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
-    FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeFirewallAgent,
-    WorkloadBridge, WorkloadBridgeAgent, WorkloadBridgeBackend,
+    FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeExecService,
+    NodeExecSettings, NodeFirewallAgent, WorkloadBridge, WorkloadBridgeAgent,
+    WorkloadBridgeBackend,
 };
 use tokio::sync::watch;
 
@@ -96,6 +97,14 @@ where
             Err(error) => return runtimes.fail(error).await,
         };
     let cluster_log_nodes = plan.cluster().nodes.keys().cloned().collect::<Vec<_>>();
+    let exec_sessions = if spec.workload_enabled {
+        match cluster_exec_sessions(factory, plan, spec, store.clone()) {
+            Ok(sessions) => Some(Arc::new(sessions) as Arc<dyn server::ClusterExecSessions>),
+            Err(error) => return runtimes.fail(error).await,
+        }
+    } else {
+        None
+    };
     let api_server = match server::ApiServer::new(
         store.clone(),
         plan.cluster().cluster_id.clone(),
@@ -107,6 +116,10 @@ where
             .with_firewall_settings(factory.firewall_settings.clone())
             .with_log_query_store(local_log_queries)
             .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries);
+        let server = match exec_sessions {
+            Some(sessions) => server.with_exec_sessions(sessions),
+            None => server,
+        };
         match &factory.webhook_backend {
             Some(backend) => server.with_webhook_backend(backend.clone()),
             None => server,
@@ -519,6 +532,62 @@ fn cluster_log_query_store(
         local,
     )
     .map_err(|error| role_error("construct cluster log proxy", error))
+}
+
+fn cluster_exec_sessions<MeshBackendType, FirewallBackendType, BridgeBackendType>(
+    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
+    plan: &DaemonPlan,
+    spec: &RoleSpec,
+    store: Arc<dyn Store>,
+) -> Result<server::HttpClusterExecSessions, RoleError> {
+    let settings = &factory.api_settings;
+    let trust_root = settings
+        .cluster_trust_root_pem
+        .as_deref()
+        .ok_or_else(|| RoleError::new("cluster exec proxy has no trust root"))?;
+    let identity = settings
+        .cluster_client_identity
+        .as_ref()
+        .ok_or_else(|| RoleError::new("cluster exec proxy has no TLS identity"))?;
+    let jwt_secret = settings
+        .jwt_secret_key
+        .as_ref()
+        .ok_or_else(|| RoleError::new("cluster exec proxy has no JWT secret"))?;
+    let local = Arc::new(
+        NodeExecService::new(
+            store,
+            factory.workload_runtime.clone(),
+            NodeExecSettings {
+                cluster_id: spec.cluster_id.clone(),
+                node_id: spec.node_id.clone(),
+                maximum_sessions: 8,
+            },
+        )
+        .map_err(|error| role_error("construct local exec service", error))?,
+    );
+    let endpoints = plan
+        .cluster()
+        .nodes
+        .iter()
+        .map(|(node_id, node)| {
+            (
+                node_id.clone(),
+                SocketAddr::new(
+                    IpAddr::V4(node.endpoint.host_address),
+                    node.endpoint.api_port,
+                ),
+            )
+        })
+        .collect();
+    server::HttpClusterExecSessions::new(
+        plan.node_id().clone(),
+        endpoints,
+        trust_root,
+        identity,
+        jwt_secret,
+        local,
+    )
+    .map_err(|error| role_error("construct cluster exec proxy", error))
 }
 
 fn build_bridge_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(

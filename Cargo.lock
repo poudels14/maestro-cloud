@@ -5377,6 +5377,7 @@ dependencies = [
  "axum-server",
  "build",
  "firewall",
+ "futures-util",
  "http-body-util",
  "ingress",
  "ipnet",
@@ -5385,6 +5386,7 @@ dependencies = [
  "kernel-controller",
  "kernel-store",
  "logs",
+ "node-agent",
  "rcgen",
  "reqwest",
  "runtime",
@@ -5396,6 +5398,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tower",
  "webhook",
 ]
