@@ -10,7 +10,9 @@ async fn main() {
     let mut input = stdin.lock();
     let mut output = stdout.lock();
     if let Err(error) = maestro_cli::run(cli, &mut input, &mut output).await {
-        let _ = writeln!(io::stderr().lock(), "[maestro]: {error}");
-        std::process::exit(1);
+        if error.should_report() {
+            let _ = writeln!(io::stderr().lock(), "[maestro]: {error}");
+        }
+        std::process::exit(error.process_exit_code());
     }
 }

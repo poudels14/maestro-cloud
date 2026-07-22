@@ -39,6 +39,10 @@ pub enum CliError {
     ResponseTooLarge { limit_bytes: usize },
     #[error("invalid API response: {message}")]
     InvalidApiResponse { message: String },
+    #[error("interactive exec failed: {message}")]
+    Exec { message: String },
+    #[error("remote command exited with status {code}")]
+    ExecExit { code: i32 },
 }
 
 impl CliError {
@@ -85,5 +89,24 @@ impl CliError {
         Self::InvalidApiResponse {
             message: message.into(),
         }
+    }
+
+    pub(crate) fn exec(message: impl Into<String>) -> Self {
+        Self::Exec {
+            message: message.into(),
+        }
+    }
+
+    /// Process status the CLI executable should return for this failure.
+    pub fn process_exit_code(&self) -> i32 {
+        match self {
+            Self::ExecExit { code } => (*code).clamp(1, 255),
+            _ => 1,
+        }
+    }
+
+    /// Returns whether the executable should print this error before exiting.
+    pub fn should_report(&self) -> bool {
+        !matches!(self, Self::ExecExit { .. })
     }
 }

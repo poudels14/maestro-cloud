@@ -8,6 +8,7 @@ mod config;
 mod config_source;
 mod contexts;
 mod deployments;
+mod exec_command;
 mod log_command;
 mod login;
 mod rollout;

@@ -7,6 +7,7 @@ use crate::CliError;
 use crate::cluster_command::ClusterCommand;
 use crate::config::{self, ConfigKind};
 use crate::contexts::ContextStore;
+use crate::exec_command::ExecCommand;
 use crate::log_command::LogCommand;
 use crate::login::{DEFAULT_LOGIN_DAYS, login};
 use crate::services_command::ServiceCommand;
@@ -35,6 +36,11 @@ enum Command {
     Contexts {
         #[command(subcommand)]
         command: ContextCommand,
+    },
+    /// Execute a command in one running service replica.
+    Exec {
+        #[command(flatten)]
+        command: ExecCommand,
     },
     /// Stream normalized logs from the active Maestro API context.
     Logs {
@@ -174,6 +180,7 @@ pub async fn run(
                 }
             }
         }
+        Command::Exec { command } => crate::exec_command::run(command, input, output).await,
         Command::Logs { command } => crate::log_command::run(command, output).await,
         Command::Services { command } => crate::services_command::run(command, input, output).await,
     }
