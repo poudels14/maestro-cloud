@@ -10,6 +10,8 @@ pub enum RuntimeCapability {
     Exec,
     /// Allocate a terminal and resize it during an exec session.
     InteractiveExec,
+    /// Terminate an exec process without terminating its workload.
+    KillExec,
     /// Attach a workload to a network after creation.
     DynamicNetwork,
     /// Pause and resume an existing workload without stopping it.

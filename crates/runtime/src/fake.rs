@@ -76,6 +76,7 @@ impl FakeRuntime {
         Self::with_capabilities(Capabilities::new([
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
+            RuntimeCapability::KillExec,
         ]))
     }
 

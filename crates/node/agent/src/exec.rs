@@ -274,6 +274,10 @@ impl ExecSession for LimitedExecSession {
     async fn next(&mut self) -> Result<Option<ExecOutput>, RuntimeError> {
         self.session.next().await
     }
+
+    async fn kill(&mut self) -> Result<(), RuntimeError> {
+        self.session.kill().await
+    }
 }
 
 /// Why a node-local exec session was rejected before or by the runtime.

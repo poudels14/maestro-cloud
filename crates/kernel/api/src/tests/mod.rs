@@ -3,6 +3,7 @@
 mod automation;
 mod command;
 mod condition;
+mod exec_stream;
 mod identity;
 mod metadata;
 mod network;

@@ -236,6 +236,28 @@ impl ExecSession for ContainerdExecSession {
             }));
         }
     }
+
+    async fn kill(&mut self) -> Result<(), RuntimeError> {
+        if self.exit_emitted {
+            return Ok(());
+        }
+        let result = containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
+            .kill(namespaced(
+                KillRequest {
+                    container_id: self.container_id.clone(),
+                    exec_id: self.exec_id.clone(),
+                    signal: 9,
+                    all: false,
+                },
+                &self.namespace,
+            )?)
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if error.code() == containerd::tonic::Code::NotFound => Ok(()),
+            Err(error) => Err(exec_error("kill", error)),
+        }
+    }
 }
 
 impl ContainerdExecSession {

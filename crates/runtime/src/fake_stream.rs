@@ -77,6 +77,13 @@ impl ExecSession for FakeExecSession {
     async fn next(&mut self) -> Result<Option<ExecOutput>, RuntimeError> {
         Ok(self.outputs.pop_front())
     }
+
+    async fn kill(&mut self) -> Result<(), RuntimeError> {
+        self.outputs.clear();
+        self.outputs
+            .push_back(ExecOutput::Exited { code: Some(137) });
+        Ok(())
+    }
 }
 
 pub(crate) fn parse_cursor(cursor: Option<&str>) -> Result<u64, RuntimeError> {

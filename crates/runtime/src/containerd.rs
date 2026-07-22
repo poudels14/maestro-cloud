@@ -110,6 +110,7 @@ impl WorkloadRuntime for ContainerdRuntime {
         Capabilities::new([
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
+            RuntimeCapability::KillExec,
             RuntimeCapability::DynamicNetwork,
             RuntimeCapability::BuildArtifact,
             RuntimeCapability::PushArtifact,

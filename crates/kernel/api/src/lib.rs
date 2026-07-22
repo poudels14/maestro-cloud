@@ -6,6 +6,7 @@
 mod automation;
 mod command;
 mod condition;
+mod exec_stream;
 mod identity;
 mod metadata;
 mod network;
@@ -30,6 +31,7 @@ pub use command::{
     ServiceWriteResponse, UpgradeCommandResponse, UpgradeCreateRequest,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
+pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,
     FirewallPolicyId, IngressRouteId, InvalidIdentifier, NodeFirewallId, NodeId, NodeInstanceId,
