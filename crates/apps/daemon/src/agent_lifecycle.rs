@@ -6,6 +6,7 @@ use cluster::{StoreRuntime, StoreShutdown};
 use kernel_store::Clock;
 use logs::{
     LogDeliveryStore, LogQueryStore, LogStatsStore, LogStore, LogStoreRuntime, StatsMetricStore,
+    TrafficQueryStore,
 };
 use metrics::{
     HostMetricDeliveryStore, HostMetricQueryStore, HostMetricStore, MetricDeliveryStore,
@@ -53,6 +54,10 @@ impl AgentStartupRuntimes {
 
     pub(crate) fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
         self.logs.stats_metric_store()
+    }
+
+    pub(crate) fn traffic_query_store(&self) -> Arc<dyn TrafficQueryStore> {
+        self.logs.traffic_query_store()
     }
 
     pub(crate) fn metric_store(&self) -> Arc<dyn MetricStore> {

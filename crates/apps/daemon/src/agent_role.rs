@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cluster::WIREGUARD_MTU_BYTES;
 use kernel_store::Store;
-use logs::NodeLogQueryStore;
+use logs::{NodeLogQueryStore, NodeTrafficQueryStore};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeExecService,
@@ -93,6 +93,7 @@ where
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
     let local_log_queries = runtimes.log_query_store();
+    let local_traffic_queries = runtimes.traffic_query_store();
     let controller_stats = Arc::new(logs::LiveControllerStats::new(
         runtimes.log_stats_store(),
         factory
@@ -133,15 +134,19 @@ where
     }
     let workload_metric_queries = runtimes.metric_query_store();
     let host_metric_queries = runtimes.host_metric_query_store();
-    let cluster_log_queries = match cluster_query_clients::log_query_store(
+    let cluster_query_client = match cluster_query_clients::log_query_store(
         plan,
         &factory.api_settings,
         local_log_queries.clone(),
+        local_traffic_queries.clone(),
     ) {
-        Ok(queries) => Arc::new(queries) as Arc<dyn NodeLogQueryStore>,
+        Ok(queries) => Arc::new(queries),
         Err(error) => return runtimes.fail(error).await,
     };
+    let cluster_log_queries = cluster_query_client.clone() as Arc<dyn NodeLogQueryStore>;
+    let cluster_traffic_queries = cluster_query_client as Arc<dyn NodeTrafficQueryStore>;
     let cluster_log_nodes = plan.cluster().nodes.keys().cloned().collect::<Vec<_>>();
+    let cluster_traffic_nodes = cluster_log_nodes.clone();
     let cluster_metric_queries = match cluster_query_clients::metric_query_store(
         plan,
         &factory.api_settings,
@@ -181,6 +186,11 @@ where
             .with_firewall_settings(factory.firewall_settings.clone())
             .with_log_query_store(local_log_queries)
             .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries)
+            .with_traffic_query_stores(
+                local_traffic_queries,
+                cluster_traffic_nodes,
+                cluster_traffic_queries,
+            )
             .with_metric_query_stores(
                 spec.node_id.clone(),
                 workload_metric_queries,

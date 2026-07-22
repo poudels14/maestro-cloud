@@ -18,6 +18,7 @@ mod service_rollouts;
 mod services;
 mod stats;
 mod system;
+mod traffic;
 mod upgrades;
 mod webhook_commands;
 
@@ -46,6 +47,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(service_rollouts::router())
         .merge(services::router())
         .merge(stats::router())
+        .merge(traffic::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())
         .route_layer(middleware::from_fn_with_state(
@@ -56,6 +58,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(metrics::node_router())
         .merge(stats::node_router())
         .merge(exec::node_router())
+        .merge(traffic::node_router())
         .route_layer(middleware::from_fn_with_state(auth, require_node));
     Router::new()
         .merge(system::router())

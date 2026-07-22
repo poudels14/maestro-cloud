@@ -6,7 +6,7 @@ use kernel_api::{ClusterId, TrafficGenerationId};
 use super::plan::World;
 use crate::{
     BackendChange, IngressBackend, IngressBackendError, PublishedTraffic, TraefikBackend,
-    TraefikCutover, TraefikProvider, TraefikStage, plan,
+    TraefikCutover, TraefikProvider, TraefikStage, plan, traefik_service_router_prefix,
 };
 
 #[tokio::test]
@@ -14,7 +14,8 @@ async fn traefik_backend_stages_services_before_atomic_router_cutover()
 -> Result<(), Box<dyn std::error::Error>> {
     let provider = Arc::new(RecordingProvider::default());
     let backend = TraefikBackend::new(ClusterId::new("cluster-1")?, provider.clone());
-    backend.apply(&active_change()).await?;
+    let change = active_change();
+    backend.apply(&change).await?;
 
     assert_eq!(provider.events(), [Event::Stage, Event::Cutover]);
     let stage = provider.stages().remove(0);
@@ -31,7 +32,13 @@ async fn traefik_backend_stages_services_before_atomic_router_cutover()
             .all(|key| key.starts_with("http/services/"))
     );
     let cutover = provider.cutovers().remove(0);
-    assert!(cutover.router_prefix.starts_with("http/routers/maestro-s-"));
+    assert_eq!(
+        cutover.router_prefix,
+        format!(
+            "http/routers/{}",
+            traefik_service_router_prefix(&change.service_id)
+        )
+    );
     assert!(
         cutover
             .routers

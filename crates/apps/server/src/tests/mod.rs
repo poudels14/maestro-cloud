@@ -38,6 +38,7 @@ mod service_commands;
 mod service_rollouts;
 mod services;
 mod stats;
+mod traffic;
 mod upgrades;
 
 #[test]
@@ -296,6 +297,21 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1services~1{serviceId}~1traffic-generations/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1ingress~1traffic/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1services~1{serviceId}~1traffic/get")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/components/schemas/IngressTrafficBreakdown")
             .is_some()
     );
     assert!(document.pointer("/paths/~1api~1previews/get").is_some());

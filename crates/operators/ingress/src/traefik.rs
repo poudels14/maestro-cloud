@@ -13,6 +13,14 @@ use crate::{BackendChange, IngressBackend, IngressBackendError, PublishedTraffic
 const LABEL_DOMAIN: &[u8] = b"maestro-traefik-label-v1\0";
 const AFFINITY_DOMAIN: &[u8] = b"maestro-node-affinity-v1\0";
 
+/// Stable namespace reserved for routers that reject blocklisted client addresses.
+pub const TRAEFIK_BLOCKED_ROUTER_PREFIX: &str = "maestro.internal-blocked-";
+
+/// Returns the stable access-log router prefix owned by one service.
+pub fn traefik_service_router_prefix(service_id: &kernel_api::ServiceId) -> String {
+    router_label_prefix(&service_label(service_id))
+}
+
 /// Generation-specific entries written before any stable router references them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraefikStage {

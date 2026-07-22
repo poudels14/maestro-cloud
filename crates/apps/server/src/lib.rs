@@ -18,6 +18,7 @@ mod openapi_commands;
 mod openapi_logs;
 mod openapi_metrics;
 mod openapi_stats;
+mod openapi_traffic;
 mod resource;
 mod routes;
 mod settings;
@@ -70,6 +71,9 @@ pub(crate) struct AppState {
     pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,
     pub(crate) cluster_log_nodes: Arc<[NodeId]>,
     pub(crate) cluster_log_queries: Option<Arc<logs::ClusterLogQueryCoordinator>>,
+    pub(crate) traffic_queries: Option<Arc<dyn logs::TrafficQueryStore>>,
+    pub(crate) cluster_traffic_nodes: Arc<[NodeId]>,
+    pub(crate) cluster_traffic_queries: Option<Arc<logs::ClusterTrafficQueryCoordinator>>,
     pub(crate) local_metric_node: Option<NodeId>,
     pub(crate) workload_metric_queries: Option<Arc<dyn metrics::WorkloadMetricQueryStore>>,
     pub(crate) host_metric_queries: Option<Arc<dyn metrics::HostMetricQueryStore>>,
@@ -111,6 +115,9 @@ impl ApiServer {
             log_queries: None,
             cluster_log_nodes: Arc::from([]),
             cluster_log_queries: None,
+            traffic_queries: None,
+            cluster_traffic_nodes: Arc::from([]),
+            cluster_traffic_queries: None,
             local_metric_node: None,
             workload_metric_queries: None,
             host_metric_queries: None,
@@ -169,6 +176,23 @@ impl ApiServer {
         self.state.cluster_log_nodes = Arc::from(node_ids);
         self.state.cluster_log_queries =
             Some(Arc::new(logs::ClusterLogQueryCoordinator::new(nodes)));
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables node-local and cluster-wide access-log traffic analytics.
+    pub fn with_traffic_query_stores(
+        mut self,
+        local: Arc<dyn logs::TrafficQueryStore>,
+        mut node_ids: Vec<NodeId>,
+        nodes: Arc<dyn logs::NodeTrafficQueryStore>,
+    ) -> Self {
+        node_ids.sort();
+        node_ids.dedup();
+        self.state.traffic_queries = Some(local);
+        self.state.cluster_traffic_nodes = Arc::from(node_ids);
+        self.state.cluster_traffic_queries =
+            Some(Arc::new(logs::ClusterTrafficQueryCoordinator::new(nodes)));
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

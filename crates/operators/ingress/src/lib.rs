@@ -25,7 +25,10 @@ pub use model::{
 };
 pub use plan::{IngressPlanError, plan};
 pub use reconciler::IngressReconciler;
-pub use traefik::{TraefikBackend, TraefikCutover, TraefikProvider, TraefikStage};
+pub use traefik::{
+    TRAEFIK_BLOCKED_ROUTER_PREFIX, TraefikBackend, TraefikCutover, TraefikProvider, TraefikStage,
+    traefik_service_router_prefix,
+};
 pub use traefik_store::StoreTraefikProvider;
 pub use validation::validate_route_spec;
 

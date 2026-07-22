@@ -33,6 +33,7 @@ mod stats;
 mod stats_warnings;
 mod store;
 mod traffic;
+mod traffic_cluster;
 
 pub use cluster_query::{
     ClusterLogCursor, ClusterLogEntry, ClusterLogPage, ClusterLogQueryCoordinator,
@@ -108,6 +109,7 @@ pub use traffic::{
     TrafficQueryStore, merge_ingress_traffic, merge_service_traffic, project_ingress_traffic,
     project_service_traffic,
 };
+pub use traffic_cluster::{ClusterTrafficQueryCoordinator, NodeTrafficQueryStore};
 
 #[cfg(test)]
 mod tests;

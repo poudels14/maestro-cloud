@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use kernel_api::NodeId;
-use logs::{ControllerStatsProvider, LogQueryStore, StatsMetricStore};
+use logs::{ControllerStatsProvider, LogQueryStore, StatsMetricStore, TrafficQueryStore};
 use metrics::{HostMetricQueryStore, WorkloadMetricQueryStore};
 
 use crate::control_plane::role_error;
@@ -13,6 +13,7 @@ pub(crate) fn log_query_store(
     plan: &DaemonPlan,
     settings: &server::ServerSettings,
     local: Arc<dyn LogQueryStore>,
+    local_traffic: Arc<dyn TrafficQueryStore>,
 ) -> Result<server::HttpNodeLogQueryStore, RoleError> {
     let trust_root = required_trust_root(settings, "log")?;
     let identity = required_identity(settings, "log")?;
@@ -24,6 +25,7 @@ pub(crate) fn log_query_store(
         identity,
         jwt_secret,
         local,
+        local_traffic,
     )
     .map_err(|error| role_error("construct cluster log proxy", error))
 }

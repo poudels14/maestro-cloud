@@ -201,6 +201,7 @@ async fn node_client_queries_a_peer_over_authenticated_mutual_tls()
 
     let local_node = NodeId::new("node-local")?;
     let remote_node = NodeId::new("node-remote")?;
+    let local_logs = Arc::new(InMemoryLogStore::new());
     let client = HttpNodeLogQueryStore::new(
         local_node.clone(),
         BTreeMap::from([
@@ -210,7 +211,8 @@ async fn node_client_queries_a_peer_over_authenticated_mutual_tls()
         &certificate_pem,
         &identity,
         &secret,
-        Arc::new(InMemoryLogStore::new()),
+        local_logs.clone(),
+        local_logs,
     )?;
     let query = LogReadQuery::new(LogQueryScope::System, LogReadOrder::NewestFirst, 10)?
         .with_search(r#"message:"system""#.parse()?);

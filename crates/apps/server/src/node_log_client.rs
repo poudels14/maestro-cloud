@@ -4,9 +4,11 @@ use crate::node_http_client::{NodeHttpClient, NodeHttpClientError, NodeHttpReque
 use async_trait::async_trait;
 use kernel_api::{NodeId, SecretValue};
 use logs::{
-    LogHistogramBucket, LogHistogramGroupBy, LogHistogramQuery, LogQueryScope, LogQueryStore,
-    LogQueryStoreError, LogReadCursor, LogReadOrder, LogReadQuery, NodeLogQueryStore,
-    SequencedLogEntry,
+    IngressTrafficBreakdown, IngressTrafficQuery, IngressTrafficScope, LogHistogramBucket,
+    LogHistogramGroupBy, LogHistogramQuery, LogQueryScope, LogQueryStore, LogQueryStoreError,
+    LogReadCursor, LogReadOrder, LogReadQuery, NodeLogQueryStore, NodeTrafficQueryStore,
+    SequencedLogEntry, ServiceTrafficQuery, TrafficMetricPoint, TrafficQueryError,
+    TrafficQueryStore,
 };
 
 use crate::TlsIdentity;
@@ -14,6 +16,7 @@ use crate::TlsIdentity;
 /// HTTPS node-local query proxy using cluster trust and one node certificate.
 pub struct HttpNodeLogQueryStore {
     local: Arc<dyn LogQueryStore>,
+    local_traffic: Arc<dyn TrafficQueryStore>,
     transport: NodeHttpClient,
 }
 
@@ -26,9 +29,11 @@ impl HttpNodeLogQueryStore {
         identity: &TlsIdentity,
         jwt_secret_key: &SecretValue,
         local: Arc<dyn LogQueryStore>,
+        local_traffic: Arc<dyn TrafficQueryStore>,
     ) -> Result<Self, NodeHttpClientError> {
         Ok(Self {
             local,
+            local_traffic,
             transport: NodeHttpClient::new(
                 local_node_id,
                 endpoints,
@@ -37,6 +42,45 @@ impl HttpNodeLogQueryStore {
                 jwt_secret_key,
             )?,
         })
+    }
+}
+
+#[async_trait]
+impl NodeTrafficQueryStore for HttpNodeLogQueryStore {
+    async fn query_node_ingress_traffic(
+        &self,
+        node_id: &NodeId,
+        query: &IngressTrafficQuery,
+    ) -> Result<IngressTrafficBreakdown, TrafficQueryError> {
+        if node_id == self.transport.local_node_id() {
+            return self.local_traffic.query_ingress_traffic(query).await;
+        }
+        self.transport
+            .get_json(
+                node_id,
+                "/api/node/traffic/ingress",
+                &ingress_traffic_parameters(query),
+            )
+            .await
+            .map_err(map_traffic_request_error)
+    }
+
+    async fn query_node_service_traffic(
+        &self,
+        node_id: &NodeId,
+        query: &ServiceTrafficQuery,
+    ) -> Result<Vec<TrafficMetricPoint>, TrafficQueryError> {
+        if node_id == self.transport.local_node_id() {
+            return self.local_traffic.query_service_traffic(query).await;
+        }
+        self.transport
+            .get_json(
+                node_id,
+                "/api/node/traffic/service",
+                &service_traffic_parameters(query),
+            )
+            .await
+            .map_err(map_traffic_request_error)
     }
 }
 
@@ -118,6 +162,36 @@ fn histogram_parameters(query: &LogHistogramQuery) -> Vec<(String, String)> {
     parameters
 }
 
+fn ingress_traffic_parameters(query: &IngressTrafficQuery) -> Vec<(String, String)> {
+    let (scope, prefix) = match query.scope() {
+        IngressTrafficScope::Cluster {
+            blocked_router_prefix,
+        } => ("cluster", blocked_router_prefix),
+        IngressTrafficScope::Blocked { router_prefix } => ("blocked", router_prefix),
+        IngressTrafficScope::Service { router_prefix } => ("service", router_prefix),
+    };
+    vec![
+        ("scope".to_owned(), scope.to_owned()),
+        ("routerPrefix".to_owned(), prefix.clone()),
+        ("from".to_owned(), query.from().0.to_string()),
+        ("to".to_owned(), query.to().0.to_string()),
+        ("limit".to_owned(), query.limit().to_string()),
+    ]
+}
+
+fn service_traffic_parameters(query: &ServiceTrafficQuery) -> Vec<(String, String)> {
+    vec![
+        (
+            "serviceId".to_owned(),
+            query.service_id().as_str().to_owned(),
+        ),
+        ("routerPrefix".to_owned(), query.router_prefix().to_owned()),
+        ("from".to_owned(), query.from().0.to_string()),
+        ("to".to_owned(), query.to().0.to_string()),
+        ("limit".to_owned(), query.limit().to_string()),
+    ]
+}
+
 fn scope_parameters(scope: &LogQueryScope) -> Vec<(String, String)> {
     let (scope, scope_id) = match scope {
         LogQueryScope::All => ("all", None),
@@ -161,5 +235,12 @@ fn map_request_error(error: NodeHttpRequestError) -> LogQueryStoreError {
     match error {
         NodeHttpRequestError::Rejected { message } => LogQueryStoreError::Rejected { message },
         NodeHttpRequestError::Unavailable { message } => unavailable(message),
+    }
+}
+
+fn map_traffic_request_error(error: NodeHttpRequestError) -> TrafficQueryError {
+    match error {
+        NodeHttpRequestError::Rejected { message } => TrafficQueryError::Rejected { message },
+        NodeHttpRequestError::Unavailable { message } => TrafficQueryError::Unavailable { message },
     }
 }
