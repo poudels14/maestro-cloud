@@ -175,7 +175,9 @@ impl ArtifactStore for FakeBuildBackend {
         &self,
         _policy: &ArtifactPrunePolicy,
     ) -> Result<ArtifactPruneReport, ArtifactStoreError> {
-        Err(unused("prune", "policy"))
+        Ok(ArtifactPruneReport {
+            removed: Vec::new(),
+        })
     }
 }
 

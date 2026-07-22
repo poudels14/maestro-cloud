@@ -20,7 +20,7 @@ use runtime::{
     ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
 };
 
-use crate::artifact_replication::retained_digests;
+use crate::artifact_replication::{preserved_digests, retained_digests};
 use crate::{
     ArtifactHolderRegistry, ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
     ArtifactReplicationSettings,
@@ -67,6 +67,8 @@ async fn replication_imports_from_a_live_holder_and_publishes_the_copy()
     .await?;
     put_liveness(&store, &cluster_id, &target_node, target_session.id()).await?;
     let artifacts = Arc::new(TestArtifacts::default());
+    let stale = ArtifactDigest::new("sha256:stale")?;
+    lock(&artifacts.local).insert(stale.clone());
     let holders = ArtifactHolderRegistry::new(
         store.clone(),
         &cluster_id,
@@ -90,8 +92,15 @@ async fn replication_imports_from_a_live_holder_and_publishes_the_copy()
     assert_eq!(report.retained, 1);
     assert_eq!(report.eligible_nodes, 1);
     assert_eq!(report.imported, 1);
+    assert_eq!(report.pruned, 1);
+    assert_eq!(report.prune_failure, None);
     assert!(report.failures.is_empty());
+    assert_eq!(
+        lock(&artifacts.prune_policies).as_slice(),
+        &[ArtifactPrunePolicy::Preserve(vec![digest.clone()])]
+    );
     assert!(artifacts.contains(&digest).await?);
+    assert!(!artifacts.contains(&stale).await?);
     let readers = ArtifactHolderRegistry::new(store, &cluster_id, target_node, target_session.id());
     assert_eq!(readers.holders(&digest).await?.len(), 2);
     Ok(())
@@ -123,12 +132,21 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
             ArtifactDigest::new("sha256:latest")?,
         ])
     );
+    assert_eq!(
+        preserved_digests(&deployments)?,
+        BTreeSet::from([
+            ArtifactDigest::new("sha256:active")?,
+            ArtifactDigest::new("sha256:latest")?,
+            ArtifactDigest::new("registry.test/api@sha256:external")?,
+        ])
+    );
     Ok(())
 }
 
 #[derive(Default)]
 struct TestArtifacts {
     local: Mutex<BTreeSet<ArtifactDigest>>,
+    prune_policies: Mutex<Vec<ArtifactPrunePolicy>>,
 }
 
 #[async_trait]
@@ -192,9 +210,19 @@ impl ArtifactStore for TestArtifacts {
 
     async fn prune(
         &self,
-        _policy: &ArtifactPrunePolicy,
+        policy: &ArtifactPrunePolicy,
     ) -> Result<ArtifactPruneReport, ArtifactStoreError> {
-        Err(unused("prune"))
+        lock(&self.prune_policies).push(policy.clone());
+        let ArtifactPrunePolicy::Preserve(preserved) = policy;
+        let preserved = preserved.iter().collect::<BTreeSet<_>>();
+        let mut local = lock(&self.local);
+        let removed = local
+            .iter()
+            .filter(|digest| !preserved.contains(digest))
+            .cloned()
+            .collect::<Vec<_>>();
+        local.retain(|digest| preserved.contains(digest));
+        Ok(ArtifactPruneReport { removed })
     }
 }
 

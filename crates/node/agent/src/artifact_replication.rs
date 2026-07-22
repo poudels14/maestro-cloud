@@ -8,7 +8,9 @@ use kernel_api::{
     NodeId, ResourceKind, ServiceId,
 };
 use kernel_store::{Clock, Keyspace, Store, StoreError};
-use runtime::{ArtifactByteStream, ArtifactDigest, ArtifactStore, ArtifactStoreError};
+use runtime::{
+    ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy, ArtifactStore, ArtifactStoreError,
+};
 use tokio::sync::watch;
 
 use crate::{ArtifactHolderRegistry, ArtifactHolderRegistryError};
@@ -181,6 +183,7 @@ impl ArtifactReplicationAgent {
             .map(|node| node.meta.id)
             .collect::<BTreeSet<_>>();
         let retained = retained_digests(&deployments)?;
+        let preserved = preserved_digests(&deployments)?;
         let mut report = ArtifactReplicationReport {
             retained: retained.len(),
             eligible_nodes: eligible.len(),
@@ -227,6 +230,16 @@ impl ArtifactReplicationAgent {
                     message: error.to_string(),
                 }),
             }
+        }
+        match self
+            .artifacts
+            .prune(&ArtifactPrunePolicy::Preserve(
+                preserved.into_iter().collect(),
+            ))
+            .await
+        {
+            Ok(pruned) => report.pruned = pruned.removed.len(),
+            Err(error) => report.prune_failure = Some(error.to_string()),
         }
         Ok(report)
     }
@@ -318,6 +331,28 @@ pub(crate) fn retained_digests(
         .collect()
 }
 
+pub(crate) fn preserved_digests(
+    deployments: &[Deployment],
+) -> Result<BTreeSet<ArtifactDigest>, ArtifactReplicationError> {
+    let mut preserved = retained_digests(deployments)?;
+    for digest in deployments
+        .iter()
+        .filter(|deployment| {
+            matches!(
+                deployment.status.phase,
+                DeploymentPhase::Building
+                    | DeploymentPhase::PendingReady
+                    | DeploymentPhase::Ready
+                    | DeploymentPhase::Draining
+            )
+        })
+        .filter_map(|deployment| deployment.status.image_digest.as_deref())
+    {
+        preserved.insert(ArtifactDigest::new(digest.to_owned())?);
+    }
+    Ok(preserved)
+}
+
 fn decode_resource<Resource>(
     stored: &kernel_store::StoredValue,
 ) -> Result<Resource, ArtifactReplicationError>
@@ -369,6 +404,10 @@ pub struct ArtifactReplicationReport {
     pub imported: usize,
     /// Stale or obsolete holder claims removed during this pass.
     pub removed_claims: usize,
+    /// Unreferenced runtime-managed artifacts removed during this pass.
+    pub pruned: usize,
+    /// Cleanup failure isolated from transfer and holder convergence.
+    pub prune_failure: Option<String>,
     /// Per-digest failures isolated from other retained artifacts.
     pub failures: Vec<ArtifactReplicationFailure>,
 }
