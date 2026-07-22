@@ -61,14 +61,18 @@ enum DeadLetterCommand {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    if let Err(error) = run().await {
+    let arguments = normalize_arguments(std::env::args_os().collect());
+    let cli = match Cli::try_parse_from(arguments) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    if let Err(error) = run(cli).await {
         eprintln!("maestro daemon failed: {error}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::try_parse_from(normalize_arguments(std::env::args_os().collect()))?;
+async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         DaemonCommand::Start { config } => start(config).await,
         DaemonCommand::DeadLetters { config, command } => {
