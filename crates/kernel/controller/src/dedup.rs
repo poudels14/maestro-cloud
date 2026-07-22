@@ -100,11 +100,6 @@ fn append_claim(
     response: Vec<u8>,
     mut transaction: Transaction,
 ) -> Result<Transaction, ControllerError> {
-    if response.len() > MAXIMUM_CLAIM_RESPONSE_BYTES {
-        return Err(ControllerError::Contract {
-            message: format!("request claim response exceeds {MAXIMUM_CLAIM_RESPONSE_BYTES} bytes"),
-        });
-    }
     let mutates_claim = transaction.mutations.iter().any(|mutation| match mutation {
         Mutation::Put { key, .. } | Mutation::Delete { key } => key == &claim_key,
     });
@@ -114,13 +109,7 @@ fn append_claim(
                 .to_string(),
         });
     }
-    let encoded_claim = serde_json::to_vec(&RequestClaim {
-        fingerprint: fingerprint.0,
-        response,
-    })
-    .map_err(|error| ControllerError::Contract {
-        message: format!("request claim could not be encoded: {error}"),
-    })?;
+    let encoded_claim = encode_request_claim(fingerprint, response)?;
     transaction.compares.push(Compare {
         key: claim_key.clone(),
         expected: ExpectedVersion::Missing,
@@ -131,6 +120,28 @@ fn append_claim(
         session: None,
     });
     Ok(transaction)
+}
+
+/// Encodes one canonical request claim for trusted control-plane writers.
+///
+/// This is exposed so one-shot migrations can reserve legacy request identities
+/// using the same wire contract as live mutations.
+pub fn encode_request_claim(
+    fingerprint: RequestFingerprint,
+    response: Vec<u8>,
+) -> Result<Vec<u8>, ControllerError> {
+    if response.len() > MAXIMUM_CLAIM_RESPONSE_BYTES {
+        return Err(ControllerError::Contract {
+            message: format!("request claim response exceeds {MAXIMUM_CLAIM_RESPONSE_BYTES} bytes"),
+        });
+    }
+    serde_json::to_vec(&RequestClaim {
+        fingerprint: fingerprint.0,
+        response,
+    })
+    .map_err(|error| ControllerError::Contract {
+        message: format!("request claim could not be encoded: {error}"),
+    })
 }
 
 async fn resolve_outcome(

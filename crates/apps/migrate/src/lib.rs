@@ -18,6 +18,8 @@ mod legacy_node_schema;
 mod legacy_nodes;
 mod legacy_placement_schema;
 mod legacy_placements;
+mod legacy_request_schema;
+mod legacy_requests;
 mod legacy_resources;
 mod legacy_schema;
 mod legacy_services;
@@ -27,7 +29,7 @@ mod runner;
 mod snapshot;
 
 pub use legacy_convert::{LegacyPlanError, plan_legacy_snapshot};
-pub use plan::{MigrationPlan, MigrationWrite, PlanError};
+pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use runner::{CutoverMigration, MigrationError, MigrationOutcome};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
 
@@ -49,6 +51,8 @@ mod legacy_node_lifecycle_tests;
 mod legacy_node_tests;
 #[cfg(test)]
 mod legacy_placement_tests;
+#[cfg(test)]
+mod legacy_request_tests;
 #[cfg(test)]
 mod legacy_tests;
 #[cfg(test)]

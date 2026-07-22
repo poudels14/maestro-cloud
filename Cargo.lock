@@ -3588,6 +3588,7 @@ dependencies = [
  "http 1.4.2",
  "ipnet",
  "kernel-api",
+ "kernel-controller",
  "kernel-store",
  "serde",
  "serde_json",

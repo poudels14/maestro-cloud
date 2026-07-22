@@ -19,6 +19,7 @@ use crate::legacy_network::LegacyNetworkCatalog;
 use crate::legacy_node_lifecycle::LegacyNodeLifecycleCatalog;
 use crate::legacy_nodes::LegacyNodeCatalog;
 use crate::legacy_placements::LegacyPlacementCatalog;
+use crate::legacy_requests::LegacyRequestCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
@@ -88,8 +89,13 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
+    let requests = LegacyRequestCatalog::decode(&placements.unclaimed).map_err(|error| {
+        LegacyPlanError::DecodeLegacyState {
+            message: error.to_string(),
+        }
+    })?;
     let webhooks =
-        LegacyWebhookCatalog::decode(&placements.unclaimed, master_secret).map_err(|error| {
+        LegacyWebhookCatalog::decode(&requests.unclaimed, master_secret).map_err(|error| {
             LegacyPlanError::DecodeLegacyState {
                 message: error.to_string(),
             }
@@ -105,6 +111,7 @@ pub fn plan_legacy_snapshot(
     derived.annotate_master(&mut resources)?;
     membership.annotate_nodes(&mut resources)?;
     maintenance.annotate_master(&mut resources)?;
+    requests.annotate_master(&mut resources)?;
     lifecycle.annotate_nodes(&mut resources)?;
     resources.extend(lifecycle.convert_removed()?);
     let cluster_resources = cluster.convert(&catalog, &nodes, &mut resources)?;
@@ -113,8 +120,13 @@ pub fn plan_legacy_snapshot(
     let network_resources = network.convert(&resources)?;
     resources.extend(network_resources);
     resources.extend(webhooks.convert());
-    MigrationPlan::new(identity.cluster_id().clone(), snapshot.digest(), resources)
-        .map_err(Into::into)
+    MigrationPlan::with_request_barriers(
+        identity.cluster_id().clone(),
+        snapshot.digest(),
+        resources,
+        requests.barriers(),
+    )
+    .map_err(Into::into)
 }
 
 fn convert_catalog(

@@ -1,4 +1,5 @@
-use kernel_api::{BuiltinKind, BuiltinResource, ClusterId, ResourceName};
+use kernel_api::{BuiltinKind, BuiltinResource, ClusterId, RequestId, ResourceName};
+use kernel_controller::{RequestFingerprint, encode_request_claim};
 
 /// One exact canonical resource write produced by legacy-schema conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,12 +70,45 @@ impl MigrationWrite {
     }
 }
 
+/// One exact request-claim write used to block unsafe legacy request replay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationRequestClaim {
+    request_id: RequestId,
+    value: Vec<u8>,
+}
+
+impl MigrationRequestClaim {
+    fn collision_barrier(
+        request_id: RequestId,
+        fingerprint: RequestFingerprint,
+    ) -> Result<Self, PlanError> {
+        let value = encode_request_claim(fingerprint, Vec::new()).map_err(|error| {
+            PlanError::SerializeRequestClaim {
+                request_id: request_id.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        Ok(Self { request_id, value })
+    }
+
+    /// Returns the legacy request identity reserved by this claim.
+    pub const fn request_id(&self) -> &RequestId {
+        &self.request_id
+    }
+
+    /// Returns the canonical claim bytes reused across retries.
+    pub fn value(&self) -> &[u8] {
+        &self.value
+    }
+}
+
 /// Deterministically ordered, snapshot-bound set of destination writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationPlan {
     cluster_id: ClusterId,
     source_digest: [u8; 32],
     writes: Vec<MigrationWrite>,
+    request_claims: Vec<MigrationRequestClaim>,
 }
 
 impl MigrationPlan {
@@ -88,14 +122,43 @@ impl MigrationPlan {
             .into_iter()
             .map(MigrationWrite::from_resource)
             .collect::<Result<Vec<_>, _>>()?;
-        Self::from_writes(cluster_id, source_digest, writes)
+        Self::from_parts(cluster_id, source_digest, writes, Vec::new())
+    }
+
+    /// Converts resources and legacy request barriers into one deterministic plan.
+    pub fn with_request_barriers(
+        cluster_id: ClusterId,
+        source_digest: [u8; 32],
+        resources: impl IntoIterator<Item = BuiltinResource>,
+        barriers: impl IntoIterator<Item = (RequestId, RequestFingerprint)>,
+    ) -> Result<Self, PlanError> {
+        let writes = resources
+            .into_iter()
+            .map(MigrationWrite::from_resource)
+            .collect::<Result<Vec<_>, _>>()?;
+        let request_claims = barriers
+            .into_iter()
+            .map(|(request_id, fingerprint)| {
+                MigrationRequestClaim::collision_barrier(request_id, fingerprint)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::from_parts(cluster_id, source_digest, writes, request_claims)
     }
 
     /// Validates and orders already serialized migration writes.
     pub fn from_writes(
         cluster_id: ClusterId,
         source_digest: [u8; 32],
+        writes: Vec<MigrationWrite>,
+    ) -> Result<Self, PlanError> {
+        Self::from_parts(cluster_id, source_digest, writes, Vec::new())
+    }
+
+    fn from_parts(
+        cluster_id: ClusterId,
+        source_digest: [u8; 32],
         mut writes: Vec<MigrationWrite>,
+        mut request_claims: Vec<MigrationRequestClaim>,
     ) -> Result<Self, PlanError> {
         writes.sort_by(|left, right| (left.kind, &left.id).cmp(&(right.kind, &right.id)));
         if let Some((kind, id)) = writes.windows(2).find_map(|pair| match pair {
@@ -106,10 +169,18 @@ impl MigrationPlan {
         }) {
             return Err(PlanError::DuplicateResource { kind, id });
         }
+        request_claims.sort_by(|left, right| left.request_id.cmp(&right.request_id));
+        if let Some(request_id) = request_claims.windows(2).find_map(|pair| match pair {
+            [left, right] if left.request_id == right.request_id => Some(left.request_id.clone()),
+            _ => None,
+        }) {
+            return Err(PlanError::DuplicateRequestClaim { request_id });
+        }
         Ok(Self {
             cluster_id,
             source_digest,
             writes,
+            request_claims,
         })
     }
 
@@ -126,6 +197,11 @@ impl MigrationPlan {
     /// Returns writes in stable kind-and-identity order.
     pub fn writes(&self) -> &[MigrationWrite] {
         &self.writes
+    }
+
+    /// Returns legacy request collision barriers in stable identity order.
+    pub fn request_claims(&self) -> &[MigrationRequestClaim] {
+        &self.request_claims
     }
 }
 
@@ -149,5 +225,19 @@ pub enum PlanError {
         kind: BuiltinKind,
         /// Colliding identity.
         id: ResourceName,
+    },
+    /// A request identity was reserved more than once.
+    #[error("migration plan contains duplicate request claim {request_id}")]
+    DuplicateRequestClaim {
+        /// Repeated legacy request identity.
+        request_id: RequestId,
+    },
+    /// A request collision barrier failed canonical serialization.
+    #[error("could not serialize request claim {request_id}: {message}")]
+    SerializeRequestClaim {
+        /// Legacy request identity being reserved.
+        request_id: RequestId,
+        /// Serialization error detail.
+        message: String,
     },
 }

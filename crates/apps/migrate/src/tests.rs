@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use kernel_api::{
     ArtifactTemplate, BuiltinResource, ClusterId, ExecPolicy, Generation, NodeApiAccess, Object,
-    ObjectMeta, PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState,
-    Service, ServiceId, ServiceSpec, ServiceStatus,
+    ObjectMeta, PlacementConstraint, RequestId, ResourceKind, ResourceName, ResourceRevision,
+    RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus,
 };
+use kernel_controller::{ControllerError, RequestDeduplicator, RequestFingerprint};
 use kernel_store::{
     CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock,
 };
@@ -76,6 +77,19 @@ fn plan_orders_resources_and_rejects_destination_aliases() -> TestResult {
         ),
         Err(PlanError::DuplicateResource { .. })
     ));
+    let request_id = RequestId::new("request-1")?;
+    assert!(matches!(
+        MigrationPlan::with_request_barriers(
+            ClusterId::new("production")?,
+            [8; 32],
+            [],
+            [
+                (request_id.clone(), RequestFingerprint::new([1; 32])),
+                (request_id, RequestFingerprint::new([2; 32])),
+            ],
+        ),
+        Err(PlanError::DuplicateRequestClaim { .. })
+    ));
     Ok(())
 }
 
@@ -105,6 +119,7 @@ async fn migration_commits_last_and_is_idempotent() -> TestResult {
         migration.apply(&migration_plan).await?,
         MigrationOutcome::Applied {
             resources: 1,
+            request_claims: 0,
             written: 1,
             reused: 0,
         }
@@ -113,7 +128,10 @@ async fn migration_commits_last_and_is_idempotent() -> TestResult {
     assert!(store.get(&marker_key(&keyspace)?).await?.is_some());
     assert_eq!(
         migration.apply(&migration_plan).await?,
-        MigrationOutcome::AlreadyComplete { resources: 1 }
+        MigrationOutcome::AlreadyComplete {
+            resources: 1,
+            request_claims: 0,
+        }
     );
 
     let changed_plan = plan("api", [12; 32])?;
@@ -142,9 +160,42 @@ async fn migration_reuses_exact_partial_writes() -> TestResult {
         migration.apply(&plan).await?,
         MigrationOutcome::Applied {
             resources: 1,
+            request_claims: 0,
             written: 0,
             reused: 1,
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_reserves_legacy_request_ids_before_completion() -> TestResult {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let keyspace = keyspace()?;
+    let migration = migration(store.clone(), keyspace.clone())?;
+    let request_id = RequestId::new("legacy-request")?;
+    let plan = MigrationPlan::with_request_barriers(
+        ClusterId::new("production")?,
+        [41; 32],
+        [BuiltinResource::Service(service("api")?)],
+        [(request_id.clone(), RequestFingerprint::new([4; 32]))],
+    )?;
+
+    assert_eq!(
+        migration.apply(&plan).await?,
+        MigrationOutcome::Applied {
+            resources: 1,
+            request_claims: 1,
+            written: 2,
+            reused: 0,
+        }
+    );
+    let claim_key = keyspace.request_claim(&request_id);
+    assert_eq!(
+        RequestDeduplicator::new(store)
+            .replay(&claim_key, RequestFingerprint::new([5; 32]))
+            .await,
+        Err(ControllerError::RequestCollision)
     );
     Ok(())
 }

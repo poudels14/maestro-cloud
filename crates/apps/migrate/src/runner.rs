@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::MigrationPlan;
 
-const MARKER_SCHEMA_VERSION: u32 = 1;
+const MARKER_SCHEMA_VERSION: u32 = 2;
 
 /// Resumable application of one snapshot-bound cutover plan.
 pub struct CutoverMigration {
@@ -44,6 +44,7 @@ impl CutoverMigration {
             if existing == marker {
                 return Ok(MigrationOutcome::AlreadyComplete {
                     resources: plan.writes().len(),
+                    request_claims: plan.request_claims().len(),
                 });
             }
             return Err(MigrationError::MarkerMismatch {
@@ -52,11 +53,20 @@ impl CutoverMigration {
                 actual_digest: existing.source_sha256,
                 expected_resources: marker.resources,
                 actual_resources: existing.resources,
+                expected_request_claims: marker.request_claims,
+                actual_request_claims: existing.request_claims,
             });
         }
 
         let mut written = 0;
         let mut reused = 0;
+        for claim in plan.request_claims() {
+            let key = self.keyspace.request_claim(claim.request_id());
+            match self.write_exact(key, claim.value().to_vec()).await? {
+                WriteDisposition::Written => written += 1,
+                WriteDisposition::Reused => reused += 1,
+            }
+        }
         for write in plan.writes() {
             let kind = ResourceKind::new(write.kind().as_str()).map_err(|error| {
                 MigrationError::InvalidDestinationKind {
@@ -79,6 +89,7 @@ impl CutoverMigration {
 
         Ok(MigrationOutcome::Applied {
             resources: plan.writes().len(),
+            request_claims: plan.request_claims().len(),
             written,
             reused,
         })
@@ -127,6 +138,7 @@ struct MigrationMarker {
     cluster_id: ClusterId,
     source_sha256: String,
     resources: usize,
+    request_claims: usize,
 }
 
 impl MigrationMarker {
@@ -137,6 +149,7 @@ impl MigrationMarker {
             cluster_id: plan.cluster_id().clone(),
             source_sha256: hex::encode(plan.source_digest()),
             resources: plan.writes().len(),
+            request_claims: plan.request_claims().len(),
         }
     }
 }
@@ -155,15 +168,19 @@ pub enum MigrationOutcome {
     Applied {
         /// Total resource count in the plan.
         resources: usize,
-        /// Resources newly created by this invocation.
+        /// Total legacy request collision barriers in the plan.
+        request_claims: usize,
+        /// Destinations newly created by this invocation.
         written: usize,
-        /// Exact resource bytes reused after an earlier partial invocation.
+        /// Exact destination bytes reused after an earlier partial invocation.
         reused: usize,
     },
     /// An identical snapshot-bound plan had already completed.
     AlreadyComplete {
         /// Total resource count confirmed by the marker.
         resources: usize,
+        /// Total request collision barriers confirmed by the marker.
+        request_claims: usize,
     },
 }
 
@@ -219,8 +236,10 @@ pub enum MigrationError {
     },
     /// The migration identity was already used for a different input plan.
     #[error(
-        "migration marker `{key}` binds {actual_resources} resources from {actual_digest}, \
-         not {expected_resources} resources from {expected_digest}"
+        "migration marker `{key}` binds {actual_resources} resources and \
+         {actual_request_claims} request claims from {actual_digest}, not \
+         {expected_resources} resources and {expected_request_claims} request claims from \
+         {expected_digest}"
     )]
     MarkerMismatch {
         /// Marker key.
@@ -233,5 +252,9 @@ pub enum MigrationError {
         expected_resources: usize,
         /// Resource count stored by the prior run.
         actual_resources: usize,
+        /// Request claim count requested by this run.
+        expected_request_claims: usize,
+        /// Request claim count stored by the prior run.
+        actual_request_claims: usize,
     },
 }
