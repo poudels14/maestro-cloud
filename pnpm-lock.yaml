@@ -25,6 +25,9 @@ importers:
       '@kobalte/core':
         specifier: ^0.13.12
         version: 0.13.12(solid-js@1.9.14)
+      '@maestro/api-client':
+        specifier: workspace:*
+        version: link:packages/api-client
       '@solidjs/meta':
         specifier: ^0.29.4
         version: 0.29.4(solid-js@1.9.14)

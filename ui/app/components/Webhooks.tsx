@@ -3,30 +3,30 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../lib/useQuery";
 import clsx from "clsx";
 import { Plus, Send, Trash2 } from "lucide-solid";
-import type { SlackCategory, SlackWebhook } from "../lib/types";
-import {
-  createSlackWebhook,
-  deleteSlackWebhook,
-  testSlackWebhook,
-  updateSlackWebhook
-} from "../lib/api";
-import { queryKeys, slackWebhooksQuery } from "../lib/queries";
+import type { Webhook, WebhookEvent } from "../lib/types";
+import { createWebhook, deleteWebhook, testWebhook } from "../lib/api";
+import { queryKeys, webhooksQuery } from "../lib/queries";
 import { SectionHeader } from "../lib/ui";
 import { ConfirmDialog } from "./home/ConfirmDialog";
 
-const ALL_CATEGORIES: SlackCategory[] = ["info", "error"];
+const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
+  { value: "deploymentTransition", label: "Deployments" },
+  { value: "nodeAvailability", label: "Nodes" },
+  { value: "previewTransition", label: "Previews" },
+  { value: "upgradeTransition", label: "Upgrades" }
+];
 
-function SlackWebhooks() {
+function Webhooks() {
   const queryClient = useQueryClient();
-  const webhooks = useQuery(() => slackWebhooksQuery());
+  const webhooks = useQuery(() => webhooksQuery());
   const [showForm, setShowForm] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const [pendingDelete, setPendingDelete] = createSignal<SlackWebhook | null>(null);
+  const [pendingDelete, setPendingDelete] = createSignal<Webhook | null>(null);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
 
   const deleteMutation = useMutation(() => ({
-    mutationFn: (id: string) => deleteSlackWebhook(id),
+    mutationFn: (webhook: Webhook) => deleteWebhook(webhook),
     onSuccess: () => {
       setPendingDelete(null);
       invalidate();
@@ -40,10 +40,9 @@ function SlackWebhooks() {
   return (
     <div>
       <div class="mb-4">
-        <SectionHeader>Slack webhooks</SectionHeader>
+        <SectionHeader>Webhooks</SectionHeader>
         <p class="mt-1 text-xs text-gray-400">
-          Error notifications include deployment crashes and node failures; info notifications
-          include lifecycle updates and node recoveries.
+          Deliver signed deployment, node, preview, and upgrade transitions to an HTTPS endpoint.
         </p>
       </div>
       <Show when={actionError()}>
@@ -101,8 +100,8 @@ function SlackWebhooks() {
         description={
           <>
             Are you sure you want to delete{" "}
-            <span class="font-medium text-gray-700">{pendingDelete()?.name}</span>? No more
-            notifications will be sent to this webhook.
+            <span class="font-medium text-gray-700">{pendingDelete()?.meta.id}</span>? No more
+            events will be sent to this endpoint.
           </>
         }
         confirmLabel="Delete"
@@ -110,7 +109,7 @@ function SlackWebhooks() {
         busy={deleteMutation.isPending}
         onConfirm={() => {
           const target = pendingDelete();
-          if (target) deleteMutation.mutate(target.id);
+          if (target) deleteMutation.mutate(target);
         }}
         onCancel={() => setPendingDelete(null)}
       />
@@ -119,59 +118,47 @@ function SlackWebhooks() {
 }
 
 function WebhookRow(props: {
-  webhook: SlackWebhook;
+  webhook: Webhook;
   onError: (msg: string) => void;
   onRequestDelete: () => void;
 }) {
-  const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
-
-  const toggleMutation = useMutation(() => ({
-    mutationFn: (enabled: boolean) => updateSlackWebhook(props.webhook.id, { enabled }),
-    onSuccess: invalidate,
-    onError: (err) => props.onError(err instanceof Error ? err.message : "toggle failed")
-  }));
   const testMutation = useMutation(() => ({
-    mutationFn: () => testSlackWebhook(props.webhook.id),
+    mutationFn: () => testWebhook(props.webhook.meta.id),
     onError: (err) => props.onError(err instanceof Error ? err.message : "test failed")
   }));
-  const busy = () => toggleMutation.isPending || testMutation.isPending;
+  const busy = () => testMutation.isPending;
 
   return (
     <div class="px-4 py-3 flex items-center justify-between gap-4">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-gray-800 truncate">{props.webhook.name}</span>
-          <For each={props.webhook.categories}>
-            {(category) => (
+          <span class="text-sm font-medium text-gray-800 truncate">{props.webhook.meta.id}</span>
+          <For each={props.webhook.spec.events}>
+            {(event) => (
               <span
                 class={clsx("text-[11px] font-medium px-1.5 py-0.5 rounded", {
-                  "bg-sky-50 text-sky-700 border border-sky-200": category === "info",
-                  "bg-red-50 text-red-700 border border-red-200": category === "error"
+                  "bg-sky-50 text-sky-700 border border-sky-200": event === "deploymentTransition",
+                  "bg-emerald-50 text-emerald-700 border border-emerald-200":
+                    event === "nodeAvailability",
+                  "bg-violet-50 text-violet-700 border border-violet-200":
+                    event === "previewTransition",
+                  "bg-amber-50 text-amber-700 border border-amber-200":
+                    event === "upgradeTransition"
                 })}
               >
-                {category}
+                {EVENT_OPTIONS.find((option) => option.value === event)?.label ?? event}
               </span>
             )}
           </For>
-          <Show when={!props.webhook.enabled}>
-            <span class="text-[11px] font-medium text-gray-400">disabled</span>
+          <Show when={props.webhook.status.consecutiveFailures > 0}>
+            <span class="text-[11px] font-medium text-red-600">
+              {props.webhook.status.consecutiveFailures} failed
+            </span>
           </Show>
         </div>
-        <p class="text-xs font-mono text-gray-400 truncate mt-0.5">{props.webhook.url}</p>
+        <p class="text-xs font-mono text-gray-400 truncate mt-0.5">{props.webhook.spec.endpoint}</p>
       </div>
       <div class="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          onClick={() => toggleMutation.mutate(!props.webhook.enabled)}
-          disabled={busy()}
-          class={clsx("text-xs px-2 py-1 rounded-md transition-colors", {
-            "bg-gray-100 text-gray-600 hover:bg-gray-200": props.webhook.enabled,
-            "bg-gray-50 text-gray-400 hover:bg-gray-100": !props.webhook.enabled
-          })}
-        >
-          {props.webhook.enabled ? "disable" : "enable"}
-        </button>
         <button
           type="button"
           onClick={() => testMutation.mutate()}
@@ -201,42 +188,51 @@ function WebhookForm(props: {
   onError: (msg: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [name, setName] = createSignal("");
-  const [url, setUrl] = createSignal("");
-  const [categories, setCategories] = createSignal<SlackCategory[]>(["info", "error"]);
+  const [id, setId] = createSignal("");
+  const [endpoint, setEndpoint] = createSignal("");
+  const [signingSecret, setSigningSecret] = createSignal("");
+  const [events, setEvents] = createSignal<WebhookEvent[]>(
+    EVENT_OPTIONS.map((option) => option.value)
+  );
 
   const createMutation = useMutation(() => ({
     mutationFn: () =>
-      createSlackWebhook({
-        name: name().trim(),
-        url: url().trim(),
-        categories: categories(),
-        enabled: true
+      createWebhook({
+        id: id().trim(),
+        endpoint: endpoint().trim(),
+        events: events(),
+        signingSecret: signingSecret()
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.slackWebhooks });
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
       props.onSaved();
     },
     onError: (err) => props.onError(err instanceof Error ? err.message : "create failed")
   }));
 
-  const toggleCategory = (category: SlackCategory) => {
-    setCategories((current) =>
-      current.includes(category) ? current.filter((c) => c !== category) : [...current, category]
+  const toggleEvent = (event: WebhookEvent) => {
+    setEvents((current) =>
+      current.includes(event)
+        ? current.filter((candidate) => candidate !== event)
+        : [...current, event]
     );
   };
 
   const save = () => {
-    if (!name().trim()) {
-      props.onError("Name is required");
+    if (!id().trim()) {
+      props.onError("Webhook ID is required");
       return;
     }
-    if (!url().trim()) {
-      props.onError("URL is required");
+    if (!endpoint().trim()) {
+      props.onError("Endpoint is required");
       return;
     }
-    if (categories().length === 0) {
-      props.onError("Select at least one category");
+    if (events().length === 0) {
+      props.onError("Select at least one event");
+      return;
+    }
+    if (signingSecret().length < 32) {
+      props.onError("Signing secret must contain at least 32 characters");
       return;
     }
     createMutation.mutate();
@@ -247,33 +243,42 @@ function WebhookForm(props: {
       <div class="grid gap-2.5">
         <input
           type="text"
-          placeholder="Name (e.g. #deploys)"
-          value={name()}
-          onInput={(e) => setName(e.currentTarget.value)}
+          placeholder="Webhook ID (e.g. deployments)"
+          value={id()}
+          onInput={(e) => setId(e.currentTarget.value)}
           disabled={createMutation.isPending}
           class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
         />
         <input
           type="url"
-          placeholder="https://hooks.slack.com/services/..."
-          value={url()}
-          onInput={(e) => setUrl(e.currentTarget.value)}
+          placeholder="https://events.example.com/maestro"
+          value={endpoint()}
+          onInput={(e) => setEndpoint(e.currentTarget.value)}
           disabled={createMutation.isPending}
           class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
         />
+        <input
+          type="password"
+          placeholder="Signing secret (at least 32 characters)"
+          value={signingSecret()}
+          onInput={(e) => setSigningSecret(e.currentTarget.value)}
+          disabled={createMutation.isPending}
+          autocomplete="new-password"
+          class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
+        />
         <div class="flex items-center gap-2">
-          <span class="text-xs text-gray-500">Categories:</span>
-          <For each={ALL_CATEGORIES}>
-            {(category) => (
+          <span class="text-xs text-gray-500">Events:</span>
+          <For each={EVENT_OPTIONS}>
+            {(option) => (
               <label class="inline-flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={categories().includes(category)}
-                  onChange={() => toggleCategory(category)}
+                  checked={events().includes(option.value)}
+                  onChange={() => toggleEvent(option.value)}
                   disabled={createMutation.isPending}
                   class="size-3.5"
                 />
-                {category}
+                {option.label}
               </label>
             )}
           </For>
@@ -301,4 +306,4 @@ function WebhookForm(props: {
   );
 }
 
-export { SlackWebhooks };
+export { Webhooks };

@@ -1,3 +1,5 @@
+import type { ApiSchemas } from "@maestro/api-client";
+
 export interface BuildCommand {
   command: string;
   args: string[];
@@ -94,15 +96,8 @@ export namespace Preview {
   };
 }
 
-export type SlackCategory = "info" | "error";
-
-export interface SlackWebhook {
-  id: string;
-  name: string;
-  url: string;
-  categories: SlackCategory[];
-  enabled: boolean;
-}
+export type Webhook = ApiSchemas["Webhook"];
+export type WebhookEvent = ApiSchemas["WebhookEvent"];
 
 export interface Service {
   id: string;

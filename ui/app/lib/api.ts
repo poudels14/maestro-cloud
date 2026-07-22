@@ -1,3 +1,4 @@
+import { ApiHttpError, createApiClient, createFetchTransport } from "@maestro/api-client";
 import type {
   ClusterNode,
   Deployment,
@@ -10,11 +11,11 @@ import type {
   MetricPoint,
   ClusterStats,
   Service,
-  SlackCategory,
-  SlackWebhook,
   StatsMetricPoint,
   TrafficPoint,
-  UnschedulableReplica
+  UnschedulableReplica,
+  Webhook,
+  WebhookEvent
 } from "./types";
 import { apiErrorFromResponse } from "./apiError";
 
@@ -556,55 +557,71 @@ export async function getContainerMetrics(
   return res.json();
 }
 
-export async function listSlackWebhooks(): Promise<SlackWebhook[]> {
-  const res = await fetch("/api/webhooks/slack");
-  if (!res.ok) throw new Error(`Failed to load webhooks: ${res.statusText}`);
-  return res.json();
+function webhookClient() {
+  return createApiClient(createFetchTransport(location.origin));
 }
 
-export async function createSlackWebhook(payload: {
-  name: string;
-  url: string;
-  categories: SlackCategory[];
-  enabled?: boolean;
-}): Promise<SlackWebhook> {
-  const res = await fetch("/api/webhooks/slack", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to create webhook: ${res.statusText}`);
+function webhookRequestError(error: unknown, fallback: string): Error {
+  if (!(error instanceof ApiHttpError)) {
+    return error instanceof Error ? error : new Error(fallback);
   }
-  return res.json();
-}
-
-export async function updateSlackWebhook(
-  id: string,
-  patch: Partial<{ name: string; url: string; categories: SlackCategory[]; enabled: boolean }>
-): Promise<SlackWebhook> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch)
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update webhook: ${res.statusText}`);
+  let message = error.body || fallback;
+  try {
+    const payload = JSON.parse(error.body) as {
+      error?: { message?: string } | string;
+    };
+    message = typeof payload.error === "string" ? payload.error : payload.error?.message || message;
+  } catch {
+    // Preserve a non-JSON response body from the API proxy.
   }
-  return res.json();
+  return new Error(message);
 }
 
-export async function deleteSlackWebhook(id: string): Promise<void> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete webhook: ${res.statusText}`);
+export async function listWebhooks(): Promise<Webhook[]> {
+  try {
+    return await webhookClient().listWebhooks();
+  } catch (error) {
+    throw webhookRequestError(error, "Failed to load webhooks");
+  }
 }
 
-export async function testSlackWebhook(id: string): Promise<void> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}/test`, { method: "POST" });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Test message failed: ${res.statusText}`);
+export async function createWebhook(payload: {
+  id: string;
+  endpoint: string;
+  events: WebhookEvent[];
+  signingSecret: string;
+}): Promise<void> {
+  try {
+    await webhookClient().putWebhook(
+      payload.id,
+      {
+        endpoint: payload.endpoint,
+        events: payload.events,
+        signingSecret: payload.signingSecret
+      },
+      crypto.randomUUID()
+    );
+  } catch (error) {
+    throw webhookRequestError(error, "Failed to create webhook");
+  }
+}
+
+export async function deleteWebhook(webhook: Webhook): Promise<void> {
+  try {
+    await webhookClient().deleteWebhook(
+      webhook.meta.id,
+      { expectedRevision: webhook.meta.revision },
+      crypto.randomUUID()
+    );
+  } catch (error) {
+    throw webhookRequestError(error, "Failed to delete webhook");
+  }
+}
+
+export async function testWebhook(id: string): Promise<void> {
+  try {
+    await webhookClient().testWebhook(id, {}, crypto.randomUUID());
+  } catch (error) {
+    throw webhookRequestError(error, "Webhook test delivery failed");
   }
 }

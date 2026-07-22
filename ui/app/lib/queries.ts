@@ -24,7 +24,7 @@ import {
   getServiceTraffic,
   getServices,
   getUnschedulableReplicas,
-  listSlackWebhooks
+  listWebhooks
 } from "./api";
 
 const isServer = typeof window === "undefined";
@@ -54,7 +54,7 @@ const queryKeys = {
   ingressBlocklist: ["ingress", "blocklist"] as const,
   containerMetrics: (serviceId: string, range: number) =>
     ["metrics", "containers", serviceId, range] as const,
-  slackWebhooks: ["webhooks", "slack"] as const
+  webhooks: ["webhooks"] as const
 };
 
 const clusterInfoQuery = (opts?: { pollForMaintenance?: boolean }) => ({
@@ -282,9 +282,9 @@ const containerMetricsQuery = (serviceId: string, rangeMs: number) => ({
   refetchInterval: 10_000
 });
 
-const slackWebhooksQuery = () => ({
-  queryKey: queryKeys.slackWebhooks,
-  queryFn: ssrSafe(listSlackWebhooks, [])
+const webhooksQuery = () => ({
+  queryKey: queryKeys.webhooks,
+  queryFn: ssrSafe(listWebhooks, [])
 });
 
 export {
@@ -306,5 +306,5 @@ export {
   blockedIngressTrafficQuery,
   ingressBlocklistQuery,
   containerMetricsQuery,
-  slackWebhooksQuery
+  webhooksQuery
 };

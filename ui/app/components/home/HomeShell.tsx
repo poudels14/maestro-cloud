@@ -13,7 +13,7 @@ import { NodeMetricsSection } from "./NodeMetricsSection";
 import { DisksSection } from "./DisksSection";
 import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
-import { SlackWebhooks } from "../SlackWebhooks";
+import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
 import { HttpLogsSection } from "./HttpLogsSection";
@@ -92,7 +92,7 @@ function HomeShell(props: { tab: HomeTab }) {
                     <ClusterHero />
                     <ClusterStatsSection />
                     <ClusterConfigSection />
-                    <SlackWebhooks />
+                    <Webhooks />
                   </div>
                 </Match>
                 <Match when={props.tab === "metrics"}>
