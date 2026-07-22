@@ -71,9 +71,10 @@ pub use workload::{
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,
     BuildTemplate, CommandSpec, Deployment, DeploymentGoal, DeploymentPhase, DeploymentSpec,
     DeploymentStatus, ExecPolicy, HealthCheckSpec, HealthProbe, NodeApiAccess, PlacementConstraint,
-    PreviewPolicy, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState,
-    SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec,
-    VolumeSource, WorkloadUserSpec, workload_hostname,
+    PlacementHistory, PlacementHistorySpec, PlacementHistoryStatus, PreviewPolicy, ReplicaState,
+    ReplicaStateSpec, ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec,
+    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    workload_hostname,
 };
 
 #[cfg(test)]

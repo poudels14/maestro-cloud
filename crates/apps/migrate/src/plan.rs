@@ -37,6 +37,7 @@ impl MigrationWrite {
             BuiltinResource::Service(resource) => encode!(Service, resource),
             BuiltinResource::Deployment(resource) => encode!(Deployment, resource),
             BuiltinResource::Assignment(resource) => encode!(Assignment, resource),
+            BuiltinResource::PlacementHistory(resource) => encode!(PlacementHistory, resource),
             BuiltinResource::ReplicaState(resource) => encode!(ReplicaState, resource),
             BuiltinResource::IngressRoute(resource) => encode!(IngressRoute, resource),
             BuiltinResource::IngressBlocklist(resource) => encode!(IngressBlocklist, resource),

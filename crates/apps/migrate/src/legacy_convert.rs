@@ -18,6 +18,7 @@ use crate::legacy_membership::LegacyMembershipCatalog;
 use crate::legacy_network::LegacyNetworkCatalog;
 use crate::legacy_node_lifecycle::LegacyNodeLifecycleCatalog;
 use crate::legacy_nodes::LegacyNodeCatalog;
+use crate::legacy_placements::LegacyPlacementCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
@@ -82,8 +83,13 @@ pub fn plan_legacy_snapshot(
                 message: error.to_string(),
             }
         })?;
+    let placements = LegacyPlacementCatalog::decode(&derived.unclaimed).map_err(|error| {
+        LegacyPlanError::DecodeLegacyState {
+            message: error.to_string(),
+        }
+    })?;
     let webhooks =
-        LegacyWebhookCatalog::decode(&derived.unclaimed, master_secret).map_err(|error| {
+        LegacyWebhookCatalog::decode(&placements.unclaimed, master_secret).map_err(|error| {
             LegacyPlanError::DecodeLegacyState {
                 message: error.to_string(),
             }
@@ -103,6 +109,7 @@ pub fn plan_legacy_snapshot(
     resources.extend(lifecycle.convert_removed()?);
     let cluster_resources = cluster.convert(&catalog, &nodes, &mut resources)?;
     resources.extend(cluster_resources);
+    resources.extend(placements.convert()?);
     let network_resources = network.convert(&resources)?;
     resources.extend(network_resources);
     resources.extend(webhooks.convert());

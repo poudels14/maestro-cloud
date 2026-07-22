@@ -485,6 +485,40 @@ pub struct AssignmentStatus {
 /// A scheduled workload assignment resource.
 pub type Assignment = Object<AssignmentId, AssignmentSpec, AssignmentStatus>;
 
+/// Immutable placement identity retained after an assignment stops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacementHistorySpec {
+    /// Service whose replica occupied the placement.
+    pub service_id: ServiceId,
+    /// Immutable deployment whose replica occupied the placement.
+    pub deployment_id: DeploymentId,
+    /// Zero-based replica slot within the deployment.
+    pub replica_index: u32,
+    /// Node that hosted the workload.
+    pub node_id: NodeId,
+    /// Node API address captured when the workload started.
+    pub cluster_host_address: IpAddr,
+    /// Node API port captured when the workload started.
+    pub cluster_api_port: u16,
+    /// Runtime hostname captured when the workload started.
+    pub container_hostname: String,
+}
+
+/// Start and terminal timing for one placement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacementHistoryStatus {
+    /// Time the workload first occupied the placement.
+    pub started_at: Timestamp,
+    /// Time the workload left the placement, or `None` while it remains active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<Timestamp>,
+}
+
+/// Durable audit record for one assignment placement.
+pub type PlacementHistory = Object<AssignmentId, PlacementHistorySpec, PlacementHistoryStatus>;
+
 fn initial_restart_generation() -> Generation {
     Generation(1)
 }

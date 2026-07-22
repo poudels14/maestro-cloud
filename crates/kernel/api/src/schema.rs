@@ -7,12 +7,13 @@ use serde_json::{Value, json};
 use crate::{
     ArtifactArchiveUploadResponse, Assignment, Build, ClusterId, CommandRequest, Deployment,
     DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute,
-    IngressRouting, MaskedClusterConfig, Node, NodeFirewall, NodeNetwork, NodeTombstone, Preview,
-    ReplicaState, ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange,
-    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
-    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
-    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
-    ServiceWriteResponse, TrafficGeneration, UnschedulableReplica, UpgradeRun, Webhook,
+    IngressRouting, MaskedClusterConfig, Node, NodeFirewall, NodeNetwork, NodeTombstone,
+    PlacementHistory, Preview, ReplicaState, ResourceKind, Service, ServiceCommandResponse,
+    ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus,
+    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec,
+    ServiceWriteRequest, ServiceWriteResponse, TrafficGeneration, UnschedulableReplica, UpgradeRun,
+    Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -38,6 +39,8 @@ pub enum BuiltinKind {
     Deployment,
     /// A scheduled workload assignment.
     Assignment,
+    /// A durable assignment placement audit record.
+    PlacementHistory,
     /// An observed replica state.
     ReplicaState,
     /// An ingress route.
@@ -62,13 +65,14 @@ pub enum BuiltinKind {
 
 impl BuiltinKind {
     /// Built-in kinds in deterministic schema and snapshot order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Node,
         Self::NodeTombstone,
         Self::NodeNetwork,
         Self::Service,
         Self::Deployment,
         Self::Assignment,
+        Self::PlacementHistory,
         Self::ReplicaState,
         Self::IngressRoute,
         Self::IngressBlocklist,
@@ -92,6 +96,7 @@ impl BuiltinKind {
             Self::Service => "Service",
             Self::Deployment => "Deployment",
             Self::Assignment => "Assignment",
+            Self::PlacementHistory => "PlacementHistory",
             Self::ReplicaState => "ReplicaState",
             Self::IngressRoute => "IngressRoute",
             Self::IngressBlocklist => "IngressBlocklist",
@@ -124,6 +129,7 @@ impl TryFrom<&ResourceKind> for BuiltinKind {
             "Service" => Ok(Self::Service),
             "Deployment" => Ok(Self::Deployment),
             "Assignment" => Ok(Self::Assignment),
+            "PlacementHistory" => Ok(Self::PlacementHistory),
             "ReplicaState" => Ok(Self::ReplicaState),
             "IngressRoute" => Ok(Self::IngressRoute),
             "IngressBlocklist" => Ok(Self::IngressBlocklist),
@@ -157,6 +163,8 @@ pub enum BuiltinResource {
     Deployment(Deployment),
     /// A scheduled workload assignment.
     Assignment(Assignment),
+    /// A durable assignment placement audit record.
+    PlacementHistory(PlacementHistory),
     /// An observed replica state.
     ReplicaState(ReplicaState),
     /// An ingress route.
@@ -190,6 +198,7 @@ impl BuiltinResource {
             Self::Service(_) => BuiltinKind::Service,
             Self::Deployment(_) => BuiltinKind::Deployment,
             Self::Assignment(_) => BuiltinKind::Assignment,
+            Self::PlacementHistory(_) => BuiltinKind::PlacementHistory,
             Self::ReplicaState(_) => BuiltinKind::ReplicaState,
             Self::IngressRoute(_) => BuiltinKind::IngressRoute,
             Self::IngressBlocklist(_) => BuiltinKind::IngressBlocklist,
@@ -246,6 +255,9 @@ pub fn decode_builtin(
         BuiltinKind::Service => serde_json::from_value(value).map(BuiltinResource::Service),
         BuiltinKind::Deployment => serde_json::from_value(value).map(BuiltinResource::Deployment),
         BuiltinKind::Assignment => serde_json::from_value(value).map(BuiltinResource::Assignment),
+        BuiltinKind::PlacementHistory => {
+            serde_json::from_value(value).map(BuiltinResource::PlacementHistory)
+        }
         BuiltinKind::ReplicaState => {
             serde_json::from_value(value).map(BuiltinResource::ReplicaState)
         }
@@ -285,6 +297,7 @@ pub fn openapi_document() -> Value {
     register_schema::<Service>(&mut generator, BuiltinKind::Service);
     register_schema::<Deployment>(&mut generator, BuiltinKind::Deployment);
     register_schema::<Assignment>(&mut generator, BuiltinKind::Assignment);
+    register_schema::<PlacementHistory>(&mut generator, BuiltinKind::PlacementHistory);
     register_schema::<ReplicaState>(&mut generator, BuiltinKind::ReplicaState);
     register_schema::<IngressRoute>(&mut generator, BuiltinKind::IngressRoute);
     register_schema::<IngressBlocklist>(&mut generator, BuiltinKind::IngressBlocklist);

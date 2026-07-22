@@ -16,6 +16,8 @@ mod legacy_node_lifecycle_schema;
 mod legacy_node_resources;
 mod legacy_node_schema;
 mod legacy_nodes;
+mod legacy_placement_schema;
+mod legacy_placements;
 mod legacy_resources;
 mod legacy_schema;
 mod legacy_services;
@@ -45,6 +47,8 @@ mod legacy_network_tests;
 mod legacy_node_lifecycle_tests;
 #[cfg(test)]
 mod legacy_node_tests;
+#[cfg(test)]
+mod legacy_placement_tests;
 #[cfg(test)]
 mod legacy_tests;
 #[cfg(test)]

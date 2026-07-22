@@ -196,6 +196,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/placements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPlacementHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/stats": {
         parameters: {
             query?: never;
@@ -1318,7 +1334,7 @@ export interface components {
         BlockedIpsResponse: {
             blockedIps: string[];
         };
-        Build: components["schemas"]["Object13"];
+        Build: components["schemas"]["Object14"];
         /** @description Stable identity of an artifact build. */
         BuildId: string;
         /** @description Persisted phase of an artifact build. */
@@ -1519,7 +1535,7 @@ export interface components {
             /** Format: int64 */
             totalBytes: number;
         };
-        DnsRecord: components["schemas"]["Object12"];
+        DnsRecord: components["schemas"]["Object13"];
         /** @description Stable identity of a cluster DNS record. */
         DnsRecordId: string;
         /** @description Desired authoritative DNS record set. */
@@ -1604,7 +1620,7 @@ export interface components {
             script: string;
             tableName: string;
         };
-        FirewallPolicy: components["schemas"]["Object11"];
+        FirewallPolicy: components["schemas"]["Object12"];
         FirewallPolicyCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
             generation: components["schemas"]["Generation"];
@@ -1722,7 +1738,7 @@ export interface components {
             /** @enum {string} */
             stream: "stdout" | "stderr" | "otlp" | "system";
         };
-        IngressBlocklist: components["schemas"]["Object9"];
+        IngressBlocklist: components["schemas"]["Object10"];
         /** @description Stable identity of the cluster ingress blocklist. */
         IngressBlocklistId: string;
         /** @description Desired canonical client addresses denied before service routing. */
@@ -1739,7 +1755,7 @@ export interface components {
             /** @description Digest of the exact rendered address set. */
             configurationDigest?: string | null;
         };
-        IngressRoute: components["schemas"]["Object8"];
+        IngressRoute: components["schemas"]["Object9"];
         /** @description Stable identity of an ingress route. */
         IngressRouteId: string;
         /** @description Desired host routing for one service endpoint. */
@@ -1859,7 +1875,7 @@ export interface components {
         NodeDiskMap: {
             [key: string]: components["schemas"]["DiskInfo"][];
         };
-        NodeFirewall: components["schemas"]["Object17"];
+        NodeFirewall: components["schemas"]["Object18"];
         /** @description Stable identity of a node's desired firewall ruleset. */
         NodeFirewallId: string;
         /** @description Complete generated nftables input desired on one node. */
@@ -1995,6 +2011,15 @@ export interface components {
         /** @description A typed Maestro resource with desired and observed state. */
         Object10: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
+            meta: components["schemas"]["ObjectMeta8"];
+            /** @description Desired state written by users or another controller. */
+            spec: components["schemas"]["IngressBlocklistSpec"];
+            /** @description Observed state written by the resource's owning controller. */
+            status: components["schemas"]["IngressBlocklistStatus"];
+        };
+        /** @description A typed Maestro resource with desired and observed state. */
+        Object11: {
+            /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta9"];
             /** @description Desired state written by users or another controller. */
             spec: components["schemas"]["TrafficGenerationSpec"];
@@ -2002,7 +2027,7 @@ export interface components {
             status: components["schemas"]["TrafficGenerationStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object11: {
+        Object12: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta10"];
             /** @description Desired state written by users or another controller. */
@@ -2011,7 +2036,7 @@ export interface components {
             status: components["schemas"]["FirewallPolicyStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object12: {
+        Object13: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta11"];
             /** @description Desired state written by users or another controller. */
@@ -2020,7 +2045,7 @@ export interface components {
             status: components["schemas"]["DnsRecordStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object13: {
+        Object14: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta12"];
             /** @description Desired state written by users or another controller. */
@@ -2029,7 +2054,7 @@ export interface components {
             status: components["schemas"]["BuildStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object14: {
+        Object15: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta13"];
             /** @description Desired state written by users or another controller. */
@@ -2038,7 +2063,7 @@ export interface components {
             status: components["schemas"]["PreviewStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object15: {
+        Object16: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta14"];
             /** @description Desired state written by users or another controller. */
@@ -2047,7 +2072,7 @@ export interface components {
             status: components["schemas"]["UpgradeRunStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object16: {
+        Object17: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta15"];
             /** @description Desired state written by users or another controller. */
@@ -2056,7 +2081,7 @@ export interface components {
             status: components["schemas"]["WebhookStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object17: {
+        Object18: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta16"];
             /** @description Desired state written by users or another controller. */
@@ -2112,6 +2137,15 @@ export interface components {
         /** @description A typed Maestro resource with desired and observed state. */
         Object7: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
+            meta: components["schemas"]["ObjectMeta5"];
+            /** @description Desired state written by users or another controller. */
+            spec: components["schemas"]["PlacementHistorySpec"];
+            /** @description Observed state written by the resource's owning controller. */
+            status: components["schemas"]["PlacementHistoryStatus"];
+        };
+        /** @description A typed Maestro resource with desired and observed state. */
+        Object8: {
+            /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta6"];
             /** @description Desired state written by users or another controller. */
             spec: components["schemas"]["ReplicaStateSpec"];
@@ -2119,22 +2153,13 @@ export interface components {
             status: components["schemas"]["ReplicaStateStatus"];
         };
         /** @description A typed Maestro resource with desired and observed state. */
-        Object8: {
+        Object9: {
             /** @description Identity, concurrency, ownership, and deletion metadata. */
             meta: components["schemas"]["ObjectMeta7"];
             /** @description Desired state written by users or another controller. */
             spec: components["schemas"]["IngressRouteSpec"];
             /** @description Observed state written by the resource's owning controller. */
             status: components["schemas"]["IngressRouteStatus"];
-        };
-        /** @description A typed Maestro resource with desired and observed state. */
-        Object9: {
-            /** @description Identity, concurrency, ownership, and deletion metadata. */
-            meta: components["schemas"]["ObjectMeta8"];
-            /** @description Desired state written by users or another controller. */
-            spec: components["schemas"]["IngressBlocklistSpec"];
-            /** @description Observed state written by the resource's owning controller. */
-            status: components["schemas"]["IngressBlocklistStatus"];
         };
         /** @description Metadata shared by every resource kind. */
         ObjectMeta: {
@@ -2522,6 +2547,40 @@ export interface components {
             /** @description Required node identity, when placement is pinned. */
             nodeId?: components["schemas"]["NodeId"] | (null);
         };
+        PlacementHistory: components["schemas"]["Object7"];
+        /** @description Immutable placement identity retained after an assignment stops. */
+        PlacementHistorySpec: {
+            /**
+             * Format: uint16
+             * @description Node API port captured when the workload started.
+             */
+            clusterApiPort: number;
+            /**
+             * Format: ip
+             * @description Node API address captured when the workload started.
+             */
+            clusterHostAddress: string;
+            /** @description Runtime hostname captured when the workload started. */
+            containerHostname: string;
+            /** @description Immutable deployment whose replica occupied the placement. */
+            deploymentId: components["schemas"]["DeploymentId"];
+            /** @description Node that hosted the workload. */
+            nodeId: components["schemas"]["NodeId"];
+            /**
+             * Format: uint32
+             * @description Zero-based replica slot within the deployment.
+             */
+            replicaIndex: number;
+            /** @description Service whose replica occupied the placement. */
+            serviceId: components["schemas"]["ServiceId"];
+        };
+        /** @description Start and terminal timing for one placement. */
+        PlacementHistoryStatus: {
+            /** @description Time the workload left the placement, or `None` while it remains active. */
+            endedAt?: components["schemas"]["Timestamp"] | (null);
+            /** @description Time the workload first occupied the placement. */
+            startedAt: components["schemas"]["Timestamp"];
+        };
         /** @description Inclusive transport port range. */
         PortRange: {
             /**
@@ -2535,7 +2594,7 @@ export interface components {
              */
             start: number;
         };
-        Preview: components["schemas"]["Object14"];
+        Preview: components["schemas"]["Object15"];
         /** @description Stable identity of a pull-request preview. */
         PreviewId: string;
         /** @description Persisted lifecycle of a pull-request preview. */
@@ -2599,7 +2658,7 @@ export interface components {
             uptimeMs: number;
             version: string;
         };
-        ReplicaState: components["schemas"]["Object7"];
+        ReplicaState: components["schemas"]["Object8"];
         /** @description Stable identity of a deployment replica's observed state. */
         ReplicaStateId: string;
         /** @description Desired identity of one observable deployment replica slot. */
@@ -2932,7 +2991,7 @@ export interface components {
             statusCode: number;
             value: string;
         };
-        TrafficGeneration: components["schemas"]["Object10"];
+        TrafficGeneration: components["schemas"]["Object11"];
         /** @description Stable identity of an ingress traffic generation. */
         TrafficGenerationId: string;
         /** @description Persisted cutover lifecycle of a traffic generation. */
@@ -3045,7 +3104,7 @@ export interface components {
         UpgradeMode: "rolling" | "allNodes";
         /** @description Persisted lifecycle shared by rolling and all-node upgrade modes. */
         UpgradePhase: "pending" | "draining" | "applying" | "restarting" | "verifying" | "completed" | "failed" | "canceled";
-        UpgradeRun: components["schemas"]["Object15"];
+        UpgradeRun: components["schemas"]["Object16"];
         /** @description Stable identity of a persisted cluster upgrade run. */
         UpgradeRunId: string;
         /** @description Desired target and batching for one cluster upgrade. */
@@ -3091,7 +3150,7 @@ export interface components {
             /** @enum {string} */
             type: "managed";
         };
-        Webhook: components["schemas"]["Object16"];
+        Webhook: components["schemas"]["Object17"];
         /** @description Notification severity selected independently from event classes. */
         WebhookCategory: "info" | "error";
         WebhookCommandResponse: {
@@ -3607,6 +3666,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    listPlacementHistory: {
+        parameters: {
+            query?: {
+                serviceId?: string;
+                deploymentId?: string;
+                replicaIndex?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered resource list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementHistory"][];
+                };
             };
         };
     };

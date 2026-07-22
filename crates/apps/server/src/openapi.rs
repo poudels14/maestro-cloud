@@ -26,6 +26,10 @@ pub fn openapi_document() -> Value {
             list_operation("listUnschedulableReplicas", "UnschedulableReplica"),
         ),
         (
+            "/api/cluster/placements".to_string(),
+            placement_history_operation(),
+        ),
+        (
             "/api/artifact-archives/{archiveId}".to_string(),
             artifact_archive_operation(),
         ),
@@ -571,6 +575,36 @@ fn list_operation(operation_id: &str, schema: &str) -> Value {
             }
         }
     })
+}
+
+fn placement_history_operation() -> Value {
+    let mut operation = list_operation("listPlacementHistory", "PlacementHistory");
+    if let Some(get) = operation.get_mut("get").and_then(Value::as_object_mut) {
+        get.insert(
+            "parameters".to_string(),
+            json!([
+                {
+                    "name": "serviceId",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string"}
+                },
+                {
+                    "name": "deploymentId",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string"}
+                },
+                {
+                    "name": "replicaIndex",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "integer", "format": "uint32", "minimum": 0}
+                }
+            ]),
+        );
+    }
+    operation
 }
 
 pub(crate) fn get_operation(operation_id: &str, parameter: &str, schema: &str) -> Value {

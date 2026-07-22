@@ -1,10 +1,13 @@
 use axum::http::StatusCode;
-use kernel_api::{ClusterInfo, DeploymentId, ServiceId, UnschedulableReplica};
+use kernel_api::{
+    AssignmentId, ClusterInfo, DeploymentId, NodeId, Object, PlacementHistory,
+    PlacementHistorySpec, PlacementHistoryStatus, ServiceId, Timestamp, UnschedulableReplica,
+};
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store};
 
 use crate::{ApiServer, ServerSettings};
 
-use super::{decode, request, seeded_store};
+use super::{decode, metadata, put, request, seeded_store};
 
 #[tokio::test]
 async fn cluster_info_summarizes_node_capabilities() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,6 +29,52 @@ async fn cluster_info_summarizes_node_capabilities() -> Result<(), Box<dyn std::
             workload_node_count: 1,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn placement_history_is_filtered_and_ordered_without_driving_exec()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let older = placement("assignment-old", "api", "api-v1", 0, 1_000)?;
+    let newer = placement("assignment-new", "api", "api-v2", 1, 2_000)?;
+    let other = placement("assignment-other", "worker", "worker-v1", 0, 3_000)?;
+    for value in [&older, &newer, &other] {
+        put(
+            store.as_ref(),
+            &cluster_id,
+            "PlacementHistory",
+            value.meta.id.as_str(),
+            value,
+        )
+        .await?;
+    }
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let response = request(
+        &server,
+        "/api/cluster/placements?serviceId=api&replicaIndex=1",
+        None,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let placements: Vec<PlacementHistory> = decode(response).await?;
+    assert_eq!(placements.len(), 1);
+    assert_eq!(
+        placements.first().map(|placement| &placement.meta.id),
+        Some(&newer.meta.id)
+    );
+    assert_eq!(
+        placements.first().map(|placement| &placement.spec),
+        Some(&newer.spec)
+    );
+
+    let response = request(&server, "/api/cluster/placements?serviceId=-bad", None).await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     Ok(())
 }
 
@@ -82,3 +131,29 @@ async fn unschedulable_replicas_are_empty_before_the_first_scheduler_pass()
     );
     Ok(())
 }
+
+fn placement(
+    id: &str,
+    service_id: &str,
+    deployment_id: &str,
+    replica_index: u32,
+    started_at: i64,
+) -> Result<PlacementHistory, kernel_api::InvalidIdentifier> {
+    Ok(Object {
+        meta: metadata(AssignmentId::new(id)?),
+        spec: PlacementHistorySpec {
+            service_id: ServiceId::new(service_id)?,
+            deployment_id: DeploymentId::new(deployment_id)?,
+            replica_index,
+            node_id: NodeId::new("node-1")?,
+            cluster_host_address: IpAddr::V4(Ipv4Addr::new(10, 20, 0, 1)),
+            cluster_api_port: 3000,
+            container_hostname: format!("{service_id}-{replica_index}"),
+        },
+        status: PlacementHistoryStatus {
+            started_at: Timestamp(started_at),
+            ended_at: None,
+        },
+    })
+}
+use std::net::{IpAddr, Ipv4Addr};
