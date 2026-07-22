@@ -211,7 +211,7 @@ fn replica(
     })
 }
 
-fn build(
+pub(super) fn build(
     id: &str,
     service_id: &str,
     deployment_id: &str,

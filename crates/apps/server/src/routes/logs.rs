@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use kernel_api::{BuildId, DeploymentId, ServiceId, Timestamp};
+use kernel_api::{BuildId, DeploymentId, NodeId, ServiceId, Timestamp};
 use logs::{
     ClusterLogCursor, ClusterLogPage, ClusterLogQueryCoordinator, LogHistogramBucket,
     LogHistogramGroupBy, LogHistogramQuery, LogQueryParseError, LogQueryScope, LogQueryStore,
@@ -12,6 +12,7 @@ use logs::{
 use serde::Deserialize;
 
 use crate::routes::deployments::{ensure_service, owned_deployment, parse_service_id};
+use crate::routes::observations::owned_build;
 use crate::{ApiError, AppState};
 
 const DEFAULT_TAIL: usize = 100;
@@ -37,6 +38,14 @@ pub(super) fn router() -> Router<AppState> {
             "/api/services/{service_id}/deployments/{deployment_id}/logs/histogram",
             get(deployment_histogram),
         )
+        .route(
+            "/api/services/{service_id}/builds/{build_id}/logs",
+            get(build_logs),
+        )
+        .route(
+            "/api/services/{service_id}/builds/{build_id}/logs/histogram",
+            get(build_histogram),
+        )
 }
 
 pub(super) fn node_router() -> Router<AppState> {
@@ -56,6 +65,7 @@ struct ReadParameters {
     to: Option<i64>,
     query: Option<String>,
     component: Option<String>,
+    node_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -67,6 +77,7 @@ struct HistogramParameters {
     group_by: Option<String>,
     query: Option<String>,
     component: Option<String>,
+    node_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +121,7 @@ async fn node_logs(
         to: parameters.to,
         query: parameters.query,
         component: None,
+        node_id: None,
     };
     let mut query = read_query(scope, parameters)?;
     query = query.with_order(match order {
@@ -143,6 +155,7 @@ async fn node_histogram(
             group_by: parameters.group_by,
             query: parameters.query,
             component: None,
+            node_id: None,
         },
     )?;
     query_store(&state)?
@@ -186,6 +199,15 @@ async fn deployment_logs(
     cluster_read(&state, LogQueryScope::Deployment(deployment_id), parameters).await
 }
 
+async fn build_logs(
+    State(state): State<AppState>,
+    Path((service_id, build_id)): Path<(String, String)>,
+    Query(parameters): Query<ReadParameters>,
+) -> Result<Json<ClusterLogPage>, ApiError> {
+    let build_id = owned_build_id(&state, service_id, build_id).await?;
+    cluster_read(&state, LogQueryScope::Build(build_id), parameters).await
+}
+
 async fn all_histogram(
     State(state): State<AppState>,
     Query(parameters): Query<HistogramParameters>,
@@ -220,6 +242,15 @@ async fn deployment_histogram(
     cluster_histogram(&state, LogQueryScope::Deployment(deployment_id), parameters).await
 }
 
+async fn build_histogram(
+    State(state): State<AppState>,
+    Path((service_id, build_id)): Path<(String, String)>,
+    Query(parameters): Query<HistogramParameters>,
+) -> Result<Json<Vec<LogHistogramBucket>>, ApiError> {
+    let build_id = owned_build_id(&state, service_id, build_id).await?;
+    cluster_histogram(&state, LogQueryScope::Build(build_id), parameters).await
+}
+
 async fn cluster_read(
     state: &AppState,
     scope: LogQueryScope,
@@ -230,6 +261,7 @@ async fn cluster_read(
             "cluster log queries use cursor instead of after or before",
         ));
     }
+    let node_ids = selected_cluster_log_nodes(state, parameters.node_id.as_deref())?;
     let cursor = parameters
         .cursor
         .as_deref()
@@ -237,7 +269,7 @@ async fn cluster_read(
         .transpose()?;
     let query = read_query(scope, parameters)?;
     cluster_query_store(state)?
-        .query_logs(&state.cluster_log_nodes, &query, cursor.as_ref())
+        .query_logs(&node_ids, &query, cursor.as_ref())
         .await
         .map(Json)
         .map_err(query_error)
@@ -248,9 +280,10 @@ async fn cluster_histogram(
     scope: LogQueryScope,
     parameters: HistogramParameters,
 ) -> Result<Json<Vec<LogHistogramBucket>>, ApiError> {
+    let node_ids = selected_cluster_log_nodes(state, parameters.node_id.as_deref())?;
     let query = histogram_query(state, scope, parameters)?;
     cluster_query_store(state)?
-        .query_histogram(&state.cluster_log_nodes, &query)
+        .query_histogram(&node_ids, &query)
         .await
         .map(Json)
         .map_err(query_error)
@@ -341,6 +374,22 @@ fn system_scope(component: Option<&str>) -> Result<LogQueryScope, ApiError> {
     }
 }
 
+fn selected_cluster_log_nodes(
+    state: &AppState,
+    node_id: Option<&str>,
+) -> Result<Vec<NodeId>, ApiError> {
+    let Some(node_id) = node_id else {
+        return Ok(state.cluster_log_nodes.to_vec());
+    };
+    let node_id = NodeId::new(node_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if state.cluster_log_nodes.binary_search(&node_id).is_err() {
+        return Err(ApiError::bad_request(format!(
+            "node `{node_id}` is outside this topology"
+        )));
+    }
+    Ok(vec![node_id])
+}
+
 fn node_scope(scope: &str, scope_id: Option<&str>) -> Result<LogQueryScope, ApiError> {
     let missing_id = || ApiError::bad_request(format!("node log scope `{scope}` requires scopeId"));
     match scope {
@@ -379,6 +428,17 @@ async fn owned_deployment_id(
         .await?
         .meta
         .id)
+}
+
+async fn owned_build_id(
+    state: &AppState,
+    service_id: String,
+    build_id: String,
+) -> Result<BuildId, ApiError> {
+    let service_id =
+        ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    ensure_service(state, service_id.clone()).await?;
+    Ok(owned_build(state, &service_id, build_id).await?.meta.id)
 }
 
 fn query_store(state: &AppState) -> Result<Arc<dyn LogQueryStore>, ApiError> {

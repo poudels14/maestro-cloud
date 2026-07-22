@@ -9,36 +9,21 @@ import {
   on,
   onCleanup
 } from "solid-js";
-import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
+import { ChevronDown, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
-import type { LogEntry } from "../../lib/types";
-import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
 import {
-  getClusterLogHistogram,
-  getClusterLogs,
-  getLogs,
-  getServiceLogHistogram,
-  getServiceLogs,
-  getSystemLogHistogram,
-  getSystemLogs,
-  type ClusterLogHistogram,
+  getLogHistogram,
+  getLogPage,
+  type LogEntry,
   type LogHistogram,
-  type LogHistogramBucket
+  type LogHistogramBucket,
+  type LogPage,
+  type LogScope
 } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
 import { dateFormatter, httpFields } from "../../lib/logFormat";
-import {
-  TimeCell,
-  ExpanderCell,
-  HostCell,
-  LevelCell,
-  MessageCell,
-  MethodCell,
-  StatusCell,
-  PathCell
-} from "./cells";
-import { LogDetailPanel } from "./LogDetailPanel";
 import { LogHistogramChart } from "./LogHistogram";
+import { LOG_COLUMNS, LogRow } from "./LogRow";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
 import {
   combineLogQueries,
@@ -46,15 +31,6 @@ import {
   removeLogQueryPill,
   withLogHistogramGroupFilter
 } from "./logQueryPills";
-
-const COL = {
-  time: "sm:w-[118px]",
-  host: "sm:w-[112px]",
-  service: "sm:w-[124px]",
-  level: "sm:w-[52px]",
-  method: "sm:w-[60px]",
-  status: "sm:w-[56px]"
-};
 
 const minuteFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -78,12 +54,6 @@ type SelectedLogBucket = {
   to: number;
 };
 
-function isClusterLogHistogram(
-  histogram: LogHistogram
-): histogram is ClusterLogHistogram {
-  return "unavailableNodes" in histogram;
-}
-
 function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
   const existing = new Set(current.map(logEntryKey));
   const unique = incoming.filter((entry) => {
@@ -102,8 +72,8 @@ function logEntryKey(entry: LogEntry) {
 function LogViewer(props: {
   serviceId: string;
   deploymentId: string | null;
+  buildId?: string | null;
   isSystem: boolean;
-  hasBuild: boolean;
   phase?: "build" | "deploy";
   embedded?: boolean;
   showHistogram?: boolean;
@@ -119,7 +89,6 @@ function LogViewer(props: {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
-  const [hasMore, setHasMore] = createSignal(false);
   const [queryDraft, setQueryDraft] = createSignal("");
   const [internalQuery, setInternalQuery] = createSignal(props.query ?? "");
   const query = () => (props.onQueryChange ? (props.query ?? "") : internalQuery());
@@ -130,10 +99,8 @@ function LogViewer(props: {
       setInternalQuery(value);
     }
   };
-  const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
-  const [pollCursor, setPollCursor] = createSignal<number | string>(props.cluster ? "" : 0);
-  const [unavailableNodes, setUnavailableNodes] = createSignal<string[]>([]);
+  const [pollCursor, setPollCursor] = createSignal<LogPage["cursor"]>({});
   const [internalRangeMs, setInternalRangeMs] = createSignal(TIME_RANGES[0].ms);
   const rangeMs = () => {
     if (props.onRangeChange) {
@@ -157,8 +124,6 @@ function LogViewer(props: {
   const [selectedBucket, setSelectedBucket] = createSignal<SelectedLogBucket | null>(null);
   let fetchGeneration = 0;
   let histogramGeneration = 0;
-
-  const hasBuildLogs = () => lines().some((line) => line.source?.endsWith("/build"));
 
   const phaseLines = () => {
     const all = lines().filter((line) => line.text.trim().length > 0);
@@ -235,7 +200,7 @@ function LogViewer(props: {
 
   const rowRequestContext = createMemo(
     () =>
-      `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
+      `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.deploymentId ?? ""}\0${props.buildId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
   );
 
   const selectRange = (nextRangeMs: number) => {
@@ -318,132 +283,33 @@ function LogViewer(props: {
     setExpanded(next);
   };
 
-  const fetchTail = async (searchQuery: string) => {
-    const { from, to } = activeTimeRange();
-    if (props.cluster)
-      return getClusterLogs({
-        tail: PAGE_SIZE,
-        nodeId: props.cluster.nodeId,
-        serviceId: props.serviceId || undefined,
-        query: searchQuery || undefined,
-        from,
-        to
-      });
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        undefined,
-        undefined,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        undefined,
-        undefined,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      undefined,
-      undefined,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
+  const logScope = (): LogScope => {
+    if (props.phase === "build" && props.buildId) {
+      return { type: "build", serviceId: props.serviceId, buildId: props.buildId };
+    }
+    if (props.isSystem) return { type: "system", component: props.serviceId || undefined };
+    if (props.deploymentId) {
+      return {
+        type: "deployment",
+        serviceId: props.serviceId,
+        deploymentId: props.deploymentId
+      };
+    }
+    if (props.serviceId) return { type: "service", serviceId: props.serviceId };
+    return { type: "all" };
   };
 
-  const fetchAfter = async (after: number | string, searchQuery: string) => {
+  const fetchPage = async (searchQuery: string, cursor?: LogPage["cursor"]) => {
     const { from, to } = activeTimeRange();
-    if (props.cluster)
-      return getClusterLogs({
-        tail: PAGE_SIZE,
-        cursor: typeof after === "string" ? after || undefined : undefined,
-        nodeId: props.cluster.nodeId,
-        serviceId: props.serviceId || undefined,
-        query: searchQuery || undefined,
-        from,
-        to
-      });
-    const afterSeq = typeof after === "number" ? after : undefined;
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        afterSeq,
-        undefined,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        afterSeq,
-        undefined,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      afterSeq,
-      undefined,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
-  };
-
-  const fetchBefore = async (before: number, searchQuery: string) => {
-    const { from, to } = activeTimeRange();
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        undefined,
-        before,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        undefined,
-        before,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      undefined,
-      before,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
+    return getLogPage({
+      scope: logScope(),
+      tail: PAGE_SIZE,
+      ...(cursor ? { cursor } : {}),
+      ...(props.cluster?.nodeId ? { nodeId: props.cluster.nodeId } : {}),
+      ...(searchQuery ? { query: searchQuery } : {}),
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
   };
 
   const fetchHistogram = async () => {
@@ -457,34 +323,15 @@ function LogViewer(props: {
     setHistogramLoading(true);
     setHistogramError(null);
     try {
-      const result = props.cluster
-        ? await getClusterLogHistogram({
-            from,
-            to,
-            nodeId: props.cluster.nodeId,
-            serviceId: props.serviceId || undefined,
-            query: searchQuery || undefined,
-            bucketMs,
-            groupBy: props.histogramGroupBy
-          })
-        : props.isSystem
-          ? await getSystemLogHistogram(
-              props.serviceId,
-              from,
-              to,
-              searchQuery || undefined,
-              bucketMs,
-              props.histogramGroupBy
-            )
-          : await getServiceLogHistogram(
-              props.serviceId,
-              from,
-              to,
-              props.phase,
-              searchQuery || undefined,
-              bucketMs,
-              props.histogramGroupBy
-            );
+      const result = await getLogHistogram({
+        scope: logScope(),
+        from,
+        to,
+        bucketMs: bucketMs ?? 60_000,
+        ...(props.histogramGroupBy ? { groupBy: props.histogramGroupBy } : {}),
+        ...(props.cluster?.nodeId ? { nodeId: props.cluster.nodeId } : {}),
+        ...(searchQuery ? { query: searchQuery } : {})
+      });
       if (
         generation !== histogramGeneration ||
         searchQuery !== requestQuery() ||
@@ -492,9 +339,6 @@ function LogViewer(props: {
       )
         return;
       setHistogram(result);
-      if (isClusterLogHistogram(result)) {
-        setUnavailableNodes(result.unavailableNodes.map(clusterLogNodeLabel));
-      }
       setHistogramError(null);
     } catch (err) {
       if (generation !== histogramGeneration) return;
@@ -506,14 +350,10 @@ function LogViewer(props: {
 
   const fetchInitialLogs = async (searchQuery: string, generation: number) => {
     try {
-      const page = await fetchTail(searchQuery);
+      const page = await fetchPage(searchQuery);
       if (generation !== fetchGeneration) return;
-      setHasMore(!props.cluster && page.entries.length >= PAGE_SIZE);
       setLines(page.entries);
       setPollCursor(page.cursor);
-      setUnavailableNodes(
-        "unavailableNodes" in page ? page.unavailableNodes.map(clusterLogNodeLabel) : []
-      );
       setError(null);
     } catch (err) {
       if (generation !== fetchGeneration) return;
@@ -528,12 +368,9 @@ function LogViewer(props: {
     const searchQuery = requestQuery();
     const requestContext = rowRequestContext();
     try {
-      const page = await fetchAfter(pollCursor(), searchQuery);
+      const page = await fetchPage(searchQuery, pollCursor());
       if (requestContext !== rowRequestContext()) return;
       setPollCursor(page.cursor);
-      setUnavailableNodes(
-        "unavailableNodes" in page ? page.unavailableNodes.map(clusterLogNodeLabel) : []
-      );
       const { from, to } = activeTimeRange();
       setLines((prev) =>
         mergeLogEntries(prev, page.entries).filter(
@@ -546,43 +383,11 @@ function LogViewer(props: {
     }
   };
 
-  const loadMore = async () => {
-    if (loadingMore() || props.cluster) return;
-    const oldestSeq = lines()[0]?.seq;
-    if (oldestSeq != null) {
-      setLoadingMore(true);
-      const prevHeight = scrollRef?.scrollHeight ?? 0;
-      const prevTop = scrollRef?.scrollTop ?? 0;
-      const searchQuery = requestQuery();
-      const requestContext = rowRequestContext();
-      try {
-        const page = await fetchBefore(oldestSeq, searchQuery);
-        if (requestContext !== rowRequestContext()) return;
-        setHasMore(page.entries.length >= PAGE_SIZE);
-        wasAtBottom = false;
-        setLines((prev) => mergeLogEntries(prev, page.entries, true));
-        requestAnimationFrame(() => {
-          if (!scrollRef) return;
-          scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
-          updateScrollFlags();
-        });
-      } catch (err) {
-        if (requestContext === rowRequestContext()) {
-          setError(err instanceof Error ? err.message : "Failed to load earlier logs");
-        }
-      } finally {
-        setLoadingMore(false);
-      }
-    }
-  };
-
   createEffect(
     on(rowRequestContext, () => {
       setLines([]);
-      setHasMore(false);
-      setPollCursor(props.cluster ? "" : 0);
+      setPollCursor({});
       setExpanded(new Set<string>());
-      setUnavailableNodes([]);
       setLoading(true);
       const generation = ++fetchGeneration;
       fetchInitialLogs(requestQuery(), generation);
@@ -610,14 +415,12 @@ function LogViewer(props: {
 
   let scrollRef: HTMLDivElement | undefined;
   let wasAtBottom = true;
-  const [nearTop, setNearTop] = createSignal(false);
   const [atBottom, setAtBottom] = createSignal(true);
 
   const updateScrollFlags = () => {
     if (!scrollRef) return;
     wasAtBottom = scrollRef.scrollHeight - scrollRef.scrollTop - scrollRef.clientHeight < 50;
     setAtBottom(wasAtBottom);
-    setNearTop(scrollRef.scrollTop < 80);
   };
 
   const jumpToLatest = () => {
@@ -642,18 +445,7 @@ function LogViewer(props: {
 
   const onScroll = () => {
     updateScrollFlags();
-    if (scrollRef?.scrollTop != null && scrollRef.scrollTop < 80 && hasMore() && !loadingMore()) {
-      void loadMore();
-    }
   };
-
-  createEffect(() => {
-    if (props.phase !== "build") return;
-    if (loading() || loadingMore()) return;
-    if (!hasMore()) return;
-    if (hasBuildLogs()) return;
-    loadMore();
-  });
 
   const streamView = () => props.phase === "build";
 
@@ -765,12 +557,6 @@ function LogViewer(props: {
           />
         </div>
       </Show>
-      <Show when={unavailableNodes().length > 0}>
-        <div class="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Logs from {unavailableNodes().join(", ")} are temporarily unavailable. Results are
-          partial.
-        </div>
-      </Show>
       <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-3">
         <LogQueryInput
           value={queryDraft()}
@@ -801,51 +587,53 @@ function LogViewer(props: {
             <div class="text-gray-400 text-center py-8 font-mono text-xs">No logs available.</div>
           </Match>
           <Match when={filteredLines().length > 0}>
-            <Show when={hasMore() && nearTop()}>
-              <div class="sticky top-0 z-20 h-0 flex items-start justify-center pointer-events-none">
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore()}
-                  class={clsx(
-                    "pointer-events-auto shrink-0 whitespace-nowrap mt-9 sm:mt-12 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md border bg-white shadow-md outline-none transition-colors",
-                    loadingMore()
-                      ? "text-gray-400 border-gray-200 cursor-wait"
-                      : "text-gray-600 border-gray-200 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50"
-                  )}
-                >
-                  <Show when={loadingMore()} fallback={<ChevronUp class="size-3" />}>
-                    <Loader2 class="size-3 animate-spin" />
-                  </Show>
-                  Load earlier
-                  <span class="text-gray-400 font-mono">+{PAGE_SIZE.toLocaleString()}</span>
-                </button>
-              </div>
-            </Show>
             <ul class="font-mono text-xs">
               <li class="hidden sm:flex items-stretch py-1.5 px-2 border-b border-gray-200 bg-gray-100 text-[11px] font-sans font-medium text-gray-500 sticky top-0 z-10">
                 <span class={clsx("shrink-0", streamView() ? "w-2" : "w-[18px]")} />
-                <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
+                <span class={clsx(LOG_COLUMNS.time, "shrink-0 pr-2 truncate")}>Time</span>
                 <Show when={showHost()}>
-                  <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                  <span
+                    class={clsx(
+                      LOG_COLUMNS.host,
+                      "shrink-0 px-2 truncate border-l border-gray-300"
+                    )}
+                  >
                     {props.cluster ? "Node" : "Host"}
                   </span>
                 </Show>
                 <Show when={props.cluster}>
                   <span
-                    class={clsx(COL.service, "shrink-0 px-2 truncate border-l border-gray-300")}
+                    class={clsx(
+                      LOG_COLUMNS.service,
+                      "shrink-0 px-2 truncate border-l border-gray-300"
+                    )}
                   >
                     Service
                   </span>
                 </Show>
-                <span class={clsx(COL.level, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                <span
+                  class={clsx(
+                    LOG_COLUMNS.level,
+                    "shrink-0 px-2 truncate border-l border-gray-300"
+                  )}
+                >
                   Level
                 </span>
                 <Show when={showHttp()}>
-                  <span class={clsx(COL.method, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                  <span
+                    class={clsx(
+                      LOG_COLUMNS.method,
+                      "shrink-0 px-2 truncate border-l border-gray-300"
+                    )}
+                  >
                     Method
                   </span>
-                  <span class={clsx(COL.status, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                  <span
+                    class={clsx(
+                      LOG_COLUMNS.status,
+                      "shrink-0 px-2 truncate border-l border-gray-300"
+                    )}
+                  >
                     Status
                   </span>
                 </Show>
@@ -885,116 +673,6 @@ function LogViewer(props: {
         </button>
       </Show>
     </div>
-  );
-}
-
-function streamMessageClass(level: string) {
-  switch (level.toLowerCase()) {
-    case "error":
-    case "err":
-    case "fatal":
-    case "panic":
-      return "text-red-600";
-    case "warn":
-    case "warning":
-      return "text-amber-700";
-    default:
-      return "text-gray-700";
-  }
-}
-
-function LogRow(props: {
-  line: LogEntry;
-  index: number;
-  showHost: boolean;
-  showService: boolean;
-  showHttp: boolean;
-  stream?: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const host = () => clusterLogNodeLabel(props.line);
-  const service = () => props.line.serviceId || props.line.source?.split("/")[0] || "";
-  const http = () => httpFields(props.line.attrs);
-  return (
-    <li
-      class={clsx("border-b border-gray-50 transition-colors", {
-        "cursor-pointer": !props.stream,
-        "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
-        "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
-        "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
-      })}
-      onClick={() => {
-        if (!props.stream) props.onToggle();
-      }}
-    >
-      <div
-        class={clsx("flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 pr-2 py-1.5 sm:py-1", {
-          "pl-2": !props.stream,
-          "pl-4": props.stream
-        })}
-      >
-        <div class="flex items-center flex-wrap gap-x-2 gap-y-1 shrink-0 sm:contents">
-          <Show when={!props.stream}>
-            <ExpanderCell
-              expanded={props.expanded}
-              onToggle={(ev) => {
-                ev.stopPropagation();
-                props.onToggle();
-              }}
-            />
-          </Show>
-          <div class={clsx("shrink-0 sm:pr-2 sm:pt-px", COL.time)}>
-            <TimeCell ts={props.line.ts} />
-          </div>
-          <Show when={props.showHost}>
-            <div class={clsx("min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px", COL.host)}>
-              <HostCell value={host()} />
-            </div>
-          </Show>
-          <Show when={props.showService}>
-            <div class={clsx("min-w-0 max-w-[140px] sm:max-w-none sm:px-2 sm:pt-px", COL.service)}>
-              <HostCell value={service()} />
-            </div>
-          </Show>
-          <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.level)}>
-            <LevelCell level={props.line.level} />
-          </div>
-          <Show when={props.showHttp}>
-            <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.method)}>
-              <MethodCell method={http().method} />
-            </div>
-            <div class={clsx("shrink-0 sm:px-2 sm:pt-px", COL.status)}>
-              <StatusCell status={http().status} />
-            </div>
-          </Show>
-        </div>
-        <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
-          <Show
-            when={http().path}
-            fallback={
-              <MessageCell
-                text={props.line.text}
-                class={props.stream ? streamMessageClass(props.line.level) : undefined}
-              />
-            }
-          >
-            <PathCell
-              path={http().path!}
-              durationLabel={http().durationLabel}
-              requestHost={http().requestHost}
-              clientIp={http().clientIp}
-              router={http().router}
-            />
-          </Show>
-        </div>
-      </div>
-      <Show when={props.expanded}>
-        <div class="border-t border-gray-100 bg-gray-50/80 px-4 py-3">
-          <LogDetailPanel entry={props.line} />
-        </div>
-      </Show>
-    </li>
   );
 }
 

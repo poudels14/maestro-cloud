@@ -9,7 +9,6 @@ import type {
   IngressBlocklist,
   IngressTrafficBreakdown,
   IngressRouting,
-  LogEntry,
   MaskedConfig,
   MetricPoint,
   ClusterStats,
@@ -37,6 +36,16 @@ export {
   removeDeployment,
   restartDeployment
 } from "./deploymentApi";
+export { getLogHistogram, getLogPage } from "./logApi";
+export type {
+  LogEntry,
+  LogHistogram,
+  LogHistogramBucket,
+  LogHistogramRequest,
+  LogPage,
+  LogPageRequest,
+  LogScope
+} from "./logApi";
 
 export interface ClusterInfo extends ClusterSummary {
   nodes: ClusterNode[];
@@ -212,264 +221,6 @@ export async function getClusterConfig(): Promise<MaskedConfig> {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`Failed to fetch cluster config: ${res.statusText}`);
   return res.json();
-}
-
-export async function getLogs(
-  serviceId: string,
-  deploymentId: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
-    location.origin
-  );
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export async function getServiceLogs(
-  serviceId: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch service logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export async function getSystemLogs(
-  name: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch system logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export interface LogHistogramBucket {
-  ts: number;
-  count: number;
-  levels?: Record<string, number>;
-}
-
-export interface LogHistogram {
-  from: number;
-  to: number;
-  bucketMs: number;
-  buckets: LogHistogramBucket[];
-}
-
-export async function getServiceLogHistogram(
-  serviceId: string,
-  from: number,
-  to: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  bucketMs?: number,
-  groupBy?: "level" | "status"
-): Promise<LogHistogram> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/logs/histogram`,
-    location.origin
-  );
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
-  if (groupBy) url.searchParams.set("groupBy", groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export async function getSystemLogHistogram(
-  name: string,
-  from: number,
-  to: number,
-  query?: string,
-  bucketMs?: number,
-  groupBy?: "level" | "status"
-): Promise<LogHistogram> {
-  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs/histogram`, location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  if (query) url.searchParams.set("query", query);
-  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
-  if (groupBy) url.searchParams.set("groupBy", groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export interface LogPage {
-  entries: LogEntry[];
-  cursor: number;
-}
-
-export interface ClusterLogNodeError {
-  nodeId: string;
-  nodeName: string;
-  error: string;
-}
-
-export interface ClusterLogPage {
-  entries: LogEntry[];
-  cursor: string;
-  partial: boolean;
-  unavailableNodes: ClusterLogNodeError[];
-}
-
-export interface ClusterLogHistogram extends LogHistogram {
-  partial: boolean;
-  unavailableNodes: ClusterLogNodeError[];
-}
-
-export async function getClusterLogs(params: {
-  tail?: number;
-  cursor?: string;
-  nodeId?: string;
-  serviceId?: string;
-  query?: string;
-  from?: number;
-  to?: number;
-}): Promise<ClusterLogPage> {
-  const url = new URL("/api/cluster/logs", location.origin);
-  if (params.tail != null) url.searchParams.set("tail", String(params.tail));
-  if (params.cursor) url.searchParams.set("cursor", params.cursor);
-  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
-  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
-  if (params.query) url.searchParams.set("query", params.query);
-  if (params.from != null) url.searchParams.set("from", String(params.from));
-  if (params.to != null) url.searchParams.set("to", String(params.to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch cluster logs: ${res.statusText}`);
-  }
-  const raw = (await res.json()) as Omit<ClusterLogPage, "entries"> & {
-    entries: Record<string, unknown>[];
-  };
-  return { ...raw, entries: mapLogEntries(raw.entries) };
-}
-
-export async function getClusterLogHistogram(params: {
-  from: number;
-  to: number;
-  nodeId?: string;
-  serviceId?: string;
-  query?: string;
-  bucketMs?: number;
-  groupBy?: "level" | "status";
-}): Promise<ClusterLogHistogram> {
-  const url = new URL("/api/cluster/logs/histogram", location.origin);
-  url.searchParams.set("from", String(params.from));
-  url.searchParams.set("to", String(params.to));
-  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
-  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
-  if (params.query) url.searchParams.set("query", params.query);
-  if (params.bucketMs != null) url.searchParams.set("bucketMs", String(params.bucketMs));
-  if (params.groupBy) url.searchParams.set("groupBy", params.groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch cluster log histogram: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-function mapLogPage(res: Response, raw: Record<string, unknown>[]): LogPage {
-  const entries = mapLogEntries(raw);
-  const header = Number(res.headers.get("x-maestro-log-cursor"));
-  const lastEntry = entries.at(-1)?.seq ?? 0;
-  return {
-    entries,
-    cursor: Number.isSafeInteger(header) && header >= 0 ? Math.max(header, lastEntry) : lastEntry
-  };
-}
-
-function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
-  return raw.map((entry) => {
-    const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : undefined;
-    let hostname: string | undefined;
-    if (tags) {
-      const match = tags.find((tag) => tag.startsWith("hostname:"));
-      if (match) hostname = match.slice("hostname:".length);
-    }
-    return {
-      seq: entry.seq as number,
-      ts: entry.ts as number,
-      level: entry.level as string,
-      stream: entry.stream as LogEntry["stream"],
-      text: entry.text as string,
-      source: entry.source as string | undefined,
-      origin: entry.origin as string | undefined,
-      hostname,
-      nodeId: entry.nodeId as string | undefined,
-      nodeName: entry.nodeName as string | undefined,
-      serviceId: entry.serviceId as string | undefined,
-      tier: entry.tier as LogEntry["tier"],
-      tags,
-      attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
-    };
-  });
 }
 
 export async function getDisks(): Promise<DiskInfo[]> {

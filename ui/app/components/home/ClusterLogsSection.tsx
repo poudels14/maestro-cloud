@@ -92,7 +92,6 @@ function ClusterLogsSection() {
           serviceId={search().service ?? ""}
           deploymentId={null}
           isSystem={false}
-          hasBuild={false}
           showHistogram
           fillHeight
           cluster={{ nodeId: search().node }}

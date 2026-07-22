@@ -71,23 +71,6 @@ export type BackupStats = ApiSchemas["BackupStatsSnapshot"];
 export type StatsWarning = ApiSchemas["StatsWarning"];
 export type StatsMetricPoint = ApiSchemas["StatsMetricPoint"];
 
-export interface LogEntry {
-  seq: number;
-  ts: number;
-  level: string;
-  stream: "stdout" | "stderr";
-  text: string;
-  source?: string;
-  origin?: string;
-  hostname?: string;
-  nodeId?: string;
-  nodeName?: string;
-  serviceId?: string;
-  tier?: "service" | "system";
-  tags?: string[];
-  attrs?: [string, string][];
-}
-
 export type MaskedConfig = {
   cluster: {
     name: string;

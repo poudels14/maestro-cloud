@@ -8022,6 +8022,14 @@
               "maxLength": 4096,
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
           }
         ],
         "responses": {
@@ -8099,6 +8107,14 @@
             "schema": {
               "maxLength": 4096,
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
             }
           }
         ],
@@ -8654,6 +8670,211 @@
         ]
       }
     },
+    "/api/services/{serviceId}/builds/{buildId}/logs": {
+      "get": {
+        "operationId": "listBuildLogs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterLogPage"
+                }
+              }
+            },
+            "description": "Ordered normalized logs"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/services/{serviceId}/builds/{buildId}/logs/histogram": {
+      "get": {
+        "operationId": "getBuildLogHistogram",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucketMs",
+            "required": false,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "groupBy",
+            "required": false,
+            "schema": {
+              "enum": [
+                "level",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogHistogramBucket"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Event-time log histogram"
+          },
+          "400": {
+            "description": "Invalid scope, cursor, range, or LogQL expression"
+          },
+          "503": {
+            "description": "One or more cluster log stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/services/{serviceId}/deployments": {
       "get": {
         "operationId": "listDeployments",
@@ -8961,6 +9182,14 @@
               "maxLength": 4096,
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
           }
         ],
         "responses": {
@@ -9054,6 +9283,14 @@
             "schema": {
               "maxLength": 4096,
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
             }
           }
         ],
@@ -9486,6 +9723,14 @@
               "maxLength": 4096,
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
           }
         ],
         "responses": {
@@ -9571,6 +9816,14 @@
             "schema": {
               "maxLength": 4096,
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
             }
           }
         ],
@@ -10417,6 +10670,14 @@
           },
           {
             "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -10501,6 +10762,14 @@
             "schema": {
               "maxLength": 4096,
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeId"
             }
           },
           {

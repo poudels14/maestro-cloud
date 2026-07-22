@@ -16,7 +16,6 @@ function HttpLogsSection() {
       serviceId="maestro-ingress"
       deploymentId={null}
       isSystem
-      hasBuild={false}
       phase="deploy"
       showHistogram
       histogramGroupBy="status"

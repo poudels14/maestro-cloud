@@ -119,15 +119,24 @@ async fn get_build(
 ) -> Result<Json<Build>, ApiError> {
     let service_id = parse_service_id(service_id)?;
     ensure_service(&state, service_id.clone()).await?;
+    let build = owned_build(&state, &service_id, build_id).await?;
+    Ok(Json(mask::build(build)))
+}
+
+pub(super) async fn owned_build(
+    state: &AppState,
+    service_id: &ServiceId,
+    build_id: String,
+) -> Result<Build, ApiError> {
     let build_id =
         BuildId::new(build_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let build: Build = resource::get(&state, BuiltinKind::Build, build_id.clone()).await?;
-    if build.spec.service_id != service_id {
+    let build: Build = resource::get(state, BuiltinKind::Build, build_id.clone()).await?;
+    if build.spec.service_id != *service_id {
         return Err(ApiError::not_found(format!(
             "Build `{build_id}` does not exist for Service `{service_id}`"
         )));
     }
-    Ok(Json(mask::build(build)))
+    Ok(build)
 }
 
 async fn scope(

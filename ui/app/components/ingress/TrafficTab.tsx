@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Ban, Check, ChevronLeft, ChevronRight, Copy, ShieldCheck, Trash2, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
-import { getSystemLogHistogram, setBlockedIngressIp, type LogHistogram } from "../../lib/api";
+import { getLogHistogram, setBlockedIngressIp, type LogHistogram } from "../../lib/api";
 import {
   blockedIngressTrafficQuery,
   ingressTrafficQuery,
@@ -52,14 +52,13 @@ function IngressTrafficTab() {
     queryFn: () => {
       const to = Date.now() + 1;
       const bucketMs = TIME_RANGES.find((range) => range.ms === rangeMs())?.bucketMs;
-      return getSystemLogHistogram(
-        "maestro-ingress",
-        to - rangeMs(),
+      return getLogHistogram({
+        scope: { type: "system", component: "maestro-ingress" },
+        from: to - rangeMs(),
         to,
-        undefined,
-        bucketMs,
-        "status"
-      );
+        bucketMs: bucketMs ?? 60_000,
+        groupBy: "status"
+      });
     },
     refetchInterval: 30_000
   }));
@@ -508,7 +507,6 @@ function TrafficIpSheet(props: {
                     serviceId="maestro-ingress"
                     deploymentId={null}
                     isSystem
-                    hasBuild={false}
                     phase="deploy"
                     embedded={true}
                     fillHeight

@@ -38,6 +38,14 @@ pub(crate) fn paths() -> Map<String, Value> {
                 false,
             ),
         ),
+        (
+            "/api/services/{serviceId}/builds/{buildId}/logs".to_owned(),
+            read_operation("listBuildLogs", &["serviceId", "buildId"], false),
+        ),
+        (
+            "/api/services/{serviceId}/builds/{buildId}/logs/histogram".to_owned(),
+            histogram_operation("getBuildLogHistogram", &["serviceId", "buildId"], false),
+        ),
     ])
 }
 
@@ -134,6 +142,7 @@ fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Valu
         query_parameter("from", json!({"type": "integer", "format": "int64"})),
         query_parameter("to", json!({"type": "integer", "format": "int64"})),
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),
+        query_parameter("nodeId", json!({"$ref": "#/components/schemas/NodeId"})),
     ]);
     if system {
         parameters.push(query_parameter(
@@ -161,6 +170,7 @@ fn histogram_operation(operation_id: &str, path_names: &[&str], system: bool) ->
             json!({"type": "string", "enum": ["level", "status"]}),
         ),
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),
+        query_parameter("nodeId", json!({"$ref": "#/components/schemas/NodeId"})),
     ]);
     if system {
         parameters.push(query_parameter(

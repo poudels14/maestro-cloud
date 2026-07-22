@@ -4,7 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use kernel_api::{
-    AssignmentId, ClusterId, DeploymentId, NodeId, SecretValue, ServiceId, Timestamp, WorkloadId,
+    AssignmentId, BuildId, ClusterId, DeploymentId, NodeId, SecretValue, ServiceId, Timestamp,
+    WorkloadId,
 };
 use logs::{
     ClusterLogPage, InMemoryLogStore, IngestLogEntry, LogBody, LogHistogramBucket,
@@ -17,6 +18,7 @@ use runtime::WorkloadMetadata;
 use crate::{ApiServer, HttpNodeLogQueryStore, ServerSettings, TlsIdentity};
 
 use super::deployments::deployment;
+use super::observations::build;
 use super::{decode, put, request, seeded_store, token};
 
 #[tokio::test]
@@ -32,6 +34,8 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
         &deployment,
     )
     .await?;
+    let build = build("api-build", "api", "api-deployment")?;
+    put(&store, &cluster_id, "Build", build.meta.id.as_str(), &build).await?;
     let logs = Arc::new(InMemoryLogStore::new());
     let mut failed = workload_entry(1, "api", "api-deployment", 100, "error", "failed")?;
     failed
@@ -41,6 +45,7 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
         failed,
         workload_entry(2, "worker", "worker-deployment", 150, "info", "other")?,
         system_entry(3, 175)?,
+        build_entry(4, 200)?,
     ])
     .await?;
     let server = with_test_logs(
@@ -79,6 +84,21 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(decode::<ClusterLogPage>(response).await?.entries.len(), 1);
 
+    let response = request(
+        &server,
+        "/api/services/api/builds/api-build/logs?nodeId=node-one",
+        None,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(decode::<ClusterLogPage>(response).await?.entries.len(), 1);
+    assert_eq!(
+        request(&server, "/api/logs?nodeId=outside", None)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
     let response = request(&server, "/api/system/logs?component=daemon", None).await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(decode::<ClusterLogPage>(response).await?.entries.len(), 1);
@@ -100,7 +120,7 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
     );
 
     logs.append(&[workload_entry(
-        4,
+        5,
         "api",
         "api-deployment",
         250,
@@ -118,7 +138,7 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
     assert_eq!(followed.entries.len(), 1);
     assert_eq!(
         followed.entries.first().map(|entry| entry.sequence),
-        Some(LogSequence(4))
+        Some(LogSequence(5))
     );
     Ok(())
 }
@@ -390,6 +410,29 @@ fn system_entry(
             component: "daemon".to_owned(),
         },
         body: LogBody::Text("system".to_owned()),
+        attributes: BTreeMap::new(),
+    })
+}
+
+fn build_entry(index: u64, event_at: i64) -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {
+    let node_id = NodeId::new("node-one")?;
+    let build_id = BuildId::new("api-build")?;
+    Ok(IngestLogEntry {
+        id: LogRecordId {
+            node_id: node_id.clone(),
+            producer: LogProducer::Build(build_id.clone()),
+            cursor: OriginCursor::new(index.to_string()),
+        },
+        observed_at: Timestamp(event_at),
+        event_at: Timestamp(event_at),
+        severity: "info".to_owned(),
+        stream: LogStream::Stdout,
+        origin: LogOrigin::Build {
+            cluster_id: ClusterId::new("server-test")?,
+            node_id,
+            build_id,
+        },
+        body: LogBody::Text("building".to_owned()),
         attributes: BTreeMap::new(),
     })
 }

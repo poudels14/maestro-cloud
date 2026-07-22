@@ -105,8 +105,8 @@ function DeploymentSheet(props: {
                         <LogViewer
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
+                          buildId={deployment.spec.buildId}
                           isSystem={false}
-                          hasBuild={hasBuild}
                           phase="deploy"
                           embedded
                           fillHeight
@@ -116,8 +116,8 @@ function DeploymentSheet(props: {
                         <LogViewer
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
+                          buildId={deployment.spec.buildId}
                           isSystem={false}
-                          hasBuild
                           phase="build"
                           embedded
                           fillHeight

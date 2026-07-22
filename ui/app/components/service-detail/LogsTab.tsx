@@ -36,7 +36,6 @@ function LogsTab(props: { service: Service }) {
         serviceId={props.service.meta.id}
         deploymentId={null}
         isSystem={false}
-        hasBuild={props.service.spec.artifact.type === "build"}
         phase="deploy"
         showHistogram
         fillHeight

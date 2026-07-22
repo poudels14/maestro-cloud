@@ -29,6 +29,16 @@ export type ServiceMetricQuery = NonNullable<
 export type ContainerMetricQuery = NonNullable<
   operations["listContainerMetrics"]["parameters"]["query"]
 >;
+export type LogReadQuery = NonNullable<operations["listLogs"]["parameters"]["query"]>;
+export type SystemLogReadQuery = NonNullable<
+  operations["listSystemLogs"]["parameters"]["query"]
+>;
+export type LogHistogramQuery = NonNullable<
+  operations["getLogHistogram"]["parameters"]["query"]
+>;
+export type SystemLogHistogramQuery = NonNullable<
+  operations["getSystemLogHistogram"]["parameters"]["query"]
+>;
 
 export interface MaestroApiClient {
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
@@ -172,6 +182,56 @@ export interface MaestroApiClient {
     buildId: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["Build"]>;
+  listLogs(
+    query?: LogReadQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ClusterLogPage"]>;
+  listSystemLogs(
+    query?: SystemLogReadQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ClusterLogPage"]>;
+  listServiceLogs(
+    serviceId: string,
+    query?: LogReadQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ClusterLogPage"]>;
+  listDeploymentLogs(
+    serviceId: string,
+    deploymentId: string,
+    query?: LogReadQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ClusterLogPage"]>;
+  listBuildLogs(
+    serviceId: string,
+    buildId: string,
+    query?: LogReadQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ClusterLogPage"]>;
+  getLogHistogram(
+    query?: LogHistogramQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["LogHistogramBucket"][]>;
+  getSystemLogHistogram(
+    query?: SystemLogHistogramQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["LogHistogramBucket"][]>;
+  getServiceLogHistogram(
+    serviceId: string,
+    query?: LogHistogramQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["LogHistogramBucket"][]>;
+  getDeploymentLogHistogram(
+    serviceId: string,
+    deploymentId: string,
+    query?: LogHistogramQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["LogHistogramBucket"][]>;
+  getBuildLogHistogram(
+    serviceId: string,
+    buildId: string,
+    query?: LogHistogramQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["LogHistogramBucket"][]>;
   listIngressRoutes(
     serviceId: string,
     options?: ApiRequestOptions
@@ -483,6 +543,51 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
     getBuild: (serviceId, buildId, options) =>
       get(
         `/api/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}`,
+        options
+      ),
+    listLogs: (query, options) => get(withQuery("/api/logs", query), options),
+    listSystemLogs: (query, options) => get(withQuery("/api/system/logs", query), options),
+    listServiceLogs: (serviceId, query, options) =>
+      get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/logs`, query), options),
+    listDeploymentLogs: (serviceId, deploymentId, query, options) =>
+      get(
+        withQuery(
+          `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
+          query
+        ),
+        options
+      ),
+    listBuildLogs: (serviceId, buildId, query, options) =>
+      get(
+        withQuery(
+          `/api/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}/logs`,
+          query
+        ),
+        options
+      ),
+    getLogHistogram: (query, options) =>
+      get(withQuery("/api/logs/histogram", query), options),
+    getSystemLogHistogram: (query, options) =>
+      get(withQuery("/api/system/logs/histogram", query), options),
+    getServiceLogHistogram: (serviceId, query, options) =>
+      get(
+        withQuery(`/api/services/${encodeURIComponent(serviceId)}/logs/histogram`, query),
+        options
+      ),
+    getDeploymentLogHistogram: (serviceId, deploymentId, query, options) =>
+      get(
+        withQuery(
+          `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs/histogram`,
+          query
+        ),
+        options
+      ),
+    getBuildLogHistogram: (serviceId, buildId, query, options) =>
+      get(
+        withQuery(
+          `/api/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}/logs/histogram`,
+          query
+        ),
         options
       ),
     listIngressRoutes: (serviceId, options) =>

@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
-import type { LogEntry } from "../../lib/types";
+import type { LogEntry } from "../../lib/logView";
 import { httpFields, httpMethodColor, httpStatusPill, type HttpFields } from "../../lib/logFormat";
 
 function AccessLogSummary(props: { fields: HttpFields }) {
