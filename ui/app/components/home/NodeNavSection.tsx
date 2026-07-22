@@ -1,14 +1,12 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
-import { Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "@maestro/kit";
 import { clusterInfoQuery, isPartOfCluster } from "@maestro/cluster";
 import { clusterApi, panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
 
-type CoreHomePath = "/cluster/logs";
-type HomePath = CoreHomePath | PanelFeaturePath;
+type HomePath = PanelFeaturePath;
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   const navigate = useNavigate();
@@ -16,6 +14,10 @@ function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   const nodeNavigation = () =>
     panelFeatureRegistry.nav
       .filter((entry) => entry.section === "node")
+      .sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
+  const clusterNavigation = () =>
+    panelFeatureRegistry.nav
+      .filter((entry) => entry.section === "cluster")
       .sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
 
   const go = (to: HomePath) => {
@@ -49,18 +51,16 @@ function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
       </SidebarSection>
       <Show when={isPartOfCluster(cluster.data)}>
         <SidebarSection title="Cluster">
-          <SidebarNavItem
-            label="Nodes"
-            icon={Network}
-            selected={props.active === "/cluster"}
-            onClick={() => go("/cluster")}
-          />
-          <SidebarNavItem
-            label="Logs"
-            icon={ScrollText}
-            selected={props.active === "/cluster/logs"}
-            onClick={() => go("/cluster/logs")}
-          />
+          <For each={clusterNavigation()}>
+            {(entry) => (
+              <SidebarNavItem
+                label={entry.label}
+                icon={entry.icon}
+                selected={props.active === entry.path}
+                onClick={() => go(entry.path)}
+              />
+            )}
+          </For>
         </SidebarSection>
       </Show>
     </>

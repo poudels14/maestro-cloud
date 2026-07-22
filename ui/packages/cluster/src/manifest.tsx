@@ -1,4 +1,4 @@
-import { Info } from "lucide-solid";
+import { Info, Network } from "lucide-solid";
 import { defineFeatureManifest } from "@maestro/sdk";
 import type { ClusterApi } from "./api";
 import { ClusterInfoPage } from "./ClusterInfoPage";
@@ -19,6 +19,13 @@ function createClusterFeature(api: ClusterApi) {
         label: "Info",
         icon: Info,
         section: "node",
+        order: 10
+      },
+      {
+        path: "/cluster",
+        label: "Nodes",
+        icon: Network,
+        section: "cluster",
         order: 10
       }
     ]

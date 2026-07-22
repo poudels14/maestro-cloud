@@ -1,4 +1,4 @@
-import { createSignal, Match, Show, Switch } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
@@ -9,7 +9,6 @@ import { clusterInfoQuery } from "@maestro/cluster";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
-import { ClusterLogsSection } from "./ClusterLogsSection";
 import { clusterApi, panelFeatureRegistry, servicesApi } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
@@ -78,14 +77,9 @@ function HomeShell(props: { path: HomePath }) {
             <ClientOnly
               fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}
             >
-              <Switch>
-                <Match when={props.path === "/cluster/logs"}>
-                  <ClusterLogsSection />
-                </Match>
-                <Match when={featureRoute()}>
-                  {(route) => <Dynamic component={route().component} />}
-                </Match>
-              </Switch>
+              <Show when={featureRoute()}>
+                {(route) => <Dynamic component={route().component} />}
+              </Show>
             </ClientOnly>
           </div>
         </div>

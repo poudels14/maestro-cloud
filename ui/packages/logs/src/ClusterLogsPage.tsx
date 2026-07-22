@@ -1,28 +1,58 @@
 import { createMemo, For } from "solid-js";
-import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import { servicesQuery, userServices as visibleUserServices } from "@maestro/services";
-import { clusterNodesQuery } from "@maestro/cluster";
-import { clusterLogNodeLabel, LogViewer } from "@maestro/logs";
-import { clusterApi, logsApi, servicesApi } from "../../features";
+import { useQuery } from "@maestro/sdk";
+import type { LogsApi } from "./api";
+import { clusterLogNodeLabel, type ClusterLogNodeRef } from "./clusterLogNode";
+import { LogViewer } from "./LogViewer";
 
-type ClusterLogsSearch = {
-  node?: string;
-  service?: string;
-  query?: string;
-  range?: string;
-};
+interface ClusterLogsNode extends ClusterLogNodeRef {
+  nodeId: string;
+  alive: boolean;
+}
 
-function ClusterLogsSection() {
-  const nodes = useQuery(() => clusterNodesQuery(clusterApi));
-  const services = useQuery(() => servicesQuery(servicesApi));
+interface ClusterLogsService {
+  id: string;
+  name: string;
+}
+
+interface ClusterLogsLoaders {
+  listNodes: () => Promise<ClusterLogsNode[]>;
+  listServices: () => Promise<ClusterLogsService[]>;
+}
+
+interface ClusterLogsSearch {
+  node?: string | undefined;
+  service?: string | undefined;
+  query?: string | undefined;
+  range?: string | undefined;
+}
+
+interface ClusterLogsPageProps extends ClusterLogsLoaders {
+  api: LogsApi;
+}
+
+const isServer = typeof window === "undefined";
+const ssrSafeList = <Value,>(loader: () => Promise<Value[]>) =>
+  isServer ? () => Promise.resolve([] as Value[]) : loader;
+
+function ClusterLogsPage(props: ClusterLogsPageProps) {
+  const nodes = useQuery(() => ({
+    queryKey: ["logs", "cluster", "nodes"],
+    queryFn: ssrSafeList(props.listNodes),
+    refetchInterval: 5_000
+  }));
+  const services = useQuery(() => ({
+    queryKey: ["logs", "cluster", "services"],
+    queryFn: ssrSafeList(props.listServices),
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000
+  }));
   const location = useLocation();
   const navigate = useNavigate();
   const search = () => location().search as ClusterLogsSearch;
-  const userServices = createMemo(() =>
-    visibleUserServices(services.data ?? []).sort((left, right) =>
-      left.spec.name.localeCompare(right.spec.name)
-    )
+  const sortedServices = createMemo(() =>
+    [...(services.data ?? [])].sort((left, right) => left.name.localeCompare(right.name))
   );
   const setUrlSearch = (updates: ClusterLogsSearch) =>
     navigate({
@@ -30,6 +60,10 @@ function ClusterLogsSection() {
       search: { ...search(), ...updates },
       replace: true
     });
+  const clusterSelection = () => {
+    const nodeId = search().node;
+    return nodeId ? { nodeId } : {};
+  };
 
   return (
     <div class="h-full min-h-0 flex flex-col gap-3">
@@ -76,10 +110,10 @@ function ClusterLogsSection() {
                 All services
               </option>
               <optgroup label="User services">
-                <For each={userServices()}>
+                <For each={sortedServices()}>
                   {(service) => (
-                    <option value={service.meta.id} selected={service.meta.id === search().service}>
-                      {service.spec.name}
+                    <option value={service.id} selected={service.id === search().service}>
+                      {service.name}
                     </option>
                   )}
                 </For>
@@ -90,16 +124,16 @@ function ClusterLogsSection() {
       </div>
       <div class="min-h-0 flex-1">
         <LogViewer
-          api={logsApi}
+          api={props.api}
           serviceId={search().service ?? ""}
           deploymentId={null}
           isSystem={false}
           showHistogram
           fillHeight
-          cluster={{ nodeId: search().node }}
+          cluster={clusterSelection()}
           query={search().query ?? ""}
           onQueryChange={(value) => setUrlSearch({ query: value || undefined })}
-          range={search().range}
+          range={search().range ?? "1h"}
           onRangeChange={(value) => setUrlSearch({ range: value === "1h" ? undefined : value })}
         />
       </div>
@@ -107,4 +141,5 @@ function ClusterLogsSection() {
   );
 }
 
-export { ClusterLogsSection };
+export { ClusterLogsPage };
+export type { ClusterLogsLoaders, ClusterLogsNode, ClusterLogsService };
