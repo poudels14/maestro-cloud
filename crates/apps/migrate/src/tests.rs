@@ -48,8 +48,14 @@ fn snapshot_digest_is_order_independent_and_input_is_bounded() -> TestResult {
 #[test]
 fn plan_orders_resources_and_rejects_destination_aliases() -> TestResult {
     let service = service("api")?;
-    let plan = MigrationPlan::new([7; 32], [BuiltinResource::Service(service.clone())])?;
+    let cluster_id = ClusterId::new("production")?;
+    let plan = MigrationPlan::new(
+        cluster_id.clone(),
+        [7; 32],
+        [BuiltinResource::Service(service.clone())],
+    )?;
 
+    assert_eq!(plan.cluster_id(), &cluster_id);
     assert_eq!(plan.writes().len(), 1);
     assert_eq!(
         plan.writes()
@@ -61,6 +67,7 @@ fn plan_orders_resources_and_rejects_destination_aliases() -> TestResult {
     );
     assert!(matches!(
         MigrationPlan::new(
+            cluster_id,
             [7; 32],
             [
                 BuiltinResource::Service(service.clone()),
@@ -69,6 +76,21 @@ fn plan_orders_resources_and_rejects_destination_aliases() -> TestResult {
         ),
         Err(PlanError::DuplicateResource { .. })
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_rejects_a_different_destination_cluster() -> TestResult {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let destination = Keyspace::new(&ClusterId::new("staging")?);
+    let migration = migration(store.clone(), destination.clone())?;
+    let plan = plan("api", [9; 32])?;
+
+    assert!(matches!(
+        migration.apply(&plan).await,
+        Err(MigrationError::DestinationClusterMismatch { .. })
+    ));
+    assert!(store.get(&marker_key(&destination)?).await?.is_none());
     Ok(())
 }
 
@@ -162,6 +184,7 @@ fn migration(store: Arc<InMemoryStore>, keyspace: Keyspace) -> TestResult<Cutove
 
 fn plan(service_id: &str, digest: [u8; 32]) -> TestResult<MigrationPlan> {
     Ok(MigrationPlan::new(
+        ClusterId::new("production")?,
         digest,
         [BuiltinResource::Service(service(service_id)?)],
     )?)

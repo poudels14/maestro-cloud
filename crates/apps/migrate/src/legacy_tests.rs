@@ -7,6 +7,8 @@ use kernel_api::{
 };
 
 use crate::legacy_crypto::encrypt_for_test;
+use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_node_tests::node_entries;
 use crate::legacy_services::{LegacyServiceCatalog, LegacyServiceError};
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
@@ -131,7 +133,7 @@ fn service_catalog_rejects_counter_drift_and_orphan_sidecars() -> TestResult {
 
 #[test]
 fn cutover_plan_converts_service_and_deployment_resources() -> TestResult {
-    let snapshot = service_snapshot(vec![
+    let snapshot = cutover_service_snapshot(vec![
         encrypted(
             "/maetro/services/api/deploy-1/deploy/env",
             json!({"PUBLIC_NAME": "api"}),
@@ -144,7 +146,7 @@ fn cutover_plan_converts_service_and_deployment_resources() -> TestResult {
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
     assert_eq!(plan.source_digest(), snapshot.digest());
-    assert_eq!(plan.writes().len(), 2);
+    assert_eq!(plan.writes().len(), 3);
     let service: Service = decode_write(&plan, BuiltinKind::Service)?;
     let deployment: Deployment = decode_write(&plan, BuiltinKind::Deployment)?;
 
@@ -185,7 +187,7 @@ fn cutover_plan_converts_service_and_deployment_resources() -> TestResult {
 
 #[test]
 fn cutover_plan_rejects_unclaimed_key_families() -> TestResult {
-    let snapshot = service_snapshot(vec![LegacyEntry::new(
+    let snapshot = cutover_service_snapshot(vec![LegacyEntry::new(
         "/maetro/cluster/meta",
         b"cluster".to_vec(),
     )])?;
@@ -233,7 +235,7 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
             "env": {"source": "env://preview"}
         }
     });
-    let snapshot = LegacySnapshot::new(vec![
+    let mut entries = vec![
         json_entry(
             "/maetro/services/web/info",
             json!({"config": config.clone()}),
@@ -276,10 +278,13 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
             "/maetro/services/web/deploy-web/preview/env",
             json!({"PREVIEW": "true"}),
         )?,
-    ])?;
+    ];
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries.push(cluster_meta());
+    let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
-    assert_eq!(plan.writes().len(), 5);
+    assert_eq!(plan.writes().len(), 6);
     let service: Service = decode_write(&plan, BuiltinKind::Service)?;
     let deployment: Deployment = decode_write(&plan, BuiltinKind::Deployment)?;
     let build: Build = decode_write(&plan, BuiltinKind::Build)?;
@@ -330,6 +335,16 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
 fn service_snapshot(extra: Vec<LegacyEntry>) -> Result<LegacySnapshot, crate::SnapshotError> {
     let mut entries = fixture_entries();
     entries.extend(extra);
+    LegacySnapshot::new(entries)
+}
+
+fn cutover_service_snapshot(
+    extra: Vec<LegacyEntry>,
+) -> Result<LegacySnapshot, crate::SnapshotError> {
+    let mut entries = fixture_entries();
+    entries.extend(extra);
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries.push(cluster_meta());
     LegacySnapshot::new(entries)
 }
 

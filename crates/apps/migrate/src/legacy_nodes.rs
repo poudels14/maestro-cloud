@@ -1,6 +1,7 @@
 use ipnet::Ipv4Net;
 use kernel_api::{BuiltinResource, NodeId, NodeInstanceId};
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::Ipv4Addr;
 
 use crate::LegacyEntry;
 use crate::legacy_convert::LegacyPlanError;
@@ -30,6 +31,15 @@ struct LegacyPorts {
     gateway: u16,
     store_client: u16,
     store_peer: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LegacyControlEndpoint {
+    pub(crate) host_ip: Ipv4Addr,
+    pub(crate) api_port: u16,
+    pub(crate) gateway_port: u16,
+    pub(crate) etcd_client_port: u16,
+    pub(crate) etcd_peer_port: u16,
 }
 
 impl LegacyNodeCatalog {
@@ -116,6 +126,25 @@ impl LegacyNodeCatalog {
 
     pub(crate) fn convert(&self) -> Result<Vec<BuiltinResource>, LegacyPlanError> {
         convert_nodes(&self.nodes)
+    }
+
+    pub(crate) fn master_host(&self) -> Option<Ipv4Addr> {
+        self.nodes.values().find_map(|node| {
+            (node.record.last_info.role == LegacyNodeRole::Master)
+                .then_some(node.record.last_info.cluster_host_ip)
+        })
+    }
+
+    pub(crate) fn control_endpoint(&self, host_ip: Ipv4Addr) -> Option<LegacyControlEndpoint> {
+        self.nodes.values().find_map(|node| {
+            (node.control.host_ip == host_ip).then_some(LegacyControlEndpoint {
+                host_ip,
+                api_port: node.control.api_port,
+                gateway_port: node.control.gateway_port,
+                etcd_client_port: node.control.etcd_client_port,
+                etcd_peer_port: node.control.etcd_peer_port,
+            })
+        })
     }
 }
 

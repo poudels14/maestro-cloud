@@ -4,6 +4,8 @@ use kernel_api::{
 use serde_json::json;
 
 use crate::legacy_crypto::encrypt_for_test;
+use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -13,7 +15,7 @@ const SLACK_KEY: &str = "/maetro/cluster/config/webhooks/slack";
 
 #[test]
 fn cutover_plan_authenticates_and_converts_slack_webhooks() -> TestResult {
-    let snapshot = LegacySnapshot::new(vec![encrypted(
+    let snapshot = cutover_snapshot(encrypted(
         json!([
             {
                 "id": "wh_operations",
@@ -30,7 +32,7 @@ fn cutover_plan_authenticates_and_converts_slack_webhooks() -> TestResult {
             }
         ]),
         MASTER_SECRET,
-    )?])?;
+    )?)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
     let operations = decode_webhook(&plan, "wh_operations")?;
@@ -73,7 +75,7 @@ fn cutover_plan_authenticates_and_converts_slack_webhooks() -> TestResult {
 
 #[test]
 fn cutover_plan_rejects_wrong_slack_encryption_secret() -> TestResult {
-    let snapshot = LegacySnapshot::new(vec![encrypted(
+    let snapshot = cutover_snapshot(encrypted(
         json!([{
             "id": "wh_operations",
             "name": "Operations",
@@ -81,7 +83,7 @@ fn cutover_plan_rejects_wrong_slack_encryption_secret() -> TestResult {
             "categories": ["info"]
         }]),
         MASTER_SECRET,
-    )?])?;
+    )?)?;
 
     assert!(matches!(
         plan_legacy_snapshot(&snapshot, "wrong secret"),
@@ -92,7 +94,7 @@ fn cutover_plan_rejects_wrong_slack_encryption_secret() -> TestResult {
 
 #[test]
 fn cutover_plan_rejects_duplicate_or_invalid_slack_controls() -> TestResult {
-    let duplicate_ids = LegacySnapshot::new(vec![encrypted(
+    let duplicate_ids = cutover_snapshot(encrypted(
         json!([
             {
                 "id": "wh_operations",
@@ -108,13 +110,13 @@ fn cutover_plan_rejects_duplicate_or_invalid_slack_controls() -> TestResult {
             }
         ]),
         MASTER_SECRET,
-    )?])?;
+    )?)?;
     assert!(matches!(
         plan_legacy_snapshot(&duplicate_ids, MASTER_SECRET),
         Err(LegacyPlanError::DecodeLegacyState { .. })
     ));
 
-    let duplicate_categories = LegacySnapshot::new(vec![encrypted(
+    let duplicate_categories = cutover_snapshot(encrypted(
         json!([{
             "id": "wh_operations",
             "name": "Operations",
@@ -122,7 +124,7 @@ fn cutover_plan_rejects_duplicate_or_invalid_slack_controls() -> TestResult {
             "categories": ["error", "error"]
         }]),
         MASTER_SECRET,
-    )?])?;
+    )?)?;
     assert!(matches!(
         plan_legacy_snapshot(&duplicate_categories, MASTER_SECRET),
         Err(LegacyPlanError::DecodeLegacyState { .. })
@@ -136,6 +138,13 @@ fn encrypted(value: serde_json::Value, secret: &str) -> Result<LegacyEntry, Lega
         .map_err(|error| LegacyPlanError::DecodeLegacyState {
             message: error.to_string(),
         })
+}
+
+fn cutover_snapshot(webhook: LegacyEntry) -> Result<LegacySnapshot, crate::SnapshotError> {
+    let mut entries = node_entries("node-a", "master", 10, 1);
+    entries.push(cluster_meta());
+    entries.push(webhook);
+    LegacySnapshot::new(entries)
 }
 
 fn decode_webhook(

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kernel_api::{ResourceKind, ResourceName};
+use kernel_api::{ClusterId, ResourceKind, ResourceName};
 use kernel_store::{
     CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, StoreKey,
 };
@@ -29,6 +29,14 @@ impl CutoverMigration {
 
     /// Converges every resource, then commits the completion marker last.
     pub async fn apply(&self, plan: &MigrationPlan) -> Result<MigrationOutcome, MigrationError> {
+        let destination_prefix = self.keyspace.cluster().to_string();
+        let expected_prefix = format!("/maestro/clusters/{}/", plan.cluster_id());
+        if destination_prefix != expected_prefix {
+            return Err(MigrationError::DestinationClusterMismatch {
+                plan_cluster_id: plan.cluster_id().clone(),
+                destination_prefix,
+            });
+        }
         let marker = MigrationMarker::new(&self.migration_id, plan);
         let marker_key = self.keyspace.migration_marker(&self.migration_id);
         if let Some(stored) = self.store.get(&marker_key).await? {
@@ -116,6 +124,7 @@ enum WriteDisposition {
 struct MigrationMarker {
     schema_version: u32,
     migration_id: ResourceName,
+    cluster_id: ClusterId,
     source_sha256: String,
     resources: usize,
 }
@@ -125,6 +134,7 @@ impl MigrationMarker {
         Self {
             schema_version: MARKER_SCHEMA_VERSION,
             migration_id: migration_id.clone(),
+            cluster_id: plan.cluster_id().clone(),
             source_sha256: hex::encode(plan.source_digest()),
             resources: plan.writes().len(),
         }
@@ -163,6 +173,16 @@ pub enum MigrationError {
     /// The destination store operation failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// The selected destination keyspace belongs to a different cluster.
+    #[error(
+        "migration plan for cluster `{plan_cluster_id}` cannot write to `{destination_prefix}`"
+    )]
+    DestinationClusterMismatch {
+        /// Identity authenticated by the legacy cluster metadata.
+        plan_cluster_id: ClusterId,
+        /// Canonical destination prefix selected by the caller.
+        destination_prefix: String,
+    },
     /// A built-in kind could not be represented by the open key type.
     #[error("invalid destination kind `{kind}`: {message}")]
     InvalidDestinationKind {

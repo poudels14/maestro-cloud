@@ -1,4 +1,4 @@
-use kernel_api::{BuiltinKind, BuiltinResource, ResourceName};
+use kernel_api::{BuiltinKind, BuiltinResource, ClusterId, ResourceName};
 
 /// One exact canonical resource write produced by legacy-schema conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +70,7 @@ impl MigrationWrite {
 /// Deterministically ordered, snapshot-bound set of destination writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationPlan {
+    cluster_id: ClusterId,
     source_digest: [u8; 32],
     writes: Vec<MigrationWrite>,
 }
@@ -77,6 +78,7 @@ pub struct MigrationPlan {
 impl MigrationPlan {
     /// Converts typed resources into a collision-free, deterministic write set.
     pub fn new(
+        cluster_id: ClusterId,
         source_digest: [u8; 32],
         resources: impl IntoIterator<Item = BuiltinResource>,
     ) -> Result<Self, PlanError> {
@@ -84,11 +86,12 @@ impl MigrationPlan {
             .into_iter()
             .map(MigrationWrite::from_resource)
             .collect::<Result<Vec<_>, _>>()?;
-        Self::from_writes(source_digest, writes)
+        Self::from_writes(cluster_id, source_digest, writes)
     }
 
     /// Validates and orders already serialized migration writes.
     pub fn from_writes(
+        cluster_id: ClusterId,
         source_digest: [u8; 32],
         mut writes: Vec<MigrationWrite>,
     ) -> Result<Self, PlanError> {
@@ -102,9 +105,15 @@ impl MigrationPlan {
             return Err(PlanError::DuplicateResource { kind, id });
         }
         Ok(Self {
+            cluster_id,
             source_digest,
             writes,
         })
+    }
+
+    /// Returns the legacy cluster identity that must own the destination keyspace.
+    pub const fn cluster_id(&self) -> &ClusterId {
+        &self.cluster_id
     }
 
     /// Returns the canonical legacy snapshot digest.

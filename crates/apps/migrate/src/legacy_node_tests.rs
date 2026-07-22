@@ -1,6 +1,7 @@
 use kernel_api::{AnnotationKey, BuiltinKind, ConditionState, Node, NodeRole};
 use serde_json::{Value, json};
 
+use crate::legacy_fixtures::{CLUSTER_ID, cluster_meta, cluster_meta_for};
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -10,6 +11,7 @@ const MASTER_SECRET: &str = "correct horse battery staple";
 #[test]
 fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
     let mut entries = node_entries("node-a", "master", 10, 1);
+    entries.push(cluster_meta());
     let info = node_info("node-a", "master", 10, 1);
     entries.push(json_entry("/maetro/cluster/nodes/node-a", info.clone()));
     entries.push(json_entry(
@@ -25,6 +27,7 @@ fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
     let node: Node = decode_node(&plan, "node-a")?;
 
+    assert_eq!(plan.cluster_id().as_str(), CLUSTER_ID);
     assert_eq!(node.spec.hostname, "node-a.internal");
     assert_eq!(node.spec.host_address.to_string(), "10.0.0.10");
     assert_eq!(node.spec.role, NodeRole::Master);
@@ -56,6 +59,7 @@ fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
         "migration.maestro.dev/legacy-node-state",
         "migration.maestro.dev/legacy-subnet-reservation",
         "migration.maestro.dev/legacy-control-reservation",
+        "migration.maestro.dev/legacy-cluster-meta",
     ] {
         assert!(
             node.meta
@@ -67,10 +71,30 @@ fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
 }
 
 #[test]
+fn cutover_plan_rejects_cluster_identity_that_disagrees_with_nodes() -> TestResult {
+    let mut entries = node_entries("node-a", "master", 10, 1);
+    let meta = cluster_meta();
+    let mut value: Value = serde_json::from_slice(meta.value())?;
+    value
+        .as_object_mut()
+        .ok_or("missing cluster-meta fixture")?
+        .insert("bootstrapHostIp".to_owned(), json!("10.0.0.11"));
+    entries.push(json_entry(meta.key(), value));
+    let snapshot = LegacySnapshot::new(entries)?;
+
+    assert!(matches!(
+        plan_legacy_snapshot(&snapshot, MASTER_SECRET),
+        Err(LegacyPlanError::DecodeLegacyState { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn cutover_plan_maps_legacy_voters_into_control_plane_nodes() -> TestResult {
     let mut entries = node_entries("node-a", "master", 10, 1);
     entries.extend(node_entries("node-b", "voter", 11, 2));
     entries.extend(node_entries("node-c", "voter", 12, 3));
+    entries.push(cluster_meta_for(&[10, 11, 12]));
     let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
@@ -89,6 +113,7 @@ fn cutover_plan_maps_legacy_voters_into_control_plane_nodes() -> TestResult {
 #[test]
 fn cutover_plan_rejects_incomplete_or_orphan_node_state() -> TestResult {
     let mut missing_control = node_entries("node-a", "master", 10, 1);
+    missing_control.push(cluster_meta());
     missing_control.retain(|entry| !entry.key().contains("/control-addresses/"));
     let snapshot = LegacySnapshot::new(missing_control)?;
     assert!(matches!(
@@ -111,6 +136,7 @@ fn cutover_plan_rejects_incomplete_or_orphan_node_state() -> TestResult {
 fn cutover_plan_rejects_topology_that_cannot_preflight() -> TestResult {
     let mut overlapping = node_entries("node-a", "master", 10, 1);
     overlapping.extend(node_entries("node-b", "worker", 11, 1));
+    overlapping.push(cluster_meta());
     let snapshot = LegacySnapshot::new(overlapping)?;
     assert!(matches!(
         plan_legacy_snapshot(&snapshot, MASTER_SECRET),
@@ -118,6 +144,7 @@ fn cutover_plan_rejects_topology_that_cannot_preflight() -> TestResult {
     ));
 
     let mut noncanonical = node_entries("node-a", "master", 10, 1);
+    noncanonical.push(cluster_meta());
     for entry in &mut noncanonical {
         let key = entry.key().to_owned();
         if key.contains("/node-records/") {
@@ -144,6 +171,7 @@ fn cutover_plan_rejects_topology_that_cannot_preflight() -> TestResult {
     ));
 
     let mut mismatched_ports = node_entries("node-a", "master", 10, 1);
+    mismatched_ports.push(cluster_meta());
     let mut worker = node_entries("node-b", "worker", 11, 2);
     let control = worker
         .iter_mut()
