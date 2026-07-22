@@ -9,6 +9,7 @@ use kernel_api::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::legacy_cluster::LegacyClusterCatalog;
 use crate::legacy_config::{ConvertedServiceConfig, convert_service_config};
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
@@ -31,12 +32,19 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
-    if let Some(entry) = catalog.unclaimed.first() {
+    let cluster = LegacyClusterCatalog::decode(&catalog.unclaimed).map_err(|error| {
+        LegacyPlanError::DecodeLegacyState {
+            message: error.to_string(),
+        }
+    })?;
+    if let Some(entry) = cluster.unclaimed.first() {
         return Err(LegacyPlanError::UnsupportedLegacyKey {
             key: entry.key().to_owned(),
         });
     }
-    let resources = convert_catalog(&catalog)?;
+    let mut resources = convert_catalog(&catalog)?;
+    let cluster_resources = cluster.convert(&catalog, &mut resources)?;
+    resources.extend(cluster_resources);
     MigrationPlan::new(snapshot.digest(), resources).map_err(Into::into)
 }
 
@@ -316,7 +324,7 @@ pub(crate) fn owner(kind: &str, id: ResourceName) -> Result<OwnerReference, Lega
     })
 }
 
-fn deployment_phase(status: LegacyDeploymentStatus) -> DeploymentPhase {
+pub(crate) fn deployment_phase(status: LegacyDeploymentStatus) -> DeploymentPhase {
     match status {
         LegacyDeploymentStatus::Queued => DeploymentPhase::Queued,
         LegacyDeploymentStatus::Building => DeploymentPhase::Building,
@@ -477,6 +485,14 @@ pub enum LegacyPlanError {
     InvalidDeployment {
         /// Legacy deployment identity.
         deployment_id: String,
+        /// Validation detail.
+        message: String,
+    },
+    /// A scheduled workload record is internally inconsistent.
+    #[error("legacy assignment `{assignment_id}` is invalid: {message}")]
+    InvalidAssignment {
+        /// Legacy assignment or related deployment identity.
+        assignment_id: String,
         /// Validation detail.
         message: String,
     },

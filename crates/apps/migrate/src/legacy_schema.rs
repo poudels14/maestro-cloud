@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -265,6 +266,82 @@ pub(crate) enum LegacyDeploymentStatus {
     Draining,
     #[serde(alias = "CANCELLED")]
     Canceled,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyAssignmentManifest {
+    pub(crate) node_id: String,
+    pub(crate) generation: u64,
+    #[serde(default)]
+    pub(crate) assignments: Vec<LegacyAssignment>,
+    #[serde(default)]
+    pub(crate) images: Vec<LegacyImageAssignment>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyAssignment {
+    pub(crate) assignment_id: String,
+    pub(crate) placement_epoch: u64,
+    pub(crate) service_id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) replica_index: u32,
+    pub(crate) node_id: String,
+    #[serde(default)]
+    pub(crate) container_ip: Option<Ipv4Addr>,
+    #[serde(default)]
+    pub(crate) replaces_assignment_id: Option<String>,
+    pub(crate) created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyImageAssignment {
+    pub(crate) service_id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) image: String,
+    pub(crate) source_node_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyReplicaState {
+    #[serde(default)]
+    pub(crate) service_id: Option<String>,
+    #[serde(default)]
+    pub(crate) deployment_id: Option<String>,
+    #[serde(default)]
+    pub(crate) replica_index: u32,
+    pub(crate) status: LegacyDeploymentStatus,
+    #[serde(default)]
+    pub(crate) healthcheck_failures: u32,
+    #[serde(default)]
+    pub(crate) restart_attempts: u32,
+    #[serde(default)]
+    pub(crate) node_id: Option<String>,
+    #[serde(default)]
+    pub(crate) assignment_id: Option<String>,
+    #[serde(default)]
+    pub(crate) endpoint: Option<LegacyReplicaEndpoint>,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyReplicaEndpoint {
+    pub(crate) container_ip: String,
+    pub(crate) container_hostname: String,
+    pub(crate) ingress_container_port: u16,
+    pub(crate) gateway: LegacyNodeGatewayEndpoint,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyNodeGatewayEndpoint {
+    pub(crate) host_ip: Ipv4Addr,
+    pub(crate) port: u16,
 }
 
 const fn default_healthcheck_interval() -> u32 {

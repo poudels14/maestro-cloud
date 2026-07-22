@@ -1,5 +1,6 @@
 //! One-shot, resumable migration from legacy Maestro state into typed resources.
 
+mod legacy_cluster;
 mod legacy_config;
 mod legacy_convert;
 mod legacy_crypto;
@@ -15,6 +16,8 @@ pub use plan::{MigrationPlan, MigrationWrite, PlanError};
 pub use runner::{CutoverMigration, MigrationError, MigrationOutcome};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
 
+#[cfg(test)]
+mod legacy_cluster_tests;
 #[cfg(test)]
 mod legacy_tests;
 #[cfg(test)]
