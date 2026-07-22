@@ -26,6 +26,8 @@ tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "rt
 zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [dev-dependencies]
+cluster = { version = "0.1.0", path = "../../cluster" }
+time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bin]]

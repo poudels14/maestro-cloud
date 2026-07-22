@@ -66,4 +66,6 @@ mod legacy_tests;
 #[cfg(test)]
 mod legacy_webhook_tests;
 #[cfg(test)]
+mod real_etcd_tests;
+#[cfg(test)]
 mod tests;

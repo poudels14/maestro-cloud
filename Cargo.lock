@@ -3585,6 +3585,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "clap",
+ "cluster",
  "etcd-client",
  "hex",
  "http 1.4.2",
@@ -3598,6 +3599,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "zeroize",
 ]

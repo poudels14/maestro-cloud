@@ -14,7 +14,7 @@ use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-const MASTER_SECRET: &str = "correct horse battery staple";
+pub(crate) const MASTER_SECRET: &str = "correct horse battery staple";
 
 #[test]
 fn service_catalog_authenticates_and_joins_legacy_records() -> TestResult {
@@ -338,7 +338,7 @@ fn service_snapshot(extra: Vec<LegacyEntry>) -> Result<LegacySnapshot, crate::Sn
     LegacySnapshot::new(entries)
 }
 
-fn cutover_service_snapshot(
+pub(crate) fn cutover_service_snapshot(
     extra: Vec<LegacyEntry>,
 ) -> Result<LegacySnapshot, crate::SnapshotError> {
     let mut entries = fixture_entries();
@@ -399,7 +399,7 @@ fn json_entry(key: &str, value: serde_json::Value) -> LegacyEntry {
     LegacyEntry::new(key, value.to_string().into_bytes())
 }
 
-fn encrypted(
+pub(crate) fn encrypted(
     key: &str,
     value: serde_json::Value,
 ) -> Result<LegacyEntry, Box<dyn std::error::Error>> {
