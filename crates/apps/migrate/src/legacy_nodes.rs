@@ -164,6 +164,16 @@ impl LegacyNodeCatalog {
             })
             .collect()
     }
+
+    pub(crate) fn maintenance_drain(&self) -> Option<&NodeId> {
+        self.nodes.iter().find_map(|(node_id, node)| {
+            node.state.as_ref().and_then(|state| {
+                (state.unschedulable
+                    && matches!(state.reason.as_deref(), Some("upgrade" | "restart")))
+                .then_some(node_id)
+            })
+        })
+    }
 }
 
 fn validate_orphans(

@@ -5,6 +5,8 @@ mod legacy_config;
 mod legacy_convert;
 mod legacy_crypto;
 mod legacy_identity;
+mod legacy_maintenance;
+mod legacy_maintenance_schema;
 mod legacy_membership;
 mod legacy_network;
 mod legacy_node_resources;
@@ -27,6 +29,8 @@ pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
 mod legacy_cluster_tests;
 #[cfg(test)]
 mod legacy_fixtures;
+#[cfg(test)]
+mod legacy_maintenance_tests;
 #[cfg(test)]
 mod legacy_membership_tests;
 #[cfg(test)]
