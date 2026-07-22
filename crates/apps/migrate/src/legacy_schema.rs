@@ -344,6 +344,22 @@ pub(crate) struct LegacyNodeGatewayEndpoint {
     pub(crate) port: u16,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LegacyTrafficGeneration {
+    pub(crate) service_id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) traffic_epoch: u64,
+    pub(crate) active_assignment_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) active_node_ids: Vec<String>,
+    pub(crate) generation: String,
+    #[serde(default)]
+    pub(crate) routing_fingerprint: String,
+    pub(crate) switched_at_ms: i64,
+    pub(crate) drain_old_after_ms: i64,
+}
+
 const fn default_healthcheck_interval() -> u32 {
     60
 }

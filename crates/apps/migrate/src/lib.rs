@@ -4,6 +4,7 @@ mod legacy_cluster;
 mod legacy_config;
 mod legacy_convert;
 mod legacy_crypto;
+mod legacy_network;
 mod legacy_resources;
 mod legacy_schema;
 mod legacy_services;
@@ -18,6 +19,8 @@ pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
 
 #[cfg(test)]
 mod legacy_cluster_tests;
+#[cfg(test)]
+mod legacy_network_tests;
 #[cfg(test)]
 mod legacy_tests;
 #[cfg(test)]

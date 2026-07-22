@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::legacy_cluster::LegacyClusterCatalog;
 use crate::legacy_config::{ConvertedServiceConfig, convert_service_config};
+use crate::legacy_network::LegacyNetworkCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
 use crate::legacy_schema::LegacyDeploymentStatus;
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
@@ -37,7 +38,12 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
-    if let Some(entry) = cluster.unclaimed.first() {
+    let network = LegacyNetworkCatalog::decode(&cluster.unclaimed).map_err(|error| {
+        LegacyPlanError::DecodeLegacyState {
+            message: error.to_string(),
+        }
+    })?;
+    if let Some(entry) = network.unclaimed.first() {
         return Err(LegacyPlanError::UnsupportedLegacyKey {
             key: entry.key().to_owned(),
         });
@@ -45,6 +51,8 @@ pub fn plan_legacy_snapshot(
     let mut resources = convert_catalog(&catalog)?;
     let cluster_resources = cluster.convert(&catalog, &mut resources)?;
     resources.extend(cluster_resources);
+    let network_resources = network.convert(&resources)?;
+    resources.extend(network_resources);
     MigrationPlan::new(snapshot.digest(), resources).map_err(Into::into)
 }
 
@@ -493,6 +501,14 @@ pub enum LegacyPlanError {
     InvalidAssignment {
         /// Legacy assignment or related deployment identity.
         assignment_id: String,
+        /// Validation detail.
+        message: String,
+    },
+    /// Legacy cluster runtime state cannot be represented safely.
+    #[error("legacy cluster resource `{resource_id}` is invalid: {message}")]
+    InvalidClusterState {
+        /// Legacy service or singleton resource identity.
+        resource_id: String,
         /// Validation detail.
         message: String,
     },
