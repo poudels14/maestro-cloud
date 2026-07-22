@@ -7,7 +7,7 @@ use kernel_api::{
 };
 
 use crate::legacy_crypto::encrypt_for_test;
-use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_fixtures::cluster_state;
 use crate::legacy_node_tests::node_entries;
 use crate::legacy_services::{LegacyServiceCatalog, LegacyServiceError};
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
@@ -280,7 +280,7 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
         )?,
     ];
     entries.extend(node_entries("node-a", "master", 10, 1));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
@@ -344,7 +344,7 @@ fn cutover_service_snapshot(
     let mut entries = fixture_entries();
     entries.extend(extra);
     entries.extend(node_entries("node-a", "master", 10, 1));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     LegacySnapshot::new(entries)
 }
 

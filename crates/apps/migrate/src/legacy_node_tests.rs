@@ -1,7 +1,7 @@
 use kernel_api::{AnnotationKey, BuiltinKind, ConditionState, Node, NodeRole};
 use serde_json::{Value, json};
 
-use crate::legacy_fixtures::{CLUSTER_ID, cluster_meta, cluster_meta_for};
+use crate::legacy_fixtures::{CLUSTER_ID, cluster_meta, cluster_state, cluster_state_for};
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -11,7 +11,7 @@ const MASTER_SECRET: &str = "correct horse battery staple";
 #[test]
 fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
     let mut entries = node_entries("node-a", "master", 10, 1);
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     let info = node_info("node-a", "master", 10, 1);
     entries.push(json_entry("/maetro/cluster/nodes/node-a", info.clone()));
     entries.push(json_entry(
@@ -60,6 +60,7 @@ fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
         "migration.maestro.dev/legacy-subnet-reservation",
         "migration.maestro.dev/legacy-control-reservation",
         "migration.maestro.dev/legacy-cluster-meta",
+        "migration.maestro.dev/legacy-store-member",
     ] {
         assert!(
             node.meta
@@ -94,7 +95,7 @@ fn cutover_plan_maps_legacy_voters_into_control_plane_nodes() -> TestResult {
     let mut entries = node_entries("node-a", "master", 10, 1);
     entries.extend(node_entries("node-b", "voter", 11, 2));
     entries.extend(node_entries("node-c", "voter", 12, 3));
-    entries.push(cluster_meta_for(&[10, 11, 12]));
+    entries.extend(cluster_state_for(&[10, 11, 12]));
     let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;

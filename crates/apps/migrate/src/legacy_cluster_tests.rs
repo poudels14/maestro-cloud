@@ -4,7 +4,7 @@ use kernel_api::{
 };
 use serde_json::json;
 
-use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_fixtures::cluster_state;
 use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
@@ -57,7 +57,7 @@ fn cutover_plan_converts_scheduled_assignment_and_replica_state() -> TestResult 
         ),
     ];
     entries.extend(node_entries("node-a", "master", 10, 1));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
@@ -161,7 +161,7 @@ fn cutover_plan_rejects_assignment_references_outside_service_history() -> TestR
     ];
     entries.extend(node_entries("node-a", "master", 10, 1));
     entries.extend(node_entries("node-b", "worker", 11, 2));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     let snapshot = LegacySnapshot::new(entries)?;
 
     assert!(matches!(
@@ -224,7 +224,7 @@ fn cutover_plan_preserves_registry_free_image_placements() -> TestResult {
     ];
     entries.extend(node_entries("node-a", "master", 10, 1));
     entries.extend(node_entries("node-b", "worker", 11, 2));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     let snapshot = LegacySnapshot::new(entries)?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;

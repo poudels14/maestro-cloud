@@ -146,6 +146,24 @@ impl LegacyNodeCatalog {
             })
         })
     }
+
+    pub(crate) fn control_plane_endpoints(&self) -> BTreeMap<NodeId, LegacyControlEndpoint> {
+        self.nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                node.record.last_info.role.is_control_plane().then_some((
+                    node_id.clone(),
+                    LegacyControlEndpoint {
+                        host_ip: node.control.host_ip,
+                        api_port: node.control.api_port,
+                        gateway_port: node.control.gateway_port,
+                        etcd_client_port: node.control.etcd_client_port,
+                        etcd_peer_port: node.control.etcd_peer_port,
+                    },
+                ))
+            })
+            .collect()
+    }
 }
 
 fn validate_orphans(

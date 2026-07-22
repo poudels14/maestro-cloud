@@ -4,7 +4,7 @@ use kernel_api::{
 };
 use serde_json::json;
 
-use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_fixtures::cluster_state;
 use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
@@ -189,7 +189,7 @@ fn workload_entries() -> Vec<LegacyEntry> {
         ),
     ];
     entries.extend(node_entries("node-a", "master", 10, 1));
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     entries
 }
 

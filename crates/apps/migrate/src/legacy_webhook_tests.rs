@@ -4,7 +4,7 @@ use kernel_api::{
 use serde_json::json;
 
 use crate::legacy_crypto::encrypt_for_test;
-use crate::legacy_fixtures::cluster_meta;
+use crate::legacy_fixtures::cluster_state;
 use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 
@@ -142,7 +142,7 @@ fn encrypted(value: serde_json::Value, secret: &str) -> Result<LegacyEntry, Lega
 
 fn cutover_snapshot(webhook: LegacyEntry) -> Result<LegacySnapshot, crate::SnapshotError> {
     let mut entries = node_entries("node-a", "master", 10, 1);
-    entries.push(cluster_meta());
+    entries.extend(cluster_state());
     entries.push(webhook);
     LegacySnapshot::new(entries)
 }

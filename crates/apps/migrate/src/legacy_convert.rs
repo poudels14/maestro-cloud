@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::legacy_cluster::LegacyClusterCatalog;
 use crate::legacy_config::{ConvertedServiceConfig, convert_service_config};
 use crate::legacy_identity::LegacyClusterIdentity;
+use crate::legacy_membership::LegacyMembershipCatalog;
 use crate::legacy_network::LegacyNetworkCatalog;
 use crate::legacy_nodes::LegacyNodeCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
@@ -46,7 +47,13 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
-    let cluster = LegacyClusterCatalog::decode(&identity.unclaimed).map_err(|error| {
+    let membership =
+        LegacyMembershipCatalog::decode(&identity.unclaimed, &nodes).map_err(|error| {
+            LegacyPlanError::DecodeLegacyState {
+                message: error.to_string(),
+            }
+        })?;
+    let cluster = LegacyClusterCatalog::decode(&membership.unclaimed).map_err(|error| {
         LegacyPlanError::DecodeLegacyState {
             message: error.to_string(),
         }
@@ -70,6 +77,7 @@ pub fn plan_legacy_snapshot(
     let mut resources = convert_catalog(&catalog)?;
     resources.extend(nodes.convert()?);
     identity.annotate_master(&mut resources)?;
+    membership.annotate_nodes(&mut resources)?;
     let cluster_resources = cluster.convert(&catalog, &nodes, &mut resources)?;
     resources.extend(cluster_resources);
     let network_resources = network.convert(&resources)?;
