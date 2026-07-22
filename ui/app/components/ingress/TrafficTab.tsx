@@ -14,7 +14,7 @@ import {
 } from "../../lib/queries";
 import type { TrafficBreakdownEntry } from "../../lib/types";
 import { Card, ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
-import { LogHistogramChart } from "../logs/LogHistogram";
+import { StackedHistogramChart } from "@maestro/charts";
 import { LogViewer } from "../logs/LogViewer";
 
 const TIME_RANGES = [
@@ -170,11 +170,12 @@ function IngressTrafficTab() {
         </div>
         <Show when={statusHistogram.data}>
           {(histogram) => (
-            <LogHistogramChart
+            <StackedHistogramChart
               data={histogram().buckets}
               from={histogram().from}
               to={histogram().to}
               bucketMs={histogram().bucketMs}
+              itemName="request"
             />
           )}
         </Show>

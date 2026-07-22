@@ -21,8 +21,8 @@ import {
   type LogScope
 } from "../../lib/api";
 import { ErrorBanner } from "@maestro/kit";
+import { StackedHistogramChart } from "@maestro/charts";
 import { dateFormatter, httpFields } from "../../lib/logFormat";
-import { LogHistogramChart } from "./LogHistogram";
 import { LOG_COLUMNS, LogRow } from "./LogRow";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
 import {
@@ -533,11 +533,12 @@ function LogViewer(props: {
             </div>
           </Show>
           <Show when={histogram()}>
-            <LogHistogramChart
+            <StackedHistogramChart
               data={histogram()!.buckets}
               from={histogram()!.from}
               to={histogram()!.to}
               bucketMs={histogram()!.bucketMs}
+              itemName="log"
               selectedTs={selectedBucket()?.ts}
               onSelectInterval={selectHistogramInterval}
               onSelect={selectHistogramBucket}

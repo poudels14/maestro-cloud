@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
 import { formatBytes, formatPercent } from "../../lib/format";
 import { Card, ErrorBanner, SectionHeader } from "@maestro/kit";
-import { TimelineChart } from "../TimelineChart";
+import { TimelineChart } from "@maestro/charts";
 
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000 },

@@ -1,17 +1,20 @@
 import { createEffect, onCleanup, onMount } from "solid-js";
 import * as d3 from "d3";
 
-type DataPoint = { ts: number; value: number };
+export { StackedHistogramChart } from "./StackedHistogramChart";
+export type { StackedHistogramBucket } from "./StackedHistogramChart";
+
+export type TimelineDataPoint = { ts: number; value: number };
 
 export function TimelineChart(props: {
-  data: DataPoint[];
+  data: TimelineDataPoint[];
   label: string;
   color?: string;
   yFormat?: (v: number) => string;
   height?: number;
   xMin?: number;
   xMax?: number;
-  secondarySeries?: { data: DataPoint[]; color: string; label: string };
+  secondarySeries?: { data: TimelineDataPoint[]; color: string; label: string };
 }) {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
@@ -93,13 +96,13 @@ export function TimelineChart(props: {
       .call((g) => g.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px"));
 
     const line = d3
-      .line<DataPoint>()
+      .line<TimelineDataPoint>()
       .x((d) => xScale(d.ts))
       .y((d) => yScale(d.value))
       .curve(d3.curveMonotoneX);
 
     const area = d3
-      .area<DataPoint>()
+      .area<TimelineDataPoint>()
       .x((d) => xScale(d.ts))
       .y0(innerHeight)
       .y1((d) => yScale(d.value))
@@ -161,7 +164,7 @@ export function TimelineChart(props: {
       .attr("fill", "none")
       .attr("pointer-events", "all");
 
-    const bisect = d3.bisector<DataPoint, number>((d) => d.ts).left;
+    const bisect = d3.bisector<TimelineDataPoint, number>((d) => d.ts).left;
 
     overlay
       .on("mousemove", (event: MouseEvent) => {

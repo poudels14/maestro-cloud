@@ -1,6 +1,11 @@
 import { createEffect, onCleanup, onMount } from "solid-js";
 import * as d3 from "d3";
-import type { LogHistogramBucket } from "../../lib/api";
+
+export interface StackedHistogramBucket {
+  ts: number;
+  count: number;
+  levels?: Record<string, number>;
+}
 
 const LEVEL_PRIORITY = ["trace", "debug", "info", "warn", "error", "2xx", "3xx", "4xx", "5xx"];
 
@@ -39,7 +44,7 @@ function levelRank(level: string) {
   return rank < 0 ? -1 : rank;
 }
 
-function bucketLevels(bucket: LogHistogramBucket) {
+function bucketLevels(bucket: StackedHistogramBucket) {
   const entries = Object.entries(bucket.levels ?? {}).filter(([, count]) => count > 0);
   const categorized = entries.reduce((total, [, count]) => total + count, 0);
   if (categorized < bucket.count) entries.push(["other", bucket.count - categorized]);
@@ -49,19 +54,25 @@ function bucketLevels(bucket: LogHistogramBucket) {
   });
 }
 
-function LogHistogramChart(props: {
-  data: LogHistogramBucket[];
+function StackedHistogramChart(props: {
+  data: StackedHistogramBucket[];
   from: number;
   to: number;
   bucketMs: number;
+  itemName?: string;
   selectedTs?: number;
-  onSelectInterval?: (bucket: LogHistogramBucket) => void;
-  onSelect?: (bucket: LogHistogramBucket, level: string) => void;
+  onSelectInterval?: (bucket: StackedHistogramBucket) => void;
+  onSelect?: (bucket: StackedHistogramBucket, level: string) => void;
 }) {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
   const height = 132;
   const margin = { top: 12, right: 12, bottom: 26, left: 42 };
+
+  const itemLabel = (count: number) => {
+    const name = props.itemName ?? "event";
+    return count === 1 ? name : `${name}s`;
+  };
 
   const render = () => {
     if (!containerRef || !svgRef) return;
@@ -114,7 +125,7 @@ function LogHistogramChart(props: {
         axis.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px")
       );
 
-    const bucketBounds = (bucket: LogHistogramBucket) => {
+    const bucketBounds = (bucket: StackedHistogramBucket) => {
       const start = Math.max(props.from, bucket.ts);
       const end = Math.min(props.to, bucket.ts + props.bucketMs);
       const x = Math.max(0, xScale(start));
@@ -148,10 +159,10 @@ function LogHistogramChart(props: {
       .attr("font-size", "11px");
 
     graph
-      .selectAll(".log-bucket-hit-area")
+      .selectAll(".histogram-bucket-hit-area")
       .data(props.data)
       .join("rect")
-      .attr("class", "log-bucket-hit-area")
+      .attr("class", "histogram-bucket-hit-area")
       .attr("x", (bucket) => bucketBounds(bucket).x)
       .attr("y", 0)
       .attr("width", (bucket) => bucketBounds(bucket).width)
@@ -161,7 +172,7 @@ function LogHistogramChart(props: {
       .attr("tabindex", 0)
       .attr("aria-label", (bucket) => {
         const bounds = bucketBounds(bucket);
-        return `Select ${bucket.count.toLocaleString()} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
+        return `Select ${bucket.count.toLocaleString()} ${itemLabel(bucket.count)} from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
       })
       .style("cursor", props.onSelectInterval ? "pointer" : "default")
       .on("mouseenter", (_event, bucket) => {
@@ -196,10 +207,10 @@ function LogHistogramChart(props: {
     });
 
     graph
-      .selectAll(".log-bucket-segment")
+      .selectAll(".histogram-bucket-segment")
       .data(segments)
       .join("rect")
-      .attr("class", "log-bucket-segment")
+      .attr("class", "histogram-bucket-segment")
       .attr("x", (segment) => bucketBounds(segment.bucket).x)
       .attr("y", (segment) => yScale(segment.end))
       .attr("width", (segment) => bucketBounds(segment.bucket).width)
@@ -211,7 +222,7 @@ function LogHistogramChart(props: {
       .attr("tabindex", 0)
       .attr("aria-label", (segment) => {
         const bounds = bucketBounds(segment.bucket);
-        return `${segment.count.toLocaleString()} ${segment.level} logs from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
+        return `${segment.count.toLocaleString()} ${segment.level} ${itemLabel(segment.count)} from ${new Date(bounds.start).toLocaleString()} to ${new Date(bounds.end).toLocaleString()}`;
       })
       .style("cursor", props.onSelect ? "pointer" : "default")
       .on("mouseenter", (_event, segment) => {
@@ -219,7 +230,7 @@ function LogHistogramChart(props: {
         const x = bounds.x + bounds.width / 2;
         const start = new Date(bounds.start);
         const end = new Date(bounds.end);
-        const label = `${segment.count.toLocaleString()} ${segment.level} logs · ${segment.bucket.count.toLocaleString()} total · ${d3.timeFormat("%b %d %H:%M")(start)}–${d3.timeFormat("%H:%M")(end)}`;
+        const label = `${segment.count.toLocaleString()} ${segment.level} ${itemLabel(segment.count)} · ${segment.bucket.count.toLocaleString()} total · ${d3.timeFormat("%b %d %H:%M")(start)}–${d3.timeFormat("%H:%M")(end)}`;
         tooltip.style("display", null);
         tooltip.select("line").attr("x1", x).attr("x2", x);
         tooltipText
@@ -246,7 +257,7 @@ function LogHistogramChart(props: {
         .attr("text-anchor", "middle")
         .attr("fill", "#9ca3af")
         .attr("font-size", "11px")
-        .text("No matching logs in this range");
+        .text(`No matching ${itemLabel(2)} in this range`);
     }
   };
 
@@ -262,6 +273,7 @@ function LogHistogramChart(props: {
     props.from;
     props.to;
     props.bucketMs;
+    props.itemName;
     props.selectedTs;
     render();
   });
@@ -273,4 +285,4 @@ function LogHistogramChart(props: {
   );
 }
 
-export { LogHistogramChart };
+export { StackedHistogramChart };
