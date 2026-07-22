@@ -7,3 +7,4 @@ mod metric_duck;
 mod query;
 mod retention;
 mod settings;
+mod traffic;

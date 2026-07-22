@@ -5,12 +5,13 @@ use std::thread::JoinHandle;
 use async_trait::async_trait;
 use kernel_api::Timestamp;
 use logs::{
-    DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
-    LogDeliveryStoreError, LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadQuery,
-    LogSequence, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
-    LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
+    DeadLetterStore, DeadLetterStoreError, IngestLogEntry, IngressTrafficBreakdown,
+    IngressTrafficQuery, LogAppendReport, LogDeliveryStore, LogDeliveryStoreError,
+    LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadQuery, LogSequence,
+    LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore, LogStoreError,
+    LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, ServiceTrafficQuery, SinkDeadLetter,
     SinkDeadLetterStats, StatsMetricAppendReport, StatsMetricPoint, StatsMetricQuery,
-    StatsMetricStore, StatsMetricStoreError,
+    StatsMetricStore, StatsMetricStoreError, TrafficMetricPoint, TrafficQueryError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -105,6 +106,14 @@ pub(crate) enum Command {
     QueryStatsMetrics {
         query: StatsMetricQuery,
         response: oneshot::Sender<Result<Vec<StatsMetricPoint>, StatsMetricStoreError>>,
+    },
+    QueryIngressTraffic {
+        query: IngressTrafficQuery,
+        response: oneshot::Sender<Result<IngressTrafficBreakdown, TrafficQueryError>>,
+    },
+    QueryServiceTraffic {
+        query: ServiceTrafficQuery,
+        response: oneshot::Sender<Result<Vec<TrafficMetricPoint>, TrafficQueryError>>,
     },
     Shutdown {
         response: oneshot::Sender<()>,
@@ -533,6 +542,10 @@ impl LogStoreRuntime for DuckLogStoreRuntime {
     }
 
     fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
+        self.store.clone()
+    }
+
+    fn traffic_query_store(&self) -> Arc<dyn logs::TrafficQueryStore> {
         self.store.clone()
     }
 

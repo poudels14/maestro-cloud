@@ -169,6 +169,20 @@ pub(crate) fn run_worker(
                 let _ignored =
                     response.send(crate::stats_metric_schema::query(&connection, &query));
             }
+            Command::QueryIngressTraffic { query, response } => {
+                let _ignored = response.send(crate::traffic_query_schema::query_ingress_traffic(
+                    &connection,
+                    cold_root,
+                    &query,
+                ));
+            }
+            Command::QueryServiceTraffic { query, response } => {
+                let _ignored = response.send(crate::traffic_query_schema::query_service_traffic(
+                    &connection,
+                    cold_root,
+                    &query,
+                ));
+            }
             Command::Shutdown { response } => {
                 drop(connection);
                 let _ignored = response.send(());

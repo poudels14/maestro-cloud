@@ -21,11 +21,17 @@ pub(super) fn sanitize_request_path(object: &mut serde_json::Map<String, serde_j
     let Some(path) = value.as_str() else {
         return;
     };
-    let path = path.split('?').next().unwrap_or("/");
+    let path = path
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .chars()
+        .take(2_048)
+        .collect::<String>();
     *value = serde_json::Value::String(if path.is_empty() {
         "/".to_owned()
     } else {
-        path.to_owned()
+        path
     });
 }
 

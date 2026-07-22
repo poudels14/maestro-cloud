@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{
     DeadLetterStore, IngestLogEntry, LogDeliveryStore, LogQueryStore, LogStatsStore,
-    StatsMetricStore,
+    StatsMetricStore, TrafficQueryStore,
 };
 
 /// Outcome of one atomic idempotent append batch.
@@ -45,6 +45,9 @@ pub trait LogStoreRuntime: Send {
 
     /// Returns durable controller and backup time-series history.
     fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore>;
+
+    /// Returns access-log-derived ingress and service traffic analytics.
+    fn traffic_query_store(&self) -> Arc<dyn TrafficQueryStore>;
 
     /// Drains accepted writes and releases the store's owned resources.
     async fn shutdown(self: Box<Self>) -> Result<(), LogStoreRuntimeError>;

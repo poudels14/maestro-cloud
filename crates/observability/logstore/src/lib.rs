@@ -24,6 +24,8 @@ mod query_duck;
 mod schema;
 mod settings;
 mod stats_metric_schema;
+mod traffic_duck;
+mod traffic_query_schema;
 mod workload_metric_schema;
 
 pub use duck::{DuckLogStore, DuckLogStoreRuntime};

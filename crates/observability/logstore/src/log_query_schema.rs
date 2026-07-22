@@ -197,7 +197,7 @@ fn scope_filter(scope: &LogQueryScope) -> CompiledPredicate {
     }
 }
 
-fn query_source(cold_root: &Path) -> Result<CompiledPredicate, LogQueryStoreError> {
+pub(crate) fn query_source(cold_root: &Path) -> Result<CompiledPredicate, LogQueryStoreError> {
     let mut source = CompiledPredicate {
         sql: "SELECT sequence, event_at_ms, entry_json FROM query_logs".to_owned(),
         values: Vec::new(),
@@ -239,7 +239,7 @@ fn contains_parquet(root: &Path) -> Result<bool, LogQueryStoreError> {
     Ok(false)
 }
 
-fn duck_values(values: Vec<QueryValue>) -> Result<Vec<Value>, LogQueryStoreError> {
+pub(crate) fn duck_values(values: Vec<QueryValue>) -> Result<Vec<Value>, LogQueryStoreError> {
     values
         .into_iter()
         .map(|value| match value {

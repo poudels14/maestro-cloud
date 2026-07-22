@@ -32,6 +32,7 @@ mod sink_worker;
 mod stats;
 mod stats_warnings;
 mod store;
+mod traffic;
 
 pub use cluster_query::{
     ClusterLogCursor, ClusterLogEntry, ClusterLogPage, ClusterLogQueryCoordinator,
@@ -100,6 +101,13 @@ pub use stats::{
 };
 pub use stats_warnings::derive_stats_warnings;
 pub use store::{LogAppendReport, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError};
+pub use traffic::{
+    IngressTrafficBreakdown, IngressTrafficQuery, IngressTrafficScope,
+    MAXIMUM_TRAFFIC_BREAKDOWN_LIMIT, MAXIMUM_TRAFFIC_METRIC_LIMIT, ServiceTrafficQuery,
+    TRAFFIC_BUCKET_MS, TrafficBreakdownEntry, TrafficMetricPoint, TrafficQueryError,
+    TrafficQueryStore, merge_ingress_traffic, merge_service_traffic, project_ingress_traffic,
+    project_service_traffic,
+};
 
 #[cfg(test)]
 mod tests;
