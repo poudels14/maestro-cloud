@@ -39,6 +39,8 @@ pub enum CliError {
     ResponseTooLarge { limit_bytes: usize },
     #[error("invalid API response: {message}")]
     InvalidApiResponse { message: String },
+    #[error("{action}: {message}")]
+    Cluster { action: String, message: String },
     #[error("interactive exec failed: {message}")]
     Exec { message: String },
     #[error("remote command exited with status {code}")]
@@ -87,6 +89,13 @@ impl CliError {
 
     pub(crate) fn invalid_api_response(message: impl Into<String>) -> Self {
         Self::InvalidApiResponse {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn cluster(action: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Cluster {
+            action: action.into(),
             message: message.into(),
         }
     }

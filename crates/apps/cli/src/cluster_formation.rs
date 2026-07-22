@@ -1,0 +1,191 @@
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use cluster::{
+    CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
+    certificate_fingerprint,
+};
+use kernel_api::{NodeId, NodeRole};
+use time::{Duration, OffsetDateTime};
+
+use crate::CliError;
+use crate::config::load_cluster;
+use crate::config_source::ConfigSourceReader;
+
+const AUTHORITY_VALIDITY_DAYS: i64 = 3_650;
+const NODE_VALIDITY_DAYS: i64 = 825;
+
+pub(crate) async fn init_ca(
+    config_source: &str,
+    data_directory: &Path,
+    output: &mut dyn Write,
+    reader: &impl ConfigSourceReader,
+) -> Result<(), CliError> {
+    let loaded = load_cluster(config_source, reader).await?;
+    let local_node =
+        loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
+            CliError::invalid_input("selected node disappeared from the topology")
+        })?;
+    if local_node.role != NodeRole::Master {
+        return Err(CliError::invalid_input(format!(
+            "cluster init-ca must run for the declared master, not `{}`",
+            loaded.node_id
+        )));
+    }
+
+    let authority_directory = authority_directory(data_directory);
+    let authority = ClusterCertificateAuthority::load_or_initialize(
+        &authority_directory,
+        &loaded.cluster.name,
+        validity(AUTHORITY_VALIDITY_DAYS)?,
+    )
+    .map_err(|error| CliError::cluster("failed to initialize cluster CA", error.to_string()))?;
+    let fingerprint = certificate_fingerprint(&authority.certificate_pem).map_err(|error| {
+        CliError::cluster("failed to fingerprint cluster CA", error.to_string())
+    })?;
+    writeln!(output, "Cluster: {}", loaded.cluster.cluster_id).map_err(output_error)?;
+    writeln!(output, "CA SHA-256: {fingerprint}").map_err(output_error)?;
+    writeln!(output, "Authority: {}", authority_directory.display()).map_err(output_error)
+}
+
+pub(crate) async fn issue_node(
+    config_source: &str,
+    data_directory: &Path,
+    node_id: String,
+    destination: Option<&Path>,
+    output: &mut dyn Write,
+    reader: &impl ConfigSourceReader,
+) -> Result<(), CliError> {
+    let loaded = load_cluster(config_source, reader).await?;
+    let node_id = NodeId::new(node_id)
+        .map_err(|error| CliError::invalid_input(format!("invalid node ID: {error}")))?;
+    let node = loaded.cluster.nodes.get(&node_id).ok_or_else(|| {
+        CliError::invalid_input(format!("node `{node_id}` is absent from cluster.nodes"))
+    })?;
+    let authority = ClusterCertificateAuthority::load(&authority_directory(data_directory))
+        .map_err(|error| {
+            CliError::cluster("failed to load initialized cluster CA", error.to_string())
+        })?;
+    let bundle = authority
+        .issue_node_certificate(
+            &node_id,
+            &node.hostname,
+            node.endpoint.host_address,
+            node.role,
+            validity(NODE_VALIDITY_DAYS)?,
+        )
+        .map_err(|error| {
+            CliError::cluster("failed to issue node certificate", error.to_string())
+        })?;
+    let bundle_path = destination
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_bundle_path(data_directory, &node_id));
+    persist_bundle(&bundle_path, &bundle)?;
+    writeln!(
+        output,
+        "[maestro]: issued {} certificate bundle for `{node_id}`",
+        role_name(node.role)
+    )
+    .map_err(output_error)?;
+    writeln!(output, "Bundle: {}", bundle_path.display()).map_err(output_error)
+}
+
+fn authority_directory(data_directory: &Path) -> PathBuf {
+    data_directory.join("security").join("cluster-ca")
+}
+
+fn default_bundle_path(data_directory: &Path, node_id: &NodeId) -> PathBuf {
+    data_directory
+        .join("security")
+        .join("provisioning")
+        .join(format!("{node_id}.certificates.json"))
+}
+
+fn validity(days: i64) -> Result<CertificateValidity, CliError> {
+    let now = OffsetDateTime::now_utc();
+    let not_before = now
+        .checked_sub(Duration::minutes(5))
+        .ok_or_else(|| CliError::invalid_input("certificate activation time is out of range"))?;
+    let not_after = now
+        .checked_add(Duration::days(days))
+        .ok_or_else(|| CliError::invalid_input("certificate expiration time is out of range"))?;
+    CertificateValidity::new(not_before, not_after)
+        .map_err(|error| CliError::invalid_input(error.to_string()))
+}
+
+fn persist_bundle(path: &Path, bundle: &NodeCertificateBundle) -> Result<(), CliError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|source| {
+        CliError::io(
+            format!("failed to create bundle directory `{}`", parent.display()),
+            source,
+        )
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
+        CliError::io(
+            format!(
+                "failed to create temporary bundle in `{}`",
+                parent.display()
+            ),
+            source,
+        )
+    })?;
+    serde_json::to_writer_pretty(&mut temporary, bundle)
+        .map_err(|source| CliError::json("failed to encode node certificate bundle", source))?;
+    temporary.write_all(b"\n").map_err(|source| {
+        CliError::io(
+            format!(
+                "failed to write node certificate bundle `{}`",
+                path.display()
+            ),
+            source,
+        )
+    })?;
+    temporary.as_file().sync_all().map_err(|source| {
+        CliError::io(
+            format!(
+                "failed to sync node certificate bundle `{}`",
+                path.display()
+            ),
+            source,
+        )
+    })?;
+    temporary.persist_noclobber(path).map_err(|error| {
+        let action = if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "refusing to overwrite node certificate bundle `{}`",
+                path.display()
+            )
+        } else {
+            format!(
+                "failed to install node certificate bundle `{}`",
+                path.display()
+            )
+        };
+        CliError::io(action, error.error)
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| {
+            CliError::io(
+                format!("failed to sync bundle directory `{}`", parent.display()),
+                source,
+            )
+        })
+}
+
+fn role_name(role: NodeRole) -> &'static str {
+    match role {
+        NodeRole::Master => "master",
+        NodeRole::Hybrid => "hybrid",
+        NodeRole::ControlPlane => "control-plane",
+        NodeRole::Worker => "worker",
+    }
+}
+
+fn output_error(source: std::io::Error) -> CliError {
+    CliError::io("failed to write command output", source)
+}

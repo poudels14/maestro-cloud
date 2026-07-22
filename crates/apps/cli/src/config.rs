@@ -135,6 +135,13 @@ pub(crate) async fn validate(
     }
 }
 
+pub(crate) async fn load_cluster(
+    source: &str,
+    reader: &impl ConfigSourceReader,
+) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
+    decode_cluster(source, load_merged(source, reader).await?)
+}
+
 fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {
     if fields.is_empty() {
         writeln!(output, "[maestro]: ignored fields: none").map_err(output_error)?;

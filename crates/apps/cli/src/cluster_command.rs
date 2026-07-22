@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 use kernel_api::UpgradeMode;
@@ -6,11 +7,37 @@ use kernel_api::UpgradeMode;
 use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
 use crate::cluster::{self, NodeLifecycleAction};
+use crate::cluster_formation;
+use crate::config_source::SystemConfigSourceReader;
 use crate::contexts::ContextStore;
 use crate::upgrades;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ClusterCommand {
+    /// Initialize or verify the cluster certificate authority on the master.
+    InitCa {
+        /// Cluster configuration source.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected data directory that owns cluster security material.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+    },
+    /// Issue a private certificate bundle for one declared cluster node.
+    IssueNode {
+        /// Cluster configuration source.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected data directory containing the initialized authority.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+        /// Stable node identity already declared in the cluster topology.
+        #[arg(long)]
+        node_id: String,
+        /// Create the private bundle at this path instead of the default.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
     /// Show the active cluster identity and node capabilities.
     Info,
     /// List durable cluster nodes and their scheduling state.
@@ -88,18 +115,35 @@ pub(crate) enum UpgradeTarget {
 }
 
 pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Result<(), CliError> {
-    let contexts = ContextStore::from_environment()?;
-    let client = ApiClient::new(contexts.active()?)?;
     match command {
-        ClusterCommand::Info => cluster::info(&client, output).await,
-        ClusterCommand::Nodes => cluster::list_nodes(&client, output).await,
-        ClusterCommand::Config => cluster::show_config(&client, output).await,
+        ClusterCommand::InitCa { config, data_dir } => {
+            cluster_formation::init_ca(&config, &data_dir, output, &SystemConfigSourceReader).await
+        }
+        ClusterCommand::IssueNode {
+            config,
+            data_dir,
+            node_id,
+            output: destination,
+        } => {
+            cluster_formation::issue_node(
+                &config,
+                &data_dir,
+                node_id,
+                destination.as_deref(),
+                output,
+                &SystemConfigSourceReader,
+            )
+            .await
+        }
+        ClusterCommand::Info => cluster::info(&active_client()?, output).await,
+        ClusterCommand::Nodes => cluster::list_nodes(&active_client()?, output).await,
+        ClusterCommand::Config => cluster::show_config(&active_client()?, output).await,
         ClusterCommand::Drain {
             node_id,
             idempotency_key,
         } => {
             cluster::node_lifecycle(
-                &client,
+                &active_client()?,
                 node_id,
                 request_id(idempotency_key)?,
                 NodeLifecycleAction::Drain,
@@ -112,7 +156,7 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             idempotency_key,
         } => {
             cluster::node_lifecycle(
-                &client,
+                &active_client()?,
                 node_id,
                 request_id(idempotency_key)?,
                 NodeLifecycleAction::Restore,
@@ -120,7 +164,7 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             )
             .await
         }
-        ClusterCommand::Upgrades => upgrades::list(&client, output).await,
+        ClusterCommand::Upgrades => upgrades::list(&active_client()?, output).await,
         ClusterCommand::Upgrade {
             target: _,
             target_version,
@@ -130,7 +174,7 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             idempotency_key,
         } => {
             upgrades::start(
-                &client,
+                &active_client()?,
                 target_version,
                 batch.into(),
                 node_ids,
@@ -143,6 +187,19 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
         ClusterCommand::Unfreeze {
             upgrade_run,
             idempotency_key,
-        } => upgrades::cancel(&client, upgrade_run, request_id(idempotency_key)?, output).await,
+        } => {
+            upgrades::cancel(
+                &active_client()?,
+                upgrade_run,
+                request_id(idempotency_key)?,
+                output,
+            )
+            .await
+        }
     }
+}
+
+fn active_client() -> Result<ApiClient, CliError> {
+    let contexts = ContextStore::from_environment()?;
+    ApiClient::new(contexts.active()?)
 }

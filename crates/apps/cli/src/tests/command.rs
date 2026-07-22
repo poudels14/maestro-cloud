@@ -27,6 +27,34 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "info"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "nodes"]).is_ok());
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "config"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "init-ca",
+            "--config",
+            "maestro.jsonc",
+            "--data-dir",
+            "/var/lib/maestro",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "issue-node",
+            "--config",
+            "maestro.jsonc",
+            "--data-dir",
+            "/var/lib/maestro",
+            "--node-id",
+            "node-a",
+            "--output",
+            "/run/maestro/node-a.json",
+        ])
+        .is_ok()
+    );
     for command in ["drain", "restore"] {
         assert!(
             Cli::try_parse_from([

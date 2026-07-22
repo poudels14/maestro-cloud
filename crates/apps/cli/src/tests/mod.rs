@@ -3,6 +3,7 @@
 mod api_client;
 mod archive;
 mod cluster;
+mod cluster_formation;
 mod command;
 mod config;
 mod config_source;

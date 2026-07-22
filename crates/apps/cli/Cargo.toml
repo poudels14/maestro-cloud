@@ -41,6 +41,7 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "time"]
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 uuid.workspace = true
 webpki-roots = "=0.26.11"
+time.workspace = true
 
 [lints]
 workspace = true
