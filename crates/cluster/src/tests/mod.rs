@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod admission;
+mod admission_coordinator;
 mod certificates;
 mod embedded_etcd;
 mod fixtures;

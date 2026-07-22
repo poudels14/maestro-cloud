@@ -138,6 +138,16 @@ impl Keyspace {
         self.key(&format!("control/requests/{request_id}"))
     }
 
+    /// Durable operator approvals for topology-bound cluster joins.
+    pub fn join_approvals(&self) -> StorePrefix {
+        self.prefix("control/join-approvals")
+    }
+
+    /// One durable operator approval for a declared node identity.
+    pub fn join_approval(&self, node_id: &NodeId) -> StoreKey {
+        self.key(&format!("control/join-approvals/{node_id}"))
+    }
+
     /// Durable completion marker for one explicitly named cutover migration.
     pub fn migration_marker(&self, migration_id: &ResourceName) -> StoreKey {
         self.key(&format!("control/migrations/{migration_id}"))

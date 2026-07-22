@@ -5,6 +5,7 @@
 //! kernel contracts, but never on node agents, runtimes, operators, or apps.
 
 mod admission;
+mod admission_coordinator;
 mod certificates;
 mod embedded_etcd;
 mod embedded_etcd_files;
@@ -20,6 +21,9 @@ mod provider;
 mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
+pub use admission_coordinator::{
+    AdmissionCoordinator, AdmissionCoordinatorError, NodeJoinApproval, NodeJoinApprovalState,
+};
 pub use certificates::{
     CertificateError, CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority,
     NodeCertificateBundle, certificate_fingerprint,
