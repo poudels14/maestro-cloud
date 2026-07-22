@@ -431,6 +431,7 @@ impl RealProcessCluster {
             cluster_id: self.cluster.cluster_id.clone(),
             cluster_name: self.cluster.name.clone(),
             nodes: self.cluster.nodes.clone(),
+            control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
             ports: self.cluster.ports,
             certificates,
             operator_jwt_secret: SecretValue::new(

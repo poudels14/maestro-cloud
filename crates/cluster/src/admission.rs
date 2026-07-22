@@ -40,7 +40,47 @@ pub fn admit_join_request(
     source_address: Ipv4Addr,
     now_unix_ms: i64,
 ) -> Result<JoinAdmission, AdmissionError> {
-    request.validate_wire_shape(now_unix_ms)?;
+    admit_join_request_with_freshness(
+        config,
+        request,
+        signature,
+        source_address,
+        now_unix_ms,
+        true,
+    )
+}
+
+pub(crate) fn admit_replayed_join_request(
+    config: &ClusterConfig,
+    request: &JoinRequest,
+    signature: &RequestSignature,
+    source_address: Ipv4Addr,
+    now_unix_ms: i64,
+) -> Result<JoinAdmission, AdmissionError> {
+    admit_join_request_with_freshness(
+        config,
+        request,
+        signature,
+        source_address,
+        now_unix_ms,
+        false,
+    )
+}
+
+fn admit_join_request_with_freshness(
+    config: &ClusterConfig,
+    request: &JoinRequest,
+    signature: &RequestSignature,
+    source_address: Ipv4Addr,
+    now_unix_ms: i64,
+    require_freshness: bool,
+) -> Result<JoinAdmission, AdmissionError> {
+    let validation_time = if require_freshness {
+        now_unix_ms
+    } else {
+        request.timestamp_unix_ms
+    };
+    request.validate_wire_shape(validation_time)?;
     verify_join_request_signature(&config.join_secret, request, signature)?;
     config.preflight()?;
 

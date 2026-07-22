@@ -5,6 +5,7 @@ use kernel_api::{NodeId, NodeRole, SecretValue};
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store, StoredValue};
 use serde::{Deserialize, Serialize};
 
+use crate::admission::admit_replayed_join_request;
 use crate::{
     AdmissionError, CertificateError, CertificateValidity, ClusterCertificateAuthority,
     ClusterConfig, ClusterPreflightError, EncryptedJoinResponse, JoinPayload, JoinProtocolError,
@@ -179,13 +180,25 @@ impl AdmissionCoordinator {
         now_unix_ms: i64,
         certificate_validity: CertificateValidity,
     ) -> Result<EncryptedJoinResponse, AdmissionCoordinatorError> {
-        let evidence = admit_join_request(
+        let evidence = match admit_join_request(
             &self.config,
             request,
             signature,
             source_address,
             now_unix_ms,
-        )?;
+        ) {
+            Ok(evidence) => evidence,
+            Err(
+                error @ AdmissionError::Protocol(JoinProtocolError::TimestampOutsideWindow {
+                    ..
+                }),
+            ) => {
+                return self
+                    .replay_expired_request(request, signature, source_address, now_unix_ms, error)
+                    .await;
+            }
+            Err(error) => return Err(error.into()),
+        };
         let key = self.keys.join_approval(&evidence.node_id);
         for _attempt in 0..MAXIMUM_APPROVAL_CAS_ATTEMPTS {
             let stored = self.store.get(&key).await?.ok_or_else(|| {
@@ -234,6 +247,45 @@ impl AdmissionCoordinator {
         })
     }
 
+    async fn replay_expired_request(
+        &self,
+        request: &JoinRequest,
+        signature: &RequestSignature,
+        source_address: Ipv4Addr,
+        now_unix_ms: i64,
+        freshness_error: AdmissionError,
+    ) -> Result<EncryptedJoinResponse, AdmissionCoordinatorError> {
+        let evidence = admit_replayed_join_request(
+            &self.config,
+            request,
+            signature,
+            source_address,
+            now_unix_ms,
+        )?;
+        let stored = self
+            .store
+            .get(&self.keys.join_approval(&evidence.node_id))
+            .await?;
+        let Some(stored) = stored else {
+            return Err(freshness_error.into());
+        };
+        let record = decode_record(&stored)?;
+        if record.view.public_key_sha256 != evidence.public_key_sha256 {
+            return Err(AdmissionCoordinatorError::ApprovalKeyMismatch {
+                node_id: evidence.node_id,
+            });
+        }
+        match record.accepted {
+            Some(accepted) if accepted.request_sha256 == evidence.request_sha256 => {
+                self.encrypt(request, &accepted.payload)
+            }
+            Some(_) => Err(AdmissionCoordinatorError::AdmissionConflict {
+                node_id: evidence.node_id,
+            }),
+            None => Err(freshness_error.into()),
+        }
+    }
+
     async fn issue_payload(
         &self,
         request: &JoinRequest,
@@ -263,6 +315,7 @@ impl AdmissionCoordinator {
             cluster_id: self.config.cluster_id.clone(),
             cluster_name: self.config.name.clone(),
             nodes: self.config.nodes.clone(),
+            control_allow_cidrs: self.config.control_allow_cidrs.clone(),
             ports: self.config.ports,
             certificates,
             operator_jwt_secret: self.operator_jwt_secret.clone(),

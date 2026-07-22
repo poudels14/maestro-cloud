@@ -8,6 +8,7 @@ use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
 use crate::cluster::{self, NodeLifecycleAction};
 use crate::cluster_formation;
+use crate::cluster_join::{self, JoinOptions};
 use crate::config_source::SystemConfigSourceReader;
 use crate::contexts::ContextStore;
 use crate::upgrades;
@@ -53,6 +54,30 @@ pub(crate) enum ClusterCommand {
         node_id: String,
         /// SHA-256 fingerprint printed by `cluster prepare-join` on that node.
         public_key_sha256: String,
+    },
+    /// Join an approved declared node through an authenticated cluster endpoint.
+    Join {
+        /// HTTPS origin of a running control-plane node.
+        leader: String,
+        /// Cluster configuration source containing this node and the join secret.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected absolute data directory that will own daemon state.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+        /// Absolute containerd gRPC socket path.
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "/run/containerd/containerd.sock"
+        )]
+        containerd_socket: PathBuf,
+        /// Absolute etcd executable required for control-plane nodes.
+        #[arg(long, value_name = "PATH")]
+        etcd_binary: Option<PathBuf>,
+        /// Create the private daemon launch document at this path.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
     },
     /// Show the active cluster identity and node capabilities.
     Info,
@@ -159,6 +184,20 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             node_id,
             public_key_sha256,
         } => cluster::approve_node(&active_client()?, node_id, public_key_sha256, output).await,
+        ClusterCommand::Join {
+            leader,
+            config,
+            data_dir,
+            containerd_socket,
+            etcd_binary,
+            output: destination,
+        } => {
+            let mut options = JoinOptions::new(leader, config, data_dir);
+            options.containerd_socket = containerd_socket;
+            options.etcd_binary = etcd_binary;
+            options.output = destination;
+            cluster_join::join(options, output, &SystemConfigSourceReader).await
+        }
         ClusterCommand::Info => cluster::info(&active_client()?, output).await,
         ClusterCommand::Nodes => cluster::list_nodes(&active_client()?, output).await,
         ClusterCommand::Config => cluster::show_config(&active_client()?, output).await,

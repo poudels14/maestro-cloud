@@ -14,8 +14,8 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    ClusterCertificateAuthority, ClusterPorts, JoinPrivateKey, JoinProtocolError, JoinRequest,
-    NodeCertificateBundle, NodeDefinition,
+    ClusterCertificateAuthority, ClusterPorts, Ipv4Cidr, JoinPrivateKey, JoinProtocolError,
+    JoinRequest, NodeCertificateBundle, NodeDefinition,
     join::{canonical_body, decode_leader_public_key, decode_public_key, validate_shared_secret},
 };
 
@@ -33,6 +33,9 @@ pub struct JoinPayload {
     pub cluster_name: String,
     /// Authoritative node topology at admission time.
     pub nodes: BTreeMap<NodeId, NodeDefinition>,
+    /// Authoritative private networks allowed to initiate control traffic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control_allow_cidrs: Vec<Ipv4Cidr>,
     /// Persisted cluster service ports.
     pub ports: ClusterPorts,
     /// Node-specific mutual-authentication identity.

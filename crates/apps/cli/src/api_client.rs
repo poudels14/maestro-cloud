@@ -228,8 +228,18 @@ async fn decode_response<Response>(response: reqwest::Response) -> Result<Respon
 where
     Response: DeserializeOwned,
 {
+    decode_response_with_limit(response, RESPONSE_LIMIT_BYTES).await
+}
+
+pub(crate) async fn decode_response_with_limit<Response>(
+    response: reqwest::Response,
+    limit_bytes: usize,
+) -> Result<Response, CliError>
+where
+    Response: DeserializeOwned,
+{
     let status = response.status();
-    let encoded = bounded_body(response).await?;
+    let encoded = bounded_body(response, limit_bytes).await?;
     if status.is_success() {
         serde_json::from_slice(&encoded)
             .map_err(|source| CliError::json("failed to decode API response", source))
@@ -247,24 +257,23 @@ where
     }
 }
 
-async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, CliError> {
+async fn bounded_body(
+    response: reqwest::Response,
+    limit_bytes: usize,
+) -> Result<Vec<u8>, CliError> {
     if response
         .content_length()
-        .is_some_and(|length| length > RESPONSE_LIMIT_BYTES as u64)
+        .is_some_and(|length| length > limit_bytes as u64)
     {
-        return Err(CliError::ResponseTooLarge {
-            limit_bytes: RESPONSE_LIMIT_BYTES,
-        });
+        return Err(CliError::ResponseTooLarge { limit_bytes });
     }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk
             .map_err(|source| CliError::transport("failed while reading API response", source))?;
-        if body.len().saturating_add(chunk.len()) > RESPONSE_LIMIT_BYTES {
-            return Err(CliError::ResponseTooLarge {
-                limit_bytes: RESPONSE_LIMIT_BYTES,
-            });
+        if body.len().saturating_add(chunk.len()) > limit_bytes {
+            return Err(CliError::ResponseTooLarge { limit_bytes });
         }
         body.extend_from_slice(&chunk);
     }

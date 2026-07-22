@@ -25,6 +25,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         cluster_id: config.cluster_id.clone(),
         cluster_name: config.name.clone(),
         nodes: config.nodes.clone(),
+        control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
         certificates,
         operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),

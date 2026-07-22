@@ -109,6 +109,29 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
 
     let request = JoinRequest::from_config(&join_key, &config, &node_id, 1_000)?;
     let signature = sign_join_request(&config.join_secret, &request)?;
+    assert!(matches!(
+        coordinator
+            .admit(
+                &request,
+                &signature,
+                request.endpoint.host_address,
+                1_000 + 10 * 60 * 1_000,
+                validity()?,
+            )
+            .await,
+        Err(AdmissionCoordinatorError::Admission(
+            crate::AdmissionError::Protocol(
+                crate::JoinProtocolError::TimestampOutsideWindow { .. }
+            )
+        ))
+    ));
+    assert!(
+        provider
+            .staged
+            .lock()
+            .map_err(|_| "staged lock poisoned")?
+            .is_empty()
+    );
     let first = coordinator
         .admit(
             &request,
@@ -135,7 +158,7 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
             &request,
             &signature,
             request.endpoint.host_address,
-            1_001,
+            1_000 + 10 * 60 * 1_000,
             validity()?,
         )
         .await?;
