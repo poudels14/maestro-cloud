@@ -1,50 +1,45 @@
-import type { ClusterMaintenanceRun } from "./api";
-import { nodeAdminLabel } from "./nodeAdmin";
-import type { ClusterNode } from "./types";
+import type { ClusterNode, UpgradeRun } from "./types";
 
 const MAINTENANCE_STAGE_LABELS: Record<string, string> = {
-  "awaiting-leadership-transfer": "transferring leadership",
-  "upgrade-requested": "requesting upgrade",
-  "self-restart-pending": "restarting leader",
-  "updating-source": "updating source",
-  "validating-source": "validating source",
-  "rebuilding-system": "rebuilding system",
-  "prebuilding-images": "pre-building system images",
+  pending: "waiting to start",
+  draining: "draining workloads",
+  applying: "applying upgrade",
   restarting: "restarting",
   verifying: "verifying health",
-  restoring: "restoring placement"
+  completed: "completed",
+  failed: "failed",
+  canceled: "canceled"
 };
+
+const TERMINAL_PHASES = new Set(["completed", "failed", "canceled"]);
 
 interface ActiveMaintenanceNode {
   nodeId: string;
   label: string;
-  adminUrl: string | null;
 }
 
 function activeMaintenanceNode(
-  run: ClusterMaintenanceRun | null | undefined,
+  run: UpgradeRun | null | undefined,
   nodes: ClusterNode[] | undefined
 ): ActiveMaintenanceNode | null {
-  const step = run?.nodes[run.currentNodeIndex];
+  const steps = run?.status.nodes ?? [];
+  const step =
+    steps.find(
+      (candidate) => candidate.phase !== "pending" && !TERMINAL_PHASES.has(candidate.phase)
+    ) ?? steps.find((candidate) => !TERMINAL_PHASES.has(candidate.phase));
   if (!step) return null;
   const node = nodes?.find((candidate) => candidate.nodeId === step.nodeId);
-  const adminUrl = node?.adminUrl ?? null;
-  const hostname = node?.hostname || step.hostname;
-  const label = adminUrl
-    ? nodeAdminLabel(adminUrl)
-    : hostname && hostname !== "unknown-host"
-      ? hostname
-      : step.nodeId;
-  return { nodeId: step.nodeId, label, adminUrl };
+  const label = node?.hostname && node.hostname !== "unknown-host" ? node.hostname : step.nodeId;
+  return { nodeId: step.nodeId, label };
 }
 
-function maintenanceStageLabel(run: ClusterMaintenanceRun | null | undefined) {
+function maintenanceStageLabel(run: UpgradeRun | null | undefined) {
   if (!run) return null;
-  const step = run.nodes[run.currentNodeIndex];
-  const stage =
-    run.phase === "restoring" ? run.phase : step?.upgradeStage || run.phase || step?.status;
-  if (!stage) return null;
-  return MAINTENANCE_STAGE_LABELS[stage] ?? stage.replaceAll("-", " ");
+  const activePhase = run.status.nodes?.find(
+    (candidate) => candidate.phase !== "pending" && !TERMINAL_PHASES.has(candidate.phase)
+  )?.phase;
+  const phase = activePhase ?? run.status.phase;
+  return MAINTENANCE_STAGE_LABELS[phase] ?? phase;
 }
 
 export { activeMaintenanceNode, maintenanceStageLabel };

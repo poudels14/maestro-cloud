@@ -13,6 +13,7 @@ import { decodeJson } from "./transport";
 import type { ApiRequestOptions, ApiTransport, TransportRequest } from "./transport";
 
 export interface MaestroApiClient {
+  getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
   listUnschedulableReplicas(
     options?: ApiRequestOptions
@@ -285,6 +286,7 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
   }
 
   return {
+    getClusterInfo: (options) => get("/api/cluster", options),
     listNodes: (options) => get("/api/cluster/nodes", options),
     listUnschedulableReplicas: (options) => get("/api/cluster/unschedulable", options),
     getNode: (nodeId, options) =>

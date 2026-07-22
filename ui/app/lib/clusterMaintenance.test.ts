@@ -1,60 +1,62 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { ClusterMaintenanceRun } from "./api";
 import { activeMaintenanceNode, maintenanceStageLabel } from "./clusterMaintenance.ts";
-import type { ClusterNode } from "./types";
+import type { ClusterNode, UpgradeRun } from "./types";
 
 const run = {
-  kind: "upgrade",
-  targetVersion: "0.4.8",
-  requestedAtMs: 1,
-  phase: "verifying",
-  currentNodeIndex: 1,
-  nodes: [
-    { nodeId: "node-a", hostname: "unknown-host", status: "succeeded" },
-    {
-      nodeId: "node-b",
-      hostname: "unknown-host",
-      status: "upgrading",
-      upgradeStage: "rebuilding-system"
-    }
-  ]
-} satisfies ClusterMaintenanceRun;
+  meta: { id: "upgrade-1", generation: 1, revision: 8 },
+  spec: { mode: "rolling", targetVersion: "0.4.8" },
+  status: {
+    phase: "applying",
+    nodes: [
+      { nodeId: "node-a", attempts: 1, phase: "completed" },
+      { nodeId: "node-b", attempts: 1, phase: "applying" }
+    ]
+  }
+} satisfies UpgradeRun;
 
 const node = {
   nodeId: "node-b",
-  hostname: "unknown-host",
+  hostname: "worker-b",
   role: "hybrid",
-  clusterHostIp: "10.1.0.12",
-  clusterApiPort: 3000,
-  adminUrl: "http://10.51.0.250",
+  hostAddress: "10.1.0.12",
   subnet: "10.51.0.0/24",
   dataPlaneReady: true,
   version: "0.4.7",
   alive: true,
   lastSeenAtMs: 1,
+  revision: 4,
   state: { unschedulable: true, reason: "upgrade" }
 } satisfies ClusterNode;
 
-test("identifies the active maintenance node by admin address", () => {
+test("identifies the active maintenance node by hostname", () => {
   assert.deepEqual(activeMaintenanceNode(run, [node]), {
     nodeId: "node-b",
-    label: "10.51.0.250",
-    adminUrl: "http://10.51.0.250"
+    label: "worker-b"
   });
-  assert.equal(maintenanceStageLabel(run), "rebuilding system");
+  assert.equal(maintenanceStageLabel(run), "applying upgrade");
 });
 
 test("falls back to the node id and coordinator phase", () => {
   const waiting = {
     ...run,
-    phase: "awaiting-leadership-transfer",
-    nodes: run.nodes.map((step) => ({ ...step, upgradeStage: null }))
-  };
+    status: {
+      phase: "draining" as const,
+      nodes: [
+        { ...run.status.nodes[0]!, phase: "completed" as const },
+        { ...run.status.nodes[1]!, phase: "pending" as const }
+      ]
+    }
+  } satisfies UpgradeRun;
   assert.equal(activeMaintenanceNode(waiting, [])?.label, "node-b");
-  assert.equal(maintenanceStageLabel(waiting), "transferring leadership");
+  assert.equal(maintenanceStageLabel(waiting), "draining workloads");
 });
 
-test("shows placement restoration after the node restart completes", () => {
-  assert.equal(maintenanceStageLabel({ ...run, phase: "restoring" }), "restoring placement");
+test("uses the aggregate phase when there is no active node", () => {
+  const complete = {
+    ...run,
+    status: { phase: "completed" as const, nodes: [] }
+  } satisfies UpgradeRun;
+  assert.equal(activeMaintenanceNode(complete, [node]), null);
+  assert.equal(maintenanceStageLabel(complete), "completed");
 });

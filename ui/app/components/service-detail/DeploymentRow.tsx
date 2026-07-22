@@ -1,18 +1,15 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
-import { ExternalLink, GitCommitHorizontal } from "lucide-solid";
-import type { ClusterInfo } from "../../lib/api";
+import { GitCommitHorizontal } from "lucide-solid";
 import type { Deployment } from "../../lib/types";
 import { DeploymentMenu, STATUS_COLORS, StatusBadge, StatusDot } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
-import { nodeAdminUrl } from "../../lib/nodeAdmin";
 import { replicaHostname } from "../../lib/deploymentEndpoints";
 
 type Props = {
   deployment: Deployment;
   isLatest: boolean;
   isSelected: boolean;
-  clusterInfo: ClusterInfo | null;
   onOpen: () => void;
   onCancel: () => void;
   onStop: () => void;
@@ -113,7 +110,6 @@ function DeploymentRow(props: Props) {
                 replicaStatus={replica.status}
                 nodeId={replica.nodeId}
                 containerHostname={replica.endpoint?.containerHostname}
-                clusterInfo={props.clusterInfo}
               />
             )}
           </For>
@@ -129,67 +125,23 @@ function ReplicaRow(props: {
   replicaStatus: string;
   nodeId?: string | null;
   containerHostname?: string | null;
-  clusterInfo: ClusterInfo | null;
 }) {
   const hostname = () =>
     replicaHostname(props.deployment, props.replicaIndex, props.containerHostname);
-  const fqdn = () => (props.clusterInfo ? `${hostname()}.${props.clusterInfo.aliasDomain}` : null);
-  const href = () => {
-    const host = fqdn();
-    if (!host) return null;
-    const port = props.deployment.config.ingress?.port;
-    return port ? `http://${host}:${port}` : `http://${host}`;
-  };
   const replicaStatusColors = () => STATUS_COLORS[props.replicaStatus] ?? STATUS_COLORS.STOPPED!;
-  const adminUrl = () => nodeAdminUrl(props.clusterInfo?.nodes, props.nodeId);
 
   return (
     <div class="flex items-center gap-2 text-xs">
       <StatusDot status={props.replicaStatus} />
-      <Show
-        when={href()}
-        fallback={<span class="font-mono text-gray-600 truncate">{fqdn() ?? hostname()}</span>}
-      >
-        {(url) => (
-          <a
-            href={url()}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            title="Open in new tab"
-            class="group inline-flex items-center gap-1 font-mono text-gray-600 hover:text-indigo-600 truncate underline decoration-gray-300 underline-offset-2 hover:decoration-indigo-300"
-          >
-            <span class="truncate">{fqdn()}</span>
-            <ExternalLink class="size-3 text-gray-400 group-hover:text-indigo-500 shrink-0" />
-          </a>
-        )}
-      </Show>
+      <span class="truncate font-mono text-gray-600">{hostname()}</span>
       <Show when={props.nodeId}>
         {(nodeId) => (
-          <Show
-            when={adminUrl()}
-            fallback={
-              <span
-                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
-                title="Cluster node"
-              >
-                <span class="font-semibold">NODE:</span> {nodeId()}
-              </span>
-            }
+          <span
+            class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
+            title="Cluster node"
           >
-            {(url) => (
-              <a
-                href={url()}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(event) => event.stopPropagation()}
-                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
-                title="Open node admin homepage"
-              >
-                <span class="font-semibold">NODE:</span> {nodeId()}
-              </a>
-            )}
-          </Show>
+            <span class="font-semibold">NODE:</span> {nodeId()}
+          </span>
         )}
       </Show>
       <Show when={props.replicaStatus !== "READY"}>

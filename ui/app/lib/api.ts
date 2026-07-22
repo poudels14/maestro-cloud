@@ -1,6 +1,12 @@
-import { ApiHttpError, createApiClient, createFetchTransport } from "@maestro/api-client";
+import {
+  ApiHttpError,
+  createApiClient,
+  createFetchTransport,
+  type ApiSchemas
+} from "@maestro/api-client";
 import type {
   ClusterNode,
+  ClusterSummary,
   Deployment,
   DiskInfo,
   IngressBlocklist,
@@ -14,47 +20,87 @@ import type {
   StatsMetricPoint,
   TrafficPoint,
   UnschedulableReplica,
+  UpgradeRun,
   Webhook,
   WebhookEvent
 } from "./types";
 import { apiErrorFromResponse } from "./apiError";
 
-export interface ClusterInfo {
-  clusterId?: string | null;
-  thisNodeId?: string | null;
-  leader?: string | null;
-  clusterName: string;
-  clusterAlias: string;
-  canonicalDomain: string;
-  aliasDomain: string;
-  aliasStatus?: "active" | "conflicted" | "unknown" | "inactive";
-  version?: string;
-  upgrading?: boolean;
-  restarting?: boolean;
-  upgradeRun?: ClusterMaintenanceRun | null;
-  nodes?: ClusterNode[];
+export interface ClusterInfo extends ClusterSummary {
+  nodes: ClusterNode[];
+  activeUpgrade: UpgradeRun | null;
 }
 
-export interface ClusterMaintenanceNodeStep {
-  nodeId: string;
-  hostname: string;
-  status: string;
-  upgradeStage?: string | null;
+const NODE_LIVENESS_WINDOW_MS = 30_000;
+
+function apiClient() {
+  return createApiClient(createFetchTransport(location.origin));
 }
 
-export interface ClusterMaintenanceRun {
-  kind: "upgrade" | "restart";
-  targetVersion: string;
-  requestedAtMs: number;
-  phase: string;
-  currentNodeIndex: number;
-  nodes: ClusterMaintenanceNodeStep[];
+export function projectClusterNodes(
+  nodes: ApiSchemas["Node"][],
+  networks: ApiSchemas["NodeNetwork"][],
+  nowMs = Date.now()
+): ClusterNode[] {
+  const networksByNode = new Map(networks.map((network) => [network.spec.nodeId, network]));
+  return nodes
+    .map((node) => {
+      const network = networksByNode.get(node.meta.id);
+      const meshCondition = network?.status.conditions?.find(
+        (condition) => condition.type === "MeshReady"
+      );
+      const dataPlaneReady =
+        network != null &&
+        network.status.appliedGeneration === network.meta.generation &&
+        meshCondition?.status === "true";
+      const placementCondition = ["Maintenance", "Draining"]
+        .map((type) =>
+          node.status.conditions?.find(
+            (condition) => condition.type === type && condition.status === "true"
+          )
+        )
+        .find((condition) => condition != null);
+      return {
+        nodeId: node.meta.id,
+        hostname: node.spec.hostname,
+        role: node.spec.role,
+        hostAddress: node.spec.hostAddress,
+        subnet: network?.spec.workloadSubnet ?? "unavailable",
+        dataPlaneReady,
+        dataPlaneError: dataPlaneReady
+          ? null
+          : meshReadinessError(network, meshCondition),
+        version: node.status.version,
+        alive: node.status.lastSeen >= nowMs - NODE_LIVENESS_WINDOW_MS,
+        lastSeenAtMs: node.status.lastSeen,
+        revision: node.meta.revision,
+        state: {
+          unschedulable: placementCondition != null,
+          drainedAtMs: placementCondition?.lastTransitionTime ?? null,
+          reason: placementCondition?.message || placementCondition?.reason || null
+        }
+      } satisfies ClusterNode;
+    })
+    .sort((left, right) => left.hostname.localeCompare(right.hostname));
+}
+
+function meshReadinessError(
+  network: ApiSchemas["NodeNetwork"] | undefined,
+  condition: ApiSchemas["Condition"] | undefined
+): string {
+  if (!network) return "Mesh network is not published";
+  if (network.status.appliedGeneration !== network.meta.generation) {
+    return "Mesh network generation is not applied";
+  }
+  return condition?.message || condition?.reason || "Mesh network is not ready";
 }
 
 export async function getClusterNodes(): Promise<ClusterNode[]> {
-  const res = await fetch("/api/cluster/nodes");
-  if (!res.ok) throw new Error(`Failed to fetch cluster nodes: ${res.statusText}`);
-  return res.json();
+  const [nodes, networks] = await Promise.all([
+    apiClient().listNodes(),
+    apiClient().listNodeNetworks()
+  ]);
+  return projectClusterNodes(nodes, networks);
 }
 
 export async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]> {
@@ -63,18 +109,29 @@ export async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]
   return res.json();
 }
 
-export async function setNodeDrain(nodeId: string, drain: boolean): Promise<void> {
-  const operation = drain ? "drain" : "restore";
-  const res = await fetch(`/api/cluster/nodes/${encodeURIComponent(nodeId)}/${operation}`, {
-    method: "POST"
-  });
-  if (!res.ok) throw new Error((await res.text()) || `Failed to ${operation} node`);
+export async function setNodeDrain(node: ClusterNode, drain: boolean): Promise<void> {
+  try {
+    const request = { expectedRevision: node.revision };
+    if (drain) {
+      await apiClient().drainNode(node.nodeId, request, crypto.randomUUID());
+    } else {
+      await apiClient().restoreNode(node.nodeId, request, crypto.randomUUID());
+    }
+  } catch (error) {
+    throw apiRequestError(error, `Failed to ${drain ? "drain" : "restore"} node`);
+  }
 }
 
 export async function getClusterInfo(): Promise<ClusterInfo> {
-  const res = await fetch("/api/cluster");
-  if (!res.ok) throw new Error(`Failed to fetch cluster info: ${res.statusText}`);
-  return res.json();
+  const [summary, nodes, upgrades] = await Promise.all([
+    apiClient().getClusterInfo(),
+    getClusterNodes(),
+    apiClient().listUpgrades()
+  ]);
+  const activeUpgrade = upgrades
+    .filter((run) => !["completed", "failed", "canceled"].includes(run.status.phase))
+    .sort((left, right) => right.meta.revision - left.meta.revision)[0];
+  return { ...summary, nodes, activeUpgrade: activeUpgrade ?? null };
 }
 
 export async function getClusterStats(): Promise<ClusterStats> {
@@ -557,11 +614,7 @@ export async function getContainerMetrics(
   return res.json();
 }
 
-function webhookClient() {
-  return createApiClient(createFetchTransport(location.origin));
-}
-
-function webhookRequestError(error: unknown, fallback: string): Error {
+function apiRequestError(error: unknown, fallback: string): Error {
   if (!(error instanceof ApiHttpError)) {
     return error instanceof Error ? error : new Error(fallback);
   }
@@ -579,9 +632,9 @@ function webhookRequestError(error: unknown, fallback: string): Error {
 
 export async function listWebhooks(): Promise<Webhook[]> {
   try {
-    return await webhookClient().listWebhooks();
+    return await apiClient().listWebhooks();
   } catch (error) {
-    throw webhookRequestError(error, "Failed to load webhooks");
+    throw apiRequestError(error, "Failed to load webhooks");
   }
 }
 
@@ -592,7 +645,7 @@ export async function createWebhook(payload: {
   signingSecret: string;
 }): Promise<void> {
   try {
-    await webhookClient().putWebhook(
+    await apiClient().putWebhook(
       payload.id,
       {
         endpoint: payload.endpoint,
@@ -602,26 +655,26 @@ export async function createWebhook(payload: {
       crypto.randomUUID()
     );
   } catch (error) {
-    throw webhookRequestError(error, "Failed to create webhook");
+    throw apiRequestError(error, "Failed to create webhook");
   }
 }
 
 export async function deleteWebhook(webhook: Webhook): Promise<void> {
   try {
-    await webhookClient().deleteWebhook(
+    await apiClient().deleteWebhook(
       webhook.meta.id,
       { expectedRevision: webhook.meta.revision },
       crypto.randomUUID()
     );
   } catch (error) {
-    throw webhookRequestError(error, "Failed to delete webhook");
+    throw apiRequestError(error, "Failed to delete webhook");
   }
 }
 
 export async function testWebhook(id: string): Promise<void> {
   try {
-    await webhookClient().testWebhook(id, {}, crypto.randomUUID());
+    await apiClient().testWebhook(id, {}, crypto.randomUUID());
   } catch (error) {
-    throw webhookRequestError(error, "Webhook test delivery failed");
+    throw apiRequestError(error, "Webhook test delivery failed");
   }
 }

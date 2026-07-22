@@ -2,7 +2,7 @@ import { createSignal, Match, Show, Switch } from "solid-js";
 import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
-import { AlertTriangle, Menu } from "lucide-solid";
+import { Menu } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { clusterInfoQuery, servicesQuery } from "../../lib/queries";
 import { ServiceSidebar } from "../service-detail/Sidebar";
@@ -60,7 +60,7 @@ function HomeShell(props: { tab: HomeTab }) {
           </button>
           <Show when={cluster.data}>
             {(info) => (
-              <span class="text-sm font-semibold text-gray-900 truncate">{info().clusterName}</span>
+              <span class="text-sm font-semibold text-gray-900 truncate">{info().clusterId}</span>
             )}
           </Show>
         </div>
@@ -134,43 +134,13 @@ function ClusterHero() {
         <div>
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
-              {info().clusterName}
+              {info().clusterId}
             </h1>
-            <Show when={info().version}>
-              {(version) => (
-                <span
-                  class="rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] font-mono text-gray-500"
-                  title="Maestro version"
-                >
-                  v{version()}
-                </span>
-              )}
-            </Show>
           </div>
-          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <a
-              href={`http://${info().canonicalDomain}`}
-              title="Canonical domain"
-              class="text-gray-500 hover:text-gray-700 no-underline truncate"
-            >
-              {info().canonicalDomain}
-            </a>
-            <a
-              href={`http://${info().aliasDomain}`}
-              title="Alias domain"
-              class="text-gray-400 hover:text-gray-600 no-underline truncate"
-            >
-              {info().aliasDomain}
-            </a>
-            <Show when={info().aliasStatus === "conflicted"}>
-              <span
-                class="inline-flex items-center gap-1 text-amber-600"
-                title="Another tailnet cluster claims this DNS alias"
-              >
-                <AlertTriangle class="size-3.5" />
-                alias conflict
-              </span>
-            </Show>
+          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+            <span>{info().nodeCount} nodes</span>
+            <span>{info().controlPlaneNodeCount} control plane</span>
+            <span>{info().workloadNodeCount} workload</span>
           </div>
         </div>
       )}

@@ -98,6 +98,8 @@ export namespace Preview {
 
 export type Webhook = ApiSchemas["Webhook"];
 export type WebhookEvent = ApiSchemas["WebhookEvent"];
+export type ClusterSummary = ApiSchemas["ClusterInfo"];
+export type UpgradeRun = ApiSchemas["UpgradeRun"];
 
 export interface Service {
   id: string;
@@ -133,17 +135,15 @@ export interface ReplicaState {
 export interface ClusterNode {
   nodeId: string;
   hostname: string;
-  role: "master" | "hybrid" | "voter" | "worker";
-  clusterHostIp: string;
-  clusterApiPort: number;
-  adminUrl?: string | null;
+  role: ApiSchemas["NodeRole"];
+  hostAddress: string;
   subnet: string;
   dataPlaneReady: boolean;
   dataPlaneError?: string | null;
   version: string;
   alive: boolean;
   lastSeenAtMs: number;
-  lostAtMs?: number | null;
+  revision: number;
   state: {
     unschedulable: boolean;
     drainedAtMs?: number | null;

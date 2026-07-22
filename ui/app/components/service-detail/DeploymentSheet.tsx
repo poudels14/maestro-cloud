@@ -1,14 +1,12 @@
 import { createSignal, For, Show, Switch, Match } from "solid-js";
-import { Check, Copy, ExternalLink, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
+import { Check, Copy, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
 import type { Deployment } from "../../lib/types";
-import { type ClusterInfo } from "../../lib/api";
 import { StatusBadge, timeAgo } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
 import { ReplicaRow } from "./DeploymentRow";
-import { replicaHostname } from "../../lib/deploymentEndpoints";
 
 type SheetTabId = "logs" | "build" | "details";
 
@@ -19,7 +17,6 @@ function DeploymentSheet(props: {
   tab: SheetTabId;
   onTabChange: (tab: SheetTabId) => void;
   onClose: () => void;
-  clusterInfo: ClusterInfo | null;
 }) {
   return (
     <Dialog
@@ -115,7 +112,7 @@ function DeploymentSheet(props: {
                         />
                       </Match>
                       <Match when={props.tab === "details"}>
-                        <DeploymentDetails deployment={d} clusterInfo={props.clusterInfo} />
+                        <DeploymentDetails deployment={d} />
                       </Match>
                     </Switch>
                   </div>
@@ -144,7 +141,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
   );
 }
 
-function DeploymentDetails(props: { deployment: Deployment; clusterInfo: ClusterInfo | null }) {
+function DeploymentDetails(props: { deployment: Deployment }) {
   const [envRevealed, setEnvRevealed] = createSignal(false);
   const d = props.deployment;
   const envEntries = () =>
@@ -158,19 +155,6 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
   const buildEnvSource = () => d.config.build?.env?.source ?? null;
   const buildSecretKeys = () => Object.keys(d.config.build?.secrets?.items ?? {}).sort();
   const buildSecretSource = () => d.config.build?.secrets?.source ?? null;
-
-  const deploymentDomain = () => {
-    const info = props.clusterInfo;
-    if (!info) return null;
-    const replica = d.replicas?.find((candidate) => candidate.replicaIndex === 0);
-    const host = `${replicaHostname(
-      d,
-      0,
-      replica?.endpoint?.containerHostname
-    )}.${info.aliasDomain}`;
-    const port = d.config.ingress?.port ?? null;
-    return port ? `${host}:${port}` : host;
-  };
 
   const hasAnyDetails = () =>
     envEntries().length > 0 ||
@@ -202,22 +186,6 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
           <Show when={d.build?.dockerImageId}>
             {(imageId) => <DetailRow label="Image" value={imageId()} />}
           </Show>
-          <Show when={deploymentDomain()}>
-            {(domain) => (
-              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs font-medium text-gray-700 shrink-0">Endpoint</span>
-                <a
-                  href={`http://${domain()}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="group inline-flex min-w-0 items-center gap-1 text-xs text-gray-600 hover:text-indigo-600 underline decoration-gray-300 underline-offset-2 hover:decoration-indigo-300"
-                >
-                  <span class="truncate">{domain()}</span>
-                  <ExternalLink class="size-3 shrink-0 text-gray-400 group-hover:text-indigo-500" />
-                </a>
-              </div>
-            )}
-          </Show>
         </div>
       </div>
       <Show when={(d.replicas?.length ?? 0) > 0}>
@@ -233,7 +201,6 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
                     replicaStatus={replica.status}
                     nodeId={replica.nodeId}
                     containerHostname={replica.endpoint?.containerHostname}
-                    clusterInfo={props.clusterInfo}
                   />
                   <Show when={replica.error}>
                     {(error) => (

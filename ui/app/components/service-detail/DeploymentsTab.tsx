@@ -2,9 +2,9 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import { AlertTriangle, Rocket } from "lucide-solid";
+import { Rocket } from "lucide-solid";
 import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
-import { clusterInfoQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
+import { deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "../../lib/ui";
 import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
@@ -17,7 +17,6 @@ const LOAD_MORE_STEP = 10;
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
-  const clusterInfo = useQuery(() => clusterInfoQuery());
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -111,14 +110,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
           </span>
         </div>
       </Show>
-      <Show when={clusterInfo.data?.aliasStatus === "conflicted"}>
-        <div class="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-700">
-          <AlertTriangle class="size-3.5 shrink-0" />
-          Another tailnet cluster also claims {clusterInfo.data?.aliasDomain}; deployment links may
-          resolve ambiguously.
-        </div>
-      </Show>
-
       <ConfirmDialog
         open={freezeConfirmAction() !== null}
         title="Deploy is frozen"
@@ -165,7 +156,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                     deployment={deployment}
                     isLatest={index() === 0}
                     isSelected={selectedId() === deployment.id}
-                    clusterInfo={clusterInfo.data ?? null}
                     onOpen={() =>
                       setUrlSheetState({
                         deployment: deployment.id,
@@ -196,7 +186,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}
         onClose={() => setUrlSheetState({ deployment: undefined, tab: undefined })}
-        clusterInfo={clusterInfo.data ?? null}
       />
     </>
   );

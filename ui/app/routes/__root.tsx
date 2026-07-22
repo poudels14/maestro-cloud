@@ -2,7 +2,7 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/solid-router";
 import { QueryClientProvider } from "@tanstack/solid-query";
 import { useQuery } from "../lib/useQuery";
-import { createSignal, createEffect, onCleanup, Show, Suspense } from "solid-js";
+import { createSignal, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";
 import { Loader2, X } from "lucide-solid";
@@ -77,68 +77,31 @@ function SchedulingBanner() {
 
 function MaintenanceBanner() {
   const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
-  const isUpgrading = () => cluster.data?.upgrading ?? false;
-  const isRestarting = () => cluster.data?.restarting ?? false;
-  const isMaintaining = () => isUpgrading() || isRestarting();
-  const activeNode = () => activeMaintenanceNode(cluster.data?.upgradeRun, cluster.data?.nodes);
-  const stageLabel = () => maintenanceStageLabel(cluster.data?.upgradeRun);
-  const [dismissed, setDismissed] = createSignal(false);
-  const [nowMs, setNowMs] = createSignal(Date.now());
-
-  createEffect(() => {
-    if (!isMaintaining()) {
-      setDismissed(false);
-    } else {
-      setNowMs(Date.now());
-      const timer = setInterval(() => setNowMs(Date.now()), 1_000);
-      onCleanup(() => clearInterval(timer));
-    }
-  });
-
-  const elapsedLabel = () => {
-    const startedAtMs = cluster.data?.upgradeRun?.requestedAtMs;
-    if (!startedAtMs) return null;
-    return formatElapsed(nowMs() - startedAtMs);
-  };
+  const activeRun = () => cluster.data?.activeUpgrade ?? null;
+  const activeNode = () => activeMaintenanceNode(activeRun(), cluster.data?.nodes);
+  const stageLabel = () => maintenanceStageLabel(activeRun());
+  const [dismissedRunId, setDismissedRunId] = createSignal<string | null>(null);
 
   return (
-    <Show when={isMaintaining() && !dismissed()}>
+    <Show when={activeRun() && dismissedRunId() !== activeRun()?.meta.id}>
       <div class="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 py-2.5 pl-4 pr-2.5 shadow-lg">
         <Loader2 class="size-3.5 shrink-0 animate-spin text-amber-500" />
         <span class="text-xs font-medium text-amber-700">
-          Rolling cluster {isRestarting() ? "restart" : "upgrade"}
+          {activeRun()?.spec.mode === "allNodes" ? "All-node" : "Rolling"} cluster upgrade
           <Show when={activeNode()}>
             {(node) => (
               <>
                 {" — "}
-                <Show
-                  when={node().adminUrl}
-                  fallback={<span class="font-mono font-semibold">{node().label}</span>}
-                >
-                  {(adminUrl) => (
-                    <a
-                      href={adminUrl()}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="font-mono font-semibold underline decoration-amber-300 underline-offset-2 hover:text-amber-900"
-                      title={`Open node ${node().nodeId}`}
-                    >
-                      {node().label}
-                    </a>
-                  )}
-                </Show>
+                <span class="font-mono font-semibold">{node().label}</span>
                 <Show when={stageLabel()}>{(stage) => <>: {stage()}</>}</Show>
               </>
             )}
           </Show>{" "}
           — deploys are frozen
-          <Show when={elapsedLabel()}>
-            {(elapsed) => <span class="ml-1.5 font-mono text-amber-600">{elapsed()}</span>}
-          </Show>
         </span>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={() => setDismissedRunId(activeRun()?.meta.id ?? null)}
           aria-label="Dismiss maintenance notice"
           class="rounded p-1 text-amber-400 outline-none hover:bg-amber-100 hover:text-amber-600"
         >
@@ -147,16 +110,6 @@ function MaintenanceBanner() {
       </div>
     </Show>
   );
-}
-
-function formatElapsed(elapsedMs: number) {
-  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
-  const hours = Math.floor(totalSeconds / 3_600);
-  const minutes = Math.floor((totalSeconds % 3_600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
 }
 
 function RootDocument({ children }: { children: JSX.Element }) {

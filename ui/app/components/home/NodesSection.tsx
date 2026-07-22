@@ -1,27 +1,23 @@
 import { For, Show, createSignal } from "solid-js";
-import { ExternalLink } from "lucide-solid";
 import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
-import { clusterConfigQuery, clusterInfoQuery, clusterNodesQuery } from "../../lib/queries";
+import { clusterNodesQuery } from "../../lib/queries";
 import { setNodeDrain } from "../../lib/api";
-import { isCurrentMaster } from "../../lib/clusterLeadership";
-import { nodeAdminLabel } from "../../lib/nodeAdmin";
+import type { ClusterNode } from "../../lib/types";
 
 const nodeGridClass =
   "grid min-w-[46rem] grid-cols-[minmax(10rem,1.6fr)_4.5rem_4.25rem_minmax(7.5rem,1fr)_minmax(7.5rem,1fr)_5.5rem] gap-3";
 
 function NodesSection() {
   const nodes = useQuery(() => clusterNodesQuery());
-  const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
-  const config = useQuery(() => clusterConfigQuery());
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
-  const changeDrain = async (nodeId: string, drain: boolean) => {
-    setBusy(nodeId);
+  const changeDrain = async (node: ClusterNode, drain: boolean) => {
+    setBusy(node.nodeId);
     setError(null);
     try {
-      await setNodeDrain(nodeId, drain);
+      await setNodeDrain(node, drain);
       await nodes.refetch();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -47,25 +43,6 @@ function NodesSection() {
             </div>
           )}
         </Show>
-        <Show
-          when={
-            config.data?.node.role === "master" &&
-            (nodes.data?.filter((node) => node.alive).length ?? 0) <
-              Object.keys(config.data?.cluster.nodes ?? {}).length
-          }
-        >
-          <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
-            <div class="font-medium">Cluster formation is waiting for configured nodes.</div>
-            <div class="mt-1 text-amber-800">
-              {nodes.data?.filter((node) => node.alive).length ?? 0} of{" "}
-              {Object.keys(config.data?.cluster.nodes ?? {}).length} nodes are connected. In the AWS
-              security group, allow inbound TCP {config.data?.node["api-port"]},{" "}
-              {config.data?.node["gateway-port"]}, {config.data?.node["etcd-client-port"]}, and{" "}
-              {config.data?.node["etcd-peer-port"]} from the cluster's private security group, then
-              start the remaining nodes.
-            </div>
-          </div>
-        </Show>
         <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white">
           <div
             class={`${nodeGridClass} border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500`}
@@ -73,7 +50,7 @@ function NodesSection() {
             <span>Node</span>
             <span>Role</span>
             <span>Version</span>
-            <span>Admin</span>
+            <span>Address</span>
             <span>Workload subnet</span>
             <span class="text-right">Action</span>
           </div>
@@ -92,23 +69,11 @@ function NodesSection() {
                       })}
                     />
                     <span class="truncate font-medium text-gray-800">{node.hostname}</span>
-                    <Show when={isCurrentMaster(node.nodeId, cluster.data?.leader)}>
-                      <span
-                        class="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-indigo-700"
-                        title="Current elected master"
-                      >
-                        CURRENT MASTER
-                      </span>
-                    </Show>
                   </div>
                   <div class="mt-1 truncate font-mono text-[10px] text-gray-400">{node.nodeId}</div>
                   <Show when={node.state.reason || node.dataPlaneError}>
                     <div class="mt-1 truncate text-[10px] text-amber-600">
-                      {node.state.reason
-                        ? node.state.reason === "upgrade" || node.state.reason === "restart"
-                          ? `Drained for ${node.state.reason}`
-                          : `Placement disabled: ${node.state.reason}`
-                        : node.dataPlaneError}
+                      {node.state.reason ?? node.dataPlaneError}
                     </div>
                   </Show>
                 </div>
@@ -119,28 +84,17 @@ function NodesSection() {
                 >
                   v{node.version}
                 </span>
-                <Show
-                  when={node.adminUrl}
-                  fallback={<span class="text-[11px] text-gray-400">Unavailable</span>}
+                <span
+                  class="min-w-0 truncate font-mono text-[11px] text-gray-600"
+                  title={node.hostAddress}
                 >
-                  {(adminUrl) => (
-                    <a
-                      href={adminUrl()}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="group inline-flex min-w-0 items-center gap-1 font-mono text-[11px] text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-indigo-600 hover:decoration-indigo-300"
-                      title="Open node admin homepage"
-                    >
-                      <span class="truncate">{nodeAdminLabel(adminUrl())}</span>
-                      <ExternalLink class="size-3 shrink-0 text-gray-400 group-hover:text-indigo-500" />
-                    </a>
-                  )}
-                </Show>
+                  {node.hostAddress}
+                </span>
                 <span class="font-mono text-[11px] text-gray-600">{node.subnet}</span>
                 <button
                   type="button"
                   disabled={!node.alive || busy() === node.nodeId}
-                  onClick={() => changeDrain(node.nodeId, !node.state.unschedulable)}
+                  onClick={() => changeDrain(node, !node.state.unschedulable)}
                   class={clsx(
                     "justify-self-end rounded-md border px-2 py-1 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-50",
                     node.state.unschedulable
