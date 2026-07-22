@@ -26,6 +26,9 @@ export type StatsMetricQuery = NonNullable<
 export type ServiceMetricQuery = NonNullable<
   operations["listServiceMetrics"]["parameters"]["query"]
 >;
+export type ServiceTrafficQuery = NonNullable<
+  operations["getServiceTraffic"]["parameters"]["query"]
+>;
 export type ContainerMetricQuery = NonNullable<
   operations["listContainerMetrics"]["parameters"]["query"]
 >;
@@ -247,6 +250,11 @@ export interface MaestroApiClient {
     query?: ServiceMetricQuery,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
+  getServiceTraffic(
+    serviceId: string,
+    query?: ServiceTrafficQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["TrafficMetricPoint"][]>;
   listContainerMetrics(
     serviceId: string,
     query?: ContainerMetricQuery,
@@ -601,6 +609,8 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       ),
     listServiceMetrics: (serviceId, query, options) =>
       get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics`, query), options),
+    getServiceTraffic: (serviceId, query, options) =>
+      get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/traffic`, query), options),
     listContainerMetrics: (serviceId, query, options) =>
       get(
         withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics/containers`, query),

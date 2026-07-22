@@ -11,7 +11,12 @@ test("generated config helper uses the masked operator view", async () => {
     }
   };
 
-  await createApiClient(transport).getClusterConfig();
+  const client = createApiClient(transport);
+  await client.getClusterConfig();
+  await client.listUnschedulableReplicas();
 
-  assert.deepEqual(requests, [{ method: "GET", path: "/api/config" }]);
+  assert.deepEqual(requests, [
+    { method: "GET", path: "/api/config" },
+    { method: "GET", path: "/api/cluster/unschedulable" }
+  ]);
 });

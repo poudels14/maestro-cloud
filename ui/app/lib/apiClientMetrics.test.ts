@@ -19,6 +19,7 @@ test("generated observability helpers preserve paths and query contracts", async
   await client.listClusterMetrics({ from: 30, to: 40, limit: 200, bucketMs: 5_000 });
   await client.listOperationalStatsMetrics({ name: "sink queue", from: 50, to: 60, limit: 300 });
   await client.listServiceMetrics("service/a", { from: 70, to: 80, bucketMs: 10_000 });
+  await client.getServiceTraffic("service/a", { from: 80, to: 90, limit: 500, nodeId: "node-a" });
   await client.listContainerMetrics("service/a", { from: 90, to: 100, limit: 400 });
 
   assert.deepEqual(requests, [
@@ -37,6 +38,10 @@ test("generated observability helpers preserve paths and query contracts", async
     {
       method: "GET",
       path: "/api/services/service%2Fa/metrics?from=70&to=80&bucketMs=10000"
+    },
+    {
+      method: "GET",
+      path: "/api/services/service%2Fa/traffic?from=80&to=90&limit=500&nodeId=node-a"
     },
     {
       method: "GET",

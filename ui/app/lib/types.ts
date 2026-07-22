@@ -36,29 +36,11 @@ export interface ClusterNode {
   };
 }
 
-export interface UnschedulableReplica {
-  serviceId: string;
-  deploymentId: string;
-  replicaIndex: number;
-  reason: string;
-}
+export type UnschedulableReplica = ApiSchemas["UnschedulableReplica"];
 
 export type MetricPoint = ApiSchemas["ResourceMetricPoint"];
 
-export interface TrafficPoint {
-  ts: number;
-  serviceId: string;
-  deploymentId: string | null;
-  statusCode: number;
-  method: string;
-  requests: number;
-  bytesIn: number;
-  bytesOut: number;
-  latLe1s: number;
-  latLe5s: number;
-  latLe10s: number;
-  latTotal: number;
-}
+export type TrafficPoint = ApiSchemas["TrafficMetricPoint"];
 
 export type TrafficBreakdownEntry = ApiSchemas["TrafficBreakdownEntry"];
 export type IngressTrafficBreakdown = ApiSchemas["IngressTrafficBreakdown"];

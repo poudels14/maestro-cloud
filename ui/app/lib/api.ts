@@ -119,9 +119,11 @@ export async function getClusterNodes(): Promise<ClusterNode[]> {
 }
 
 export async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]> {
-  const res = await fetch("/api/cluster/unschedulable");
-  if (!res.ok) throw new Error(`Failed to fetch scheduling errors: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().listUnschedulableReplicas();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load scheduling errors");
+  }
 }
 
 export async function setNodeDrain(node: ClusterNode, drain: boolean): Promise<void> {
@@ -261,13 +263,14 @@ export async function getServiceTraffic(
   from?: number,
   to?: number
 ): Promise<TrafficPoint[]> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/traffic`, location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (res.status === 404) return [];
-  if (!res.ok) throw new Error(`Failed to fetch traffic: ${res.statusText}`);
-  return res.json();
+  try {
+    return await apiClient().getServiceTraffic(serviceId, {
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {})
+    });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load service traffic");
+  }
 }
 
 export async function getIngressTraffic(
