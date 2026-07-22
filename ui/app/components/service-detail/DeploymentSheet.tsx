@@ -7,7 +7,7 @@ import { replicaFailure } from "../../lib/deploymentView";
 import { deploymentReplicasQuery } from "../../lib/queries";
 import { useQuery } from "../../lib/useQuery";
 import { ErrorBanner, StatusBadge, timeAgo } from "@maestro/kit";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime } from "@maestro/kit";
 import { LogViewer } from "../logs/LogViewer";
 import { ReplicaRow } from "./DeploymentRow";
 

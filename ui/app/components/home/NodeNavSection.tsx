@@ -1,27 +1,32 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
-import { Activity, ArrowLeftRight, Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
+import { ArrowLeftRight, Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
 import { clusterInfoQuery } from "../../lib/queries";
 import { isPartOfCluster } from "../../lib/systemServices";
 import { panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
+import type { NavEntry } from "@maestro/sdk";
 
-type CoreHomePath =
-  | "/"
-  | "/metrics"
-  | "/services"
-  | "/cluster"
-  | "/cluster/logs"
-  | "/traffic"
-  | "/http-logs";
+type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs" | "/traffic" | "/http-logs";
 type HomePath = CoreHomePath | PanelFeaturePath;
+
+const CORE_NODE_NAV = [
+  { path: "/", label: "Info", icon: Info, section: "node", order: 10 },
+  { path: "/services", label: "Services", icon: LayoutGrid, section: "node", order: 30 },
+  { path: "/traffic", label: "Traffic", icon: ArrowLeftRight, section: "node", order: 40 },
+  { path: "/http-logs", label: "HTTP logs", icon: ScrollText, section: "node", order: 50 }
+] as const satisfies readonly NavEntry[];
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   const navigate = useNavigate();
   const cluster = useQuery(() => clusterInfoQuery());
-  const nodeFeatures = () => panelFeatureRegistry.nav.filter((entry) => entry.section === "node");
+  const nodeNavigation = () =>
+    [
+      ...CORE_NODE_NAV,
+      ...panelFeatureRegistry.nav.filter((entry) => entry.section === "node")
+    ].sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
 
   const go = (to: HomePath) => {
     props.onNavigate?.();
@@ -41,37 +46,7 @@ function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   return (
     <>
       <SidebarSection title="Node">
-        <SidebarNavItem
-          label="Info"
-          icon={Info}
-          selected={props.active === "/"}
-          onClick={() => go("/")}
-        />
-        <SidebarNavItem
-          label="Metrics"
-          icon={Activity}
-          selected={props.active === "/metrics"}
-          onClick={() => go("/metrics")}
-        />
-        <SidebarNavItem
-          label="Services"
-          icon={LayoutGrid}
-          selected={props.active === "/services"}
-          onClick={() => go("/services")}
-        />
-        <SidebarNavItem
-          label="Traffic"
-          icon={ArrowLeftRight}
-          selected={props.active === "/traffic"}
-          onClick={() => go("/traffic")}
-        />
-        <SidebarNavItem
-          label="HTTP logs"
-          icon={ScrollText}
-          selected={props.active === "/http-logs"}
-          onClick={() => go("/http-logs")}
-        />
-        <For each={nodeFeatures()}>
+        <For each={nodeNavigation()}>
           {(entry) => (
             <SidebarNavItem
               label={entry.label}

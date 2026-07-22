@@ -5,19 +5,13 @@ import {
   getClusterConfig,
   getClusterInfo,
   getClusterNodes,
-  getClusterMetrics,
-  getContainerMetrics,
   getDeployments,
   getDeploymentReplicas,
-  getDisks,
   getIngressRoutes,
   getIngressTraffic,
   getBlockedIngressTraffic,
-  getNodeMetrics,
   getClusterStats,
   getIngressBlocklist,
-  getServiceMetrics,
-  getServiceTraffic,
   getServices,
   getUnschedulableReplicas,
   listWebhooks
@@ -40,18 +34,9 @@ const queryKeys = {
   deploymentReplicas: (serviceId: string, deploymentId: string) =>
     ["deployments", serviceId, deploymentId, "replicas"] as const,
   ingress: ["ingress"] as const,
-  disks: ["disks"] as const,
-  nodeMetrics: (range: number) => ["metrics", "node", range] as const,
-  clusterMetrics: (range: number) => ["metrics", "cluster", range] as const,
-  serviceMetrics: (serviceId: string, range: number) =>
-    ["metrics", "service", serviceId, range] as const,
-  serviceTraffic: (serviceId: string, range: number) =>
-    ["traffic", "service", serviceId, range] as const,
   ingressTraffic: (range: number) => ["traffic", "ingress", range] as const,
   blockedIngressTraffic: (range: number) => ["traffic", "blocked", range] as const,
   ingressBlocklist: ["ingress", "blocklist"] as const,
-  containerMetrics: (serviceId: string, range: number) =>
-    ["metrics", "containers", serviceId, range] as const,
   webhooks: ["webhooks"] as const
 };
 
@@ -116,52 +101,6 @@ const ingressRoutesQuery = () => ({
   staleTime: 60_000
 });
 
-const disksQuery = () => ({
-  queryKey: queryKeys.disks,
-  queryFn: ssrSafe(getDisks, []),
-  refetchInterval: 30_000
-});
-
-const nodeMetricsQuery = (rangeMs: number) => ({
-  queryKey: queryKeys.nodeMetrics(rangeMs),
-  queryFn: ssrSafe(() => {
-    const now = Date.now();
-    return getNodeMetrics(now - rangeMs, now);
-  }, []),
-  placeholderData: keepPreviousData,
-  refetchInterval: 10_000
-});
-
-const clusterMetricsQuery = (rangeMs: number) => ({
-  queryKey: queryKeys.clusterMetrics(rangeMs),
-  queryFn: ssrSafe(() => {
-    const now = Date.now();
-    return getClusterMetrics(now - rangeMs, now);
-  }, []),
-  placeholderData: keepPreviousData,
-  refetchInterval: 10_000
-});
-
-const serviceMetricsQuery = (serviceId: string, rangeMs: number) => ({
-  queryKey: queryKeys.serviceMetrics(serviceId, rangeMs),
-  queryFn: ssrSafe(() => {
-    const now = Date.now();
-    return getServiceMetrics(serviceId, now - rangeMs, now);
-  }, []),
-  placeholderData: keepPreviousData,
-  refetchInterval: 10_000
-});
-
-const serviceTrafficQuery = (serviceId: string, rangeMs: number) => ({
-  queryKey: queryKeys.serviceTraffic(serviceId, rangeMs),
-  queryFn: ssrSafe(() => {
-    const now = Date.now();
-    return getServiceTraffic(serviceId, now - rangeMs, now);
-  }, []),
-  placeholderData: keepPreviousData,
-  refetchInterval: 10_000
-});
-
 const ingressTrafficQuery = (rangeMs: number) => ({
   queryKey: queryKeys.ingressTraffic(rangeMs),
   queryFn: ssrSafe(
@@ -194,16 +133,6 @@ const ingressBlocklistQuery = () => ({
   refetchInterval: 15_000
 });
 
-const containerMetricsQuery = (serviceId: string, rangeMs: number) => ({
-  queryKey: queryKeys.containerMetrics(serviceId, rangeMs),
-  queryFn: ssrSafe(() => {
-    const now = Date.now();
-    return getContainerMetrics(serviceId, now - rangeMs, now);
-  }, []),
-  placeholderData: keepPreviousData,
-  refetchInterval: 10_000
-});
-
 const webhooksQuery = () => ({
   queryKey: queryKeys.webhooks,
   queryFn: ssrSafe(listWebhooks, [])
@@ -220,14 +149,8 @@ export {
   deploymentsQuery,
   deploymentReplicasQuery,
   ingressRoutesQuery,
-  disksQuery,
-  nodeMetricsQuery,
-  clusterMetricsQuery,
-  serviceMetricsQuery,
-  serviceTrafficQuery,
   ingressTrafficQuery,
   blockedIngressTrafficQuery,
   ingressBlocklistQuery,
-  containerMetricsQuery,
   webhooksQuery
 };

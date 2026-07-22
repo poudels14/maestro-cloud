@@ -37,4 +37,4 @@ function formatDateTime(ms: number, withYear = false): string {
   return new Date(ms).toLocaleString(undefined, options);
 }
 
-export { formatBytes, formatBytesRate, formatPercent, formatRate, formatMs, formatDateTime };
+export { formatBytes, formatBytesRate, formatDateTime, formatMs, formatPercent, formatRate };

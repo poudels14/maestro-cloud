@@ -2,15 +2,12 @@ import type { ApiSchemas } from "@maestro/api-client";
 import type {
   ClusterNode,
   ClusterSummary,
-  DiskInfo,
   IngressBlocklist,
   IngressTrafficBreakdown,
   IngressRouting,
   MaskedConfig,
-  MetricPoint,
   ClusterStats,
   StatsMetricPoint,
-  TrafficPoint,
   UnschedulableReplica,
   UpgradeRun,
   Webhook,
@@ -180,49 +177,11 @@ export async function getClusterConfig(): Promise<MaskedConfig> {
   }
 }
 
-export async function getDisks(): Promise<DiskInfo[]> {
-  try {
-    return await apiClient().listLocalDisks();
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load disks");
-  }
-}
-
 export async function getIngressRoutes(): Promise<IngressRouting[]> {
   try {
     return await apiClient().listActiveIngressRoutes();
   } catch (error) {
     throw apiRequestError(error, "Failed to load ingress routes");
-  }
-}
-
-export async function getServiceMetrics(
-  serviceId: string,
-  from?: number,
-  to?: number
-): Promise<MetricPoint[]> {
-  try {
-    return await apiClient().listServiceMetrics(serviceId, {
-      ...(from != null ? { from } : {}),
-      ...(to != null ? { to } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load service metrics");
-  }
-}
-
-export async function getServiceTraffic(
-  serviceId: string,
-  from?: number,
-  to?: number
-): Promise<TrafficPoint[]> {
-  try {
-    return await apiClient().getServiceTraffic(serviceId, {
-      ...(from != null ? { from } : {}),
-      ...(to != null ? { to } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load service traffic");
   }
 }
 
@@ -273,43 +232,6 @@ export async function getIngressBlocklist(): Promise<IngressBlocklist> {
     return await apiClient().getIngressBlocklist();
   } catch (error) {
     throw apiRequestError(error, "Failed to load ingress blocklist");
-  }
-}
-
-export async function getNodeMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  try {
-    return await apiClient().listNodeMetrics({
-      ...(from != null ? { from } : {}),
-      ...(to != null ? { to } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load node metrics");
-  }
-}
-
-export async function getClusterMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  try {
-    return await apiClient().listClusterMetrics({
-      ...(from != null ? { from } : {}),
-      ...(to != null ? { to } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load cluster metrics");
-  }
-}
-
-export async function getContainerMetrics(
-  serviceId: string,
-  from?: number,
-  to?: number
-): Promise<MetricPoint[]> {
-  try {
-    return await apiClient().listContainerMetrics(serviceId, {
-      ...(from != null ? { from } : {}),
-      ...(to != null ? { to } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load container metrics");
   }
 }
 

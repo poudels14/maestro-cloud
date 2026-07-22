@@ -10,7 +10,8 @@ import { ServiceSidebar } from "../components/service-detail/Sidebar";
 import { NodeNavSection } from "../components/home/NodeNavSection";
 import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
-import { MetricsTab } from "../components/service-detail/MetricsTab";
+import { MetricsTab } from "@maestro/metrics";
+import { metricsApi } from "../features";
 import { LogsTab } from "../components/service-detail/LogsTab";
 
 const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
@@ -184,7 +185,7 @@ function ServiceDetailPanel(props: {
             <DeploymentsTab service={props.service} />
           </Show>
           <Show when={props.tab === "metrics"}>
-            <MetricsTab service={props.service} />
+            <MetricsTab api={metricsApi} serviceId={props.service.meta.id} />
           </Show>
           <Show when={props.tab === "logs"}>
             <LogsTab service={props.service} />

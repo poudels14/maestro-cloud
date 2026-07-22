@@ -4,7 +4,7 @@ import { GitCommitHorizontal } from "lucide-solid";
 import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
 import type { Deployment, ReplicaState } from "../../lib/types";
 import { replicaDisplayName } from "../../lib/deploymentView";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime } from "@maestro/kit";
 import { DeploymentMenu } from "./DeploymentMenu";
 
 type Props = {

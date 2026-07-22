@@ -1,0 +1,28 @@
+{
+  "name": "@maestro/metrics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maestro resource and traffic metrics feature",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "test": "vitest run && pnpm typecheck",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@maestro/api-client": "workspace:*",
+    "@maestro/charts": "workspace:*",
+    "@maestro/kit": "workspace:*",
+    "@maestro/sdk": "workspace:*",
+    "@tanstack/solid-query": "^5.101.2",
+    "clsx": "^2.1.1",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "^1.9.14"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "packageManager": "pnpm@10.11.1"
+}

@@ -1,17 +1,20 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
-import { useQuery } from "../../lib/useQuery";
+import { createMemo, createSignal, For, Show, type JSX } from "solid-js";
+import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
-import type { Service, TrafficPoint } from "../../lib/types";
-import { serviceMetricsQuery, serviceTrafficQuery } from "../../lib/queries";
+import { serviceMetricsQuery, serviceTrafficQuery } from "./queries";
 import {
+  Card,
+  ErrorBanner,
   formatBytes,
   formatBytesRate,
   formatMs,
   formatPercent,
-  formatRate
-} from "../../lib/format";
-import { Card, ErrorBanner, SectionHeader } from "@maestro/kit";
+  formatRate,
+  SectionHeader
+} from "@maestro/kit";
 import { TimelineChart } from "@maestro/charts";
+import type { MetricsApi } from "./api";
+import { buildServiceTrafficSeries } from "./traffic";
 
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000 },
@@ -19,13 +22,11 @@ const TIME_RANGES = [
   { label: "24h", ms: 86_400_000 },
   { label: "7d", ms: 604_800_000 }
 ];
-const SCRAPE_INTERVAL_S = 5;
-
-function MetricsTab(props: { service: Service }) {
+function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
 
-  const metrics = useQuery(() => serviceMetricsQuery(props.service.meta.id, rangeMs()));
-  const traffic = useQuery(() => serviceTrafficQuery(props.service.meta.id, rangeMs()));
+  const metrics = useQuery(() => serviceMetricsQuery(props.api, props.serviceId, rangeMs()));
+  const traffic = useQuery(() => serviceTrafficQuery(props.api, props.serviceId, rangeMs()));
 
   const metricsData = () => metrics.data ?? [];
   const xMax = () => Date.now();
@@ -35,37 +36,7 @@ function MetricsTab(props: { service: Service }) {
   const netRxData = () => metricsData().map((m) => ({ ts: m.ts, value: m.netRxBytes }));
   const netTxData = () => metricsData().map((m) => ({ ts: m.ts, value: m.netTxBytes }));
 
-  const trafficByTs = createMemo(() => groupByTimestamp(traffic.data ?? []));
-  const totalReqRate = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: sumRequests(points) / SCRAPE_INTERVAL_S
-    }));
-  const errorReqRate = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: sumRequestsWhere(points, (p) => p.statusCode >= 400) / SCRAPE_INTERVAL_S
-    }));
-  const p95LatencyMs = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: bucketPercentileSec(points, 0.95) * 1000
-    }));
-  const p50LatencyMs = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: bucketPercentileSec(points, 0.5) * 1000
-    }));
-  const bytesInRate = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: sumBytes(points, "in") / SCRAPE_INTERVAL_S
-    }));
-  const bytesOutRate = () =>
-    trafficByTs().map(([ts, points]) => ({
-      ts,
-      value: sumBytes(points, "out") / SCRAPE_INTERVAL_S
-    }));
+  const trafficSeries = createMemo(() => buildServiceTrafficSeries(traffic.data ?? []));
 
   return (
     <div class="space-y-4">
@@ -136,13 +107,17 @@ function MetricsTab(props: { service: Service }) {
         ]}
       >
         <TimelineChart
-          data={totalReqRate()}
+          data={trafficSeries().totalRequestRate}
           label="req/s"
           color="#6366f1"
           yFormat={formatRate}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: errorReqRate(), color: "#ef4444", label: "errors/s" }}
+          secondarySeries={{
+            data: trafficSeries().errorRequestRate,
+            color: "#ef4444",
+            label: "errors/s"
+          }}
         />
       </ChartCard>
 
@@ -154,13 +129,17 @@ function MetricsTab(props: { service: Service }) {
         ]}
       >
         <TimelineChart
-          data={p50LatencyMs()}
+          data={trafficSeries().p50LatencyMs}
           label="p50"
           color="#06b6d4"
           yFormat={formatMs}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: p95LatencyMs(), color: "#f59e0b", label: "p95" }}
+          secondarySeries={{
+            data: trafficSeries().p95LatencyMs,
+            color: "#f59e0b",
+            label: "p95"
+          }}
         />
       </ChartCard>
 
@@ -172,13 +151,17 @@ function MetricsTab(props: { service: Service }) {
         ]}
       >
         <TimelineChart
-          data={bytesInRate()}
+          data={trafficSeries().bytesInRate}
           label="in/s"
           color="#10b981"
           yFormat={formatBytesRate}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: bytesOutRate(), color: "#f97316", label: "out/s" }}
+          secondarySeries={{
+            data: trafficSeries().bytesOutRate,
+            color: "#f97316",
+            label: "out/s"
+          }}
         />
       </ChartCard>
     </div>
@@ -188,7 +171,7 @@ function MetricsTab(props: { service: Service }) {
 function ChartCard(props: {
   title: string;
   legend?: { color: string; label: string }[];
-  children: any;
+  children: JSX.Element;
 }) {
   return (
     <Card class="p-4">
@@ -210,63 +193,6 @@ function ChartCard(props: {
       {props.children}
     </Card>
   );
-}
-
-function groupByTimestamp(points: TrafficPoint[]): [number, TrafficPoint[]][] {
-  const buckets = new Map<number, TrafficPoint[]>();
-  for (const point of points) {
-    const arr = buckets.get(point.ts);
-    if (arr) arr.push(point);
-    else buckets.set(point.ts, [point]);
-  }
-  return Array.from(buckets.entries()).sort(([a], [b]) => a - b);
-}
-
-function sumRequests(points: TrafficPoint[]): number {
-  let total = 0;
-  for (const p of points) total += p.requests;
-  return total;
-}
-
-function sumRequestsWhere(points: TrafficPoint[], predicate: (p: TrafficPoint) => boolean): number {
-  let total = 0;
-  for (const p of points) {
-    if (predicate(p)) total += p.requests;
-  }
-  return total;
-}
-
-function sumBytes(points: TrafficPoint[], dir: "in" | "out"): number {
-  let total = 0;
-  for (const p of points) total += dir === "in" ? p.bytesIn : p.bytesOut;
-  return total;
-}
-
-function bucketPercentileSec(points: TrafficPoint[], p: number): number {
-  let le1 = 0;
-  let le5 = 0;
-  let le10 = 0;
-  let total = 0;
-  for (const point of points) {
-    le1 += point.latLe1s;
-    le5 += point.latLe5s;
-    le10 += point.latLe10s;
-    total += point.latTotal;
-  }
-  if (total === 0) return 0;
-  const rank = p * total;
-  if (le1 >= rank) {
-    return le1 === 0 ? 0 : rank / le1;
-  }
-  if (le5 >= rank) {
-    const span = le5 - le1;
-    return span === 0 ? 1 : 1 + 4 * ((rank - le1) / span);
-  }
-  if (le10 >= rank) {
-    const span = le10 - le5;
-    return span === 0 ? 5 : 5 + 5 * ((rank - le5) / span);
-  }
-  return 10;
 }
 
 export { MetricsTab };

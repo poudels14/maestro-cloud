@@ -34,14 +34,9 @@ export interface ClusterNode {
 
 export type UnschedulableReplica = ApiSchemas["UnschedulableReplica"];
 
-export type MetricPoint = ApiSchemas["ResourceMetricPoint"];
-
-export type TrafficPoint = ApiSchemas["TrafficMetricPoint"];
-
 export type TrafficBreakdownEntry = ApiSchemas["TrafficBreakdownEntry"];
 export type IngressTrafficBreakdown = ApiSchemas["IngressTrafficBreakdown"];
 
-export type DiskInfo = ApiSchemas["DiskInfo"];
 export type ClusterStats = ApiSchemas["ClusterStatsResponse"];
 export type ControllerStats = ApiSchemas["ControllerStatsSnapshot"];
 export type SinkStats = ApiSchemas["SinkStatsSnapshot"];

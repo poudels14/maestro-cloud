@@ -10,8 +10,6 @@ import { ServiceSidebar } from "../service-detail/Sidebar";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
-import { NodeMetricsSection } from "./NodeMetricsSection";
-import { DisksSection } from "./DisksSection";
 import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
 import { Webhooks } from "../Webhooks";
@@ -96,12 +94,6 @@ function HomeShell(props: { path: HomePath }) {
                     <ClusterStatsSection />
                     <ClusterConfigSection />
                     <Webhooks />
-                  </div>
-                </Match>
-                <Match when={props.path === "/metrics"}>
-                  <div class="space-y-8">
-                    <DisksSection />
-                    <NodeMetricsSection />
                   </div>
                 </Match>
                 <Match when={props.path === "/traffic"}>

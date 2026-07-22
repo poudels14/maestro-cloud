@@ -1,11 +1,11 @@
 import { createSignal, For, Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { useQuery } from "../../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
-import { clusterMetricsQuery, nodeMetricsQuery } from "../../lib/queries";
-import { formatBytes, formatPercent } from "../../lib/format";
-import { Card, ErrorBanner, SectionHeader } from "@maestro/kit";
+import { clusterMetricsQuery, nodeMetricsQuery } from "./queries";
+import { Card, ErrorBanner, formatBytes, formatPercent, SectionHeader } from "@maestro/kit";
 import { TimelineChart } from "@maestro/charts";
+import type { MetricsApi } from "./api";
 
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000 },
@@ -14,10 +14,10 @@ const TIME_RANGES = [
   { label: "7d", ms: 604_800_000 }
 ];
 
-function NodeMetricsSection() {
+function NodeMetricsSection(props: { api: MetricsApi }) {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
-  const nodeMetrics = useQuery(() => nodeMetricsQuery(rangeMs()));
-  const clusterMetrics = useQuery(() => clusterMetricsQuery(rangeMs()));
+  const nodeMetrics = useQuery(() => nodeMetricsQuery(props.api, rangeMs()));
+  const clusterMetrics = useQuery(() => clusterMetricsQuery(props.api, rangeMs()));
 
   const latestNode = () => {
     const data = nodeMetrics.data ?? [];

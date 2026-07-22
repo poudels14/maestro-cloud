@@ -1,13 +1,12 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
-import { useQuery } from "../../lib/useQuery";
-import { disksQuery } from "../../lib/queries";
-import type { DiskInfo } from "../../lib/types";
-import { formatBytes } from "../../lib/format";
-import { Card, SectionHeader } from "@maestro/kit";
+import { useQuery } from "@maestro/sdk";
+import { disksQuery } from "./queries";
+import type { DiskInfo, MetricsApi } from "./api";
+import { Card, formatBytes, SectionHeader } from "@maestro/kit";
 
-function DisksSection() {
-  const disks = useQuery(() => disksQuery());
+function DisksSection(props: { api: MetricsApi }) {
+  const disks = useQuery(() => disksQuery(props.api));
 
   return (
     <Show when={(disks.data ?? []).length > 0}>
