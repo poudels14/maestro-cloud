@@ -31,6 +31,16 @@ fn plan_is_deterministic_and_spreads_replicas() {
 }
 
 #[test]
+fn generated_assignment_ids_are_stable_content_addresses() {
+    let output = plan(input(1));
+
+    assert_eq!(
+        output.assignments[0].meta.id.as_str(),
+        "00efef54e3f84f49abb455c6"
+    );
+}
+
+#[test]
 fn plan_preserves_existing_assignments_during_scale_changes() {
     let initial = plan(input(2));
     let initial_ids = initial

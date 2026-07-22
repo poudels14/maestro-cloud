@@ -38,3 +38,11 @@ fn artifact_archive_ids_are_sha256_content_addresses() {
         "sha256-abababababababababababababababababababababababababababababababab"
     );
 }
+
+#[test]
+fn assignment_ids_use_a_bounded_sha256_prefix() {
+    let id = crate::AssignmentId::from_sha256([0xab; 32]);
+
+    assert_eq!(id.as_str(), "abababababababababababab");
+    assert_eq!(id.as_str().len(), 24);
+}

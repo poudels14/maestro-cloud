@@ -105,6 +105,18 @@ identifier!(
     AssignmentId,
     "Stable identity of a scheduled workload assignment."
 );
+
+impl AssignmentId {
+    /// Derives a bounded stable identity from one SHA-256 digest.
+    pub fn from_sha256(digest: [u8; 32]) -> Self {
+        const IDENTITY_LENGTH: usize = 24;
+
+        let mut encoded = hex::encode(digest);
+        encoded.truncate(IDENTITY_LENGTH);
+        Self(encoded)
+    }
+}
+
 identifier!(
     WorkloadId,
     "Stable identity of one runtime-managed workload instance."

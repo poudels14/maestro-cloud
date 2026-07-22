@@ -372,13 +372,7 @@ fn assignment_id(
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    let digest = format!("{:x}", hasher.finalize())
-        .chars()
-        .take(24)
-        .collect::<String>();
-    // A 24-character lowercase hexadecimal digest always satisfies the identifier contract.
-    #[allow(clippy::expect_used)]
-    AssignmentId::new(digest).expect("SHA-256 assignment id must be valid")
+    AssignmentId::from_sha256(hasher.finalize().into())
 }
 
 pub(crate) struct PlannedAssignment {
