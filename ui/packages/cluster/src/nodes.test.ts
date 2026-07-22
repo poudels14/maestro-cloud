@@ -79,10 +79,31 @@ test("projects node liveness, mesh readiness, and drain state", () => {
     revision: 9,
     state: {
       unschedulable: true,
+      drainPending: false,
       drainedAtMs: 75_000,
       reason: "node drain requested"
     }
   });
+});
+
+test("keeps a node schedulable while drain artifact replication is pending", () => {
+  const pendingDrain = {
+    type: "Draining",
+    status: "unknown",
+    reason: "ReplicatingArtifacts",
+    message: "waiting for peer copies",
+    observedGeneration: 1,
+    lastTransitionTime: 75_000
+  } satisfies ApiSchemas["Condition"];
+  const projected = projectClusterNodes(
+    [node("node-b", "worker-b", 100_000, [pendingDrain])],
+    [network("node-b", 2, meshReady)],
+    100_000
+  );
+
+  assert.equal(projected[0]?.state.unschedulable, false);
+  assert.equal(projected[0]?.state.drainPending, true);
+  assert.equal(projected[0]?.state.reason, "waiting for peer copies");
 });
 
 test("reports a desired mesh generation that has not been applied", () => {

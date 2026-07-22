@@ -29,7 +29,7 @@ async fn node_drain_and_restore_are_optimistic_replayable_status_commands()
     assert_eq!(replay.status(), StatusCode::ACCEPTED);
     let current = get_node(&server).await?;
     assert_eq!(current.meta.generation, initial.meta.generation);
-    assert!(draining(&current));
+    assert!(drain_pending(&current));
 
     assert_eq!(
         command(
@@ -88,5 +88,13 @@ async fn command(
 fn draining(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
         condition.condition_type.0 == "Draining" && condition.state == ConditionState::True
+    })
+}
+
+fn drain_pending(node: &Node) -> bool {
+    node.status.conditions.iter().any(|condition| {
+        condition.condition_type.0 == "Draining"
+            && condition.state == ConditionState::Unknown
+            && condition.reason.0 == "ReplicatingArtifacts"
     })
 }

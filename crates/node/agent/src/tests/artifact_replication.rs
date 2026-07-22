@@ -20,7 +20,7 @@ use runtime::{
     ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
 };
 
-use crate::artifact_replication::{preserved_digests, retained_digests};
+use crate::artifact_retention::{preserved_digests, retained_digests};
 use crate::{
     ArtifactHolderRegistry, ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
     ArtifactReplicationSettings,
@@ -86,6 +86,7 @@ async fn replication_imports_from_a_live_holder_and_publishes_the_copy()
             resync_interval: Duration::from_secs(30),
         },
         clock,
+        Arc::new(FixedStatusClock),
     )?;
 
     let report = agent.reconcile_once().await?;
@@ -94,6 +95,8 @@ async fn replication_imports_from_a_live_holder_and_publishes_the_copy()
     assert_eq!(report.imported, 1);
     assert_eq!(report.pruned, 1);
     assert_eq!(report.prune_failure, None);
+    assert!(report.drain_ready);
+    assert_eq!(report.missing_peer_copies, 0);
     assert!(report.failures.is_empty());
     assert_eq!(
         lock(&artifacts.prune_policies).as_slice(),
@@ -400,6 +403,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+struct FixedStatusClock;
+
+impl crate::StatusClock for FixedStatusClock {
+    fn now(&self) -> Timestamp {
+        Timestamp(20_000)
     }
 }
 

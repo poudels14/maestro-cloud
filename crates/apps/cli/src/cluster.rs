@@ -204,6 +204,9 @@ fn node_state(node: &Node) -> &'static str {
         [condition] => match condition.state {
             ConditionState::True => "draining",
             ConditionState::False => "schedulable",
+            ConditionState::Unknown if condition.reason.0 == "ReplicatingArtifacts" => {
+                "preparing-drain"
+            }
             ConditionState::Unknown => "unknown",
         },
         _ => "unknown",

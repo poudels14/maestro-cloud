@@ -10,6 +10,8 @@ use crate::{
     UpgradePlanAction, UpgradePlanError, UpgradeSettings,
 };
 
+const ARTIFACT_REPLICATION_READY_CONDITION: &str = "ArtifactReplicationReady";
+
 /// Computes the next durable upgrade state without performing side effects.
 pub fn plan_upgrade(
     input: UpgradeInput,
@@ -213,6 +215,28 @@ fn plan_draining(
     let mut updates = BTreeMap::new();
     for node_id in &draining_ids {
         set_maintenance(&mut updates, &nodes, &run, node_id, true, input.now)?;
+    }
+    let artifacts_pending = draining_ids.iter().any(|node_id| {
+        nodes.get(node_id).is_none_or(|node| {
+            !node.status.conditions.iter().any(|condition| {
+                condition.condition_type.0 == ARTIFACT_REPLICATION_READY_CONDITION
+                    && condition.state == kernel_api::ConditionState::True
+            })
+        })
+    });
+    if artifacts_pending {
+        set_ready_condition(
+            &mut run,
+            false,
+            "ArtifactReplicationPending",
+            "selected nodes are waiting for retained artifacts to acquire peer copies",
+            input.now,
+        );
+        return Ok(plan(
+            run,
+            updates.into_values().collect(),
+            UpgradePlanAction::Requeue(settings.observation_interval),
+        ));
     }
     let assignments_remain = input.assignments.iter().any(|assignment| {
         assignment.meta.deletion_timestamp.is_none()

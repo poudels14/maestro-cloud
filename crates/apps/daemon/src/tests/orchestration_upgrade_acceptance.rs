@@ -11,9 +11,10 @@ use clustertest::{
 };
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
-    ClusterId, Generation, Node, NodeId, NodeInstanceId, NodeRole, Object, ObjectMeta,
-    ResourceKind, ResourceName, ResourceRevision, UpgradeMode, UpgradePhase, UpgradeRun,
-    UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
+    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation, Node, NodeId,
+    NodeInstanceId, NodeRole, Object, ObjectMeta, ResourceKind, ResourceName, ResourceRevision,
+    Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
+    UpgradeRunStatus,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -84,6 +85,14 @@ impl UpgradeAcceptanceWorld {
             let node_id = NodeId::new(format!("node-{index}"))?;
             let mut resource = node(&node_id, index)?;
             resource.spec.role = NodeRole::ControlPlane;
+            resource.status.conditions.push(Condition {
+                condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+                state: ConditionState::True,
+                reason: ConditionReason("PeerCopiesReady".to_string()),
+                message: "retained artifacts are replicated".to_string(),
+                observed_generation: resource.meta.generation,
+                last_transition_time: Timestamp(10_000),
+            });
             put(&store, &keys, "Node", &resource).await?;
             put_value(&store, keys.node_liveness(&node_id), b"live".to_vec()).await?;
         }

@@ -13,6 +13,7 @@ use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
 const DRAINING_CONDITION: &str = "Draining";
+const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -144,20 +145,34 @@ fn set_draining(node: &mut Node, draining: bool, now: Timestamp) -> Result<bool,
             "Node deletion is already in progress",
         ));
     }
-    let desired = if draining {
-        ConditionState::True
+    let (desired, reason, message) = if draining && node.spec.role.runs_workloads() {
+        (
+            ConditionState::Unknown,
+            DRAIN_REQUEST_REASON,
+            "node drain requested; waiting for retained artifacts to acquire peer copies",
+        )
+    } else if draining {
+        (
+            ConditionState::True,
+            "Requested",
+            "node drain requested; this node does not run workloads",
+        )
     } else {
-        ConditionState::False
+        (
+            ConditionState::False,
+            "Restored",
+            "node restored to scheduling",
+        )
     };
     let mut existing = node
         .status
         .conditions
         .iter()
         .filter(|condition| condition.condition_type.0 == DRAINING_CONDITION);
-    let canonical = existing
-        .next()
-        .is_some_and(|condition| condition.state == desired)
-        && existing.next().is_none();
+    let canonical = existing.next().is_some_and(|condition| {
+        (draining && condition.state == ConditionState::True)
+            || (condition.state == desired && condition.reason.0 == reason)
+    }) && existing.next().is_none();
     if canonical {
         return Ok(false);
     }
@@ -167,12 +182,8 @@ fn set_draining(node: &mut Node, draining: bool, now: Timestamp) -> Result<bool,
     node.status.conditions.push(Condition {
         condition_type: ConditionType(DRAINING_CONDITION.to_string()),
         state: desired,
-        reason: ConditionReason(if draining { "Requested" } else { "Restored" }.to_string()),
-        message: if draining {
-            "node drain requested".to_string()
-        } else {
-            "node restored to scheduling".to_string()
-        },
+        reason: ConditionReason(reason.to_string()),
+        message: message.to_string(),
         observed_generation: node.meta.generation,
         last_transition_time: now,
     });

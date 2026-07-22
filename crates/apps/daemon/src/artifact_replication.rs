@@ -36,6 +36,7 @@ pub(crate) fn build_artifact_replication_agent<
             resync_interval: factory.settings.artifact_resync_interval,
         },
         factory.monotonic_clock.clone(),
+        factory.status_clock.clone(),
     )
     .map(Arc::new)
     .map_err(|error| role_error("construct artifact replication agent", error))

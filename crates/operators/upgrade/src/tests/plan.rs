@@ -3,10 +3,11 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use kernel_api::{
-    Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, DeploymentId,
-    Generation, Node, NodeId, NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta,
-    ResourceRevision, ServiceId, Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId,
-    UpgradeRunSpec, UpgradeRunStatus,
+    Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, Condition,
+    ConditionReason, ConditionState, ConditionType, DeploymentId, Generation, Node, NodeId,
+    NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, ResourceRevision,
+    ServiceId, Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
+    UpgradeRunStatus,
 };
 
 use crate::{
@@ -195,6 +196,34 @@ fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement
 }
 
 #[test]
+fn rolling_upgrade_waits_for_artifact_replication_after_assignments_leave() {
+    let settings = settings(2);
+    let mut nodes = topology_with_worker();
+    let worker = nodes
+        .iter_mut()
+        .find(|node| node.meta.id.as_str() == "worker-1")
+        .expect("worker exists");
+    worker.status.conditions.clear();
+    let initialized = plan_upgrade(
+        input(run(UpgradeMode::Rolling), &nodes, Vec::new(), 10_000),
+        settings,
+    )
+    .expect("initialize rolling upgrade");
+
+    let waiting = plan_upgrade(input(initialized.run, &nodes, Vec::new(), 10_000), settings)
+        .expect("wait for artifact replication");
+    assert_eq!(waiting.run.status.phase, UpgradePhase::Draining);
+    assert_eq!(
+        waiting.action,
+        UpgradePlanAction::Requeue(Duration::from_secs(1))
+    );
+    assert!(waiting.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "ArtifactReplicationPending"
+            && condition.state == ConditionState::False
+    }));
+}
+
+#[test]
 fn exhausted_dispatch_restores_current_node_and_cancels_pending_nodes() {
     let settings = settings(1);
     let mut nodes = topology_with_worker();
@@ -278,6 +307,17 @@ fn run(mode: UpgradeMode) -> UpgradeRun {
     }
 }
 
+fn artifact_replication_ready() -> Condition {
+    Condition {
+        condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+        state: ConditionState::True,
+        reason: ConditionReason("PeerCopiesReady".to_string()),
+        message: "retained artifacts are replicated".to_string(),
+        observed_generation: Generation(1),
+        last_transition_time: Timestamp(9_000),
+    }
+}
+
 fn topology_with_worker() -> Vec<Node> {
     vec![
         node("node-1", NodeRole::Master),
@@ -308,7 +348,7 @@ fn node(id: &str, role: NodeRole) -> Node {
             instance_id: NodeInstanceId::new(format!("instance-{id}-1")).unwrap(),
             version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
-            conditions: Vec::new(),
+            conditions: vec![artifact_replication_ready()],
         },
     }
 }

@@ -47,6 +47,7 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             resync_interval: Duration::from_secs(30),
         },
         clock.clone(),
+        Arc::new(crate::SystemStatusClock),
     )?);
     let runtime = Arc::new(FakeRuntime::new());
     let network = Arc::new(FakeNetworkProvider::default());

@@ -4,8 +4,10 @@
 //! not depend on cluster provisioning, operators, observability pipelines, or
 //! application composition roots.
 
+mod artifact_drain;
 mod artifact_holder;
 mod artifact_replication;
+mod artifact_retention;
 mod assignment;
 mod assignment_error;
 #[cfg(unix)]

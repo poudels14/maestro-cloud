@@ -19,6 +19,9 @@ function projectClusterNodes(
         network != null &&
         network.status.appliedGeneration === network.meta.generation &&
         meshCondition?.status === "true";
+      const drainCondition = node.status.conditions?.find(
+        (condition) => condition.type === "Draining"
+      );
       const placementCondition = ["Maintenance", "Draining"]
         .map((type) =>
           node.status.conditions?.find(
@@ -40,8 +43,16 @@ function projectClusterNodes(
         revision: node.meta.revision,
         state: {
           unschedulable: placementCondition != null,
+          drainPending:
+            drainCondition?.status === "unknown" &&
+            drainCondition.reason === "ReplicatingArtifacts",
           drainedAtMs: placementCondition?.lastTransitionTime ?? null,
-          reason: placementCondition?.message || placementCondition?.reason || null
+          reason:
+            placementCondition?.message ||
+            placementCondition?.reason ||
+            drainCondition?.message ||
+            drainCondition?.reason ||
+            null
         }
       } satisfies ClusterNode;
     })

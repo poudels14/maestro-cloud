@@ -94,7 +94,9 @@ function NodesPage(props: { api: ClusterApi }) {
                 <button
                   type="button"
                   disabled={!node.alive || busy() === node.nodeId}
-                  onClick={() => changeDrain(node, !node.state.unschedulable)}
+                  onClick={() =>
+                    changeDrain(node, !(node.state.unschedulable || node.state.drainPending))
+                  }
                   class={clsx(
                     "justify-self-end rounded-md border px-2 py-1 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-50",
                     node.state.unschedulable
@@ -102,7 +104,11 @@ function NodesPage(props: { api: ClusterApi }) {
                       : "border-amber-200 text-amber-700 hover:bg-amber-50"
                   )}
                 >
-                  {node.state.unschedulable ? "Restore" : "Drain"}
+                  {node.state.drainPending
+                    ? "Cancel drain"
+                    : node.state.unschedulable
+                      ? "Restore"
+                      : "Drain"}
                 </button>
               </div>
             )}

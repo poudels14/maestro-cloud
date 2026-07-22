@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, Generation, Node, NodeId, NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object,
-    ObjectMeta, ResourceKind, ResourceName, ResourceRevision, Timestamp, UpgradeMode, UpgradePhase,
-    UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
+    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation, Node, NodeId,
+    NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, ResourceKind, ResourceName,
+    ResourceRevision, Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId,
+    UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_controller::{
     Backoff, ControllerError, ControllerRuntime, FencedStore, LeaderIdentity, LeadershipToken,
@@ -311,7 +312,14 @@ fn node(id: &str, role: NodeRole) -> Result<Node, kernel_api::InvalidIdentifier>
             instance_id: NodeInstanceId::new(format!("instance-{id}"))?,
             version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
-            conditions: Vec::new(),
+            conditions: vec![Condition {
+                condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+                state: ConditionState::True,
+                reason: ConditionReason("PeerCopiesReady".to_string()),
+                message: "retained artifacts are replicated".to_string(),
+                observed_generation: Generation(1),
+                last_transition_time: Timestamp(9_000),
+            }],
         },
     })
 }

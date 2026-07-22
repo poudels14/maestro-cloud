@@ -1,23 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::{
-    ArtifactTemplate, ClusterId, ConditionState, Deployment, DeploymentId, DeploymentPhase, Node,
-    NodeId, ResourceKind, ServiceId,
-};
+use kernel_api::{ClusterId, ConditionState, Deployment, Node, NodeId, ResourceKind};
 use kernel_store::{Clock, Keyspace, Store, StoreError};
 use runtime::{
     ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy, ArtifactStore, ArtifactStoreError,
 };
 use tokio::sync::watch;
 
-use crate::{ArtifactHolderRegistry, ArtifactHolderRegistryError};
+use crate::artifact_drain::{
+    ArtifactDrainReadiness, DRAINING_CONDITION, update_artifact_drain_status,
+};
+use crate::artifact_retention::{preserved_digests, retained_digests};
+use crate::{ArtifactHolderRegistry, ArtifactHolderRegistryError, StatusClock};
 
 const DEPLOYMENT_KIND: &str = "Deployment";
 const NODE_KIND: &str = "Node";
-const DRAINING_CONDITION: &str = "Draining";
 const MAX_RESOURCE_BYTES: usize = 512 * 1_024;
 
 /// Static identity and resync policy for registry-free artifact replication.
@@ -64,6 +64,7 @@ pub struct ArtifactReplicationAgent {
     deployment_kind: ResourceKind,
     node_kind: ResourceKind,
     clock: Arc<dyn Clock>,
+    status_clock: Arc<dyn StatusClock>,
 }
 
 impl ArtifactReplicationAgent {
@@ -75,6 +76,7 @@ impl ArtifactReplicationAgent {
         holders: ArtifactHolderRegistry,
         settings: ArtifactReplicationSettings,
         clock: Arc<dyn Clock>,
+        status_clock: Arc<dyn StatusClock>,
     ) -> Result<Self, ArtifactReplicationError> {
         if settings.resync_interval.is_zero() {
             return Err(ArtifactReplicationError::ZeroResyncInterval);
@@ -89,6 +91,7 @@ impl ArtifactReplicationAgent {
             holders,
             settings,
             clock,
+            status_clock,
         })
     }
 
@@ -172,15 +175,26 @@ impl ArtifactReplicationAgent {
             .into_iter()
             .map(|stored| stored.key)
             .collect::<BTreeSet<_>>();
+        let workload_node_count = nodes
+            .iter()
+            .filter(|node| {
+                node.meta.deletion_timestamp.is_none() && node.spec.role.runs_workloads()
+            })
+            .count();
+        let local_runs_workloads = nodes.iter().any(|node| {
+            node.meta.id == self.settings.node_id
+                && node.meta.deletion_timestamp.is_none()
+                && node.spec.role.runs_workloads()
+        });
         let eligible = nodes
-            .into_iter()
+            .iter()
             .filter(|node| {
                 node.meta.deletion_timestamp.is_none()
                     && node.spec.role.runs_workloads()
                     && !is_draining(node)
                     && live_keys.contains(&self.keyspace.node_liveness(&node.meta.id))
             })
-            .map(|node| node.meta.id)
+            .map(|node| node.meta.id.clone())
             .collect::<BTreeSet<_>>();
         let retained = retained_digests(&deployments)?;
         let preserved = preserved_digests(&deployments)?;
@@ -201,17 +215,17 @@ impl ArtifactReplicationAgent {
                 });
             }
         }
-        for digest in retained {
-            match self.artifacts.contains(&digest).await {
-                Ok(true) => match self.holders.publish(&digest).await {
+        for digest in &retained {
+            match self.artifacts.contains(digest).await {
+                Ok(true) => match self.holders.publish(digest).await {
                     Ok(()) => report.local = report.local.saturating_add(1),
                     Err(error) => report.failures.push(ArtifactReplicationFailure {
-                        digest,
+                        digest: digest.clone(),
                         message: error.to_string(),
                     }),
                 },
                 Ok(false) if eligible.contains(&self.settings.node_id) => {
-                    match self.ensure_local(&digest).await {
+                    match self.ensure_local(digest).await {
                         Ok(ArtifactReplicationOutcome::Imported { .. }) => {
                             report.imported = report.imported.saturating_add(1);
                         }
@@ -219,18 +233,35 @@ impl ArtifactReplicationAgent {
                             report.local = report.local.saturating_add(1);
                         }
                         Err(error) => report.failures.push(ArtifactReplicationFailure {
-                            digest,
+                            digest: digest.clone(),
                             message: error.to_string(),
                         }),
                     }
                 }
                 Ok(false) => {}
                 Err(error) => report.failures.push(ArtifactReplicationFailure {
-                    digest,
+                    digest: digest.clone(),
                     message: error.to_string(),
                 }),
             }
         }
+        let readiness = ArtifactDrainReadiness::inspect(
+            &retained,
+            &self.holders,
+            &self.settings.node_id,
+            local_runs_workloads && workload_node_count > 1,
+        )
+        .await?;
+        report.drain_ready = readiness.ready();
+        report.missing_peer_copies = readiness.missing_peer_copies();
+        update_artifact_drain_status(
+            self.store.as_ref(),
+            &self.keyspace,
+            &self.settings.node_id,
+            &readiness,
+            self.status_clock.now(),
+        )
+        .await?;
         match self
             .artifacts
             .prune(&ArtifactPrunePolicy::Preserve(
@@ -290,69 +321,6 @@ fn is_draining(node: &Node) -> bool {
     })
 }
 
-pub(crate) fn retained_digests(
-    deployments: &[Deployment],
-) -> Result<BTreeSet<ArtifactDigest>, ArtifactReplicationError> {
-    let mut latest = BTreeMap::<ServiceId, (kernel_api::Timestamp, DeploymentId)>::new();
-    for deployment in deployments.iter().filter(|deployment| {
-        matches!(
-            deployment.spec.service.artifact,
-            ArtifactTemplate::Build { .. }
-        ) && deployment.status.image_digest.is_some()
-    }) {
-        let candidate = (deployment.status.created_at, deployment.meta.id.clone());
-        latest
-            .entry(deployment.spec.service_id.clone())
-            .and_modify(|current| {
-                if candidate > *current {
-                    *current = candidate.clone();
-                }
-            })
-            .or_insert(candidate);
-    }
-    deployments
-        .iter()
-        .filter(|deployment| {
-            matches!(
-                deployment.spec.service.artifact,
-                ArtifactTemplate::Build { .. }
-            ) && (matches!(
-                deployment.status.phase,
-                DeploymentPhase::Building
-                    | DeploymentPhase::PendingReady
-                    | DeploymentPhase::Ready
-                    | DeploymentPhase::Draining
-            ) || latest
-                .get(&deployment.spec.service_id)
-                .is_some_and(|(_, id)| id == &deployment.meta.id))
-        })
-        .filter_map(|deployment| deployment.status.image_digest.as_deref())
-        .map(|digest| ArtifactDigest::new(digest.to_owned()).map_err(Into::into))
-        .collect()
-}
-
-pub(crate) fn preserved_digests(
-    deployments: &[Deployment],
-) -> Result<BTreeSet<ArtifactDigest>, ArtifactReplicationError> {
-    let mut preserved = retained_digests(deployments)?;
-    for digest in deployments
-        .iter()
-        .filter(|deployment| {
-            matches!(
-                deployment.status.phase,
-                DeploymentPhase::Building
-                    | DeploymentPhase::PendingReady
-                    | DeploymentPhase::Ready
-                    | DeploymentPhase::Draining
-            )
-        })
-        .filter_map(|deployment| deployment.status.image_digest.as_deref())
-    {
-        preserved.insert(ArtifactDigest::new(digest.to_owned())?);
-    }
-    Ok(preserved)
-}
-
 fn decode_resource<Resource>(
     stored: &kernel_store::StoredValue,
 ) -> Result<Resource, ArtifactReplicationError>
@@ -410,6 +378,10 @@ pub struct ArtifactReplicationReport {
     pub prune_failure: Option<String>,
     /// Per-digest failures isolated from other retained artifacts.
     pub failures: Vec<ArtifactReplicationFailure>,
+    /// Whether the local node may leave service without the last retained copy.
+    pub drain_ready: bool,
+    /// Retained digests that still exist only on the local node.
+    pub missing_peer_copies: usize,
 }
 
 /// Replication configuration, snapshot, transfer, or holder failure.
@@ -442,4 +414,16 @@ pub enum ArtifactReplicationError {
         digest: ArtifactDigest,
         failures: Vec<String>,
     },
+    /// The durable local node resource disappeared after registration.
+    #[error("local Node `{node_id}` disappeared during artifact status publication")]
+    LocalNodeMissing { node_id: NodeId },
+    /// The local node key contained a different typed identity.
+    #[error("local Node key expected `{expected}` but contained `{actual}`")]
+    LocalNodeIdentityMismatch { expected: NodeId, actual: NodeId },
+    /// The local node status could not be encoded within its contract bound.
+    #[error("failed to serialize local Node artifact status: {message}")]
+    SerializeNode { message: String },
+    /// Bounded compare-and-swap retries could not publish local drain readiness.
+    #[error("artifact drain status for Node `{node_id}` remained contended")]
+    DrainStatusContention { node_id: NodeId },
 }

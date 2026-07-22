@@ -29,6 +29,7 @@ interface ClusterNode {
   revision: number;
   state: {
     unschedulable: boolean;
+    drainPending?: boolean;
     drainedAtMs?: number | null;
     reason?: string | null;
   };
