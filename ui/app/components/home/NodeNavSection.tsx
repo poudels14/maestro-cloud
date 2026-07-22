@@ -1,28 +1,22 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
-import { Info, Network, ScrollText } from "lucide-solid";
+import { Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "@maestro/kit";
 import { clusterInfoQuery, isPartOfCluster } from "@maestro/cluster";
 import { clusterApi, panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
-import type { NavEntry } from "@maestro/sdk";
 
-type CoreHomePath = "/" | "/cluster" | "/cluster/logs";
+type CoreHomePath = "/cluster/logs";
 type HomePath = CoreHomePath | PanelFeaturePath;
-
-const CORE_NODE_NAV = [
-  { path: "/", label: "Info", icon: Info, section: "node", order: 10 }
-] as const satisfies readonly NavEntry[];
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   const navigate = useNavigate();
   const cluster = useQuery(() => clusterInfoQuery(clusterApi));
   const nodeNavigation = () =>
-    [
-      ...CORE_NODE_NAV,
-      ...panelFeatureRegistry.nav.filter((entry) => entry.section === "node")
-    ].sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
+    panelFeatureRegistry.nav
+      .filter((entry) => entry.section === "node")
+      .sort((left, right) => left.order - right.order || left.label.localeCompare(right.label));
 
   const go = (to: HomePath) => {
     props.onNavigate?.();

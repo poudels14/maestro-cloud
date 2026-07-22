@@ -9,10 +9,6 @@ import { clusterInfoQuery } from "@maestro/cluster";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
-import { ClusterConfigSection } from "./ClusterConfigSection";
-import { Webhooks } from "../Webhooks";
-import { ClusterStatsSection } from "./ClusterStatsSection";
-import { NodesSection } from "./NodesSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
 import { clusterApi, panelFeatureRegistry, servicesApi } from "../../features";
 
@@ -83,17 +79,6 @@ function HomeShell(props: { path: HomePath }) {
               fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading…</div>}
             >
               <Switch>
-                <Match when={props.path === "/"}>
-                  <div class="space-y-8">
-                    <ClusterHero />
-                    <ClusterStatsSection />
-                    <ClusterConfigSection />
-                    <Webhooks />
-                  </div>
-                </Match>
-                <Match when={props.path === "/cluster"}>
-                  <NodesSection />
-                </Match>
                 <Match when={props.path === "/cluster/logs"}>
                   <ClusterLogsSection />
                 </Match>
@@ -106,29 +91,6 @@ function HomeShell(props: { path: HomePath }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function ClusterHero() {
-  const cluster = useQuery(() => clusterInfoQuery(clusterApi));
-
-  return (
-    <Show when={cluster.data}>
-      {(info) => (
-        <div>
-          <div class="flex flex-wrap items-center gap-2">
-            <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
-              {info().clusterId}
-            </h1>
-          </div>
-          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-            <span>{info().nodeCount} nodes</span>
-            <span>{info().controlPlaneNodeCount} control plane</span>
-            <span>{info().workloadNodeCount} workload</span>
-          </div>
-        </div>
-      )}
-    </Show>
   );
 }
 

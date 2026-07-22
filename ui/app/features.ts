@@ -1,4 +1,4 @@
-import { createClusterApi } from "@maestro/cluster";
+import { createClusterApi, createClusterFeature } from "@maestro/cluster";
 import { createFirewallApi, createFirewallFeature } from "@maestro/firewall";
 import { createIngressApi, createIngressFeature } from "@maestro/ingress";
 import { createLogsApi, createLogsFeature } from "@maestro/logs";
@@ -14,12 +14,14 @@ const logsApi = createLogsApi(apiClient, apiRequestError);
 const metricsApi = createMetricsApi(apiClient, apiRequestError);
 const servicesApi = createServicesApi(apiClient, apiRequestError);
 
+const clusterFeature = createClusterFeature(clusterApi);
 const firewallFeature = createFirewallFeature(firewallApi);
 const metricsFeature = createMetricsFeature(metricsApi);
 const servicesFeature = createServicesFeature(servicesApi);
 const ingressFeature = createIngressFeature(ingressApi, logsApi);
 const logsFeature = createLogsFeature(logsApi);
 const panelFeatureRegistry = composeFeatureManifests([
+  clusterFeature,
   metricsFeature,
   servicesFeature,
   ingressFeature,

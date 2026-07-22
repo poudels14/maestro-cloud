@@ -3,8 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
 import { Plus, Send, Trash2 } from "lucide-solid";
-import { clusterQueryKeys, webhooksQuery, type Webhook, type WebhookEvent } from "@maestro/cluster";
-import { clusterApi } from "../features";
+import type { ClusterApi } from "./api";
+import { clusterQueryKeys, webhooksQuery } from "./queries";
+import type { Webhook, WebhookEvent } from "./types";
 import { SectionHeader } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 
@@ -15,9 +16,9 @@ const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
   { value: "upgradeTransition", label: "Upgrades" }
 ];
 
-function Webhooks() {
+function Webhooks(props: { api: ClusterApi }) {
   const queryClient = useQueryClient();
-  const webhooks = useQuery(() => webhooksQuery(clusterApi));
+  const webhooks = useQuery(() => webhooksQuery(props.api));
   const [showForm, setShowForm] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [pendingDelete, setPendingDelete] = createSignal<Webhook | null>(null);
@@ -25,7 +26,7 @@ function Webhooks() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: clusterQueryKeys.webhooks });
 
   const deleteMutation = useMutation(() => ({
-    mutationFn: (webhook: Webhook) => clusterApi.deleteWebhook(webhook),
+    mutationFn: (webhook: Webhook) => props.api.deleteWebhook(webhook),
     onSuccess: () => {
       setPendingDelete(null);
       invalidate();
@@ -57,6 +58,7 @@ function Webhooks() {
           <For each={webhooks.data}>
             {(webhook) => (
               <WebhookRow
+                api={props.api}
                 webhook={webhook}
                 onError={(msg) => setActionError(msg)}
                 onRequestDelete={() => {
@@ -84,6 +86,7 @@ function Webhooks() {
           }
         >
           <WebhookForm
+            api={props.api}
             onCancel={() => setShowForm(false)}
             onSaved={() => {
               setShowForm(false);
@@ -117,12 +120,13 @@ function Webhooks() {
 }
 
 function WebhookRow(props: {
+  api: ClusterApi;
   webhook: Webhook;
   onError: (msg: string) => void;
   onRequestDelete: () => void;
 }) {
   const testMutation = useMutation(() => ({
-    mutationFn: () => clusterApi.testWebhook(props.webhook.meta.id),
+    mutationFn: () => props.api.testWebhook(props.webhook.meta.id),
     onError: (err) => props.onError(err instanceof Error ? err.message : "test failed")
   }));
   const busy = () => testMutation.isPending;
@@ -182,6 +186,7 @@ function WebhookRow(props: {
 }
 
 function WebhookForm(props: {
+  api: ClusterApi;
   onCancel: () => void;
   onSaved: () => void;
   onError: (msg: string) => void;
@@ -196,7 +201,7 @@ function WebhookForm(props: {
 
   const createMutation = useMutation(() => ({
     mutationFn: () =>
-      clusterApi.createWebhook({
+      props.api.createWebhook({
         id: id().trim(),
         endpoint: endpoint().trim(),
         events: events(),

@@ -2,11 +2,11 @@ import { For, Show } from "solid-js";
 import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
-import type { BackupStats, ControllerStats, SinkStats } from "@maestro/cluster";
+import type { ClusterApi } from "./api";
+import type { BackupStats, ControllerStats, SinkStats } from "./types";
 import { formatBytes } from "@maestro/kit";
 import { ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
-import { clusterStatsQuery } from "@maestro/cluster";
-import { clusterApi } from "../../features";
+import { clusterStatsQuery } from "./queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
@@ -18,8 +18,8 @@ const ROW_COVERED_WARNING_CODES = new Set([
   "log-backup-disabled"
 ]);
 
-function ClusterStatsSection() {
-  const stats = useQuery(() => clusterStatsQuery(clusterApi));
+function ClusterStatsSection(props: { api: ClusterApi }) {
+  const stats = useQuery(() => clusterStatsQuery(props.api));
   return (
     <div>
       <div class="mb-4">
@@ -109,9 +109,9 @@ function ClusterStatsSection() {
 
 function SinkRow(props: {
   label: string;
-  sink?: SinkStats;
+  sink?: SinkStats | undefined;
   controllerPresent: boolean;
-  successfulHealthchecksFiltered?: boolean;
+  successfulHealthchecksFiltered?: boolean | undefined;
 }) {
   return (
     <Show
@@ -233,7 +233,12 @@ function BackupRow(props: { backup: BackupStats }) {
   return <HealthRow label="S3 log backup" level={level()} value={value()} detail={detail()} />;
 }
 
-function HealthRow(props: { label: string; level: HealthLevel; value: string; detail?: string }) {
+function HealthRow(props: {
+  label: string;
+  level: HealthLevel;
+  value: string;
+  detail?: string | undefined;
+}) {
   return (
     <div class="px-4 py-3 flex items-start justify-between gap-5">
       <div class="min-w-0">
@@ -250,7 +255,7 @@ function HealthRow(props: { label: string; level: HealthLevel; value: string; de
   );
 }
 
-function HealthPill(props: { level: HealthLevel; label?: string }) {
+function HealthPill(props: { level: HealthLevel; label?: string | undefined }) {
   const label = () => props.label ?? props.level.replace("-", " ");
   return (
     <span

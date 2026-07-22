@@ -141,6 +141,24 @@ importers:
       '@maestro/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@maestro/kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@maestro/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@tanstack/solid-query':
+        specifier: ^5.101.2
+        version: 5.101.2(solid-js@1.9.14)
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-solid:
+        specifier: ^0.577.0
+        version: 0.577.0(solid-js@1.9.14)
+      solid-js:
+        specifier: ^1.9.14
+        version: 1.9.14
     devDependencies:
       typescript:
         specifier: 5.9.3

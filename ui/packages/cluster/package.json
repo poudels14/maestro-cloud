@@ -4,14 +4,20 @@
   "private": true,
   "description": "Maestro cluster operations feature",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
   "scripts": {
     "test": "vitest run && pnpm typecheck",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@maestro/api-client": "workspace:*"
+    "@maestro/api-client": "workspace:*",
+    "@maestro/kit": "workspace:*",
+    "@maestro/sdk": "workspace:*",
+    "@tanstack/solid-query": "^5.101.2",
+    "clsx": "^2.1.1",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "^1.9.14"
   },
   "devDependencies": {
     "typescript": "5.9.3",

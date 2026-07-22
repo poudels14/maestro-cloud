@@ -28,3 +28,6 @@ export type {
   WebhookCreateRequest,
   WebhookEvent
 } from "./types";
+export { ClusterInfoPage } from "./ClusterInfoPage";
+export { createClusterFeature } from "./manifest";
+export { NodesPage } from "./NodesPage";

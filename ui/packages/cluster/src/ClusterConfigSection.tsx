@@ -1,11 +1,12 @@
 import { For, Show } from "solid-js";
 import { useQuery } from "@maestro/sdk";
-import { clusterConfigQuery, type MaskedConfig } from "@maestro/cluster";
-import { clusterApi } from "../../features";
+import type { ClusterApi } from "./api";
+import { clusterConfigQuery } from "./queries";
+import type { MaskedConfig } from "./types";
 import { ErrorBanner, SectionHeader } from "@maestro/kit";
 
-function ClusterConfigSection() {
-  const config = useQuery(() => clusterConfigQuery(clusterApi));
+function ClusterConfigSection(props: { api: ClusterApi }) {
+  const config = useQuery(() => clusterConfigQuery(props.api));
 
   return (
     <div>
