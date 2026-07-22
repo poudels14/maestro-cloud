@@ -7,7 +7,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-duckdb = { version = "=1.4.1", features = ["bundled"] }
+duckdb = { version = "=1.4.1", features = ["bundled", "parquet"] }
 kernel-api = { version = "0.1.0", path = "../../kernel/api" }
 logql = { version = "0.1.0", path = "../logql" }
 logs = { version = "0.1.0", path = "../logs" }
