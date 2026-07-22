@@ -100,6 +100,9 @@ export type Webhook = ApiSchemas["Webhook"];
 export type WebhookEvent = ApiSchemas["WebhookEvent"];
 export type ClusterSummary = ApiSchemas["ClusterInfo"];
 export type UpgradeRun = ApiSchemas["UpgradeRun"];
+export type FirewallPolicy = ApiSchemas["FirewallPolicy"];
+export type FirewallPolicySpec = ApiSchemas["FirewallPolicySpec"];
+export type FirewallDryRun = ApiSchemas["FirewallDryRunResponse"];
 
 export interface Service {
   id: string;

@@ -9,6 +9,9 @@ import type {
   ClusterSummary,
   Deployment,
   DiskInfo,
+  FirewallDryRun,
+  FirewallPolicy,
+  FirewallPolicySpec,
   IngressBlocklist,
   IngressTrafficBreakdown,
   IngressRouting,
@@ -67,9 +70,7 @@ export function projectClusterNodes(
         hostAddress: node.spec.hostAddress,
         subnet: network?.spec.workloadSubnet ?? "unavailable",
         dataPlaneReady,
-        dataPlaneError: dataPlaneReady
-          ? null
-          : meshReadinessError(network, meshCondition),
+        dataPlaneError: dataPlaneReady ? null : meshReadinessError(network, meshCondition),
         version: node.status.version,
         alive: node.status.lastSeen >= nowMs - NODE_LIVENESS_WINDOW_MS,
         lastSeenAtMs: node.status.lastSeen,
@@ -132,6 +133,50 @@ export async function getClusterInfo(): Promise<ClusterInfo> {
     .filter((run) => !["completed", "failed", "canceled"].includes(run.status.phase))
     .sort((left, right) => right.meta.revision - left.meta.revision)[0];
   return { ...summary, nodes, activeUpgrade: activeUpgrade ?? null };
+}
+
+export async function listFirewallPolicies(): Promise<FirewallPolicy[]> {
+  try {
+    return await apiClient().listFirewallPolicies();
+  } catch (error) {
+    throw apiRequestError(error, "Failed to load firewall policies");
+  }
+}
+
+export async function saveFirewallPolicy(
+  policyId: string,
+  spec: FirewallPolicySpec,
+  expectedRevision?: number
+): Promise<void> {
+  const request: ApiSchemas["FirewallPolicyWriteRequest"] =
+    expectedRevision == null ? { spec } : { spec, expectedRevision };
+  try {
+    await apiClient().putFirewallPolicy(policyId, request, crypto.randomUUID());
+  } catch (error) {
+    throw apiRequestError(error, "Failed to save firewall policy");
+  }
+}
+
+export async function deleteFirewallPolicy(
+  policyId: string,
+  expectedRevision: number
+): Promise<void> {
+  try {
+    await apiClient().deleteFirewallPolicy(policyId, { expectedRevision }, crypto.randomUUID());
+  } catch (error) {
+    throw apiRequestError(error, "Failed to delete firewall policy");
+  }
+}
+
+export async function dryRunFirewallPolicy(
+  policyId: string,
+  spec: FirewallPolicySpec
+): Promise<FirewallDryRun> {
+  try {
+    return await apiClient().dryRunFirewallPolicy(policyId, { spec });
+  } catch (error) {
+    throw apiRequestError(error, "Failed to plan firewall policy");
+  }
 }
 
 export async function getClusterStats(): Promise<ClusterStats> {

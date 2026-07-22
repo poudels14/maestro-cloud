@@ -19,6 +19,7 @@ import { NodesSection } from "./NodesSection";
 import { HttpLogsSection } from "./HttpLogsSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
 import { IngressTrafficTab } from "../ingress/TrafficTab";
+import { FirewallSection } from "../firewall/FirewallSection";
 
 function HomeShell(props: { tab: HomeTab }) {
   const navigate = useNavigate();
@@ -74,10 +75,12 @@ function HomeShell(props: { tab: HomeTab }) {
             class={clsx("mx-auto px-4 sm:px-6", {
               "max-w-6xl":
                 props.tab === "traffic" ||
+                props.tab === "firewall" ||
                 props.tab === "http-logs" ||
                 props.tab === "cluster-logs",
               "max-w-4xl":
                 props.tab !== "traffic" &&
+                props.tab !== "firewall" &&
                 props.tab !== "http-logs" &&
                 props.tab !== "cluster-logs",
               "h-full min-h-0": props.tab === "http-logs" || props.tab === "cluster-logs"
@@ -115,6 +118,9 @@ function HomeShell(props: { tab: HomeTab }) {
                 </Match>
                 <Match when={props.tab === "cluster-logs"}>
                   <ClusterLogsSection />
+                </Match>
+                <Match when={props.tab === "firewall"}>
+                  <FirewallSection />
                 </Match>
               </Switch>
             </ClientOnly>
