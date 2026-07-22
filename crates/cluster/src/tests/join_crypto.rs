@@ -2,6 +2,7 @@ use crate::{
     ClusterCertificateAuthority, JoinPayload, JoinPrivateKey, JoinProtocolError, JoinRequest,
     JoinResponseStatus, StoreJoinTicket, decrypt_join_response, encrypt_join_response,
 };
+use kernel_api::SecretValue;
 
 use super::fixtures::{valid_config, validity};
 
@@ -26,6 +27,8 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         nodes: config.nodes.clone(),
         ports: config.ports,
         certificates,
+        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
+        store_encryption_secret: SecretValue::new("store-test-secret-with-at-least-32-characters"),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             node_id.clone(),
             b"test-ticket",
@@ -76,6 +79,18 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
             JoinResponseStatus::ACCEPTED,
         ),
         Err(JoinProtocolError::ResponseIssuerGrantMismatch)
+    ));
+
+    let mut weak_secrets = payload;
+    weak_secrets.operator_jwt_secret = SecretValue::new("too-short");
+    assert!(matches!(
+        encrypt_join_response(
+            &config.join_secret,
+            &request,
+            &weak_secrets,
+            JoinResponseStatus::ACCEPTED,
+        ),
+        Err(JoinProtocolError::ResponseSecretGrantMismatch)
     ));
     Ok(())
 }

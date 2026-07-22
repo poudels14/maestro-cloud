@@ -14,6 +14,7 @@ mod control_plane;
 mod datadog;
 mod dead_letter_admin;
 mod error;
+mod join_activation;
 mod launch;
 mod launch_error;
 mod leadership;

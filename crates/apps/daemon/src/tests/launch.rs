@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use cluster::{CertificateKeyPair, NodeCertificateBundle, StoreJoinTicket};
+use cluster::{
+    CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle, StoreJoinTicket,
+};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
@@ -16,6 +18,18 @@ fn launch_validation_binds_store_mode_to_local_role_and_ticket()
 -> Result<(), Box<dyn std::error::Error>> {
     let master = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     master.validate()?;
+
+    let mut missing_issuer = master.clone();
+    missing_issuer.certificate_issuer = None;
+    assert!(missing_issuer.validate().is_err());
+
+    let mut mismatched_issuer = master.clone();
+    mismatched_issuer
+        .certificate_issuer
+        .as_mut()
+        .ok_or("certificate issuer missing")?
+        .certificate_pem = "other-root".to_string();
+    assert!(mismatched_issuer.validate().is_err());
 
     let mut weak_store_secret = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     weak_store_secret.store_encryption_secret = SecretValue::new("too-short");
@@ -34,6 +48,7 @@ fn launch_validation_binds_store_mode_to_local_role_and_ticket()
         node_id: NodeId::new("worker")?,
         etcd_binary: None,
         store_mode: StoreLaunchMode::Client,
+        certificate_issuer: None,
         ..config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?
     };
     worker.validate()?;
@@ -259,6 +274,10 @@ fn config(
                 private_key_pem: SecretValue::new("test-private-key"),
             },
         },
+        certificate_issuer: Some(ClusterCertificateAuthority {
+            certificate_pem: "test-root".to_owned(),
+            private_key_pem: SecretValue::new("test-ca-private-key"),
+        }),
         operator_jwt_secret: SecretValue::new("operator-test-secret-with-32-characters"),
         store_encryption_secret: SecretValue::new(
             "store-encryption-test-secret-with-32-characters",

@@ -37,6 +37,10 @@ pub struct JoinPayload {
     pub ports: ClusterPorts,
     /// Node-specific mutual-authentication identity.
     pub certificates: NodeCertificateBundle,
+    /// Cluster-wide key used to authenticate operator API requests.
+    pub operator_jwt_secret: SecretValue,
+    /// Cluster-wide key used to encrypt persisted internal values.
+    pub store_encryption_secret: SecretValue,
     /// Opaque store membership data granted to control-plane joiners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_join_ticket: Option<crate::StoreJoinTicket>,
@@ -213,6 +217,11 @@ fn validate_payload_binding(
         || request.role.is_control_plane() != payload.store_join_ticket.is_some()
     {
         return Err(JoinProtocolError::ResponseIssuerGrantMismatch);
+    }
+    if payload.operator_jwt_secret.expose().len() < 32
+        || payload.store_encryption_secret.expose().chars().count() < 32
+    {
+        return Err(JoinProtocolError::ResponseSecretGrantMismatch);
     }
     Ok(())
 }

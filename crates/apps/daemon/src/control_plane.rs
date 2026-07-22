@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 use upgrade::{NixosUpgradeStager, NodeRebooter};
 
 use crate::agent_role::start_agent;
+use crate::join_activation::JoinActivationSettings;
 use crate::leadership::run_leadership;
 use crate::{
     DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory, RoleRuntime, RoleSpec,
@@ -86,6 +87,7 @@ pub struct DaemonRoleSettings {
     pub(crate) leadership_keepalive_interval: Duration,
     pub(crate) campaign_retry_interval: Duration,
     pub(crate) store_shutdown_grace: Duration,
+    pub(crate) join_activation: JoinActivationSettings,
 }
 
 impl DaemonRoleSettings {
@@ -147,6 +149,7 @@ impl DaemonRoleSettings {
             leadership_keepalive_interval,
             campaign_retry_interval,
             store_shutdown_grace,
+            join_activation: JoinActivationSettings::default(),
         })
     }
 }
@@ -178,6 +181,7 @@ impl Default for DaemonRoleSettings {
             leadership_keepalive_interval: Duration::from_secs(5),
             campaign_retry_interval: Duration::from_secs(1),
             store_shutdown_grace: Duration::from_secs(10),
+            join_activation: JoinActivationSettings::default(),
         }
     }
 }

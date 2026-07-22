@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use build::LocalBuildSourceProvider;
 use cluster::{
-    ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle,
-    StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
+    ClusterCertificateAuthority, ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings,
+    NodeCertificateBundle, StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 use kernel_controller::SystemTimestampClock;
@@ -79,6 +79,9 @@ pub struct DaemonLaunchConfig {
     pub store_mode: StoreLaunchMode,
     /// Node-specific mutual TLS identity granted during bootstrap or join.
     pub security: NodeCertificateBundle,
+    /// Cluster CA signer retained only by control-plane-capable nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_issuer: Option<ClusterCertificateAuthority>,
     /// Cluster-wide HS256 key used to authenticate operator API requests.
     pub operator_jwt_secret: SecretValue,
     /// Cluster-wide master secret used to encrypt internal persisted values.
@@ -166,6 +169,21 @@ impl DaemonLaunchConfig {
                 ))
             }
             _ => Ok(()),
+        }?;
+        match (&self.certificate_issuer, node.role.is_control_plane()) {
+            (Some(issuer), true) if issuer.certificate_pem == self.security.trust_root_pem => {
+                Ok(())
+            }
+            (Some(_), true) => Err(invalid(
+                "certificate issuer must match the node identity trust root",
+            )),
+            (None, true) => Err(invalid(
+                "control-plane nodes require the cluster certificate issuer",
+            )),
+            (None, false) => Ok(()),
+            (Some(_), false) => Err(invalid(
+                "worker nodes must not retain cluster certificate signing material",
+            )),
         }
     }
 }
@@ -199,6 +217,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         etcd_binary,
         store_mode,
         security,
+        certificate_issuer: _,
         operator_jwt_secret,
         store_encryption_secret,
         instance_id,

@@ -194,6 +194,11 @@ impl RealProcessCluster {
             .get(&node.node_id)
             .cloned()
             .ok_or_else(|| RealClusterError::new("node security is missing"))?;
+        let retains_certificate_issuer = self
+            .cluster
+            .nodes
+            .get(&node.node_id)
+            .is_some_and(|definition| definition.role.is_control_plane());
         let config = DaemonLaunchConfig {
             cluster: self.cluster.clone(),
             node_id: node.node_id.clone(),
@@ -202,6 +207,11 @@ impl RealProcessCluster {
             etcd_binary: Some(self.etcd_binary.clone()),
             store_mode,
             security,
+            certificate_issuer: if retains_certificate_issuer {
+                Some(self.authority.clone())
+            } else {
+                None
+            },
             operator_jwt_secret: kernel_api::SecretValue::new(
                 "real-cluster-operator-secret-with-32-characters",
             ),
@@ -423,6 +433,12 @@ impl RealProcessCluster {
             nodes: self.cluster.nodes.clone(),
             ports: self.cluster.ports,
             certificates,
+            operator_jwt_secret: SecretValue::new(
+                "real-cluster-operator-secret-with-32-characters",
+            ),
+            store_encryption_secret: SecretValue::new(
+                "real-cluster-store-secret-with-32-characters",
+            ),
             store_join_ticket: Some(ticket),
             certificate_issuer: Some(self.authority.clone()),
         };

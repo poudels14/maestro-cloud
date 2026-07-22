@@ -310,6 +310,9 @@ pub enum JoinProtocolError {
     /// CA signing material was missing or granted to an ineligible role.
     #[error("join response certificate issuer grant does not match the requested role")]
     ResponseIssuerGrantMismatch,
+    /// Cluster-wide operator or storage secrets were too weak to start safely.
+    #[error("join response granted invalid cluster-wide secrets")]
+    ResponseSecretGrantMismatch,
     /// An HTTP response status was outside the valid range.
     #[error("invalid join response HTTP status {status}")]
     InvalidResponseStatus { status: u16 },

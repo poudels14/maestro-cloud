@@ -14,6 +14,7 @@ use crate::artifact_replication::build_artifact_replication_agent;
 use crate::cluster_query_clients;
 use crate::config_view::masked_cluster_config;
 use crate::control_plane::{DaemonRoleFactory, role_error};
+use crate::join_activation::activate_joined_member;
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
 use crate::stats_metric_sampler::StatsMetricSampler;
@@ -68,7 +69,7 @@ where
         .lock()
         .map_err(|_| RoleError::new("log-maintenance lock was poisoned"))?
         .take();
-    let (store, store_runtime) = match &factory.agent_store {
+    let (store, store_runtime, joined_member) = match &factory.agent_store {
         AgentStore::Managed {
             provider,
             start_mode,
@@ -85,12 +86,29 @@ where
                     .await;
                 }
             };
-            (runtime.store(), Some(runtime))
+            let joined_member = match start_mode {
+                cluster::StoreStartMode::Join(ticket) => Some((provider.clone(), ticket.clone())),
+                cluster::StoreStartMode::Bootstrap | cluster::StoreStartMode::Restart => None,
+            };
+            (runtime.store(), Some(runtime), joined_member)
         }
-        AgentStore::Remote(store) => (store.clone(), None),
+        AgentStore::Remote(store) => (store.clone(), None, None),
     };
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
+    if let Some((provider, ticket)) = joined_member
+        && let Err(error) = activate_joined_member(
+            provider.as_ref(),
+            &ticket,
+            factory.monotonic_clock.as_ref(),
+            factory.settings.join_activation,
+        )
+        .await
+    {
+        return runtimes
+            .fail(role_error("activate joined store member", error))
+            .await;
+    }
     let local_log_queries = runtimes.log_query_store();
     let local_traffic_queries = runtimes.traffic_query_store();
     let controller_stats = Arc::new(logs::LiveControllerStats::new(
