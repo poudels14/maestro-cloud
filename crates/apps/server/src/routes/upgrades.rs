@@ -6,12 +6,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, Generation, Object, ObjectMeta, ResourceKind, ResourceRevision, Timestamp,
-    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
+    BuiltinKind, CommandRequest, Generation, Object, ObjectMeta, ResourceKind, ResourceRevision,
+    UpgradeCommandResponse, UpgradeCreateRequest, UpgradePhase, UpgradeRun, UpgradeRunId,
+    UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use semver::Version;
-use serde::{Deserialize, Serialize};
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
@@ -95,7 +95,7 @@ async fn cancel(
     Path(upgrade_run_id): Path<String>,
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
-    payload: Result<Json<UpgradeCancelRequest>, JsonRejection>,
+    payload: Result<Json<CommandRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<UpgradeCommandResponse>), ApiError> {
     let upgrade_run_id = parse_id(upgrade_run_id)?;
     let payload = payload
@@ -209,38 +209,4 @@ fn parse_id(value: String) -> Result<UpgradeRunId, ApiError> {
 fn upgrade_kind() -> Result<ResourceKind, ApiError> {
     ResourceKind::new(BuiltinKind::UpgradeRun.as_str())
         .map_err(|error| ApiError::internal(error.to_string()))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpgradeCreateRequest {
-    upgrade_run_id: UpgradeRunId,
-    spec: UpgradeRunSpec,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpgradeCancelRequest {
-    expected_revision: ResourceRevision,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpgradeCommandResponse {
-    upgrade_run_id: UpgradeRunId,
-    generation: Generation,
-    phase: UpgradePhase,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deletion_timestamp: Option<Timestamp>,
-}
-
-impl From<&UpgradeRun> for UpgradeCommandResponse {
-    fn from(run: &UpgradeRun) -> Self {
-        Self {
-            upgrade_run_id: run.meta.id.clone(),
-            generation: run.meta.generation,
-            phase: run.status.phase,
-            deletion_timestamp: run.meta.deletion_timestamp,
-        }
-    }
 }

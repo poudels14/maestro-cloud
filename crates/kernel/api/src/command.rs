@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ArtifactArchiveId, DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation,
     IngressRouteSpec, NodeId, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
+    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
 };
 
 /// Maximum compressed bytes accepted for one uploaded build context archive.
@@ -27,6 +28,42 @@ pub struct NodeCommandResponse {
     pub node_id: NodeId,
     /// Whether new workload placement is disabled for the node.
     pub draining: bool,
+}
+
+/// Desired identity and behavior for a new cluster upgrade run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpgradeCreateRequest {
+    /// Stable run identity used to observe and retry this upgrade.
+    pub upgrade_run_id: UpgradeRunId,
+    /// Target version, node selection, and batching strategy.
+    pub spec: UpgradeRunSpec,
+}
+
+/// Accepted cluster upgrade mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeCommandResponse {
+    /// Upgrade run that accepted the mutation.
+    pub upgrade_run_id: UpgradeRunId,
+    /// Desired generation after the mutation.
+    pub generation: Generation,
+    /// Upgrade phase observed while accepting the mutation.
+    pub phase: UpgradePhase,
+    /// Cancellation timestamp, when cancellation was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletion_timestamp: Option<Timestamp>,
+}
+
+impl From<&UpgradeRun> for UpgradeCommandResponse {
+    fn from(run: &UpgradeRun) -> Self {
+        Self {
+            upgrade_run_id: run.meta.id.clone(),
+            generation: run.meta.generation,
+            phase: run.status.phase,
+            deletion_timestamp: run.meta.deletion_timestamp,
+        }
+    }
 }
 
 /// Optimistic temporary replica override for one service.

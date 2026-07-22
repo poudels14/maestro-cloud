@@ -21,6 +21,7 @@ mod service_config_convert;
 mod services;
 mod services_command;
 mod up;
+mod upgrades;
 
 pub use command::{Cli, run};
 pub use error::CliError;

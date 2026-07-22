@@ -39,6 +39,34 @@ fn context_command_surface_matches_the_rewrite_contract() {
             .is_ok()
         );
     }
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "upgrades"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "upgrade",
+            "system",
+            "--target-version",
+            "2.0.0",
+            "--batch",
+            "all",
+            "--node",
+            "node-a",
+            "--upgrade-run-id",
+            "upgrade-1",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "unfreeze",
+            "--upgrade-run",
+            "upgrade-1",
+        ])
+        .is_ok()
+    );
     assert!(Cli::try_parse_from(["maestro-next", "services", "ls"]).is_ok());
     assert!(
         Cli::try_parse_from([
