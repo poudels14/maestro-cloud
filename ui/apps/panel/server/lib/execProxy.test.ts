@@ -6,10 +6,11 @@ import {
   openExecProxy,
   type ExecProxyContext,
   type ExecProxyPeer,
-  type ExecUpstream
-} from "./execProxy.ts";
+  type ExecUpstream,
+  type ExecUpstreamEvent
+} from "./execProxy";
 
-type Listener = (event: any) => void;
+type Listener = (event: ExecUpstreamEvent) => void;
 
 class FakeUpstream implements ExecUpstream {
   static instance: FakeUpstream;
@@ -36,7 +37,7 @@ class FakeUpstream implements ExecUpstream {
     this.listeners.set(type, listeners);
   }
 
-  emit(type: string, event: any = {}) {
+  emit(type: string, event: ExecUpstreamEvent = {}) {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 

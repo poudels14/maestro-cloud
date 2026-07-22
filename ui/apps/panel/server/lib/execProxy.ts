@@ -1,7 +1,14 @@
+export type ExecUpstreamEvent = {
+  data?: unknown;
+  code?: number;
+  message?: string;
+  reason?: string;
+};
+
 export type ExecUpstream = {
   binaryType: string;
   readyState: number;
-  addEventListener(type: string, listener: (event: any) => void): void;
+  addEventListener(type: string, listener: (event: ExecUpstreamEvent) => void): void;
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(): void;
 };
