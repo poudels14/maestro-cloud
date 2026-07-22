@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -74,6 +75,12 @@ impl TryFrom<String> for ArtifactDigest {
 impl From<ArtifactDigest> for String {
     fn from(value: ArtifactDigest) -> Self {
         value.0
+    }
+}
+
+impl Display for ArtifactDigest {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
@@ -204,6 +211,9 @@ pub trait ArtifactStore: Send + Sync {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         self.resolve_digest(reference).await
     }
+
+    /// Reports whether one immutable digest is already materialized locally.
+    async fn contains(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError>;
 
     /// Opens a bounded byte stream for one immutable local artifact.
     async fn export(

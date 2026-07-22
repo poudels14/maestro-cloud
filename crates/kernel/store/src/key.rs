@@ -97,6 +97,37 @@ impl Keyspace {
         self.key(&format!("liveness/nodes/{node_id}"))
     }
 
+    /// Prefix containing every session-bound node liveness key.
+    pub fn node_liveness_records(&self) -> StorePrefix {
+        self.prefix("liveness/nodes")
+    }
+
+    /// Lease-backed nodes advertising one immutable artifact digest.
+    pub fn artifact_holders(&self, artifact_id: &ResourceName) -> StorePrefix {
+        self.prefix(&format!(
+            "liveness/artifact-holders/by-digest/{artifact_id}"
+        ))
+    }
+
+    /// One lease-backed node advertisement for an immutable artifact digest.
+    pub fn artifact_holder(&self, artifact_id: &ResourceName, node_id: &NodeId) -> StoreKey {
+        self.key(&format!(
+            "liveness/artifact-holders/by-digest/{artifact_id}/{node_id}"
+        ))
+    }
+
+    /// Lease-backed artifact advertisements owned by one node.
+    pub fn node_artifact_holders(&self, node_id: &NodeId) -> StorePrefix {
+        self.prefix(&format!("liveness/artifact-holders/by-node/{node_id}"))
+    }
+
+    /// Reverse index for one node's lease-backed artifact advertisement.
+    pub fn node_artifact_holder(&self, node_id: &NodeId, artifact_id: &ResourceName) -> StoreKey {
+        self.key(&format!(
+            "liveness/artifact-holders/by-node/{node_id}/{artifact_id}"
+        ))
+    }
+
     /// Exact internal command used to coordinate one node's staged upgrade.
     pub fn node_upgrade_command(&self, node_id: &NodeId) -> StoreKey {
         self.key(&format!("control/node-upgrades/{node_id}"))

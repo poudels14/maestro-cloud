@@ -155,6 +155,14 @@ impl ArtifactStore for DockerRuntime {
         }
     }
 
+    async fn contains(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
+        match self.client.inspect_image(digest.as_str()).await {
+            Ok(_) => Ok(true),
+            Err(error) if is_not_found(&error) => Ok(false),
+            Err(error) => Err(operation_error("inspect", Some(digest.as_str()), error)),
+        }
+    }
+
     async fn export(
         &self,
         digest: &ArtifactDigest,

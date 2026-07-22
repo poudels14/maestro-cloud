@@ -83,6 +83,11 @@ pub struct NodeRegistration {
 }
 
 impl NodeRegistration {
+    /// Returns the active node-liveness session used by related ephemeral advertisements.
+    pub fn session_id(&self) -> kernel_store::SessionId {
+        self.session.id()
+    }
+
     /// Explicitly removes this process's liveness key before its TTL expires.
     pub async fn close(self) -> Result<(), NodeRegistryError> {
         self.session.close().await.map_err(NodeRegistryError::Store)

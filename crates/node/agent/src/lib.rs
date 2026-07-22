@@ -4,6 +4,8 @@
 //! not depend on cluster provisioning, operators, observability pipelines, or
 //! application composition roots.
 
+mod artifact_holder;
+mod artifact_replication;
 mod assignment;
 mod assignment_error;
 #[cfg(unix)]
@@ -72,6 +74,12 @@ pub use log_agent::{
 #[cfg(unix)]
 pub use log_checkpoint::{FileLogCheckpointStore, LogCheckpointError, LogCheckpointStore};
 
+pub use artifact_holder::{ArtifactHolder, ArtifactHolderRegistry, ArtifactHolderRegistryError};
+pub use artifact_replication::{
+    ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
+    ArtifactReplicationError, ArtifactReplicationFailure, ArtifactReplicationOutcome,
+    ArtifactReplicationReport, ArtifactReplicationSettings,
+};
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
 pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};

@@ -25,6 +25,7 @@ async fn registry_atomically_publishes_durable_status_and_session_liveness()
     let agent = agent(store.clone(), "instance-1", clock)?;
 
     let registration = agent.register().await?;
+    let session_id = registration.session_id();
     let node = stored_node(&store).await?;
     assert_eq!(node.status.instance_id.as_str(), "instance-1");
     assert_eq!(node.status.version, "1.2.3");
@@ -33,6 +34,7 @@ async fn registry_atomically_publishes_durable_status_and_session_liveness()
         stored_liveness(&store).await?.as_deref(),
         Some("instance-1")
     );
+    assert_eq!(registration.session_id(), session_id);
 
     registration.close().await?;
     assert!(stored_liveness(&store).await?.is_none());

@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod artifact_holder;
+mod artifact_replication;
 mod assignment;
 mod assignment_plan;
 mod assignment_restart;

@@ -355,6 +355,10 @@ impl ArtifactStore for RecordingArtifacts {
         Err(unused("resolve_digest"))
     }
 
+    async fn contains(&self, _digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
+        Ok(false)
+    }
+
     async fn export(
         &self,
         _digest: &ArtifactDigest,

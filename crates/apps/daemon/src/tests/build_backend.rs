@@ -153,6 +153,10 @@ impl ArtifactStore for FakeBuildBackend {
         Err(unused("resolve", reference.as_str()))
     }
 
+    async fn contains(&self, _digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
+        Ok(false)
+    }
+
     async fn export(
         &self,
         digest: &ArtifactDigest,

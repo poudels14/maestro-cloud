@@ -118,6 +118,14 @@ impl ArtifactStore for ContainerdRuntime {
         }
     }
 
+    async fn contains(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
+        match select_image(&self.images().await?, digest) {
+            Ok(_) => Ok(true),
+            Err(ArtifactStoreError::NotFound { .. }) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn export(
         &self,
         digest: &ArtifactDigest,

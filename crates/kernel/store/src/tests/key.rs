@@ -29,6 +29,27 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/liveness/nodes/node-1"
     );
     assert_eq!(
+        keys.node_liveness_records().as_str(),
+        "/maestro/clusters/production/liveness/nodes/"
+    );
+    let artifact_id = ResourceName::new("0123456789abcdef").expect("artifact id");
+    assert_eq!(
+        keys.artifact_holders(&artifact_id).as_str(),
+        "/maestro/clusters/production/liveness/artifact-holders/by-digest/0123456789abcdef/"
+    );
+    assert_eq!(
+        keys.artifact_holder(&artifact_id, &node_id).as_str(),
+        "/maestro/clusters/production/liveness/artifact-holders/by-digest/0123456789abcdef/node-1"
+    );
+    assert_eq!(
+        keys.node_artifact_holders(&node_id).as_str(),
+        "/maestro/clusters/production/liveness/artifact-holders/by-node/node-1/"
+    );
+    assert_eq!(
+        keys.node_artifact_holder(&node_id, &artifact_id).as_str(),
+        "/maestro/clusters/production/liveness/artifact-holders/by-node/node-1/0123456789abcdef"
+    );
+    assert_eq!(
         keys.node_upgrade_command(&node_id).as_str(),
         "/maestro/clusters/production/control/node-upgrades/node-1"
     );

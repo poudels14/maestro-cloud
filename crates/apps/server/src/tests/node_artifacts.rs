@@ -151,6 +151,10 @@ impl ArtifactStore for TestArtifacts {
         Err(unused("resolve"))
     }
 
+    async fn contains(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
+        Ok(digest.as_str() == DIGEST)
+    }
+
     async fn export(
         &self,
         digest: &ArtifactDigest,
