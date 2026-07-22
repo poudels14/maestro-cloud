@@ -10,7 +10,7 @@ use logs::{LogSequence, LogSinkId};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Parser)]
-#[command(name = "daemon", about = "Maestro control-plane daemon")]
+#[command(name = "daemon", version, about = "Maestro control-plane daemon")]
 struct Cli {
     #[command(subcommand)]
     command: DaemonCommand,

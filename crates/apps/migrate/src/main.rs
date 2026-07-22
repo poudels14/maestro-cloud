@@ -19,7 +19,11 @@ use cutover_files::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "maestro-migrate", about = "One-shot Maestro cutover tool")]
+#[command(
+    name = "maestro-migrate",
+    version,
+    about = "One-shot Maestro cutover tool"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

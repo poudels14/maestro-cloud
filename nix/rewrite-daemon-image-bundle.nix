@@ -45,6 +45,7 @@ in
     test -x "$filesystem_root/bin/maestro-daemon"
     test ! -e "$filesystem_root/bin/sh"
     "$filesystem_root/bin/maestro-daemon" --help >/dev/null
+    test "$("$filesystem_root/bin/maestro-daemon" --version)" = "daemon ${version}"
 
     install -m0444 ${daemonImage} "$out/${archiveName}"
     (
