@@ -77,6 +77,7 @@ pub(crate) struct AppState {
     pub(crate) cluster_metric_queries: Option<Arc<dyn NodeMetricQueryStore>>,
     pub(crate) controller_stats: Option<Arc<dyn logs::ControllerStatsProvider>>,
     pub(crate) backup_stats: Option<Arc<dyn logs::BackupStatsProvider>>,
+    pub(crate) stats_metrics: Option<Arc<dyn logs::StatsMetricStore>>,
     pub(crate) cluster_stats_nodes: Arc<[NodeId]>,
     pub(crate) cluster_stats_queries: Option<Arc<dyn NodeStatsQueryStore>>,
     pub(crate) started_at: std::time::Instant,
@@ -117,6 +118,7 @@ impl ApiServer {
             cluster_metric_queries: None,
             controller_stats: None,
             backup_stats: None,
+            stats_metrics: None,
             cluster_stats_nodes: Arc::from([]),
             cluster_stats_queries: None,
             started_at: std::time::Instant::now(),
@@ -199,11 +201,12 @@ impl ApiServer {
         self
     }
 
-    /// Enables live local and cluster-wide controller observability snapshots.
+    /// Enables live controller snapshots and durable local and cluster operational history.
     pub fn with_stats_providers(
         mut self,
         controller: Arc<dyn logs::ControllerStatsProvider>,
         backup: Option<Arc<dyn logs::BackupStatsProvider>>,
+        metrics: Arc<dyn logs::StatsMetricStore>,
         mut node_ids: Vec<NodeId>,
         cluster: Arc<dyn NodeStatsQueryStore>,
     ) -> Self {
@@ -211,6 +214,7 @@ impl ApiServer {
         node_ids.dedup();
         self.state.controller_stats = Some(controller);
         self.state.backup_stats = backup;
+        self.state.stats_metrics = Some(metrics);
         self.state.cluster_stats_nodes = Arc::from(node_ids);
         self.state.cluster_stats_queries = Some(cluster);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));

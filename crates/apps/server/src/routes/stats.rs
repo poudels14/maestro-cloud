@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::future::try_join_all;
 use logs::{
     BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider, ControllerStatsSnapshot,
-    ProbeStatsSnapshot, derive_stats_warnings,
+    ProbeStatsSnapshot, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
+    StatsMetricStoreError, derive_stats_warnings,
 };
+use serde::Deserialize;
 
 use crate::{ApiError, AppState, NodeStatsQueryError, NodeStatsQueryStore};
 
@@ -16,10 +18,24 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/cluster/stats", get(cluster_stats))
         .route("/api/cluster/stats/nodes", get(cluster_node_stats))
+        .route("/api/metrics/stats", get(cluster_stats_metrics))
 }
 
 pub(super) fn node_router() -> Router<AppState> {
-    Router::new().route("/api/node/stats", get(node_stats))
+    Router::new()
+        .route("/api/node/stats", get(node_stats))
+        .route("/api/node/metrics/stats", get(node_stats_metrics))
+}
+
+const DEFAULT_RANGE_MS: i64 = 3_600_000;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsMetricParameters {
+    name: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+    limit: Option<usize>,
 }
 
 async fn cluster_stats(
@@ -89,6 +105,77 @@ async fn cluster_node_stats(
     Ok(Json(try_join_all(futures).await?.into_iter().collect()))
 }
 
+async fn cluster_stats_metrics(
+    State(state): State<AppState>,
+    Query(parameters): Query<StatsMetricParameters>,
+) -> Result<Json<Vec<StatsMetricPoint>>, ApiError> {
+    let query = public_stats_metric_query(&state, parameters)?;
+    let queries = cluster_provider(&state)?;
+    if state.cluster_stats_nodes.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let per_node_limit = query
+        .limit()
+        .saturating_add(state.cluster_stats_nodes.len().saturating_sub(1))
+        / state.cluster_stats_nodes.len();
+    let node_query = StatsMetricQuery::new(
+        query.name().map(str::to_owned),
+        query.from(),
+        query.to(),
+        per_node_limit.max(1),
+    )
+    .map_err(metric_store_error)?;
+    let futures = state.cluster_stats_nodes.iter().map(|node_id| {
+        let queries = queries.clone();
+        let query = node_query.clone();
+        async move {
+            queries
+                .query_node_stats_metrics(node_id, &query)
+                .await
+                .map_err(node_error)
+        }
+    });
+    let mut points = try_join_all(futures)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    points.sort_by(|left, right| {
+        left.ts
+            .cmp(&right.ts)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.labels.cmp(&right.labels))
+    });
+    points.truncate(query.limit());
+    Ok(Json(points))
+}
+
+async fn node_stats_metrics(
+    State(state): State<AppState>,
+    Query(parameters): Query<StatsMetricParameters>,
+) -> Result<Json<Vec<StatsMetricPoint>>, ApiError> {
+    let from = parameters
+        .from
+        .ok_or_else(|| ApiError::bad_request("node stats metric query requires `from`"))?;
+    let to = parameters
+        .to
+        .ok_or_else(|| ApiError::bad_request("node stats metric query requires `to`"))?;
+    let query = StatsMetricQuery::new(
+        parameters.name,
+        from,
+        to,
+        parameters
+            .limit
+            .unwrap_or(logs::MAXIMUM_STATS_METRIC_QUERY_LIMIT),
+    )
+    .map_err(metric_store_error)?;
+    stats_metric_store(&state)?
+        .query_stats_metrics(&query)
+        .await
+        .map(Json)
+        .map_err(metric_store_error)
+}
+
 fn controller_provider(state: &AppState) -> Result<Arc<dyn ControllerStatsProvider>, ApiError> {
     state
         .controller_stats
@@ -101,6 +188,34 @@ fn cluster_provider(state: &AppState) -> Result<Arc<dyn NodeStatsQueryStore>, Ap
         .cluster_stats_queries
         .clone()
         .ok_or_else(|| ApiError::service_unavailable("cluster stats query store is not configured"))
+}
+
+fn stats_metric_store(state: &AppState) -> Result<Arc<dyn StatsMetricStore>, ApiError> {
+    state
+        .stats_metrics
+        .clone()
+        .ok_or_else(|| ApiError::service_unavailable("stats metric query store is not configured"))
+}
+
+fn public_stats_metric_query(
+    state: &AppState,
+    parameters: StatsMetricParameters,
+) -> Result<StatsMetricQuery, ApiError> {
+    let to = parameters
+        .to
+        .unwrap_or_else(|| state.timestamp_clock.now().0);
+    let from = parameters
+        .from
+        .unwrap_or_else(|| to.saturating_sub(DEFAULT_RANGE_MS));
+    StatsMetricQuery::new(
+        parameters.name,
+        from,
+        to,
+        parameters
+            .limit
+            .unwrap_or(logs::MAXIMUM_STATS_METRIC_QUERY_LIMIT),
+    )
+    .map_err(metric_store_error)
 }
 
 fn backup_stats(state: &AppState) -> Result<BackupStatsSnapshot, ApiError> {
@@ -118,6 +233,13 @@ fn store_error(error: logs::LogStatsStoreError) -> ApiError {
     match error {
         logs::LogStatsStoreError::Rejected { message } => ApiError::bad_request(message),
         logs::LogStatsStoreError::Unavailable { message } => ApiError::service_unavailable(message),
+    }
+}
+
+fn metric_store_error(error: StatsMetricStoreError) -> ApiError {
+    match error {
+        StatsMetricStoreError::Rejected { message } => ApiError::bad_request(message),
+        StatsMetricStoreError::Unavailable { message } => ApiError::service_unavailable(message),
     }
 }
 

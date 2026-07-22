@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use kernel_api::NodeId;
-use logs::{ControllerStatsProvider, LogQueryStore};
+use logs::{ControllerStatsProvider, LogQueryStore, StatsMetricStore};
 use metrics::{HostMetricQueryStore, WorkloadMetricQueryStore};
 
 use crate::control_plane::role_error;
@@ -53,6 +53,7 @@ pub(crate) fn stats_query_store(
     plan: &DaemonPlan,
     settings: &server::ServerSettings,
     local: Arc<dyn ControllerStatsProvider>,
+    local_metrics: Arc<dyn StatsMetricStore>,
 ) -> Result<server::HttpNodeStatsQueryStore, RoleError> {
     let trust_root = required_trust_root(settings, "stats")?;
     let identity = required_identity(settings, "stats")?;
@@ -64,6 +65,7 @@ pub(crate) fn stats_query_store(
         identity,
         jwt_secret,
         local,
+        local_metrics,
     )
     .map_err(|error| role_error("construct cluster stats proxy", error))
 }

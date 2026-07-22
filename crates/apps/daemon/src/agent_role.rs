@@ -106,9 +106,10 @@ where
     let backup_stats = log_maintenance
         .as_ref()
         .map(|worker| Arc::new(worker.stats_handle()) as Arc<dyn logs::BackupStatsProvider>);
+    let stats_metric_queries = runtimes.stats_metric_store();
     let stats_metric_sampler = match StatsMetricSampler::new(
         spec.node_id.clone(),
-        runtimes.stats_metric_store(),
+        stats_metric_queries.clone(),
         controller_stats.clone(),
         backup_stats.clone(),
         factory.monotonic_clock.clone(),
@@ -155,6 +156,7 @@ where
         plan,
         &factory.api_settings,
         controller_stats.clone(),
+        stats_metric_queries.clone(),
     ) {
         Ok(queries) => Arc::new(queries) as Arc<dyn server::NodeStatsQueryStore>,
         Err(error) => return runtimes.fail(error).await,
@@ -188,6 +190,7 @@ where
             .with_stats_providers(
                 controller_stats,
                 backup_stats,
+                stats_metric_queries,
                 cluster_stats_nodes,
                 cluster_stats_queries,
             );

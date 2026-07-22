@@ -7,7 +7,7 @@ use kernel_api::{NodeId, SecretValue};
 use logs::{
     BackupStatsProvider, BackupStatsProviderError, BackupStatsSnapshot, ClusterStatsResponse,
     ControllerStatsProvider, ControllerStatsSnapshot, InMemoryLogStore, LiveControllerStats,
-    LogSinkId, SinkRuntimeRegistry,
+    LogSinkId, SinkRuntimeRegistry, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
 };
 
 use super::{decode, request, seeded_store, token};
@@ -25,8 +25,10 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
     let sink_id = LogSinkId::new("datadog")?;
     let runtime = SinkRuntimeRegistry::default();
     runtime.record_failure(&sink_id, "destination rejected payload");
+    logs.append_stats_metrics(&[stats_metric("requests", "node-1")])
+        .await?;
     let controller = Arc::new(LiveControllerStats::new(
-        logs,
+        logs.clone(),
         vec![sink_id],
         runtime,
         env!("CARGO_PKG_VERSION"),
@@ -39,13 +41,16 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
         ..BackupStatsSnapshot::default()
     })) as Arc<dyn BackupStatsProvider>;
     let nodes = vec![NodeId::new("node-1")?, NodeId::new("node-2")?];
-    let cluster = Arc::new(TestNodeStats(controller.clone())) as Arc<dyn NodeStatsQueryStore>;
+    let cluster = Arc::new(TestNodeStats {
+        controller: controller.clone(),
+        metrics: logs.clone(),
+    }) as Arc<dyn NodeStatsQueryStore>;
     let server = ApiServer::new(
         store,
         cluster_id,
         ServerSettings::new("127.0.0.1:3000".parse()?, Some(SecretValue::new(secret))),
     )?
-    .with_stats_providers(controller, Some(backup), nodes, cluster);
+    .with_stats_providers(controller, Some(backup), logs, nodes, cluster);
     let operator = token(secret, "operator")?;
     let node = token(secret, "node")?;
 
@@ -73,6 +78,32 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
     let response = request(&server, "/api/cluster/stats/nodes", Some(&operator)).await?;
     let nodes: BTreeMap<NodeId, ControllerStatsSnapshot> = decode(response).await?;
     assert_eq!(nodes.len(), 2);
+    let response = request(
+        &server,
+        "/api/metrics/stats?name=requests&from=9999&to=10001&limit=2",
+        Some(&operator),
+    )
+    .await?;
+    let points: Vec<StatsMetricPoint> = decode(response).await?;
+    assert_eq!(points.len(), 2);
+    assert!(points.iter().all(|point| point.name == "requests"));
+    assert_eq!(
+        points
+            .iter()
+            .filter_map(|point| point.labels.get("node").map(String::as_str))
+            .collect::<Vec<_>>(),
+        vec!["node-1", "node-2"]
+    );
+    assert_eq!(
+        request(
+            &server,
+            "/api/metrics/stats?from=10001&to=9999",
+            Some(&operator),
+        )
+        .await?
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(
         request(&server, "/api/node/stats", Some(&operator))
             .await?
@@ -80,11 +111,34 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
         StatusCode::FORBIDDEN
     );
     assert_eq!(
+        request(&server, "/api/node/metrics/stats?to=10001", Some(&node),)
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
         request(&server, "/api/node/stats", Some(&node))
             .await?
             .status(),
         StatusCode::OK
     );
+    assert_eq!(
+        request(
+            &server,
+            "/api/node/metrics/stats?from=9999&to=10001",
+            Some(&operator),
+        )
+        .await?
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = request(
+        &server,
+        "/api/node/metrics/stats?from=9999&to=10001",
+        Some(&node),
+    )
+    .await?;
+    assert_eq!(decode::<Vec<StatsMetricPoint>>(response).await?.len(), 1);
     Ok(())
 }
 
@@ -107,6 +161,10 @@ async fn stats_routes_fail_closed_without_live_composition()
             .status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
+    assert_eq!(
+        request(&server, "/api/metrics/stats", None).await?.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     Ok(())
 }
 
@@ -122,8 +180,14 @@ async fn node_stats_client_queries_a_peer_over_authenticated_mutual_tls()
     );
     let remote_node = NodeId::new("node-remote")?;
     let remote_controller = controller_provider("remote-version")?;
-    let remote_cluster =
-        Arc::new(TestNodeStats(remote_controller.clone())) as Arc<dyn NodeStatsQueryStore>;
+    let remote_metrics = Arc::new(InMemoryLogStore::new());
+    remote_metrics
+        .append_stats_metrics(&[stats_metric("remote.metric", "node-remote")])
+        .await?;
+    let remote_cluster = Arc::new(TestNodeStats {
+        controller: remote_controller.clone(),
+        metrics: remote_metrics.clone(),
+    }) as Arc<dyn NodeStatsQueryStore>;
     let (store, cluster_id) = seeded_store().await?;
     let remote = ApiServer::new(
         store,
@@ -135,6 +199,7 @@ async fn node_stats_client_queries_a_peer_over_authenticated_mutual_tls()
     .with_stats_providers(
         remote_controller,
         None,
+        remote_metrics,
         vec![remote_node.clone()],
         remote_cluster,
     )
@@ -156,19 +221,40 @@ async fn node_stats_client_queries_a_peer_over_authenticated_mutual_tls()
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let local_node = NodeId::new("node-local")?;
+    let local_metrics = Arc::new(InMemoryLogStore::new());
+    local_metrics
+        .append_stats_metrics(&[stats_metric("local.metric", "node-local")])
+        .await?;
     let client = HttpNodeStatsQueryStore::new(
         local_node.clone(),
         BTreeMap::from([
-            (local_node, "127.0.0.1:1".parse()?),
+            (local_node.clone(), "127.0.0.1:1".parse()?),
             (remote_node.clone(), remote_address),
         ]),
         &certificate_pem,
         &identity,
         &secret,
         controller_provider("local-version")?,
+        local_metrics,
     )?;
     let stats = client.query_node_stats(&remote_node, 10_000).await?;
     assert_eq!(stats.version, "remote-version");
+    let points = client
+        .query_node_stats_metrics(
+            &remote_node,
+            &StatsMetricQuery::new(Some("remote.metric".to_owned()), 9_999, 10_001, 8)?,
+        )
+        .await?;
+    assert_eq!(points, vec![stats_metric("remote.metric", "node-remote")]);
+    assert_eq!(
+        client
+            .query_node_stats_metrics(
+                &local_node,
+                &StatsMetricQuery::new(Some("local.metric".to_owned()), 9_999, 10_001, 8)?,
+            )
+            .await?,
+        vec![stats_metric("local.metric", "node-local")]
+    );
     shutdown.send(true)?;
     task.await??;
     Ok(())
@@ -182,7 +268,10 @@ impl BackupStatsProvider for TestBackupStats {
     }
 }
 
-struct TestNodeStats(Arc<dyn ControllerStatsProvider>);
+struct TestNodeStats {
+    controller: Arc<dyn ControllerStatsProvider>,
+    metrics: Arc<dyn StatsMetricStore>,
+}
 
 #[async_trait]
 impl NodeStatsQueryStore for TestNodeStats {
@@ -191,12 +280,41 @@ impl NodeStatsQueryStore for TestNodeStats {
         _node_id: &NodeId,
         reported_at_ms: i64,
     ) -> Result<ControllerStatsSnapshot, NodeStatsQueryError> {
-        self.0
+        self.controller
             .controller_stats(reported_at_ms)
             .await
             .map_err(|error| NodeStatsQueryError::Unavailable {
                 message: error.to_string(),
             })
+    }
+
+    async fn query_node_stats_metrics(
+        &self,
+        node_id: &NodeId,
+        query: &StatsMetricQuery,
+    ) -> Result<Vec<StatsMetricPoint>, NodeStatsQueryError> {
+        let mut points = self
+            .metrics
+            .query_stats_metrics(query)
+            .await
+            .map_err(|error| NodeStatsQueryError::Unavailable {
+                message: error.to_string(),
+            })?;
+        for point in &mut points {
+            point
+                .labels
+                .insert("node".to_owned(), node_id.as_str().to_owned());
+        }
+        Ok(points)
+    }
+}
+
+fn stats_metric(name: &str, node: &str) -> StatsMetricPoint {
+    StatsMetricPoint {
+        ts: 10_000,
+        name: name.to_owned(),
+        value: 1.0,
+        labels: BTreeMap::from([("node".to_owned(), node.to_owned())]),
     }
 }
 

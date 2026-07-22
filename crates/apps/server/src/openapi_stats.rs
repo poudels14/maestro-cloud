@@ -16,6 +16,7 @@ pub(crate) fn paths() -> Map<String, Value> {
                 json!({"$ref": "#/components/schemas/NodeStatsMap"}),
             ),
         ),
+        ("/api/metrics/stats".to_owned(), stats_metric_operation()),
     ])
 }
 
@@ -170,6 +171,49 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
             "additionalProperties": {"$ref": "#/components/schemas/ControllerStatsSnapshot"}
         }),
     );
+    schemas.insert(
+        "StatsMetricPoint".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["ts", "name", "value"],
+            "properties": {
+                "ts": {"type": "integer", "format": "int64"},
+                "name": {"type": "string", "minLength": 1, "maxLength": 256},
+                "value": {"type": "number", "format": "double"},
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "maxProperties": 64
+                }
+            }
+        }),
+    );
+}
+
+fn stats_metric_operation() -> Value {
+    json!({
+        "get": {
+            "operationId": "listOperationalStatsMetrics",
+            "security": [{"bearerAuth": []}],
+            "parameters": [
+                query_parameter("name", json!({"type": "string", "minLength": 1, "maxLength": 256})),
+                query_parameter("from", json!({"type": "integer", "format": "int64"})),
+                query_parameter("to", json!({"type": "integer", "format": "int64"})),
+                query_parameter("limit", json!({"type": "integer", "minimum": 1, "maximum": 10000}))
+            ],
+            "responses": {
+                "200": {
+                    "description": "Bounded controller and backup metric history",
+                    "content": {"application/json": {"schema": {
+                        "type": "array",
+                        "items": {"$ref": "#/components/schemas/StatsMetricPoint"}
+                    }}}
+                },
+                "400": {"description": "Invalid range, name, or limit"},
+                "503": {"description": "One or more node stats stores are unavailable"}
+            }
+        }
+    })
 }
 
 fn operation(operation_id: &str, schema: Value) -> Value {
@@ -194,4 +238,8 @@ fn unsigned() -> Value {
 
 fn nullable_integer() -> Value {
     json!({"type": "integer", "format": "int64", "nullable": true})
+}
+
+fn query_parameter(name: &str, schema: Value) -> Value {
+    json!({"name": name, "in": "query", "required": false, "schema": schema})
 }
