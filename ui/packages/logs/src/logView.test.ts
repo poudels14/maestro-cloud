@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ApiSchemas } from "@maestro/api-client";
-import { mapClusterLogEntry, sortLogEntries } from "./logView.ts";
+import { mapClusterLogEntry, sortLogEntries } from "./logView";
 
 test("cluster log entries project normalized workload ownership", () => {
   const wire = clusterEntry({

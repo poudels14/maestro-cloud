@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Ban, Check, ChevronLeft, ChevronRight, Copy, ShieldCheck, Trash2, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
-import { getLogHistogram, setBlockedIngressIp, type LogHistogram } from "../../lib/api";
+import { setBlockedIngressIp } from "../../lib/api";
 import {
   blockedIngressTrafficQuery,
   ingressTrafficQuery,
@@ -15,7 +15,8 @@ import {
 import type { TrafficBreakdownEntry } from "../../lib/types";
 import { Card, ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
 import { StackedHistogramChart } from "@maestro/charts";
-import { LogViewer } from "../logs/LogViewer";
+import { LogViewer, type LogHistogram } from "@maestro/logs";
+import { logsApi } from "../../features";
 
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000, bucketMs: 60_000 },
@@ -52,7 +53,7 @@ function IngressTrafficTab() {
     queryFn: () => {
       const to = Date.now() + 1;
       const bucketMs = TIME_RANGES.find((range) => range.ms === rangeMs())?.bucketMs;
-      return getLogHistogram({
+      return logsApi.getLogHistogram({
         scope: { type: "system", component: "maestro-ingress" },
         from: to - rangeMs(),
         to,
@@ -505,6 +506,7 @@ function TrafficIpSheet(props: {
                 </div>
                 <div class="flex-1 min-h-0 overflow-hidden">
                   <LogViewer
+                    api={logsApi}
                     serviceId="maestro-ingress"
                     deploymentId={null}
                     isSystem

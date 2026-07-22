@@ -2,8 +2,8 @@ import { createMemo, For } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { clusterNodesQuery, servicesQuery } from "../../lib/queries";
-import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
-import { LogViewer } from "../logs/LogViewer";
+import { clusterLogNodeLabel, LogViewer } from "@maestro/logs";
+import { logsApi } from "../../features";
 
 type ClusterLogsSearch = {
   node?: string;
@@ -89,6 +89,7 @@ function ClusterLogsSection() {
       </div>
       <div class="min-h-0 flex-1">
         <LogViewer
+          api={logsApi}
           serviceId={search().service ?? ""}
           deploymentId={null}
           isSystem={false}

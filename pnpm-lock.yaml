@@ -37,6 +37,9 @@ importers:
       '@maestro/kit':
         specifier: workspace:*
         version: link:packages/kit
+      '@maestro/logs':
+        specifier: workspace:*
+        version: link:packages/logs
       '@maestro/metrics':
         specifier: workspace:*
         version: link:packages/metrics
@@ -170,6 +173,43 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+
+  ui/packages/logs:
+    dependencies:
+      '@maestro/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@maestro/charts':
+        specifier: workspace:*
+        version: link:../charts
+      '@maestro/kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@maestro/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@tanstack/solid-router':
+        specifier: ^1.170.18
+        version: 1.170.18(solid-js@1.9.14)
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-solid:
+        specifier: ^0.577.0
+        version: 0.577.0(solid-js@1.9.14)
+      solid-js:
+        specifier: ^1.9.14
+        version: 1.9.14
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.21.0))
 
   ui/packages/metrics:
     dependencies:

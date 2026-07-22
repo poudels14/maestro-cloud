@@ -9,14 +9,13 @@ import { panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
 import type { NavEntry } from "@maestro/sdk";
 
-type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs" | "/traffic" | "/http-logs";
+type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs" | "/traffic";
 type HomePath = CoreHomePath | PanelFeaturePath;
 
 const CORE_NODE_NAV = [
   { path: "/", label: "Info", icon: Info, section: "node", order: 10 },
   { path: "/services", label: "Services", icon: LayoutGrid, section: "node", order: 30 },
-  { path: "/traffic", label: "Traffic", icon: ArrowLeftRight, section: "node", order: 40 },
-  { path: "/http-logs", label: "HTTP logs", icon: ScrollText, section: "node", order: 50 }
+  { path: "/traffic", label: "Traffic", icon: ArrowLeftRight, section: "node", order: 40 }
 ] as const satisfies readonly NavEntry[];
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {

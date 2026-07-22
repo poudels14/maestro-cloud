@@ -10,3 +10,4 @@ function clusterLogNodeLabel(node: ClusterLogNodeRef): string {
 }
 
 export { clusterLogNodeLabel };
+export type { ClusterLogNodeRef };

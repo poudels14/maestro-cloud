@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { clusterLogNodeLabel } from "./clusterLogNode.ts";
+import { clusterLogNodeLabel } from "./clusterLogNode";
 
 test("uses the stable node ID instead of a placeholder hostname", () => {
   assert.equal(

@@ -11,18 +11,10 @@ import {
 } from "solid-js";
 import { ChevronDown, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
-import {
-  getLogHistogram,
-  getLogPage,
-  type LogEntry,
-  type LogHistogram,
-  type LogHistogramBucket,
-  type LogPage,
-  type LogScope
-} from "../../lib/api";
+import type { LogEntry, LogHistogram, LogHistogramBucket, LogPage, LogScope, LogsApi } from "./api";
 import { ErrorBanner } from "@maestro/kit";
 import { StackedHistogramChart } from "@maestro/charts";
-import { dateFormatter, httpFields } from "../../lib/logFormat";
+import { dateFormatter, httpFields } from "./logFormat";
 import { LOG_COLUMNS, LogRow } from "./LogRow";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
 import {
@@ -47,6 +39,7 @@ const TIME_RANGES = [
   { label: "24h", ms: 86_400_000, bucketMs: 600_000 },
   { label: "7d", ms: 604_800_000, bucketMs: 7_200_000 }
 ];
+const DEFAULT_TIME_RANGE = TIME_RANGES[0]!;
 
 type SelectedLogBucket = {
   ts: number;
@@ -70,6 +63,7 @@ function logEntryKey(entry: LogEntry) {
 }
 
 function LogViewer(props: {
+  api: LogsApi;
   serviceId: string;
   deploymentId: string | null;
   buildId?: string | null;
@@ -101,18 +95,18 @@ function LogViewer(props: {
   };
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [pollCursor, setPollCursor] = createSignal<LogPage["cursor"]>({});
-  const [internalRangeMs, setInternalRangeMs] = createSignal(TIME_RANGES[0].ms);
+  const [internalRangeMs, setInternalRangeMs] = createSignal(DEFAULT_TIME_RANGE.ms);
   const rangeMs = () => {
     if (props.onRangeChange) {
       const matched = TIME_RANGES.find((range) => range.label === props.range);
-      return matched?.ms ?? TIME_RANGES[0].ms;
+      return matched?.ms ?? DEFAULT_TIME_RANGE.ms;
     }
     return internalRangeMs();
   };
   const setRangeMs = (value: number) => {
     if (props.onRangeChange) {
       const matched = TIME_RANGES.find((range) => range.ms === value);
-      props.onRangeChange(matched?.label ?? TIME_RANGES[0].label);
+      props.onRangeChange(matched?.label ?? DEFAULT_TIME_RANGE.label);
     } else {
       setInternalRangeMs(value);
     }
@@ -287,7 +281,9 @@ function LogViewer(props: {
     if (props.phase === "build" && props.buildId) {
       return { type: "build", serviceId: props.serviceId, buildId: props.buildId };
     }
-    if (props.isSystem) return { type: "system", component: props.serviceId || undefined };
+    if (props.isSystem) {
+      return props.serviceId ? { type: "system", component: props.serviceId } : { type: "system" };
+    }
     if (props.deploymentId) {
       return {
         type: "deployment",
@@ -301,7 +297,7 @@ function LogViewer(props: {
 
   const fetchPage = async (searchQuery: string, cursor?: LogPage["cursor"]) => {
     const { from, to } = activeTimeRange();
-    return getLogPage({
+    return props.api.getLogPage({
       scope: logScope(),
       tail: PAGE_SIZE,
       ...(cursor ? { cursor } : {}),
@@ -323,7 +319,7 @@ function LogViewer(props: {
     setHistogramLoading(true);
     setHistogramError(null);
     try {
-      const result = await getLogHistogram({
+      const result = await props.api.getLogHistogram({
         scope: logScope(),
         from,
         to,
@@ -539,7 +535,7 @@ function LogViewer(props: {
               to={histogram()!.to}
               bucketMs={histogram()!.bucketMs}
               itemName="log"
-              selectedTs={selectedBucket()?.ts}
+              {...(selectedBucket() ? { selectedTs: selectedBucket()!.ts } : {})}
               onSelectInterval={selectHistogramInterval}
               onSelect={selectHistogramBucket}
             />

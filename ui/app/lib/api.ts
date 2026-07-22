@@ -30,17 +30,6 @@ export {
   removeDeployment,
   restartDeployment
 } from "./deploymentApi";
-export { getLogHistogram, getLogPage } from "./logApi";
-export type {
-  LogEntry,
-  LogHistogram,
-  LogHistogramBucket,
-  LogHistogramRequest,
-  LogPage,
-  LogPageRequest,
-  LogScope
-} from "./logApi";
-
 export interface ClusterInfo extends ClusterSummary {
   nodes: ClusterNode[];
   activeUpgrade: UpgradeRun | null;

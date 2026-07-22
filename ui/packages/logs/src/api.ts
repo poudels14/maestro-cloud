@@ -1,5 +1,9 @@
-import type { ApiSchemas, LogHistogramQuery, LogReadQuery } from "@maestro/api-client";
-import { apiClient, apiRequestError } from "./client";
+import type {
+  ApiSchemas,
+  LogHistogramQuery,
+  LogReadQuery,
+  MaestroApiClient
+} from "@maestro/api-client";
 import { mapClusterLogEntry, sortLogEntries, type LogEntry } from "./logView";
 
 export type LogScope =
@@ -47,20 +51,35 @@ export interface LogHistogramRequest {
   query?: string;
 }
 
-async function getLogPage(request: LogPageRequest): Promise<LogPage> {
+interface LogsApi {
+  getLogPage: (request: LogPageRequest) => Promise<LogPage>;
+  getLogHistogram: (request: LogHistogramRequest) => Promise<LogHistogram>;
+}
+
+type LogsErrorMapper = (error: unknown, fallback: string) => Error;
+
+async function getLogPage(
+  client: MaestroApiClient,
+  mapError: LogsErrorMapper,
+  request: LogPageRequest
+): Promise<LogPage> {
   const query = readQuery(request);
   try {
-    const page = await readScope(request.scope, query);
+    const page = await readScope(client, request.scope, query);
     return {
       cursor: page.cursor,
       entries: sortLogEntries(page.entries.map(mapClusterLogEntry))
     };
   } catch (error) {
-    throw apiRequestError(error, "Failed to load logs");
+    throw mapError(error, "Failed to load logs");
   }
 }
 
-async function getLogHistogram(request: LogHistogramRequest): Promise<LogHistogram> {
+async function getLogHistogram(
+  client: MaestroApiClient,
+  mapError: LogsErrorMapper,
+  request: LogHistogramRequest
+): Promise<LogHistogram> {
   const query: LogHistogramQuery = {
     from: request.from,
     to: request.to,
@@ -70,7 +89,7 @@ async function getLogHistogram(request: LogHistogramRequest): Promise<LogHistogr
     ...(request.query ? { query: request.query } : {})
   };
   try {
-    const buckets = await histogramScope(request.scope, query);
+    const buckets = await histogramScope(client, request.scope, query);
     return {
       from: request.from,
       to: request.to,
@@ -82,7 +101,7 @@ async function getLogHistogram(request: LogHistogramRequest): Promise<LogHistogr
       }))
     };
   } catch (error) {
-    throw apiRequestError(error, "Failed to load log counts");
+    throw mapError(error, "Failed to load log counts");
   }
 }
 
@@ -99,44 +118,57 @@ function readQuery(request: LogPageRequest): LogReadQuery {
   };
 }
 
-function readScope(scope: LogScope, query: LogReadQuery): Promise<ApiSchemas["ClusterLogPage"]> {
+function readScope(
+  client: MaestroApiClient,
+  scope: LogScope,
+  query: LogReadQuery
+): Promise<ApiSchemas["ClusterLogPage"]> {
   switch (scope.type) {
     case "all":
-      return apiClient().listLogs(query);
+      return client.listLogs(query);
     case "system":
-      return apiClient().listSystemLogs({
+      return client.listSystemLogs({
         ...query,
         ...(scope.component ? { component: scope.component } : {})
       });
     case "service":
-      return apiClient().listServiceLogs(scope.serviceId, query);
+      return client.listServiceLogs(scope.serviceId, query);
     case "deployment":
-      return apiClient().listDeploymentLogs(scope.serviceId, scope.deploymentId, query);
+      return client.listDeploymentLogs(scope.serviceId, scope.deploymentId, query);
     case "build":
-      return apiClient().listBuildLogs(scope.serviceId, scope.buildId, query);
+      return client.listBuildLogs(scope.serviceId, scope.buildId, query);
   }
 }
 
 function histogramScope(
+  client: MaestroApiClient,
   scope: LogScope,
   query: LogHistogramQuery
 ): Promise<ApiSchemas["LogHistogramBucket"][]> {
   switch (scope.type) {
     case "all":
-      return apiClient().getLogHistogram(query);
+      return client.getLogHistogram(query);
     case "system":
-      return apiClient().getSystemLogHistogram({
+      return client.getSystemLogHistogram({
         ...query,
         ...(scope.component ? { component: scope.component } : {})
       });
     case "service":
-      return apiClient().getServiceLogHistogram(scope.serviceId, query);
+      return client.getServiceLogHistogram(scope.serviceId, query);
     case "deployment":
-      return apiClient().getDeploymentLogHistogram(scope.serviceId, scope.deploymentId, query);
+      return client.getDeploymentLogHistogram(scope.serviceId, scope.deploymentId, query);
     case "build":
-      return apiClient().getBuildLogHistogram(scope.serviceId, scope.buildId, query);
+      return client.getBuildLogHistogram(scope.serviceId, scope.buildId, query);
   }
 }
 
-export { getLogHistogram, getLogPage };
+function createLogsApi(client: () => MaestroApiClient, mapError: LogsErrorMapper): LogsApi {
+  return {
+    getLogPage: (request) => getLogPage(client(), mapError, request),
+    getLogHistogram: (request) => getLogHistogram(client(), mapError, request)
+  };
+}
+
+export { createLogsApi };
 export type { LogEntry } from "./logView";
+export type { LogsApi, LogsErrorMapper };

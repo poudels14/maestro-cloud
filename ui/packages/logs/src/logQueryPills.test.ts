@@ -5,7 +5,7 @@ import {
   logQueryPills,
   removeLogQueryPill,
   withLogHistogramGroupFilter
-} from "./logQueryPills.ts";
+} from "./logQueryPills";
 
 test("extracts top-level field filters and preserves their values", () => {
   const pills = logQueryPills(
@@ -46,7 +46,7 @@ test("keeps exclusion operators on their pills", () => {
   );
 
   const nested = "NOT NOT level:info AND service:app";
-  const level = logQueryPills(nested)[0];
+  const level = logQueryPills(nested)[0]!;
   assert.equal(level.prefix, "NOT NOT ");
   assert.equal(removeLogQueryPill(nested, level), "service:app");
 });
@@ -55,12 +55,12 @@ test("removes explicit and implicit conjunction terms without breaking the query
   const explicit = "level:error AND @http.status_code:404 AND service:app";
   const explicitPills = logQueryPills(explicit);
   assert.equal(
-    removeLogQueryPill(explicit, explicitPills[0]),
+    removeLogQueryPill(explicit, explicitPills[0]!),
     "@http.status_code:404 AND service:app"
   );
-  assert.equal(removeLogQueryPill(explicit, explicitPills[1]), "level:error AND service:app");
+  assert.equal(removeLogQueryPill(explicit, explicitPills[1]!), "level:error AND service:app");
   assert.equal(
-    removeLogQueryPill(explicit, explicitPills[2]),
+    removeLogQueryPill(explicit, explicitPills[2]!),
     "level:error AND @http.status_code:404"
   );
 

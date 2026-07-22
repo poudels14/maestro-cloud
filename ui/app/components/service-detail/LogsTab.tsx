@@ -3,7 +3,8 @@ import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import type { Service } from "../../lib/types";
 import { deploymentsQuery } from "../../lib/queries";
-import { LogViewer } from "../logs/LogViewer";
+import { LogViewer } from "@maestro/logs";
+import { logsApi } from "../../features";
 
 function LogsTab(props: { service: Service }) {
   const location = useLocation();
@@ -33,6 +34,7 @@ function LogsTab(props: { service: Service }) {
       }
     >
       <LogViewer
+        api={logsApi}
         serviceId={props.service.meta.id}
         deploymentId={null}
         isSystem={false}

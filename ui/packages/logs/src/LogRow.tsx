@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
 import clsx from "clsx";
-import type { LogEntry } from "../../lib/logView";
-import { clusterLogNodeLabel } from "../../lib/clusterLogNode";
-import { httpFields } from "../../lib/logFormat";
+import type { LogEntry } from "./logView";
+import { clusterLogNodeLabel } from "./clusterLogNode";
+import { httpFields } from "./logFormat";
 import {
   ExpanderCell,
   HostCell,

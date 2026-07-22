@@ -122,3 +122,4 @@ function stringifyUnknown(value: unknown): string {
 }
 
 export { mapClusterLogEntry, sortLogEntries };
+export type { OriginView };

@@ -1,0 +1,29 @@
+{
+  "name": "@maestro/logs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maestro structured log viewing feature",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "test": "vitest run && pnpm typecheck",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@maestro/api-client": "workspace:*",
+    "@maestro/charts": "workspace:*",
+    "@maestro/kit": "workspace:*",
+    "@maestro/sdk": "workspace:*",
+    "@tanstack/solid-router": "^1.170.18",
+    "clsx": "^2.1.1",
+    "lucide-solid": "^0.577.0",
+    "solid-js": "^1.9.14"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "packageManager": "pnpm@10.11.1"
+}

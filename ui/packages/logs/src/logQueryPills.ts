@@ -32,7 +32,7 @@ function topLevelTokens(query: string): QueryToken[] | null {
   };
 
   for (let index = 0; index < query.length; index += 1) {
-    const character = query[index];
+    const character = query[index]!;
     if (!quoted && parenthesisDepth === 0 && bracketDepth === 0 && /\s/.test(character)) {
       finish(index);
       continue;
@@ -87,7 +87,7 @@ function logQueryPills(query: string): LogQueryPill[] {
 
   const pills: LogQueryPill[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
+    const token = tokens[index]!;
     if (token.text === "AND") continue;
 
     const firstToken = index;
@@ -106,12 +106,12 @@ function logQueryPills(query: string): LogQueryPill[] {
     const parsed = parseSimpleFilter(filterToken.text, unaryPrefix);
     if (!parsed) continue;
 
-    let removeStart = tokens[firstToken].start;
-    let removeEnd = tokens[lastToken].end;
+    let removeStart = tokens[firstToken]!.start;
+    let removeEnd = tokens[lastToken]!.end;
     if (tokens[firstToken - 1]?.text === "AND") {
-      removeStart = tokens[firstToken - 1].start;
+      removeStart = tokens[firstToken - 1]!.start;
     } else if (tokens[lastToken + 1]?.text === "AND") {
-      removeEnd = tokens[lastToken + 1].end;
+      removeEnd = tokens[lastToken + 1]!.end;
     }
     pills.push({
       ...parsed,

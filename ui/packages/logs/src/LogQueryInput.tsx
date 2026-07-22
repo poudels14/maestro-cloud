@@ -11,10 +11,10 @@ import { Search, X } from "lucide-solid";
 import clsx from "clsx";
 import { logQueryPills, removeLogQueryPill, type LogQueryPill } from "./logQueryPills";
 
-type LogQueryCatalog = {
+interface LogQueryCatalog {
   fields: string[];
   values: ReadonlyMap<string, readonly string[]>;
-};
+}
 
 type SuggestionKind = "operator" | "field" | "value";
 
@@ -516,7 +516,7 @@ function HighlightedLabel(props: { label: string; match: string }) {
 
 function tokenAtCursor(query: string, cursor: number) {
   let start = Math.min(cursor, query.length);
-  while (start > 0 && !/[\s()]/.test(query[start - 1])) start -= 1;
+  while (start > 0 && !/[\s()]/.test(query[start - 1]!)) start -= 1;
   return { start, end: cursor, text: query.slice(start, cursor) };
 }
 

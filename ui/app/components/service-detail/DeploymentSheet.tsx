@@ -6,9 +6,9 @@ import type { Deployment } from "../../lib/types";
 import { replicaFailure } from "../../lib/deploymentView";
 import { deploymentReplicasQuery } from "../../lib/queries";
 import { useQuery } from "../../lib/useQuery";
-import { ErrorBanner, StatusBadge, timeAgo } from "@maestro/kit";
-import { formatDateTime } from "@maestro/kit";
-import { LogViewer } from "../logs/LogViewer";
+import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit";
+import { LogViewer } from "@maestro/logs";
+import { logsApi } from "../../features";
 import { ReplicaRow } from "./DeploymentRow";
 
 type SheetTabId = "logs" | "build" | "details";
@@ -103,6 +103,7 @@ function DeploymentSheet(props: {
                     <Switch>
                       <Match when={props.tab === "logs"}>
                         <LogViewer
+                          api={logsApi}
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
                           buildId={deployment.spec.buildId}
@@ -114,6 +115,7 @@ function DeploymentSheet(props: {
                       </Match>
                       <Match when={props.tab === "build" && hasBuild}>
                         <LogViewer
+                          api={logsApi}
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
                           buildId={deployment.spec.buildId}

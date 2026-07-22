@@ -15,7 +15,6 @@ import { ClusterConfigSection } from "./ClusterConfigSection";
 import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
-import { HttpLogsSection } from "./HttpLogsSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
 import { IngressTrafficTab } from "../ingress/TrafficTab";
 import { panelFeatureRegistry } from "../../features";
@@ -98,9 +97,6 @@ function HomeShell(props: { path: HomePath }) {
                 </Match>
                 <Match when={props.path === "/traffic"}>
                   <IngressTrafficTab />
-                </Match>
-                <Match when={props.path === "/http-logs"}>
-                  <HttpLogsSection />
                 </Match>
                 <Match when={props.path === "/services"}>
                   <ServicesGrid />

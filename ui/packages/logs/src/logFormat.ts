@@ -72,16 +72,16 @@ const TRAEFIK_ENTRYPOINT_KEYS = ["entrypointname"];
 const TRAEFIK_SCHEME_KEYS = ["requestscheme"];
 
 type HttpFields = {
-  method?: string;
-  status?: string;
-  path?: string;
-  durationLabel?: string;
-  requestHost?: string;
-  clientIp?: string;
-  router?: string;
-  service?: string;
-  entryPoint?: string;
-  scheme?: string;
+  method?: string | undefined;
+  status?: string | undefined;
+  path?: string | undefined;
+  durationLabel?: string | undefined;
+  requestHost?: string | undefined;
+  clientIp?: string | undefined;
+  router?: string | undefined;
+  service?: string | undefined;
+  entryPoint?: string | undefined;
+  scheme?: string | undefined;
   isTraefikAccessLog: boolean;
 };
 
@@ -186,12 +186,12 @@ function logLevelColors(level: string) {
 }
 
 export {
-  tsFormatter,
-  timeFormatter,
   dateFormatter,
-  logLevelColors,
   httpFields,
   httpMethodColor,
   httpStatusPill,
+  logLevelColors,
+  timeFormatter,
+  tsFormatter,
   type HttpFields
 };

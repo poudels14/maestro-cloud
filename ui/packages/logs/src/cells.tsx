@@ -8,7 +8,7 @@ import {
   logLevelColors,
   httpMethodColor,
   httpStatusPill
-} from "../../lib/logFormat";
+} from "./logFormat";
 
 function TimeCell(props: { ts: number }) {
   const d = () => new Date(props.ts);
@@ -57,7 +57,7 @@ function LevelCell(props: { level: string }) {
   );
 }
 
-function MessageCell(props: { text: string; class?: string }) {
+function MessageCell(props: { text: string; class?: string | undefined }) {
   return (
     <span class={clsx("block whitespace-pre-wrap break-words", props.class ?? "text-gray-700")}>
       {props.text}
@@ -65,7 +65,7 @@ function MessageCell(props: { text: string; class?: string }) {
   );
 }
 
-function MethodCell(props: { method?: string }) {
+function MethodCell(props: { method?: string | undefined }) {
   return (
     <Show when={props.method} fallback={<span class="text-gray-300">·</span>}>
       <span class={clsx("uppercase font-medium", httpMethodColor(props.method!))}>
@@ -75,7 +75,7 @@ function MethodCell(props: { method?: string }) {
   );
 }
 
-function StatusCell(props: { status?: string }) {
+function StatusCell(props: { status?: string | undefined }) {
   return (
     <Show when={props.status} fallback={<span class="text-gray-300">·</span>}>
       <span
@@ -92,10 +92,10 @@ function StatusCell(props: { status?: string }) {
 
 function PathCell(props: {
   path: string;
-  durationLabel?: string;
-  requestHost?: string;
-  clientIp?: string;
-  router?: string;
+  durationLabel?: string | undefined;
+  requestHost?: string | undefined;
+  clientIp?: string | undefined;
+  router?: string | undefined;
 }) {
   return (
     <span class="flex flex-col gap-0.5 min-w-0">
