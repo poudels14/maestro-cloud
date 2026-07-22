@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::legacy_cluster::LegacyClusterCatalog;
 use crate::legacy_config::{ConvertedServiceConfig, convert_service_config};
+use crate::legacy_derived::LegacyDerivedCatalog;
 use crate::legacy_identity::LegacyClusterIdentity;
 use crate::legacy_maintenance::LegacyMaintenanceCatalog;
 use crate::legacy_membership::LegacyMembershipCatalog;
@@ -75,8 +76,14 @@ pub fn plan_legacy_snapshot(
             message: error.to_string(),
         }
     })?;
+    let derived =
+        LegacyDerivedCatalog::decode(&network.unclaimed, &nodes, &catalog).map_err(|error| {
+            LegacyPlanError::DecodeLegacyState {
+                message: error.to_string(),
+            }
+        })?;
     let webhooks =
-        LegacyWebhookCatalog::decode(&network.unclaimed, master_secret).map_err(|error| {
+        LegacyWebhookCatalog::decode(&derived.unclaimed, master_secret).map_err(|error| {
             LegacyPlanError::DecodeLegacyState {
                 message: error.to_string(),
             }
@@ -89,6 +96,7 @@ pub fn plan_legacy_snapshot(
     let mut resources = convert_catalog(&catalog)?;
     resources.extend(nodes.convert()?);
     identity.annotate_master(&mut resources)?;
+    derived.annotate_master(&mut resources)?;
     membership.annotate_nodes(&mut resources)?;
     maintenance.annotate_master(&mut resources)?;
     lifecycle.annotate_nodes(&mut resources)?;
