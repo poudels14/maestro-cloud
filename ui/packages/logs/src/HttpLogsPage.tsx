@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/solid-router";
+import { mergeDefinedProperties } from "@maestro/sdk";
 import type { LogsApi } from "./api";
 import { LogViewer } from "./LogViewer";
 
@@ -10,7 +11,11 @@ function HttpLogsPage(props: { api: LogsApi }) {
   const navigate = useNavigate();
 
   const setUrlSearch = (updates: { query?: string | undefined; range?: string | undefined }) =>
-    navigate({ to: "/http-logs", search: { ...search(), ...updates }, replace: true });
+    navigate({
+      to: "/http-logs",
+      search: mergeDefinedProperties(search(), updates),
+      replace: true
+    });
 
   return (
     <LogViewer

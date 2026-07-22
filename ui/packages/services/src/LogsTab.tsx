@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { useQuery } from "@maestro/sdk";
+import { mergeDefinedProperties, useQuery } from "@maestro/sdk";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
@@ -20,7 +20,7 @@ function LogsTab(props: { api: ServicesApi; logsApi: LogsApi; service: Service }
     navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: props.service.meta.id, tab: "logs" },
-      search: { ...search(), ...updates },
+      search: mergeDefinedProperties(search(), updates),
       replace: true
     });
 

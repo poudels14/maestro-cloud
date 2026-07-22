@@ -1,6 +1,6 @@
 import { createMemo, For } from "solid-js";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import { useQuery } from "@maestro/sdk";
+import { mergeDefinedProperties, useQuery } from "@maestro/sdk";
 import type { LogsApi } from "./api";
 import { clusterLogNodeLabel, type ClusterLogNodeRef } from "./clusterLogNode";
 import { LogViewer } from "./LogViewer";
@@ -57,7 +57,7 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
   const setUrlSearch = (updates: ClusterLogsSearch) =>
     navigate({
       to: "/cluster/logs",
-      search: { ...search(), ...updates },
+      search: mergeDefinedProperties(search(), updates),
       replace: true
     });
   const clusterSelection = () => {

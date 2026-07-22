@@ -4,5 +4,8 @@ controller/target
 controller/tmp_data
 controller/default.etcd
 ui/node_modules
+ui/**/node_modules
 ui/.vinxi
 ui/.output
+ui/**/.vinxi
+ui/**/.output

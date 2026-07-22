@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { ApiRequestError, apiErrorFromBody } from "./apiError.ts";
+import { ApiRequestError, apiErrorFromBody } from "./apiError";
 
 test("parses structured API errors", async () => {
   const error = apiErrorFromBody(

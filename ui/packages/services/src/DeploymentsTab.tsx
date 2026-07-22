@@ -1,6 +1,6 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import { useQuery } from "@maestro/sdk";
+import { mergeDefinedProperties, useQuery } from "@maestro/sdk";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { LogsApi } from "@maestro/logs";
@@ -39,7 +39,7 @@ function DeploymentsTab(props: {
     navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: serviceId(), tab: "deployments" },
-      search: { ...search(), ...updates },
+      search: mergeDefinedProperties(search(), updates),
       replace: true
     });
 

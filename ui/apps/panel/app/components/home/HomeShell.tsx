@@ -17,11 +17,12 @@ function HomeShell(props: { path: HomePath }) {
   const cluster = useQuery(() => clusterInfoQuery(clusterApi));
   const [drawerOpen, setDrawerOpen] = createSignal(false);
   const featureRoute = () => panelFeatureRegistry.routes.find((route) => route.path === props.path);
-  const fullPage = () =>
-    props.path === "/http-logs" ||
-    props.path === "/cluster/logs" ||
-    featureRoute()?.layout === "full";
-  const widePage = () => fullPage() || featureRoute()?.layout === "wide";
+  const featureLayout = () => {
+    const route = featureRoute();
+    return route && "layout" in route ? route.layout : "standard";
+  };
+  const fullPage = () => featureLayout() === "full";
+  const widePage = () => fullPage() || featureLayout() === "wide";
 
   const navigateService = (service: Service) => {
     setDrawerOpen(false);

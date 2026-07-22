@@ -11,3 +11,5 @@ export type {
   RouteDefinition
 } from "./features";
 export { useQuery } from "./query";
+export { mergeDefinedProperties } from "./search";
+export type { DefinedProperties } from "./search";

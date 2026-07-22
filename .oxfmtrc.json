@@ -1,7 +1,9 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
-    "ui/app/routeTree.gen.ts",
+    "ui/apps/panel/.output/**",
+    "ui/apps/panel/.vinxi/**",
+    "ui/apps/panel/app/routeTree.gen.ts",
     "ui/packages/api-client/openapi.json",
     "ui/packages/api-client/src/schema.d.ts"
   ],

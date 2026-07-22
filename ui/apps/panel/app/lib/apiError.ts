@@ -42,8 +42,8 @@ function apiErrorFromBody(status: number, body: string, fallback: string) {
   }
   return new ApiRequestError(error?.message || fallback, {
     status,
-    code: error?.code,
-    details: error?.details
+    ...(error?.code !== undefined ? { code: error.code } : {}),
+    ...(error?.details !== undefined ? { details: error.details } : {})
   });
 }
 
