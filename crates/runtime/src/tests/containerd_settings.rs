@@ -56,6 +56,15 @@ fn containerd_settings_reject_relative_empty_and_zero_values() {
     ));
 
     let settings = ContainerdRuntimeSettings {
+        rpc_timeout: std::time::Duration::ZERO,
+        ..ContainerdRuntimeSettings::default()
+    };
+    assert!(matches!(
+        settings.validate(),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let settings = ContainerdRuntimeSettings {
         buildkit_address: "bad\naddress".to_owned(),
         ..ContainerdRuntimeSettings::default()
     };

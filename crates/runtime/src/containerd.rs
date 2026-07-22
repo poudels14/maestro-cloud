@@ -23,7 +23,7 @@ use crate::containerd_resolver::prepare_resolver_file;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{
     CLUSTER_LABEL, NODE_LABEL, container_id, container_name, is_already_exists, is_not_found,
-    namespaced, observed_workload, runtime_status, task_container_id, task_status,
+    namespaced_timeout, observed_workload, runtime_status, task_container_id, task_status,
     validate_existing,
 };
 use crate::file_log::FileLogStream;
@@ -88,11 +88,12 @@ impl ContainerdRuntime {
         let response = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),
         )
-        .get(namespaced(
+        .get(namespaced_timeout(
             GetContainerRequest {
                 id: container_id.to_owned(),
             },
             &self.settings.namespace,
+            self.settings.rpc_timeout,
         )?)
         .await
         .map_err(|error| runtime_status(error, workload_id))?;
@@ -158,7 +159,7 @@ impl WorkloadRuntime for ContainerdRuntime {
             containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
                 self.channel.clone(),
             )
-            .prepare(namespaced(
+            .prepare(namespaced_timeout(
                 PrepareSnapshotRequest {
                     snapshotter: self.settings.snapshotter.clone(),
                     key: snapshot_key.clone(),
@@ -169,6 +170,7 @@ impl WorkloadRuntime for ContainerdRuntime {
                     )]),
                 },
                 &self.settings.namespace,
+                self.settings.rpc_timeout,
             )?)
             .await;
         if let Err(error) = snapshot_result
@@ -189,11 +191,12 @@ impl WorkloadRuntime for ContainerdRuntime {
         let result = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),
         )
-        .create(namespaced(
+        .create(namespaced_timeout(
             CreateContainerRequest {
                 container: Some(record),
             },
             &self.settings.namespace,
+            self.settings.rpc_timeout,
         )?)
         .await;
         match result {
@@ -302,11 +305,12 @@ impl WorkloadRuntime for ContainerdRuntime {
         let delete = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),
         )
-        .delete(namespaced(
+        .delete(namespaced_timeout(
             DeleteContainerRequest {
                 id: container_id.clone(),
             },
             &self.settings.namespace,
+            self.settings.rpc_timeout,
         )?)
         .await;
         if let Err(error) = delete
@@ -317,12 +321,13 @@ impl WorkloadRuntime for ContainerdRuntime {
         let remove = containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
             self.channel.clone(),
         )
-        .remove(namespaced(
+        .remove(namespaced_timeout(
             RemoveSnapshotRequest {
                 snapshotter: self.settings.snapshotter.clone(),
                 key: snapshot_key(&container_id),
             },
             &self.settings.namespace,
+            self.settings.rpc_timeout,
         )?)
         .await;
         if let Err(error) = remove
@@ -358,9 +363,10 @@ impl WorkloadRuntime for ContainerdRuntime {
         let containers = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),
         )
-        .list(namespaced(
+        .list(namespaced_timeout(
             ListContainersRequest::default(),
             &self.settings.namespace,
+            self.settings.rpc_timeout,
         )?)
         .await
         .map_err(|error| RuntimeError::Unavailable {
@@ -369,9 +375,10 @@ impl WorkloadRuntime for ContainerdRuntime {
         .into_inner()
         .containers;
         let tasks = containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
-            .list(namespaced(
+            .list(namespaced_timeout(
                 ListTasksRequest::default(),
                 &self.settings.namespace,
+                self.settings.rpc_timeout,
             )?)
             .await
             .map_err(|error| RuntimeError::Unavailable {

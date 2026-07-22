@@ -106,6 +106,7 @@ impl ExitWorld {
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),
                 restart_backoff_max: Duration::from_secs(60),
+                reconcile_timeout: Duration::from_secs(10),
                 secrets_root: self.state_root.path().join("secrets"),
                 node_api_root: self.state_root.path().join("node-api"),
             },

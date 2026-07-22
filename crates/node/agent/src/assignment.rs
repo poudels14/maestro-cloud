@@ -77,6 +77,7 @@ impl AssignmentAgent {
             || settings.resync_interval.is_zero()
             || settings.restart_backoff_base.is_zero()
             || settings.restart_backoff_max < settings.restart_backoff_base
+            || settings.reconcile_timeout.is_zero()
         {
             return Err(AssignmentAgentError::ZeroDeadline);
         }
@@ -122,7 +123,37 @@ impl AssignmentAgent {
                 self.node_api.shutdown_all().await?;
                 return Ok(());
             }
-            let (report, cursor) = self.reconcile_with_cursor().await?;
+            let reconcile_deadline = self
+                .monotonic_clock
+                .now()
+                .saturating_add(self.settings.reconcile_timeout);
+            let reconcile = tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        #[cfg(unix)]
+                        self.node_api.shutdown_all().await?;
+                        return Ok(());
+                    }
+                    continue;
+                }
+                result = self.reconcile_with_cursor() => Some(result),
+                () = self.monotonic_clock.sleep_until(reconcile_deadline) => None,
+            };
+            let Some(reconcile) = reconcile else {
+                continue;
+            };
+            let (report, cursor) = match reconcile {
+                Ok(reconciled) => reconciled,
+                Err(error) if error.retryable() => {
+                    if self.wait_for_retry_or_shutdown(&mut shutdown).await {
+                        #[cfg(unix)]
+                        self.node_api.shutdown_all().await?;
+                        return Ok(());
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let retry_at = report.requeue_at.map(|deadline| {
                 monotonic_deadline(
                     self.monotonic_clock.as_ref(),
@@ -130,9 +161,21 @@ impl AssignmentAgent {
                     deadline,
                 )
             });
-            let mut events = self
+            let mut events = match self
                 .store
-                .watch(self.keyspace.resources(), WatchStart::After(cursor))?;
+                .watch(self.keyspace.resources(), WatchStart::After(cursor))
+            {
+                Ok(events) => events,
+                Err(error) if retryable_watch_error(&error) => {
+                    if self.wait_for_retry_or_shutdown(&mut shutdown).await {
+                        #[cfg(unix)]
+                        self.node_api.shutdown_all().await?;
+                        return Ok(());
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             let mut runtime_stream_ended = false;
             let mut runtime_reconnect_at = self
                 .monotonic_clock
@@ -164,7 +207,15 @@ impl AssignmentAgent {
                     }
                     event = events.next() => {
                         match event {
-                            Ok(_) | Err(StoreError::CursorExpired { .. }) => break,
+                            Ok(_) => break,
+                            Err(error) if retryable_watch_error(&error) => {
+                                if self.wait_for_retry_or_shutdown(&mut shutdown).await {
+                                    #[cfg(unix)]
+                                    self.node_api.shutdown_all().await?;
+                                    return Ok(());
+                                }
+                                break;
+                            }
                             Err(error) => return Err(error.into()),
                         }
                     }
@@ -208,6 +259,23 @@ impl AssignmentAgent {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    async fn wait_for_retry_or_shutdown(&self, shutdown: &mut watch::Receiver<bool>) -> bool {
+        let retry_at = self
+            .monotonic_clock
+            .now()
+            .saturating_add(RUNTIME_STREAM_RECONNECT_DELAY);
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return true;
+                    }
+                }
+                () = self.monotonic_clock.sleep_until(retry_at) => return false,
             }
         }
     }
@@ -377,19 +445,9 @@ impl AssignmentAgent {
             additional_mounts,
         )?;
         let handle = self.runtime.create(&spec).await?;
-        let lease = self
-            .network
-            .allocate_address(
-                network,
-                handle.workload_id(),
-                AddressRequest::Exact(assignment.spec.workload_address),
-            )
-            .await?;
-        self.network.attach(&handle, network, &lease).await?;
         let before = self.runtime.status(&handle).await?;
         match before.state {
-            WorkloadState::Created => self.runtime.start(&handle).await?,
-            WorkloadState::Running => {}
+            WorkloadState::Created | WorkloadState::Running => {}
             WorkloadState::Stopped => {
                 let replica = replica.ok_or_else(|| {
                     ConvergeFailure::pending(
@@ -421,7 +479,7 @@ impl AssignmentAgent {
                             not_before,
                         ));
                     }
-                    RestartReservation::Reserved { .. } => self.runtime.start(&handle).await?,
+                    RestartReservation::Reserved { .. } => {}
                     RestartReservation::Exhausted { maximum } => {
                         return Err(ConvergeFailure::failed(
                             "RestartLimitReached",
@@ -445,6 +503,22 @@ impl AssignmentAgent {
                     runtime_status_message(&before),
                 ));
             }
+        }
+        let needs_start = matches!(
+            before.state,
+            WorkloadState::Created | WorkloadState::Stopped
+        );
+        let lease = self
+            .network
+            .allocate_address(
+                network,
+                handle.workload_id(),
+                AddressRequest::Exact(assignment.spec.workload_address),
+            )
+            .await?;
+        self.network.attach(&handle, network, &lease).await?;
+        if needs_start {
+            self.runtime.start(&handle).await?;
         }
         let status = self.runtime.status(&handle).await?;
         if status.state == WorkloadState::Running {
@@ -554,4 +628,13 @@ impl AssignmentAgent {
             assignment_id: assignment.meta.id.to_string(),
         })
     }
+}
+
+fn retryable_watch_error(error: &StoreError) -> bool {
+    matches!(
+        error,
+        StoreError::CursorExpired { .. }
+            | StoreError::SessionExpired { .. }
+            | StoreError::Unavailable { .. }
+    )
 }

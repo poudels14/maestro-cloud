@@ -7,7 +7,7 @@ use std::time::Duration;
 use clustertest::FixtureNodeName;
 use kernel_api::NodeId;
 
-use super::{RETRY_DELAY, RealClusterError, RealProcessCluster, SETUP_TIMEOUT};
+use super::{RETRY_DELAY, RealClusterError, RealProcessCluster, SETUP_TIMEOUT, kill_process_group};
 
 pub(super) struct RealNode {
     pub(super) fixture: FixtureNodeName,
@@ -272,6 +272,7 @@ impl Drop for RealProcessCluster {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
+                kill_process_group(child.id());
             }
             kill_namespace_processes(&node.workload_namespace);
             let _ = Command::new("ip")
@@ -282,6 +283,19 @@ impl Drop for RealProcessCluster {
                 .args(["netns", "delete", &node.namespace])
                 .status();
         }
+        let volatile_root = PathBuf::from("/run/maestro").join(self.cluster.cluster_id.as_str());
+        let _ = std::fs::remove_dir_all(volatile_root);
+        let _ = Command::new("ctr")
+            .args([
+                "--address",
+                self.containerd_socket.to_string_lossy().as_ref(),
+                "namespaces",
+                "remove",
+                &format!("maestro-{}", self.cluster.cluster_id),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = Command::new("ip")
             .args(["link", "delete", &self.bridge])
             .status();

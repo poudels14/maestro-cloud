@@ -25,6 +25,34 @@ cleanup() {
   trap - EXIT INT TERM
 
   sudo ip link delete "$wireguard_probe" >/dev/null 2>&1 || true
+  if [[ -S "$containerd_socket" ]] \
+    && sudo ctr --address "$containerd_socket" version >/dev/null 2>&1; then
+    while IFS= read -r namespace; do
+      if [[ -z "$namespace" ]]; then
+        continue
+      fi
+      while IFS= read -r task_id; do
+        if [[ -n "$task_id" ]]; then
+          sudo ctr --address "$containerd_socket" --namespace "$namespace" \
+            tasks delete --force "$task_id" >/dev/null 2>&1 || true
+        fi
+      done < <(
+        sudo ctr --address "$containerd_socket" --namespace "$namespace" \
+          tasks list --quiet 2>/dev/null || true
+      )
+      while IFS= read -r container_id; do
+        if [[ -n "$container_id" ]]; then
+          sudo ctr --address "$containerd_socket" --namespace "$namespace" \
+            containers delete "$container_id" >/dev/null 2>&1 || true
+        fi
+      done < <(
+        sudo ctr --address "$containerd_socket" --namespace "$namespace" \
+          containers list --quiet 2>/dev/null || true
+      )
+    done < <(
+      sudo ctr --address "$containerd_socket" namespaces list --quiet 2>/dev/null || true
+    )
+  fi
   if [[ -n "$containerd_pid" ]]; then
     sudo kill "$containerd_pid" >/dev/null 2>&1 || true
     wait "$containerd_pid" 2>/dev/null || true
@@ -52,6 +80,8 @@ sudo modprobe wireguard
 sudo ip link add "$wireguard_probe" type wireguard
 sudo ip link delete "$wireguard_probe"
 
+# The caller owns the isolated log directory used by this redirection.
+# shellcheck disable=SC2024
 sudo containerd \
   --log-level warn \
   --address "$containerd_socket" \

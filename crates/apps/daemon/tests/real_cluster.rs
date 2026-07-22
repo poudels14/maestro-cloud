@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::net::Ipv4Addr;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -33,6 +34,10 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 #[path = "real_cluster/network.rs"]
 mod network;
+#[path = "real_cluster/workload.rs"]
+mod workload;
+#[path = "real_cluster/workload_fixture.rs"]
+mod workload_fixture;
 
 use network::{
     RealNode, kill_namespace_processes, node_namespace_diagnostics, shortened_interface_name,
@@ -215,15 +220,16 @@ impl RealProcessCluster {
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;
         let error_log = log.try_clone().map_err(RealClusterError::from_display)?;
-        let child = Command::new("ip")
+        let mut command = Command::new("ip");
+        command
             .args(["netns", "exec", &node.namespace])
             .arg(&self.daemon_binary)
             .arg(&node.config_path)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(error_log))
-            .spawn()
-            .map_err(RealClusterError::from_display)?;
+            .process_group(0);
+        let child = command.spawn().map_err(RealClusterError::from_display)?;
         self.node_mut(index)?.child = Some(child);
         Ok(())
     }
@@ -233,14 +239,31 @@ impl RealProcessCluster {
         loop {
             self.ensure_children_running()?;
             match self.connect_store().await {
-                Ok(store) => return Ok(store),
+                Ok(store)
+                    if store
+                        .list(&Keyspace::new(&self.cluster.cluster_id).resources())
+                        .await
+                        .is_ok() =>
+                {
+                    return Ok(store);
+                }
+                Ok(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(RETRY_DELAY).await;
+                }
+                Ok(_) => {
+                    return Err(RealClusterError::new(format!(
+                        "store readiness deadline elapsed before a linearizable list succeeded; log: {}",
+                        read_log(&self.node(0)?.log_path),
+                    )));
+                }
                 Err(error) if tokio::time::Instant::now() < deadline => {
                     let _detail = error;
                     tokio::time::sleep(RETRY_DELAY).await;
                 }
                 Err(error) => {
                     return Err(RealClusterError::new(format!(
-                        "store readiness deadline elapsed: {error}"
+                        "store readiness deadline elapsed: {error}; log: {}",
+                        read_log(&self.node(0)?.log_path),
                     )));
                 }
             }
@@ -446,6 +469,7 @@ impl RealProcessCluster {
         let Some(mut child) = self.node_mut(index)?.child.take() else {
             return Err(RealClusterError::new("node process is not running"));
         };
+        kill_process_group(child.id());
         kill_namespace_processes(&namespace);
         let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
         loop {
@@ -454,6 +478,7 @@ impl RealProcessCluster {
                 .map_err(RealClusterError::from_display)?
                 .is_some()
             {
+                kill_process_group(child.id());
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
@@ -772,6 +797,14 @@ fn require_command(command: &str) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Err(format!("required command `{command}` is unavailable").into())
     }
+}
+
+fn kill_process_group(process_id: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{process_id}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn read_log(path: &Path) -> String {

@@ -106,7 +106,7 @@ async fn containerd_buildkit_build_import_tag_and_prune_round_trip() {
     std::fs::create_dir(&context).unwrap();
     std::fs::write(
         context.join("Dockerfile"),
-        "FROM busybox:1.36.1\n\
+        "FROM mirror.gcr.io/library/busybox:1.36.1\n\
          RUN --mount=type=secret,id=TOKEN test -s /run/secrets/TOKEN\n\
          COPY payload /payload\n",
     )

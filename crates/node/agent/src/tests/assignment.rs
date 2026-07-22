@@ -307,6 +307,61 @@ async fn assignment_run_restarts_an_exit_delivered_after_event_subscription()
 }
 
 #[tokio::test]
+async fn assignment_run_retries_a_transient_whole_snapshot_failure()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.runtime.fail_next(
+        FakeRuntimeOperation::List,
+        RuntimeError::Unavailable {
+            message: "injected list outage".to_owned(),
+        },
+    )?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let agent = world.agent();
+    let task = tokio::spawn(async move { agent.run(shutdown_rx).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let lists = world
+                .runtime
+                .calls()
+                .unwrap()
+                .into_iter()
+                .filter(|call| call.operation == FakeRuntimeOperation::List)
+                .count();
+            if lists >= 1 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    world.monotonic_clock.advance(Duration::from_secs(1));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let lists = world
+                .runtime
+                .calls()
+                .unwrap()
+                .into_iter()
+                .filter(|call| call.operation == FakeRuntimeOperation::List)
+                .count();
+            if lists >= 2 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_running(&world).await?;
+
+    shutdown_tx.send(true)?;
+    tokio::time::timeout(Duration::from_secs(1), task).await???;
+    Ok(())
+}
+
+#[tokio::test]
 async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
@@ -562,6 +617,7 @@ impl World {
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),
                 restart_backoff_max: Duration::from_secs(60),
+                reconcile_timeout: Duration::from_secs(10),
                 secrets_root: self.secrets.path().to_path_buf(),
                 node_api_root: self.node_api.path().join("mounts"),
             },

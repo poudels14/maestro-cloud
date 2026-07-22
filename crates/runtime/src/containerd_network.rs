@@ -7,10 +7,11 @@ use sha2::{Digest, Sha256};
 
 use crate::containerd::ContainerdRuntime;
 use crate::containerd_network_linux::LinuxContainerdNetwork;
-use crate::containerd_support::container_id;
+use crate::containerd_support::{container_id, task_status};
 use crate::{
     AddressLease, AddressRequest, NetworkAttachment, NetworkHandle, NetworkProvider,
     NetworkProviderError, NetworkSpec, RuntimeError, WorkloadHandle, WorkloadNetworkStatus,
+    WorkloadState,
 };
 
 const CONTAINER_INTERFACE_NAME: &str = "eth0";
@@ -30,6 +31,12 @@ pub(crate) struct AttachmentPlan {
     pub(crate) gateway: Ipv4Addr,
     pub(crate) prefix_length: u8,
     pub(crate) mtu_bytes: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskAttachment {
+    Reuse(u32),
+    Recreate,
 }
 
 #[async_trait]
@@ -112,22 +119,26 @@ impl NetworkProvider for ContainerdRuntime {
         let container = container_id(workload, &self.settings.namespace)
             .map_err(runtime_network_error)?
             .to_owned();
-        let pid = match self
+        let process = self
             .task(&container, workload.workload_id())
             .await
-            .map_err(runtime_network_error)?
-        {
-            Some(process) if process.pid != 0 => process.pid,
-            Some(_) => {
-                return Err(unavailable(format!(
-                    "containerd task for workload `{}` has no process id",
-                    workload.workload_id()
-                )));
+            .map_err(runtime_network_error)?;
+        let pid = match task_attachment(process.as_ref()).map_err(runtime_network_error)? {
+            TaskAttachment::Reuse(pid) => pid,
+            TaskAttachment::Recreate => {
+                if process.is_some() {
+                    self.delete_task(&container, workload.workload_id())
+                        .await
+                        .map_err(runtime_network_error)?;
+                } else {
+                    self.await_task_cgroup_cleanup(workload.workload_id())
+                        .await
+                        .map_err(runtime_network_error)?;
+                }
+                self.create_task(workload, &container)
+                    .await
+                    .map_err(runtime_network_error)?
             }
-            None => self
-                .create_task(workload, &container)
-                .await
-                .map_err(runtime_network_error)?,
         };
         LinuxContainerdNetwork::attach(pid, &plan).await?;
         Ok(NetworkAttachment {
@@ -196,6 +207,26 @@ impl NetworkProvider for ContainerdRuntime {
                 address: lease.address,
             }),
         }
+    }
+}
+
+pub(crate) fn task_attachment(
+    process: Option<&containerd::types::v1::Process>,
+) -> Result<TaskAttachment, RuntimeError> {
+    let Some(process) = process else {
+        return Ok(TaskAttachment::Recreate);
+    };
+    match task_status(Some(process)).state {
+        WorkloadState::Created | WorkloadState::Running | WorkloadState::Paused => {
+            if process.pid == 0 {
+                Err(RuntimeError::Unavailable {
+                    message: "containerd task has no process id for network attachment".to_owned(),
+                })
+            } else {
+                Ok(TaskAttachment::Reuse(process.pid))
+            }
+        }
+        WorkloadState::Stopped | WorkloadState::Failed => Ok(TaskAttachment::Recreate),
     }
 }
 

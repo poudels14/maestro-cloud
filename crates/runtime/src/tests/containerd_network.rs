@@ -1,8 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use containerd::types::v1::{Process, Status};
 use kernel_api::WorkloadId;
 
-use crate::containerd_network::{attachment_plan, host_interface_name, peer_interface_name};
+use crate::containerd_network::{
+    TaskAttachment, attachment_plan, host_interface_name, peer_interface_name, task_attachment,
+};
 use crate::{AddressLease, NetworkCidr, NetworkProviderError, NetworkSpec};
 
 #[test]
@@ -71,6 +74,34 @@ fn native_attachment_plan_rejects_wrong_owners_and_unsupported_addresses() {
         attachment_plan(&ipv6, &workload_id, &lease),
         Err(NetworkProviderError::Rejected { .. })
     ));
+}
+
+#[test]
+fn native_attachment_recreates_exited_tasks_before_entering_their_namespace() {
+    assert_eq!(task_attachment(None).unwrap(), TaskAttachment::Recreate);
+    let running = Process {
+        pid: 42,
+        status: Status::Running as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        task_attachment(Some(&running)).unwrap(),
+        TaskAttachment::Reuse(42)
+    );
+    let stopped = Process {
+        pid: 42,
+        status: Status::Stopped as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        task_attachment(Some(&stopped)).unwrap(),
+        TaskAttachment::Recreate
+    );
+    let missing_pid = Process {
+        status: Status::Created as i32,
+        ..Default::default()
+    };
+    assert!(task_attachment(Some(&missing_pid)).is_err());
 }
 
 fn network_spec() -> NetworkSpec {

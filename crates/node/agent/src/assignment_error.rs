@@ -58,3 +58,28 @@ pub enum AssignmentAgentError {
     #[error("store contention prevented status update for assignment `{assignment_id}`")]
     Contention { assignment_id: String },
 }
+
+impl AssignmentAgentError {
+    pub(crate) fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Store(
+                StoreError::CursorExpired { .. }
+                    | StoreError::SessionExpired { .. }
+                    | StoreError::Unavailable { .. }
+            ) | Self::Runtime(
+                RuntimeError::NotFound { .. }
+                    | RuntimeError::Unavailable { .. }
+                    | RuntimeError::Stream { .. }
+                    | RuntimeError::Timeout { .. }
+            ) | Self::Network(
+                NetworkProviderError::NetworkNotFound { .. }
+                    | NetworkProviderError::AddressConflict { .. }
+                    | NetworkProviderError::Unavailable { .. }
+            ) | Self::AssignmentDisappeared { .. }
+                | Self::AssignmentMoved { .. }
+                | Self::ReplicaDisappeared { .. }
+                | Self::Contention { .. }
+        )
+    }
+}

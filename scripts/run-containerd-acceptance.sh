@@ -128,7 +128,7 @@ for attempt in {1..30}; do
   sleep 1
 done
 
-image=docker.io/library/busybox:1.36.1
+image=mirror.gcr.io/library/busybox:1.36.1
 if ! ctr \
   --address "$containerd_socket" \
   --namespace maestro-test \

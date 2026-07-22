@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use containerd::services::v1::Container;
 use containerd::tonic::{Code, Request, Status};
@@ -22,6 +23,16 @@ pub(crate) fn namespaced<T>(message: T, namespace: &str) -> Result<Request<T>, R
         })?;
     let mut request = Request::new(message);
     request.metadata_mut().insert("containerd-namespace", value);
+    Ok(request)
+}
+
+pub(crate) fn namespaced_timeout<T>(
+    message: T,
+    namespace: &str,
+    timeout: Duration,
+) -> Result<Request<T>, RuntimeError> {
+    let mut request = namespaced(message, namespace)?;
+    request.set_timeout(timeout);
     Ok(request)
 }
 
