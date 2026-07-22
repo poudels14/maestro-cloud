@@ -1,18 +1,16 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use cluster::WIREGUARD_MTU_BYTES;
-use kernel_store::Store;
 use logs::{NodeLogQueryStore, NodeTrafficQueryStore};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
-    FirewallBackend, MeshBackend, MeshPlanner, MeshResourceAgent, NodeExecService,
-    NodeExecSettings, NodeFirewallAgent, WorkloadBridge, WorkloadBridgeAgent,
-    WorkloadBridgeBackend,
+    FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend,
 };
 use tokio::sync::watch;
 
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
+use crate::agent_network::{build_bridge_agent, build_firewall_agent, build_mesh_agent};
+use crate::artifact_replication::build_artifact_replication_agent;
 use crate::cluster_query_clients;
 use crate::config_view::masked_cluster_config;
 use crate::control_plane::{DaemonRoleFactory, role_error};
@@ -169,7 +167,7 @@ where
     };
     let cluster_stats_nodes = cluster_log_nodes.clone();
     let exec_sessions = if spec.workload_enabled {
-        match cluster_exec_sessions(factory, plan, spec, store.clone()) {
+        match cluster_query_clients::exec_sessions(factory, plan, spec, store.clone()) {
             Ok(sessions) => Some(Arc::new(sessions) as Arc<dyn server::ClusterExecSessions>),
             Err(error) => return runtimes.fail(error).await,
         }
@@ -290,7 +288,7 @@ where
                 .await;
         }
     };
-    let assignment_agent = if spec.workload_enabled {
+    let mut assignment_agent = if spec.workload_enabled {
         match build_assignment_agent(factory, plan, spec, store.clone(), runtimes.log_store()) {
             Ok(agent) => Some(agent),
             Err(error) => return runtimes.fail(error).await,
@@ -374,13 +372,6 @@ where
                 .await;
         }
     };
-    if let Some(agent) = assignment_agent.as_ref()
-        && let Err(error) = agent.reconcile_once().await
-    {
-        return runtimes
-            .fail(role_error("establish initial workload assignments", error))
-            .await;
-    }
     if let Some(agent) = health_agent.as_ref()
         && let Err(error) = agent.reconcile_once().await
     {
@@ -416,6 +407,38 @@ where
                 .await;
         }
     };
+    let artifact_replication_agent = match build_artifact_replication_agent(
+        factory,
+        plan,
+        spec,
+        store.clone(),
+        node_registration.session_id(),
+    ) {
+        Ok(agent) => agent,
+        Err(error) => {
+            return fail_after_registration(runtimes, node_registration, error).await;
+        }
+    };
+    if let Err(error) = artifact_replication_agent.reconcile_once().await {
+        return fail_after_registration(
+            runtimes,
+            node_registration,
+            role_error("establish initial artifact replication", error),
+        )
+        .await;
+    }
+    assignment_agent = assignment_agent
+        .map(|agent| agent.with_artifact_replication(artifact_replication_agent.clone()));
+    if let Some(agent) = assignment_agent.as_ref()
+        && let Err(error) = agent.reconcile_once().await
+    {
+        return fail_after_registration(
+            runtimes,
+            node_registration,
+            role_error("establish initial workload assignments", error),
+        )
+        .await;
+    }
     let publish_store_error = {
         match factory.store.lock() {
             Ok(mut shared_store) => {
@@ -426,14 +449,7 @@ where
         }
     };
     if let Some(error) = publish_store_error {
-        let error = match node_registration.close().await {
-            Ok(()) => error,
-            Err(close_error) => RoleError::new(format!(
-                "{}; failed to roll back node liveness: {close_error}",
-                error.detail()
-            )),
-        };
-        return runtimes.fail(error).await;
+        return fail_after_registration(runtimes, node_registration, error).await;
     }
     let (shutdown, bridge_shutdown) = watch::channel(false);
     let mesh_shutdown = bridge_shutdown.clone();
@@ -441,6 +457,7 @@ where
     let firewall_shutdown = bridge_shutdown.clone();
     let dns_server_shutdown = bridge_shutdown.clone();
     let assignment_shutdown = bridge_shutdown.clone();
+    let artifact_replication_shutdown = bridge_shutdown.clone();
     let health_shutdown = bridge_shutdown.clone();
     let log_shutdown = bridge_shutdown.clone();
     let stats_shutdown = bridge_shutdown.clone();
@@ -460,6 +477,12 @@ where
             .run_registered(node_registration, node_registry_shutdown)
             .await
             .map_err(|error| role_error("run node registry agent", error))
+    });
+    let artifact_replication_task = tokio::spawn(async move {
+        artifact_replication_agent
+            .run(artifact_replication_shutdown)
+            .await
+            .map_err(|error| role_error("run artifact replication agent", error))
     });
     let bridge_task = tokio::spawn(async move {
         bridge_agent
@@ -497,6 +520,7 @@ where
         dns_resource_task,
         firewall_task,
         dns_server_task,
+        artifact_replication_task,
         node_registry_task,
         api_task,
         tokio::spawn(async move {
@@ -588,151 +612,17 @@ where
     )))
 }
 
-fn cluster_exec_sessions<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-) -> Result<server::HttpClusterExecSessions, RoleError> {
-    let settings = &factory.api_settings;
-    let trust_root = settings
-        .cluster_trust_root_pem
-        .as_deref()
-        .ok_or_else(|| RoleError::new("cluster exec proxy has no trust root"))?;
-    let identity = settings
-        .cluster_client_identity
-        .as_ref()
-        .ok_or_else(|| RoleError::new("cluster exec proxy has no TLS identity"))?;
-    let jwt_secret = settings
-        .jwt_secret_key
-        .as_ref()
-        .ok_or_else(|| RoleError::new("cluster exec proxy has no JWT secret"))?;
-    let local = Arc::new(
-        NodeExecService::new(
-            store,
-            factory.workload_runtime.clone(),
-            NodeExecSettings {
-                cluster_id: spec.cluster_id.clone(),
-                node_id: spec.node_id.clone(),
-                maximum_sessions: 8,
-            },
-        )
-        .map_err(|error| role_error("construct local exec service", error))?,
-    );
-    let endpoints = plan
-        .cluster()
-        .nodes
-        .iter()
-        .map(|(node_id, node)| {
-            (
-                node_id.clone(),
-                SocketAddr::new(
-                    IpAddr::V4(node.endpoint.host_address),
-                    node.endpoint.api_port,
-                ),
-            )
-        })
-        .collect();
-    server::HttpClusterExecSessions::new(
-        plan.node_id().clone(),
-        endpoints,
-        trust_root,
-        identity,
-        jwt_secret,
-        local,
-    )
-    .map_err(|error| role_error("construct cluster exec proxy", error))
-}
-
-fn build_bridge_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    backend: BridgeBackendType,
-) -> Result<WorkloadBridgeAgent<BridgeBackendType>, RoleError>
-where
-    BridgeBackendType: WorkloadBridgeBackend,
-{
-    let node = plan
-        .cluster()
-        .nodes
-        .get(&spec.node_id)
-        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
-    let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
-        RoleError::new("local workload subnet has no usable workload bridge gateway")
-    })?;
-    let desired = WorkloadBridge::new(gateway, node.workload_subnet.prefix(), WIREGUARD_MTU_BYTES)
-        .map_err(|error| role_error("build workload bridge state", error))?;
-    WorkloadBridgeAgent::new(
-        desired,
-        backend,
-        factory.monotonic_clock.clone(),
-        factory.settings.bridge_resync_interval,
-    )
-    .map_err(|error| role_error("construct workload bridge agent", error))
-}
-
-fn build_mesh_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-    backend: MeshBackendType,
-) -> Result<MeshResourceAgent<MeshBackendType>, RoleError>
-where
-    MeshBackendType: MeshBackend,
-{
-    let node = plan
-        .cluster()
-        .nodes
-        .get(&spec.node_id)
-        .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
-    let planner = MeshPlanner::new(
-        spec.node_id.clone(),
-        factory.mesh_identity.clone(),
-        plan.cluster().ports.wireguard,
-    )
-    .map_err(|error| role_error("build local mesh planner", error))?;
-    let publication = planner
-        .publication(
-            node.endpoint.host_address,
-            node.workload_subnet
-                .to_string()
-                .parse()
-                .map_err(|error| role_error("convert local workload subnet", error))?,
-        )
-        .map_err(|error| role_error("build local mesh publication", error))?;
-    MeshResourceAgent::new(
-        store,
-        &plan.cluster().cluster_id,
-        planner,
-        publication,
-        backend,
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-        factory.settings.mesh_resync_interval,
-    )
-    .map_err(|error| role_error("construct mesh resource agent", error))
-}
-
-fn build_firewall_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
-    factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
-    plan: &DaemonPlan,
-    spec: &RoleSpec,
-    store: Arc<dyn Store>,
-    backend: FirewallBackendType,
-) -> Result<NodeFirewallAgent<FirewallBackendType>, RoleError>
-where
-    FirewallBackendType: FirewallBackend,
-{
-    NodeFirewallAgent::new(
-        store,
-        &plan.cluster().cluster_id,
-        spec.node_id.clone(),
-        backend,
-        factory.monotonic_clock.clone(),
-        factory.status_clock.clone(),
-        factory.settings.firewall_resync_interval,
-    )
-    .map_err(|error| role_error("construct firewall resource agent", error))
+async fn fail_after_registration<T>(
+    runtimes: AgentStartupRuntimes,
+    registration: NodeRegistration,
+    error: RoleError,
+) -> Result<T, RoleError> {
+    let error = match registration.close().await {
+        Ok(()) => error,
+        Err(close_error) => RoleError::new(format!(
+            "{}; failed to roll back node liveness: {close_error}",
+            error.detail()
+        )),
+    };
+    runtimes.fail(error).await
 }

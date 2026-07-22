@@ -2,17 +2,20 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kernel_api::{Assignment, Deployment, ReplicaState, ResourceKind, ResourceName};
+use kernel_api::{
+    ArtifactTemplate, Assignment, Deployment, ReplicaState, ResourceKind, ResourceName,
+};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, WatchCursor,
     WatchStart,
 };
 use runtime::{
-    AddressLease, AddressRequest, EventCursor, EventRequest, NetworkHandle, NetworkProvider,
-    RuntimeError, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
+    AddressLease, AddressRequest, ArtifactDigest, EventCursor, EventRequest, NetworkHandle,
+    NetworkProvider, RuntimeError, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 use tokio::sync::watch;
 
+use crate::ArtifactReplicationAgent;
 use crate::StatusClock;
 use crate::assignment_error::AssignmentAgentError;
 #[cfg(unix)]
@@ -57,6 +60,7 @@ pub struct AssignmentAgent {
     replica_kind: ResourceKind,
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
+    artifact_replication: Option<Arc<ArtifactReplicationAgent>>,
     secrets: SecretMountManager,
     #[cfg(unix)]
     node_api: NodeApiMountManager,
@@ -95,10 +99,17 @@ impl AssignmentAgent {
             settings,
             monotonic_clock,
             status_clock,
+            artifact_replication: None,
             secrets,
             #[cfg(unix)]
             node_api,
         })
+    }
+
+    /// Requires registry-free build artifacts to be local before workload creation.
+    pub fn with_artifact_replication(mut self, replication: Arc<ArtifactReplicationAgent>) -> Self {
+        self.artifact_replication = Some(replication);
+        self
     }
 
     /// Reconciles one linearizable assignment snapshot and all owned runtime objects.
@@ -418,6 +429,24 @@ impl AssignmentAgent {
         replica: Option<&ReplicaState>,
         network: &NetworkHandle,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
+        if matches!(
+            deployment.spec.service.artifact,
+            ArtifactTemplate::Build { .. }
+        ) && let Some(replication) = self.artifact_replication.as_ref()
+        {
+            let digest = deployment.status.image_digest.as_deref().ok_or_else(|| {
+                ConvergeFailure::pending(
+                    "ArtifactUnavailable",
+                    "deployment artifact is not available yet".to_owned(),
+                )
+            })?;
+            let digest = ArtifactDigest::new(digest.to_owned()).map_err(|error| {
+                ConvergeFailure::failed("ArtifactReplicationRejected", error.to_string())
+            })?;
+            replication.ensure_local(&digest).await.map_err(|error| {
+                ConvergeFailure::pending("ArtifactReplicationUnavailable", error.to_string())
+            })?;
+        }
         let workload_id = workload_id(assignment)?;
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {

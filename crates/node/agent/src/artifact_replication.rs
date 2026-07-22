@@ -240,7 +240,21 @@ impl ArtifactReplicationAgent {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            self.reconcile_once().await?;
+            let reconcile = tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                result = self.reconcile_once() => result,
+            };
+            if let Err(error) = reconcile {
+                if *shutdown.borrow() {
+                    return Ok(());
+                }
+                return Err(error);
+            }
             let deadline = self
                 .clock
                 .now()

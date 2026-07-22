@@ -3,6 +3,7 @@
 mod artifact_holder;
 mod artifact_replication;
 mod assignment;
+mod assignment_artifact;
 mod assignment_plan;
 mod assignment_restart;
 #[cfg(target_os = "linux")]

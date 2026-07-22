@@ -5,7 +5,9 @@
 //! runtime guarantees ordered startup, reverse shutdown, and rollback.
 
 mod agent_lifecycle;
+mod agent_network;
 mod agent_role;
+mod artifact_replication;
 mod cluster_query_clients;
 mod config_view;
 mod control_plane;
