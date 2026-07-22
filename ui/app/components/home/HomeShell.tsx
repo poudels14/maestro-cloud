@@ -5,7 +5,7 @@ import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
 import { ServiceSidebar, servicesQuery, type Service } from "@maestro/services";
-import { clusterInfoQuery } from "../../lib/queries";
+import { clusterInfoQuery } from "@maestro/cluster";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
@@ -14,12 +14,12 @@ import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
-import { panelFeatureRegistry, servicesApi } from "../../features";
+import { clusterApi, panelFeatureRegistry, servicesApi } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
   const navigate = useNavigate();
   const services = useQuery(() => servicesQuery(servicesApi));
-  const cluster = useQuery(() => clusterInfoQuery());
+  const cluster = useQuery(() => clusterInfoQuery(clusterApi));
   const [drawerOpen, setDrawerOpen] = createSignal(false);
   const featureRoute = () => panelFeatureRegistry.routes.find((route) => route.path === props.path);
   const fullPage = () =>
@@ -110,7 +110,7 @@ function HomeShell(props: { path: HomePath }) {
 }
 
 function ClusterHero() {
-  const cluster = useQuery(() => clusterInfoQuery());
+  const cluster = useQuery(() => clusterInfoQuery(clusterApi));
 
   return (
     <Show when={cluster.data}>

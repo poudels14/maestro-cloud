@@ -1,3 +1,4 @@
+import { createClusterApi } from "@maestro/cluster";
 import { createFirewallApi, createFirewallFeature } from "@maestro/firewall";
 import { createIngressApi, createIngressFeature } from "@maestro/ingress";
 import { createLogsApi, createLogsFeature } from "@maestro/logs";
@@ -6,6 +7,7 @@ import { createServicesApi, createServicesFeature } from "@maestro/services";
 import { composeFeatureManifests } from "@maestro/sdk";
 import { apiClient, apiRequestError } from "./lib/client";
 
+const clusterApi = createClusterApi(apiClient, apiRequestError);
 const firewallApi = createFirewallApi(apiClient, apiRequestError);
 const ingressApi = createIngressApi(apiClient, apiRequestError);
 const logsApi = createLogsApi(apiClient, apiRequestError);
@@ -27,5 +29,5 @@ const panelFeatureRegistry = composeFeatureManifests([
 
 type PanelFeaturePath = (typeof panelFeatureRegistry.routes)[number]["path"];
 
-export { ingressApi, logsApi, metricsApi, panelFeatureRegistry, servicesApi };
+export { clusterApi, ingressApi, logsApi, metricsApi, panelFeatureRegistry, servicesApi };
 export type { PanelFeaturePath };

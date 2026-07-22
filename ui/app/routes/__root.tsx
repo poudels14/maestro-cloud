@@ -1,14 +1,19 @@
 /// <reference types="vite/client" />
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/solid-router";
 import { QueryClientProvider } from "@tanstack/solid-query";
-import { useQuery } from "../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import { createSignal, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";
 import { Loader2, X } from "lucide-solid";
 import { queryClient } from "../lib/queryClient";
-import { clusterInfoQuery, unschedulableQuery } from "../lib/queries";
-import { activeMaintenanceNode, maintenanceStageLabel } from "../lib/clusterMaintenance";
+import {
+  activeMaintenanceNode,
+  clusterInfoQuery,
+  maintenanceStageLabel,
+  unschedulableQuery
+} from "@maestro/cluster";
+import { clusterApi } from "../features";
 import { ClientOnly } from "../components/ClientOnly";
 import { AppToasts } from "../components/AppToasts";
 import "../app.css";
@@ -61,7 +66,7 @@ function RootComponent() {
 }
 
 function SchedulingBanner() {
-  const scheduling = useQuery(() => unschedulableQuery());
+  const scheduling = useQuery(() => unschedulableQuery(clusterApi));
   const count = () => scheduling.data?.length ?? 0;
   return (
     <Show when={count() > 0}>
@@ -76,7 +81,7 @@ function SchedulingBanner() {
 }
 
 function MaintenanceBanner() {
-  const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
+  const cluster = useQuery(() => clusterInfoQuery(clusterApi, { pollForMaintenance: true }));
   const activeRun = () => cluster.data?.activeUpgrade ?? null;
   const activeNode = () => activeMaintenanceNode(activeRun(), cluster.data?.nodes);
   const stageLabel = () => maintenanceStageLabel(activeRun());

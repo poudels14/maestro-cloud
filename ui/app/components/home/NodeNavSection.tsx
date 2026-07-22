@@ -3,9 +3,8 @@ import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
 import { Info, Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "@maestro/kit";
-import { clusterInfoQuery } from "../../lib/queries";
-import { isPartOfCluster } from "../../lib/systemServices";
-import { panelFeatureRegistry } from "../../features";
+import { clusterInfoQuery, isPartOfCluster } from "@maestro/cluster";
+import { clusterApi, panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
 import type { NavEntry } from "@maestro/sdk";
 
@@ -18,7 +17,7 @@ const CORE_NODE_NAV = [
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {
   const navigate = useNavigate();
-  const cluster = useQuery(() => clusterInfoQuery());
+  const cluster = useQuery(() => clusterInfoQuery(clusterApi));
   const nodeNavigation = () =>
     [
       ...CORE_NODE_NAV,

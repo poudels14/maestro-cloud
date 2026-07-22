@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ApiSchemas } from "@maestro/api-client";
 import { test } from "vitest";
-import { projectClusterNodes } from "./api.ts";
+import { projectClusterNodes } from "./nodes";
 
 function node(
   id: string,

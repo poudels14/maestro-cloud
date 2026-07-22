@@ -1,15 +1,14 @@
 import { For, Show, createSignal } from "solid-js";
-import { useQuery } from "../../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
-import { clusterNodesQuery } from "../../lib/queries";
-import { setNodeDrain } from "../../lib/api";
-import type { ClusterNode } from "../../lib/types";
+import { clusterNodesQuery, type ClusterNode } from "@maestro/cluster";
+import { clusterApi } from "../../features";
 
 const nodeGridClass =
   "grid min-w-[46rem] grid-cols-[minmax(10rem,1.6fr)_4.5rem_4.25rem_minmax(7.5rem,1fr)_minmax(7.5rem,1fr)_5.5rem] gap-3";
 
 function NodesSection() {
-  const nodes = useQuery(() => clusterNodesQuery());
+  const nodes = useQuery(() => clusterNodesQuery(clusterApi));
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -17,7 +16,7 @@ function NodesSection() {
     setBusy(node.nodeId);
     setError(null);
     try {
-      await setNodeDrain(node, drain);
+      await clusterApi.setNodeDrain(node, drain);
       await nodes.refetch();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

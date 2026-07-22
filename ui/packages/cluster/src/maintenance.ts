@@ -42,4 +42,8 @@ function maintenanceStageLabel(run: UpgradeRun | null | undefined) {
   return MAINTENANCE_STAGE_LABELS[phase] ?? phase;
 }
 
-export { activeMaintenanceNode, maintenanceStageLabel };
+function isPartOfCluster(cluster: { clusterId?: string } | undefined) {
+  return cluster?.clusterId != null;
+}
+
+export { activeMaintenanceNode, isPartOfCluster, maintenanceStageLabel };

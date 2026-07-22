@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { activeMaintenanceNode, maintenanceStageLabel } from "./clusterMaintenance.ts";
+import { activeMaintenanceNode, maintenanceStageLabel } from "./maintenance";
 import type { ClusterNode, UpgradeRun } from "./types";
 
 const run = {

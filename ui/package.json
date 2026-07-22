@@ -12,6 +12,7 @@
     "@kobalte/core": "^0.13.12",
     "@maestro/api-client": "workspace:*",
     "@maestro/charts": "workspace:*",
+    "@maestro/cluster": "workspace:*",
     "@maestro/firewall": "workspace:*",
     "@maestro/ingress": "workspace:*",
     "@maestro/kit": "workspace:*",

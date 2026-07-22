@@ -2,9 +2,9 @@ import { createMemo, For } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { servicesQuery, userServices as visibleUserServices } from "@maestro/services";
-import { clusterNodesQuery } from "../../lib/queries";
+import { clusterNodesQuery } from "@maestro/cluster";
 import { clusterLogNodeLabel, LogViewer } from "@maestro/logs";
-import { logsApi, servicesApi } from "../../features";
+import { clusterApi, logsApi, servicesApi } from "../../features";
 
 type ClusterLogsSearch = {
   node?: string;
@@ -14,7 +14,7 @@ type ClusterLogsSearch = {
 };
 
 function ClusterLogsSection() {
-  const nodes = useQuery(() => clusterNodesQuery());
+  const nodes = useQuery(() => clusterNodesQuery(clusterApi));
   const services = useQuery(() => servicesQuery(servicesApi));
   const location = useLocation();
   const navigate = useNavigate();

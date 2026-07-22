@@ -1,11 +1,10 @@
 import { createSignal, For, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import { useQuery } from "../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
 import { Plus, Send, Trash2 } from "lucide-solid";
-import type { Webhook, WebhookEvent } from "../lib/types";
-import { createWebhook, deleteWebhook, testWebhook } from "../lib/api";
-import { queryKeys, webhooksQuery } from "../lib/queries";
+import { clusterQueryKeys, webhooksQuery, type Webhook, type WebhookEvent } from "@maestro/cluster";
+import { clusterApi } from "../features";
 import { SectionHeader } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 
@@ -18,15 +17,15 @@ const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
 
 function Webhooks() {
   const queryClient = useQueryClient();
-  const webhooks = useQuery(() => webhooksQuery());
+  const webhooks = useQuery(() => webhooksQuery(clusterApi));
   const [showForm, setShowForm] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [pendingDelete, setPendingDelete] = createSignal<Webhook | null>(null);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: clusterQueryKeys.webhooks });
 
   const deleteMutation = useMutation(() => ({
-    mutationFn: (webhook: Webhook) => deleteWebhook(webhook),
+    mutationFn: (webhook: Webhook) => clusterApi.deleteWebhook(webhook),
     onSuccess: () => {
       setPendingDelete(null);
       invalidate();
@@ -123,7 +122,7 @@ function WebhookRow(props: {
   onRequestDelete: () => void;
 }) {
   const testMutation = useMutation(() => ({
-    mutationFn: () => testWebhook(props.webhook.meta.id),
+    mutationFn: () => clusterApi.testWebhook(props.webhook.meta.id),
     onError: (err) => props.onError(err instanceof Error ? err.message : "test failed")
   }));
   const busy = () => testMutation.isPending;
@@ -197,14 +196,14 @@ function WebhookForm(props: {
 
   const createMutation = useMutation(() => ({
     mutationFn: () =>
-      createWebhook({
+      clusterApi.createWebhook({
         id: id().trim(),
         endpoint: endpoint().trim(),
         events: events(),
         signingSecret: signingSecret()
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
+      queryClient.invalidateQueries({ queryKey: clusterQueryKeys.webhooks });
       props.onSaved();
     },
     onError: (err) => props.onError(err instanceof Error ? err.message : "create failed")

@@ -1,11 +1,12 @@
 import { For, Show } from "solid-js";
-import { useQuery } from "../../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
-import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
+import type { BackupStats, ControllerStats, SinkStats } from "@maestro/cluster";
 import { formatBytes } from "@maestro/kit";
 import { ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
-import { clusterStatsQuery } from "../../lib/queries";
+import { clusterStatsQuery } from "@maestro/cluster";
+import { clusterApi } from "../../features";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
@@ -18,7 +19,7 @@ const ROW_COVERED_WARNING_CODES = new Set([
 ]);
 
 function ClusterStatsSection() {
-  const stats = useQuery(() => clusterStatsQuery());
+  const stats = useQuery(() => clusterStatsQuery(clusterApi));
   return (
     <div>
       <div class="mb-4">
