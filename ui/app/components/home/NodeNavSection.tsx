@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
-import { ArrowLeftRight, Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
+import { Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
 import { clusterInfoQuery } from "../../lib/queries";
 import { isPartOfCluster } from "../../lib/systemServices";
@@ -9,13 +9,12 @@ import { panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
 import type { NavEntry } from "@maestro/sdk";
 
-type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs" | "/traffic";
+type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs";
 type HomePath = CoreHomePath | PanelFeaturePath;
 
 const CORE_NODE_NAV = [
   { path: "/", label: "Info", icon: Info, section: "node", order: 10 },
-  { path: "/services", label: "Services", icon: LayoutGrid, section: "node", order: 30 },
-  { path: "/traffic", label: "Traffic", icon: ArrowLeftRight, section: "node", order: 40 }
+  { path: "/services", label: "Services", icon: LayoutGrid, section: "node", order: 30 }
 ] as const satisfies readonly NavEntry[];
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {

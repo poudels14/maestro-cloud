@@ -2,9 +2,6 @@ import type { ApiSchemas } from "@maestro/api-client";
 import type {
   ClusterNode,
   ClusterSummary,
-  IngressBlocklist,
-  IngressTrafficBreakdown,
-  IngressRouting,
   MaskedConfig,
   ClusterStats,
   StatsMetricPoint,
@@ -163,64 +160,6 @@ export async function getClusterConfig(): Promise<MaskedConfig> {
     return await apiClient().getClusterConfig();
   } catch (error) {
     throw apiRequestError(error, "Failed to load cluster config");
-  }
-}
-
-export async function getIngressRoutes(): Promise<IngressRouting[]> {
-  try {
-    return await apiClient().listActiveIngressRoutes();
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load ingress routes");
-  }
-}
-
-export async function getIngressTraffic(
-  from: number,
-  to: number,
-  nodeId?: string
-): Promise<IngressTrafficBreakdown> {
-  try {
-    return await apiClient().getIngressTraffic({
-      from,
-      to,
-      limit: 200,
-      ...(nodeId ? { nodeId } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load ingress traffic");
-  }
-}
-
-export async function getBlockedIngressTraffic(
-  from: number,
-  to: number,
-  nodeId?: string
-): Promise<IngressTrafficBreakdown> {
-  try {
-    return await apiClient().getBlockedIngressTraffic({
-      from,
-      to,
-      limit: 200,
-      ...(nodeId ? { nodeId } : {})
-    });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load blocked ingress traffic");
-  }
-}
-
-export async function setBlockedIngressIp(ip: string, blocked: boolean): Promise<IngressBlocklist> {
-  try {
-    return await apiClient().setBlockedIngressIp({ ip, blocked });
-  } catch (error) {
-    throw apiRequestError(error, "Failed to update blocked IPs");
-  }
-}
-
-export async function getIngressBlocklist(): Promise<IngressBlocklist> {
-  try {
-    return await apiClient().getIngressBlocklist();
-  } catch (error) {
-    throw apiRequestError(error, "Failed to load ingress blocklist");
   }
 }
 

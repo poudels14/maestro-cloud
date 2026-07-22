@@ -1,8 +1,5 @@
 import type { ApiSchemas } from "@maestro/api-client";
 
-export type IngressBlocklist = ApiSchemas["BlockedIpsResponse"];
-export type IngressRouting = ApiSchemas["IngressRouting"];
-
 export type Webhook = ApiSchemas["Webhook"];
 export type WebhookEvent = ApiSchemas["WebhookEvent"];
 export type ClusterSummary = ApiSchemas["ClusterInfo"];
@@ -33,9 +30,6 @@ export interface ClusterNode {
 }
 
 export type UnschedulableReplica = ApiSchemas["UnschedulableReplica"];
-
-export type TrafficBreakdownEntry = ApiSchemas["TrafficBreakdownEntry"];
-export type IngressTrafficBreakdown = ApiSchemas["IngressTrafficBreakdown"];
 
 export type ClusterStats = ApiSchemas["ClusterStatsResponse"];
 export type ControllerStats = ApiSchemas["ControllerStatsSnapshot"];

@@ -1,4 +1,3 @@
-import { keepPreviousData } from "@tanstack/solid-query";
 import type { ClusterInfo } from "./api";
 import type { ClusterStats, Deployment, MaskedConfig } from "./types";
 import {
@@ -7,11 +6,7 @@ import {
   getClusterNodes,
   getDeployments,
   getDeploymentReplicas,
-  getIngressRoutes,
-  getIngressTraffic,
-  getBlockedIngressTraffic,
   getClusterStats,
-  getIngressBlocklist,
   getServices,
   getUnschedulableReplicas,
   listWebhooks
@@ -33,10 +28,6 @@ const queryKeys = {
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
   deploymentReplicas: (serviceId: string, deploymentId: string) =>
     ["deployments", serviceId, deploymentId, "replicas"] as const,
-  ingress: ["ingress"] as const,
-  ingressTraffic: (range: number) => ["traffic", "ingress", range] as const,
-  blockedIngressTraffic: (range: number) => ["traffic", "blocked", range] as const,
-  ingressBlocklist: ["ingress", "blocklist"] as const,
   webhooks: ["webhooks"] as const
 };
 
@@ -95,44 +86,6 @@ const deploymentReplicasQuery = (deployment: Deployment) => ({
   staleTime: 2_000
 });
 
-const ingressRoutesQuery = () => ({
-  queryKey: queryKeys.ingress,
-  queryFn: ssrSafe(getIngressRoutes, []),
-  staleTime: 60_000
-});
-
-const ingressTrafficQuery = (rangeMs: number) => ({
-  queryKey: queryKeys.ingressTraffic(rangeMs),
-  queryFn: ssrSafe(
-    () => {
-      const now = Date.now();
-      return getIngressTraffic(now - rangeMs, now);
-    },
-    { byIp: [], byPath: [] }
-  ),
-  placeholderData: keepPreviousData,
-  refetchInterval: 15_000
-});
-
-const blockedIngressTrafficQuery = (rangeMs: number) => ({
-  queryKey: queryKeys.blockedIngressTraffic(rangeMs),
-  queryFn: ssrSafe(
-    () => {
-      const now = Date.now();
-      return getBlockedIngressTraffic(now - rangeMs, now);
-    },
-    { byIp: [], byPath: [] }
-  ),
-  placeholderData: keepPreviousData,
-  refetchInterval: 15_000
-});
-
-const ingressBlocklistQuery = () => ({
-  queryKey: queryKeys.ingressBlocklist,
-  queryFn: ssrSafe(getIngressBlocklist, { blockedIps: [] }),
-  refetchInterval: 15_000
-});
-
 const webhooksQuery = () => ({
   queryKey: queryKeys.webhooks,
   queryFn: ssrSafe(listWebhooks, [])
@@ -148,9 +101,5 @@ export {
   servicesQuery,
   deploymentsQuery,
   deploymentReplicasQuery,
-  ingressRoutesQuery,
-  ingressTrafficQuery,
-  blockedIngressTrafficQuery,
-  ingressBlocklistQuery,
   webhooksQuery
 };

@@ -34,6 +34,9 @@ importers:
       '@maestro/firewall':
         specifier: workspace:*
         version: link:packages/firewall
+      '@maestro/ingress':
+        specifier: workspace:*
+        version: link:packages/ingress
       '@maestro/kit':
         specifier: workspace:*
         version: link:packages/kit
@@ -138,6 +141,49 @@ importers:
       '@maestro/sdk':
         specifier: workspace:*
         version: link:../sdk
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-solid:
+        specifier: ^0.577.0
+        version: 0.577.0(solid-js@1.9.14)
+      solid-js:
+        specifier: ^1.9.14
+        version: 1.9.14
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.21.0))
+
+  ui/packages/ingress:
+    dependencies:
+      '@kobalte/core':
+        specifier: ^0.13.12
+        version: 0.13.12(solid-js@1.9.14)
+      '@maestro/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@maestro/charts':
+        specifier: workspace:*
+        version: link:../charts
+      '@maestro/kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@maestro/logs':
+        specifier: workspace:*
+        version: link:../logs
+      '@maestro/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@tanstack/solid-query':
+        specifier: ^5.101.2
+        version: 5.101.2(solid-js@1.9.14)
+      '@tanstack/solid-router':
+        specifier: ^1.170.18
+        version: 1.170.18(solid-js@1.9.14)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1

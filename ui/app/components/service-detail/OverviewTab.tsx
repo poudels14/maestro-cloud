@@ -4,9 +4,10 @@ import type { Service } from "../../lib/types";
 import { servicePreviews } from "../../lib/previews";
 import { serviceDisplayStatus } from "../../lib/serviceView";
 import { StatusBadge } from "@maestro/kit";
+import { IngressInfo } from "@maestro/ingress";
+import { ingressApi } from "../../features";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
-import { IngressInfo } from "./overview/IngressInfo";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 
@@ -107,7 +108,7 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
         </div>
       </Show>
 
-      <IngressInfo service={props.service} />
+      <IngressInfo api={ingressApi} serviceId={props.service.meta.id} />
 
       <Show when={!isPreview()}>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">

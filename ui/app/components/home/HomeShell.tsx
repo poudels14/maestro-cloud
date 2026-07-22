@@ -16,7 +16,6 @@ import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
 import { NodesSection } from "./NodesSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
-import { IngressTrafficTab } from "../ingress/TrafficTab";
 import { panelFeatureRegistry } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
@@ -29,8 +28,7 @@ function HomeShell(props: { path: HomePath }) {
     props.path === "/http-logs" ||
     props.path === "/cluster/logs" ||
     featureRoute()?.layout === "full";
-  const widePage = () =>
-    props.path === "/traffic" || fullPage() || featureRoute()?.layout === "wide";
+  const widePage = () => fullPage() || featureRoute()?.layout === "wide";
 
   const navigateService = (service: Service) => {
     setDrawerOpen(false);
@@ -94,9 +92,6 @@ function HomeShell(props: { path: HomePath }) {
                     <ClusterConfigSection />
                     <Webhooks />
                   </div>
-                </Match>
-                <Match when={props.path === "/traffic"}>
-                  <IngressTrafficTab />
                 </Match>
                 <Match when={props.path === "/services"}>
                   <ServicesGrid />

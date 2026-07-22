@@ -13,6 +13,7 @@
     "@maestro/api-client": "workspace:*",
     "@maestro/charts": "workspace:*",
     "@maestro/firewall": "workspace:*",
+    "@maestro/ingress": "workspace:*",
     "@maestro/kit": "workspace:*",
     "@maestro/logs": "workspace:*",
     "@maestro/metrics": "workspace:*",
