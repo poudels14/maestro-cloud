@@ -1,25 +1,30 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import { useQuery } from "../../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
-import { deploymentsQuery, serviceQueryKeys } from "@maestro/services";
+import type { LogsApi } from "@maestro/logs";
+import type { ServicesApi } from "./api";
+import { deploymentsQuery, serviceQueryKeys } from "./queries";
 import { ErrorBanner } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
-import { showErrorToast } from "../AppToasts";
-import type { Deployment, Service } from "@maestro/services";
-import { servicesApi } from "../../features";
+import type { Deployment, Service } from "./types";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-function DeploymentsTab(props: { service: Service }) {
+function DeploymentsTab(props: {
+  api: ServicesApi;
+  logsApi: LogsApi;
+  service: Service;
+  onError: (title: string, cause: unknown) => void;
+}) {
   const queryClient = useQueryClient();
   const serviceId = () => props.service.meta.id;
   const deployFrozen = () => props.service.status.rollout === "frozen";
-  const deployments = useQuery(() => deploymentsQuery(servicesApi, serviceId()));
+  const deployments = useQuery(() => deploymentsQuery(props.api, serviceId()));
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -27,7 +32,10 @@ function DeploymentsTab(props: { service: Service }) {
   const [confirmFrozenRedeploy, setConfirmFrozenRedeploy] = createSignal(false);
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
 
-  const setUrlSheetState = (updates: { deployment?: string; tab?: SheetTabId }) =>
+  const setUrlSheetState = (updates: {
+    deployment?: string | undefined;
+    tab?: SheetTabId | undefined;
+  }) =>
     navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: serviceId(), tab: "deployments" },
@@ -47,24 +55,24 @@ function DeploymentsTab(props: { service: Service }) {
     ]);
 
   const cancelMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => servicesApi.cancelDeployment(deployment),
+    mutationFn: (deployment: Deployment) => props.api.cancelDeployment(deployment),
     onSuccess: invalidateDeployments,
-    onError: (error) => showErrorToast("Cancel failed", error)
+    onError: (error) => props.onError("Cancel failed", error)
   }));
   const removeMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => servicesApi.removeDeployment(deployment),
+    mutationFn: (deployment: Deployment) => props.api.removeDeployment(deployment),
     onSuccess: invalidateDeployments,
-    onError: (error) => showErrorToast("Remove failed", error)
+    onError: (error) => props.onError("Remove failed", error)
   }));
   const redeployMutation = useMutation(() => ({
-    mutationFn: () => servicesApi.redeployService(props.service),
+    mutationFn: () => props.api.redeployService(props.service),
     onSuccess: invalidateService,
-    onError: (error) => showErrorToast("Redeploy failed", error)
+    onError: (error) => props.onError("Redeploy failed", error)
   }));
   const restartMutation = useMutation(() => ({
-    mutationFn: (deployment: Deployment) => servicesApi.restartDeployment(deployment),
+    mutationFn: (deployment: Deployment) => props.api.restartDeployment(deployment),
     onSuccess: invalidateDeployments,
-    onError: (error) => showErrorToast("Restart failed", error)
+    onError: (error) => props.onError("Restart failed", error)
   }));
 
   const selectedDeployment = () =>
@@ -180,6 +188,8 @@ function DeploymentsTab(props: { service: Service }) {
         </Show>
       </Show>
       <DeploymentSheet
+        api={props.api}
+        logsApi={props.logsApi}
         deployment={selectedDeployment()}
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}

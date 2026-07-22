@@ -2,8 +2,8 @@ import { Show } from "solid-js";
 import clsx from "clsx";
 import { GitCommitHorizontal } from "lucide-solid";
 import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
-import type { Deployment, ReplicaState } from "@maestro/services";
-import { replicaDisplayName } from "@maestro/services";
+import type { Deployment, ReplicaState } from "./types";
+import { replicaDisplayName } from "./deploymentView";
 import { formatDateTime } from "@maestro/kit";
 import { DeploymentMenu } from "./DeploymentMenu";
 

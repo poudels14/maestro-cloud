@@ -1,16 +1,20 @@
-import { For, Show } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import { GitPullRequest } from "lucide-solid";
-import type { Service } from "@maestro/services";
-import { serviceDisplayStatus, servicePreviews } from "@maestro/services";
+import type { ServicesApi } from "./api";
+import type { Service } from "./types";
+import { serviceDisplayStatus, servicePreviews } from "./serviceView";
 import { StatusBadge } from "@maestro/kit";
-import { IngressInfo } from "@maestro/ingress";
-import { ingressApi } from "../../features";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 
-function OverviewTab(props: { service: Service; services: Service[] }) {
+function OverviewTab(props: {
+  api: ServicesApi;
+  service: Service;
+  services: Service[];
+  ingress: JSX.Element;
+}) {
   const artifact = () => props.service.spec.artifact;
   const sourceItems = () => {
     const value = artifact();
@@ -107,12 +111,12 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
         </div>
       </Show>
 
-      <IngressInfo api={ingressApi} serviceId={props.service.meta.id} />
+      {props.ingress}
 
       <Show when={!isPreview()}>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          <ReplicasEditor service={props.service} />
-          <FreezeToggle service={props.service} />
+          <ReplicasEditor api={props.api} service={props.service} />
+          <FreezeToggle api={props.api} service={props.service} />
         </div>
       </Show>
 

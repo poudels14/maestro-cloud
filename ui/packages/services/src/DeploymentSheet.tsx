@@ -2,17 +2,20 @@ import { createSignal, For, Show, Switch, Match } from "solid-js";
 import { Check, Copy, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
-import type { Deployment } from "@maestro/services";
-import { deploymentReplicasQuery, replicaFailure } from "@maestro/services";
-import { useQuery } from "../../lib/useQuery";
+import { useQuery } from "@maestro/sdk";
 import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit";
-import { LogViewer } from "@maestro/logs";
-import { logsApi, servicesApi } from "../../features";
+import { LogViewer, type LogsApi } from "@maestro/logs";
+import type { ServicesApi } from "./api";
+import { replicaFailure } from "./deploymentView";
+import { deploymentReplicasQuery } from "./queries";
+import type { Deployment } from "./types";
 import { ReplicaRow } from "./DeploymentRow";
 
 type SheetTabId = "logs" | "build" | "details";
 
 function DeploymentSheet(props: {
+  api: ServicesApi;
+  logsApi: LogsApi;
   deployment: Deployment | null;
   tab: SheetTabId;
   onTabChange: (tab: SheetTabId) => void;
@@ -102,10 +105,10 @@ function DeploymentSheet(props: {
                     <Switch>
                       <Match when={props.tab === "logs"}>
                         <LogViewer
-                          api={logsApi}
+                          api={props.logsApi}
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
-                          buildId={deployment.spec.buildId}
+                          buildId={deployment.spec.buildId ?? null}
                           isSystem={false}
                           phase="deploy"
                           embedded
@@ -114,10 +117,10 @@ function DeploymentSheet(props: {
                       </Match>
                       <Match when={props.tab === "build" && hasBuild}>
                         <LogViewer
-                          api={logsApi}
+                          api={props.logsApi}
                           serviceId={deployment.spec.serviceId}
                           deploymentId={deployment.meta.id}
-                          buildId={deployment.spec.buildId}
+                          buildId={deployment.spec.buildId ?? null}
                           isSystem={false}
                           phase="build"
                           embedded
@@ -125,7 +128,7 @@ function DeploymentSheet(props: {
                         />
                       </Match>
                       <Match when={props.tab === "details"}>
-                        <DeploymentDetails deployment={deployment} />
+                        <DeploymentDetails api={props.api} deployment={deployment} />
                       </Match>
                     </Switch>
                   </div>
@@ -154,9 +157,9 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
   );
 }
 
-function DeploymentDetails(props: { deployment: Deployment }) {
+function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) {
   const deployment = () => props.deployment;
-  const replicas = useQuery(() => deploymentReplicasQuery(servicesApi, deployment()));
+  const replicas = useQuery(() => deploymentReplicasQuery(props.api, deployment()));
   const artifact = () => deployment().spec.service.artifact;
   const environment = () => Object.entries(deployment().spec.service.environment ?? {});
   const secretKeys = () => Object.keys(deployment().spec.service.secrets?.items ?? {}).sort();

@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { EllipsisVertical, Trash2 } from "lucide-solid";
-import type { Service } from "@maestro/services";
-import { serviceDisplayStatus } from "@maestro/services";
+import type { Service } from "./types";
+import { serviceDisplayStatus } from "./serviceView";
 import { StatusBadge } from "@maestro/kit";
 
 function ServiceCard(props: { service: Service; onClick: () => void; onDelete: () => void }) {

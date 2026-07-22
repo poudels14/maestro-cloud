@@ -15,3 +15,11 @@ export {
   userServices
 } from "./serviceView";
 export type { Deployment, ReplicaState, Service } from "./types";
+export { createServicesFeature } from "./manifest";
+export { OverviewTab } from "./OverviewTab";
+export { DeploymentsTab } from "./DeploymentsTab";
+export { LogsTab } from "./LogsTab";
+export { ServicesGrid } from "./ServicesGrid";
+export { ServiceSidebar } from "./ServiceSidebar";
+export { ServiceDetailPanel } from "./ServiceDetailPanel";
+export type { DetailTab } from "./ServiceDetailPanel";

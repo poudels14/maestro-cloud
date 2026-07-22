@@ -1,12 +1,12 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import type { Service } from "@maestro/services";
-import { serviceQueryKeys } from "@maestro/services";
-import { servicesApi } from "../../../features";
+import type { ServicesApi } from "../api";
+import { serviceQueryKeys } from "../queries";
+import type { Service } from "../types";
 
 const MAX_REPLICAS = 25;
 
-function ReplicasEditor(props: { service: Service }) {
+function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
   const queryClient = useQueryClient();
   const configuredReplicas = () => props.service.spec.replicas;
   const effectiveReplicas = () => props.service.status.replicaOverride ?? configuredReplicas();
@@ -21,12 +21,12 @@ function ReplicasEditor(props: { service: Service }) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: serviceQueryKeys.all });
 
   const applyMutation = useMutation(() => ({
-    mutationFn: (next: number) => servicesApi.setReplicas(props.service, next),
+    mutationFn: (next: number) => props.api.setReplicas(props.service, next),
     onSuccess: invalidate,
     onError: (err) => setReplicasError(err instanceof Error ? err.message : "failed to update")
   }));
   const revertMutation = useMutation(() => ({
-    mutationFn: () => servicesApi.setReplicas(props.service, null),
+    mutationFn: () => props.api.setReplicas(props.service, null),
     onSuccess: invalidate,
     onError: (err) => setReplicasError(err instanceof Error ? err.message : "failed to revert")
   }));

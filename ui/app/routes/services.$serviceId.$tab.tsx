@@ -1,21 +1,20 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { useQuery } from "../lib/useQuery";
 import { createSignal, Show } from "solid-js";
-import { Menu } from "lucide-solid";
-import clsx from "clsx";
-import type { Service } from "@maestro/services";
-import { servicesQuery } from "@maestro/services";
-import { TabButton } from "@maestro/kit";
-import { ServiceSidebar } from "../components/service-detail/Sidebar";
-import { NodeNavSection } from "../components/home/NodeNavSection";
-import { OverviewTab } from "../components/service-detail/OverviewTab";
-import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
+import { IngressInfo } from "@maestro/ingress";
 import { MetricsTab } from "@maestro/metrics";
-import { metricsApi, servicesApi } from "../features";
-import { LogsTab } from "../components/service-detail/LogsTab";
+import { useQuery } from "@maestro/sdk";
+import {
+  ServiceDetailPanel,
+  ServiceSidebar,
+  servicesQuery,
+  type DetailTab,
+  type Service
+} from "@maestro/services";
+import { NodeNavSection } from "../components/home/NodeNavSection";
+import { showErrorToast } from "../components/AppToasts";
+import { ingressApi, logsApi, metricsApi, servicesApi } from "../features";
 
 const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
-type DetailTab = "overview" | "deployments" | "metrics" | "logs";
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
   validateSearch: (
@@ -48,15 +47,12 @@ function ServiceDetailPage() {
     const raw = params().tab;
     return VALID_TABS.has(raw) ? (raw as DetailTab) : "overview";
   };
-
-  const selected = () => services.data?.find((s) => s.meta.id === params().serviceId);
-
+  const selected = () => services.data?.find((service) => service.meta.id === params().serviceId);
   const navigateTab = (next: DetailTab) =>
     navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: params().serviceId, tab: next }
     });
-
   const navigateService = (service: Service) => {
     setDrawerOpen(false);
     navigate({
@@ -64,8 +60,6 @@ function ServiceDetailPage() {
       params: { serviceId: service.meta.id, tab: tab() }
     });
   };
-
-  const loading = () => services.isLoading;
 
   return (
     <div class="h-screen flex bg-[#fafafa]">
@@ -78,12 +72,12 @@ function ServiceDetailPage() {
         mobileOpen={drawerOpen()}
         onCloseMobile={() => setDrawerOpen(false)}
       />
-      <Show when={loading()}>
+      <Show when={services.isLoading}>
         <div class="flex-1 flex items-center justify-center">
           <span class="text-sm text-gray-400">Loading…</span>
         </div>
       </Show>
-      <Show when={!loading() && !selected()}>
+      <Show when={!services.isLoading && !selected()}>
         <div class="flex-1 flex items-center justify-center">
           <div class="text-center">
             <p class="text-sm text-gray-500">Service not found.</p>
@@ -97,101 +91,22 @@ function ServiceDetailPage() {
           </div>
         </div>
       </Show>
-      <Show when={!loading() && selected()}>
+      <Show when={!services.isLoading && selected()}>
         {(service) => (
           <ServiceDetailPanel
+            api={servicesApi}
+            logsApi={logsApi}
             service={service()}
             services={services.data ?? []}
             tab={tab()}
             navigateTab={navigateTab}
             onOpenDrawer={() => setDrawerOpen(true)}
+            onError={showErrorToast}
+            renderIngress={() => <IngressInfo api={ingressApi} serviceId={service().meta.id} />}
+            renderMetrics={() => <MetricsTab api={metricsApi} serviceId={service().meta.id} />}
           />
         )}
       </Show>
-    </div>
-  );
-}
-
-function ServiceDetailPanel(props: {
-  service: Service;
-  services: Service[];
-  tab: DetailTab;
-  navigateTab: (t: DetailTab) => void;
-  onOpenDrawer: () => void;
-}) {
-  const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
-
-  return (
-    <div class="flex-1 flex flex-col min-w-0 h-full">
-      <div class="shrink-0 bg-white border-b border-gray-200">
-        <div class="md:hidden h-12 px-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={props.onOpenDrawer}
-            class="p-2 -ml-2 text-gray-500 hover:text-gray-700 rounded-md outline-none"
-            aria-label="Open menu"
-          >
-            <Menu class="size-5" />
-          </button>
-          <span class="text-sm font-semibold text-gray-900 truncate">
-            {props.service.spec.name}
-          </span>
-        </div>
-        <div class="px-3 sm:px-6 pt-1.5 sm:pt-2.5 overflow-x-auto">
-          <div
-            class={clsx(
-              "mx-auto flex justify-start sm:justify-center gap-4 -mb-px whitespace-nowrap",
-              contentMaxWidth()
-            )}
-          >
-            <TabButton
-              label="Overview"
-              active={props.tab === "overview"}
-              onClick={() => props.navigateTab("overview")}
-            />
-            <TabButton
-              label="Metrics"
-              active={props.tab === "metrics"}
-              onClick={() => props.navigateTab("metrics")}
-            />
-            <TabButton
-              label="Deployments"
-              active={props.tab === "deployments"}
-              onClick={() => props.navigateTab("deployments")}
-            />
-            <TabButton
-              label="Logs"
-              active={props.tab === "logs"}
-              onClick={() => props.navigateTab("logs")}
-            />
-          </div>
-        </div>
-      </div>
-      <div
-        class={clsx("flex-1 py-3 sm:py-4 bg-[#fafafa]", {
-          "min-h-0 overflow-hidden": props.tab === "logs",
-          "overflow-y-auto": props.tab !== "logs"
-        })}
-      >
-        <div
-          class={clsx("mx-auto px-3 sm:px-6", contentMaxWidth(), {
-            "h-full min-h-0": props.tab === "logs"
-          })}
-        >
-          <Show when={props.tab === "overview"}>
-            <OverviewTab service={props.service} services={props.services} />
-          </Show>
-          <Show when={props.tab === "deployments"}>
-            <DeploymentsTab service={props.service} />
-          </Show>
-          <Show when={props.tab === "metrics"}>
-            <MetricsTab api={metricsApi} serviceId={props.service.meta.id} />
-          </Show>
-          <Show when={props.tab === "logs"}>
-            <LogsTab service={props.service} />
-          </Show>
-        </div>
-      </div>
     </div>
   );
 }

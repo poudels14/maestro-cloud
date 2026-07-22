@@ -1,20 +1,19 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "../../lib/useQuery";
-import { Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
-import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
+import { Info, Network, ScrollText } from "lucide-solid";
+import { SidebarNavItem, SidebarSection } from "@maestro/kit";
 import { clusterInfoQuery } from "../../lib/queries";
 import { isPartOfCluster } from "../../lib/systemServices";
 import { panelFeatureRegistry } from "../../features";
 import type { PanelFeaturePath } from "../../features";
 import type { NavEntry } from "@maestro/sdk";
 
-type CoreHomePath = "/" | "/services" | "/cluster" | "/cluster/logs";
+type CoreHomePath = "/" | "/cluster" | "/cluster/logs";
 type HomePath = CoreHomePath | PanelFeaturePath;
 
 const CORE_NODE_NAV = [
-  { path: "/", label: "Info", icon: Info, section: "node", order: 10 },
-  { path: "/services", label: "Services", icon: LayoutGrid, section: "node", order: 30 }
+  { path: "/", label: "Info", icon: Info, section: "node", order: 10 }
 ] as const satisfies readonly NavEntry[];
 
 function NodeNavSection(props: { active?: HomePath; onNavigate?: () => void }) {

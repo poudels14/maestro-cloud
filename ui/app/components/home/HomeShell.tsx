@@ -4,14 +4,11 @@ import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
-import type { Service } from "@maestro/services";
-import { servicesQuery } from "@maestro/services";
+import { ServiceSidebar, servicesQuery, type Service } from "@maestro/services";
 import { clusterInfoQuery } from "../../lib/queries";
-import { ServiceSidebar } from "../service-detail/Sidebar";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
-import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
 import { Webhooks } from "../Webhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
@@ -93,9 +90,6 @@ function HomeShell(props: { path: HomePath }) {
                     <ClusterConfigSection />
                     <Webhooks />
                   </div>
-                </Match>
-                <Match when={props.path === "/services"}>
-                  <ServicesGrid />
                 </Match>
                 <Match when={props.path === "/cluster"}>
                   <NodesSection />

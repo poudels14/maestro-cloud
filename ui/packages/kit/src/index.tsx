@@ -3,6 +3,7 @@ import { AlertTriangle } from "lucide-solid";
 import { Show, type JSX } from "solid-js";
 
 export { ConfirmDialog } from "./ConfirmDialog";
+export { SidebarNavItem, SidebarSection } from "./Sidebar";
 export {
   formatBytes,
   formatBytesRate,
