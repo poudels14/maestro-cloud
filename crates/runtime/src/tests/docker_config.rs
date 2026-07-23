@@ -40,6 +40,28 @@ fn docker_config_preserves_identity_and_disables_runtime_restarts() {
     assert_eq!(mounts.first().unwrap().typ, Some(MountType::BIND));
     assert_eq!(mounts.first().unwrap().read_only, Some(true));
     assert_eq!(mounts.get(1).unwrap().typ, Some(MountType::VOLUME));
+    assert_eq!(
+        mounts.get(1).unwrap().source.as_deref(),
+        Some("maestro-sha256-f36cb2e71951fe9ac6bb55e9874b077a78c2172270b79b410ea0330e7c03a053")
+    );
+}
+
+#[test]
+fn docker_managed_volumes_are_isolated_between_clusters() {
+    let first = container_config(&container_spec()).unwrap();
+    let mut second_spec = container_spec();
+    let WorkloadSpec::Container(second) = &mut second_spec else {
+        unreachable!();
+    };
+    second.configuration.metadata.cluster_id = kernel_api::ClusterId::new("cluster-2").unwrap();
+    let second = container_config(&second_spec).unwrap();
+
+    let first_mounts = first.body.host_config.unwrap().mounts.unwrap();
+    let second_mounts = second.body.host_config.unwrap().mounts.unwrap();
+    let first_source = first_mounts.get(1).unwrap().source.clone();
+    let second_source = second_mounts.get(1).unwrap().source.clone();
+    assert_ne!(first_source, second_source);
+    assert_ne!(first_source.as_deref(), Some("workload-data"));
 }
 
 #[test]

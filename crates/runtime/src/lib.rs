@@ -77,6 +77,12 @@ mod fake_state;
 mod fake_stream;
 #[cfg(target_os = "linux")]
 mod file_log;
+#[cfg(any(
+    test,
+    all(feature = "containerd", target_os = "linux"),
+    all(feature = "docker", target_os = "linux")
+))]
+mod managed_volume;
 mod network;
 #[cfg(target_os = "linux")]
 mod process;

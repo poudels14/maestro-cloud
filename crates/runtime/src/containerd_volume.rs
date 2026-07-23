@@ -4,8 +4,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use kernel_api::ClusterId;
-use sha2::{Digest, Sha256};
 
+use crate::managed_volume::managed_volume_key;
 use crate::{MountSource, RuntimeError, WorkloadConfiguration};
 
 const VOLUME_DIRECTORY: &str = "volumes";
@@ -15,14 +15,9 @@ pub(crate) fn managed_volume_path(
     cluster_id: &ClusterId,
     name: &str,
 ) -> Result<PathBuf, RuntimeError> {
-    validate_name(name)?;
-    let mut digest = Sha256::new();
-    digest.update(cluster_id.as_str().as_bytes());
-    digest.update([0]);
-    digest.update(name.as_bytes());
     Ok(state_root
         .join(VOLUME_DIRECTORY)
-        .join(format!("sha256-{}", hex::encode(digest.finalize()))))
+        .join(managed_volume_key(cluster_id, name)?))
 }
 
 pub(crate) async fn prepare_managed_volumes(
@@ -85,18 +80,6 @@ fn require_directory(path: &Path, purpose: &str) -> Result<(), RuntimeError> {
                 path.display()
             ),
         })
-    }
-}
-
-fn validate_name(name: &str) -> Result<(), RuntimeError> {
-    if name.trim().is_empty() || name.chars().any(char::is_control) {
-        Err(RuntimeError::InvalidSpec {
-            message:
-                "containerd managed-volume name must be nonempty and contain no control characters"
-                    .to_owned(),
-        })
-    } else {
-        Ok(())
     }
 }
 

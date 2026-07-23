@@ -5,6 +5,7 @@ use docker::models::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::managed_volume::managed_volume_key;
 use crate::{
     ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadConfiguration,
     WorkloadMount, WorkloadSpec,
@@ -135,11 +136,12 @@ fn environment(configuration: &WorkloadConfiguration) -> Vec<String> {
 }
 
 fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError> {
+    let cluster_id = &container.configuration.metadata.cluster_id;
     let mounts = container
         .configuration
         .mounts
         .iter()
-        .map(docker_mount)
+        .map(|mount| docker_mount(mount, cluster_id))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HostConfig {
         network_mode: Some("none".to_owned()),
@@ -156,13 +158,19 @@ fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError
     })
 }
 
-fn docker_mount(mount: &WorkloadMount) -> Result<Mount, RuntimeError> {
+fn docker_mount(
+    mount: &WorkloadMount,
+    cluster_id: &kernel_api::ClusterId,
+) -> Result<Mount, RuntimeError> {
     let target = path_text(&mount.target, "container mount target")?;
     let (source, mount_type) = match &mount.source {
         MountSource::HostPath(source) => {
             (path_text(source, "container host mount")?, MountType::BIND)
         }
-        MountSource::ManagedVolume(name) => (name.clone(), MountType::VOLUME),
+        MountSource::ManagedVolume(name) => (
+            format!("maestro-{}", managed_volume_key(cluster_id, name)?),
+            MountType::VOLUME,
+        ),
     };
     Ok(Mount {
         target: Some(target),

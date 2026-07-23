@@ -43,6 +43,7 @@ mod docker_stream;
 mod docker_support;
 mod fake;
 mod fake_network;
+mod managed_volume;
 mod network;
 #[cfg(target_os = "linux")]
 mod process;
