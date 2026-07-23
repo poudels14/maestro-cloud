@@ -75,6 +75,9 @@ sudo maestro cluster join https://10.20.0.11:3000 \
   --output /run/maestro/launch.json
 ```
 
+Existing automation may continue to use `maestro cluster join --prepare` in
+place of `cluster prepare-join`; both prepare the same durable local join key.
+
 Add `--etcd-binary /run/current-system/sw/bin/etcd` to the join command for a
 control-plane node. Bootstrap and join documents are create-only and
 owner-only; retrying the same completed operation verifies and reuses the

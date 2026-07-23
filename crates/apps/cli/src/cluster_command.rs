@@ -80,8 +80,12 @@ pub(crate) enum ClusterCommand {
     },
     /// Join an approved declared node through an authenticated cluster endpoint.
     Join {
-        /// HTTPS origin of a running control-plane node.
-        leader: String,
+        /// HTTPS origin of a running control-plane node; omit with `--prepare`.
+        #[arg(required_unless_present = "prepare", conflicts_with = "prepare")]
+        leader: Option<String>,
+        /// Prepare the durable join key without contacting the cluster.
+        #[arg(long)]
+        prepare: bool,
         /// Cluster configuration source containing this node and the join secret.
         #[arg(long, default_value = "maestro.jsonc")]
         config: String,
@@ -272,12 +276,25 @@ pub(crate) async fn run(
         } => cluster::approve_node(&active_client()?, node_id, public_key_sha256, output).await,
         ClusterCommand::Join {
             leader,
+            prepare,
             config,
             data_dir,
             containerd_socket,
             etcd_binary,
             output: destination,
         } => {
+            if prepare {
+                return cluster_formation::prepare_join(
+                    &config,
+                    &data_dir,
+                    output,
+                    &SystemConfigSourceReader,
+                )
+                .await;
+            }
+            let leader = leader.ok_or_else(|| {
+                CliError::invalid_input("leader address is required unless --prepare is used")
+            })?;
             let mut options = JoinOptions::new(leader, config, data_dir);
             options.containerd_socket = containerd_socket;
             options.etcd_binary = etcd_binary;

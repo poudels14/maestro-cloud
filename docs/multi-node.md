@@ -177,6 +177,9 @@ sudo maestro cluster prepare-join \
   --data-dir /var/lib/maestro
 ```
 
+The legacy `maestro cluster join --prepare` spelling performs the same local,
+idempotent preparation and remains available for existing automation.
+
 Approve the exact declared identity and fingerprint:
 
 ```sh

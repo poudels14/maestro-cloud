@@ -60,6 +60,19 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro",
             "cluster",
+            "join",
+            "--prepare",
+            "--config",
+            "maestro.jsonc",
+            "--data-dir",
+            "/var/lib/maestro",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
             "prepare-join",
             "--config",
             "maestro.jsonc",
@@ -67,6 +80,28 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
         ])
         .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "join",
+            "https://10.20.0.11:3000",
+            "--prepare",
+            "--data-dir",
+            "/var/lib/maestro",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "join",
+            "--data-dir",
+            "/var/lib/maestro",
+        ])
+        .is_err()
     );
     assert!(
         Cli::try_parse_from([
@@ -303,6 +338,38 @@ async fn config_init_prompts_without_loading_an_api_context()
     let output = String::from_utf8(output)?;
     assert!(output.contains("Config kind (cluster/services):"));
     assert!(output.contains("[maestro]: created"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_join_prepare_dispatches_without_an_api_context()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("maestro.jsonc");
+    let data_directory = directory.path().join("data");
+    std::fs::write(
+        &config,
+        super::cluster_formation::cluster_document()
+            .replace("node: \"node-1\"", "node: \"node-2\""),
+    )?;
+    let cli = Cli::try_parse_from([
+        "maestro",
+        "cluster",
+        "join",
+        "--prepare",
+        "--config",
+        config.to_str().ok_or("non-UTF-8 config path")?,
+        "--data-dir",
+        data_directory.to_str().ok_or("non-UTF-8 data directory")?,
+    ])?;
+    let mut output = Vec::new();
+
+    run(cli, &mut std::io::Cursor::new(Vec::new()), &mut output).await?;
+
+    assert!(data_directory.join("security/join.key").exists());
+    assert!(
+        String::from_utf8(output)?.contains("Approve with: maestro cluster approve-node node-2")
+    );
     Ok(())
 }
 

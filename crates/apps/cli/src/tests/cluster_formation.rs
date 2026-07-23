@@ -205,7 +205,7 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     Ok(())
 }
 
-fn cluster_document() -> String {
+pub(super) fn cluster_document() -> String {
     r#"{
             cluster: {
                 name: "test-cluster",
