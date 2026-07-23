@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{Config, Connection, OptionalExt, params};
 use metrics::{MetricAppendReport, MetricStoreError, WorkloadMetricPoint};
 
 const CURRENT_SCHEMA_VERSION: i64 = 6;
@@ -10,7 +10,11 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create database parent directory: {error}"))?;
     }
-    let mut connection = Connection::open(path).map_err(|error| error.to_string())?;
+    let config = Config::default()
+        .enable_autoload_extension(false)
+        .map_err(|error| error.to_string())?;
+    let mut connection =
+        Connection::open_with_flags(path, config).map_err(|error| error.to_string())?;
     connection
         .execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version BIGINT NOT NULL);")
         .map_err(|error| error.to_string())?;

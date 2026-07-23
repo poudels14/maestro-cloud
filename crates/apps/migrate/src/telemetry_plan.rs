@@ -376,6 +376,8 @@ fn count_rows(
 
 fn open_read_only(path: &Path) -> Result<Connection, LegacyTelemetryPlanError> {
     let config = Config::default()
+        .enable_autoload_extension(false)
+        .map_err(|source| database(path, source))?
         .access_mode(AccessMode::ReadOnly)
         .map_err(|source| database(path, source))?;
     Connection::open_with_flags(path, config).map_err(|source| database(path, source))

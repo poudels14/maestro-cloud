@@ -28,6 +28,13 @@
           cargo = rustToolchain;
           rustc = rustToolchain;
         };
+        rewritePackage = import ./nix/rewrite-package.nix {
+          inherit pkgs rustToolchain;
+        };
+        rewritePanel = import ./nix/rewrite-panel.nix {
+          inherit pkgs;
+          rewriteVersion = rewritePackage.version;
+        };
       in {
         default = rustPlatform.buildRustPackage {
           pname = "maestro";
@@ -49,9 +56,8 @@
             ];
         };
 
-        rewrite = import ./nix/rewrite-package.nix {
-          inherit pkgs rustToolchain;
-        };
+        rewrite = rewritePackage;
+        rewrite-panel = rewritePanel;
       }
       // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (let
         muslPkgs =
@@ -71,6 +77,16 @@
           inherit pkgs;
           rewriteBinaries = staticRewrite.passthru.binaries;
         };
+        rewriteNodeRuntime = import ./nix/rewrite-node-runtime.nix {
+          inherit pkgs;
+          nodejs = rewritePanel.nodejs;
+        };
+        rewriteAdminImage = import ./nix/rewrite-admin-image.nix {
+          inherit pkgs;
+          nodeRuntime = rewriteNodeRuntime;
+          panel = rewritePanel;
+          version = staticRewrite.version;
+        };
         imageArchitecture =
           {
             aarch64-linux = "arm64";
@@ -88,6 +104,13 @@
           daemonImage = rewriteDaemonImage;
           inherit imageArchitecture pkgs;
           rewritePackage = staticRewrite;
+        };
+        rewrite-admin-image = rewriteAdminImage;
+        rewrite-admin-image-bundle = import ./nix/rewrite-admin-image-bundle.nix {
+          adminImage = rewriteAdminImage;
+          inherit imageArchitecture pkgs;
+          nodeRuntime = rewriteNodeRuntime;
+          version = staticRewrite.version;
         };
       })
     );
@@ -113,6 +136,10 @@
           rewrite = rewritePackage;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          rewrite-admin-image-bundle =
+            self.packages.${system}.rewrite-admin-image-bundle;
+          rewrite-daemon-image-bundle =
+            self.packages.${system}.rewrite-daemon-image-bundle;
           rewrite-module = import ./nix/rewrite-module-check.nix {
             inherit pkgs rewritePackage;
             config = (nixpkgs.lib.nixosSystem {
@@ -129,6 +156,8 @@
               ];
             }).config;
           };
+          rewrite-static-bundle =
+            self.packages.${system}.rewrite-static-bundle;
         }
     );
 

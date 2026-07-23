@@ -351,6 +351,8 @@ fn send(
 
 fn open(path: &Path) -> Result<Connection, TelemetryProjectionError> {
     let config = Config::default()
+        .enable_autoload_extension(false)
+        .map_err(database)?
         .access_mode(AccessMode::ReadOnly)
         .map_err(database)?;
     Connection::open_with_flags(path, config).map_err(database)

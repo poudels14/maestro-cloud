@@ -343,6 +343,8 @@ fn inspect_destination_sync(
 
 fn open_read_only(path: &Path) -> Result<Connection, LegacyTelemetryMigrationError> {
     let config = Config::default()
+        .enable_autoload_extension(false)
+        .map_err(|error| LegacyTelemetryMigrationError::Database(error.to_string()))?
         .access_mode(AccessMode::ReadOnly)
         .map_err(|error| LegacyTelemetryMigrationError::Database(error.to_string()))?;
     Connection::open_with_flags(path, config)
