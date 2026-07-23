@@ -30,6 +30,9 @@ pub(crate) struct LogCommand {
     /// Print the recent page and exit instead of polling for new records.
     #[arg(long)]
     pub(crate) no_follow: bool,
+    /// Compatibility flag; all-log queries already include system records.
+    #[arg(long = "include-system")]
+    pub(crate) _include_system: bool,
     /// Server-side LogQL expression.
     #[arg(long)]
     pub(crate) query: Option<String>,
@@ -42,6 +45,9 @@ pub(crate) struct LogCommand {
     /// Render text lines or one complete normalized JSON object per line.
     #[arg(long, value_enum, default_value_t = LogOutput::Text)]
     pub(crate) output: LogOutput,
+    /// Compatibility flag; rewritten JSON output is always lossless.
+    #[arg(long)]
+    pub(crate) full: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
@@ -58,9 +64,9 @@ pub(crate) struct LogRequest {
 }
 
 pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(), CliError> {
+    let mut request = initial_request(&command)?;
     let contexts = ContextStore::from_environment()?;
     let client = ApiClient::new(contexts.active()?)?;
-    let mut request = initial_request(&command)?;
     let mut page: ClusterLogPage = client.get_query(&request.path, &request.parameters).await?;
     page.entries.reverse();
     write_entries(&page.entries, command.output, output)?;
@@ -90,6 +96,9 @@ pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(
 }
 
 pub(crate) fn initial_request(command: &LogCommand) -> Result<LogRequest, CliError> {
+    if command.full && command.output != LogOutput::Json {
+        return Err(CliError::invalid_input("--full requires --output json"));
+    }
     if command.tail == 0 || command.tail > logs::MAXIMUM_LOG_QUERY_LIMIT {
         return Err(CliError::invalid_input(
             "log tail must be between 1 and 10000",

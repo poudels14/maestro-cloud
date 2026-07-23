@@ -12,7 +12,7 @@ use crate::log_command::{LogCommand, LogOutput, initial_request, write_entries};
 
 #[test]
 fn log_command_surface_matches_the_harvested_cli() {
-    assert!(Cli::try_parse_from(["maestro", "logs", "--no-follow"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "logs", "--no-follow", "--include-system"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "maestro",
@@ -27,6 +27,7 @@ fn log_command_surface_matches_the_harvested_cli() {
             "250",
             "--output",
             "json",
+            "--full",
             "--no-follow",
         ])
         .is_ok()
@@ -47,10 +48,12 @@ fn requests_validate_targets_and_preserve_query_values_for_url_encoding()
         system: None,
         tail: 25,
         no_follow: true,
+        _include_system: false,
         query: Some("message:\"x & y\"".to_owned()),
         from: Some(100),
         to: Some(200),
         output: LogOutput::Json,
+        full: true,
     })?;
     assert_eq!(request.path, "/api/services/api/deployments/api-v1/logs");
     assert!(
@@ -64,6 +67,30 @@ fn requests_validate_targets_and_preserve_query_values_for_url_encoding()
             .contains(&("tail".to_owned(), "25".to_owned()))
     );
     Ok(())
+}
+
+#[test]
+fn full_compatibility_flag_requires_json_output() {
+    let command = LogCommand {
+        service: None,
+        deployment: None,
+        system: None,
+        tail: 100,
+        no_follow: true,
+        _include_system: false,
+        query: None,
+        from: None,
+        to: None,
+        output: LogOutput::Text,
+        full: true,
+    };
+
+    let error = initial_request(&command).expect_err("text output must reject --full");
+
+    assert_eq!(
+        error.to_string(),
+        "invalid input: --full requires --output json"
+    );
 }
 
 #[test]

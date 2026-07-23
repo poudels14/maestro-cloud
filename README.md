@@ -164,15 +164,16 @@ maestro logs --service my-app \
 ```
 
 Use newline-delimited JSON while following logs or piping them to tools such as
-`jq`. The default JSON shape contains `ts`, `level`, `message`, `source`, and an
-`attributes` object:
+`jq`. The rewritten CLI emits the complete normalized record, including the
+cluster node, sequence, stream, origin, body, and raw attributes:
 
 ```bash
 maestro logs --query '@http.status_code:404' --output json | jq
 ```
 
-Add `--full` for the lossless API record, including sequence, stream, origin,
-tags, and raw attribute pairs:
+The legacy `--full` spelling remains accepted with JSON output, but is no longer
+required. Likewise, all-log queries include system records by default;
+`--include-system` remains an accepted compatibility flag.
 
 ```bash
 maestro logs --query '@http.status_code:404' --output json --full | jq
