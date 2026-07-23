@@ -272,6 +272,19 @@ coordinated workflow; it does not perform the legacy immediate controller stop.
 Every form asks for confirmation before creating the maintenance run. Use `-y`
 only in operator-controlled automation.
 
+Start an availability-preserving rolling upgrade, or explicitly choose an
+all-node batch:
+
+```sh
+maestro cluster upgrade
+maestro cluster upgrade system --batch=all
+```
+
+The CLI confirms the exact target version and selection before creating the
+upgrade run. The all-node prompt warns that services and the control plane will
+be unavailable. Use `-y` only in automation that has already enforced the same
+operator approval.
+
 Permanent removal is a separate, irreversible workflow:
 
 ```sh

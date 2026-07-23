@@ -205,6 +205,18 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "node-a",
             "--upgrade-run-id",
             "upgrade-1",
+            "--yes",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "upgrade",
+            "system",
+            "--batch=all",
+            "-y",
         ])
         .is_ok()
     );
@@ -311,6 +323,36 @@ async fn restart_confirmation_can_abort_before_loading_an_api_context()
 
     let output = String::from_utf8(output)?;
     assert!(output.contains("Restart cluster node `node-a`? [y/N]:"));
+    assert!(output.ends_with("[maestro]: aborted\n"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::try_parse_from([
+        "maestro-next",
+        "cluster",
+        "upgrade",
+        "system",
+        "--target-version",
+        "2.0.0",
+        "--batch=all",
+        "--node",
+        "node-b",
+        "--node",
+        "node-a",
+    ])?;
+    let mut input = std::io::Cursor::new(b"no\n".to_vec());
+    let mut output = Vec::new();
+
+    run(cli, &mut input, &mut output).await?;
+
+    let output = String::from_utf8(output)?;
+    assert!(output.contains(
+        "Upgrade cluster nodes `node-b`, `node-a` to Maestro 2.0.0 or newer in one batch; \
+         services and the control plane will be unavailable? [y/N]:"
+    ));
     assert!(output.ends_with("[maestro]: aborted\n"));
     Ok(())
 }

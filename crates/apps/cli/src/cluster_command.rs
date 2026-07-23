@@ -184,6 +184,9 @@ pub(crate) enum ClusterCommand {
         /// Stable request key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Skip the interactive upgrade confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Cancel a stale upgrade run and release its owned drains.
     Unfreeze {
@@ -379,7 +382,13 @@ pub(crate) async fn run(
             node_ids,
             upgrade_run_id,
             idempotency_key,
+            yes,
         } => {
+            if !yes && !confirm_upgrade(&target_version, batch, &node_ids, input, output)? {
+                writeln!(output, "[maestro]: aborted")
+                    .map_err(|source| CliError::io("failed to write command output", source))?;
+                return Ok(());
+            }
             upgrades::start(
                 &active_client()?,
                 target_version,
@@ -494,6 +503,40 @@ fn confirm_restart(
     input
         .read_line(&mut answer)
         .map_err(|source| CliError::io("failed to read restart confirmation", source))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn confirm_upgrade(
+    target_version: &str,
+    batch: UpgradeBatch,
+    node_ids: &[String],
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<bool, CliError> {
+    let target = if node_ids.is_empty() {
+        "every cluster node".to_string()
+    } else {
+        format!("cluster nodes `{}`", node_ids.join("`, `"))
+    };
+    let strategy = match batch {
+        UpgradeBatch::Rolling => "serially with drain and verification",
+        UpgradeBatch::All => "in one batch; services and the control plane will be unavailable",
+    };
+    write!(
+        output,
+        "Upgrade {target} to Maestro {target_version} or newer {strategy}? [y/N]: "
+    )
+    .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
+    output
+        .flush()
+        .map_err(|source| CliError::io("failed to flush upgrade confirmation", source))?;
+    let mut answer = String::new();
+    input
+        .read_line(&mut answer)
+        .map_err(|source| CliError::io("failed to read upgrade confirmation", source))?;
     Ok(matches!(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
