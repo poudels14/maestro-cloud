@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::CliError;
 use crate::config_source::{ConfigSourceReader, resolve_relative_source};
 use crate::service_config::{
-    BuildConfig, DesiredService, PreviewConfig, ServiceTemplate, ValueSource,
+    BuildConfig, DesiredService, PreviewConfig, ServiceTemplate, ValueSource, VolumeConfig,
 };
 
 pub(super) enum BuildSourceSelection {
@@ -103,7 +103,13 @@ pub(super) async fn convert_service(
         .map(NodeId::new)
         .transpose()
         .map_err(|error| invalid(&format!("{path}.deploy.nodeAffinity.node-id"), error))?;
-    if !template.deploy.volumes.is_empty() && node_id.is_none() {
+    if template
+        .deploy
+        .volumes
+        .iter()
+        .any(|volume| volume.host_path.is_some())
+        && node_id.is_none()
+    {
         return Err(invalid(
             &format!("{path}.deploy.nodeAffinity.node-id"),
             "is required when host volumes are configured",
@@ -114,31 +120,7 @@ pub(super) async fn convert_service(
         .volumes
         .into_iter()
         .enumerate()
-        .map(|(index, volume)| {
-            Ok(VolumeMountSpec {
-                source: VolumeSource::HostPath {
-                    path: required_text(
-                        &format!("{path}.deploy.volumes[{index}].hostPath"),
-                        &volume.host_path,
-                    )?,
-                    node_id: node_id.clone().ok_or_else(|| {
-                        invalid(
-                            &format!("{path}.deploy.nodeAffinity.node-id"),
-                            "is required when host volumes are configured",
-                        )
-                    })?,
-                },
-                target: required_text(
-                    &format!("{path}.deploy.volumes[{index}].mountPath"),
-                    &volume.mount_path,
-                )?,
-                access: if volume.read_only {
-                    VolumeAccess::ReadOnly
-                } else {
-                    VolumeAccess::ReadWrite
-                },
-            })
-        })
+        .map(|(index, volume)| convert_volume(&path, index, volume, node_id.as_ref()))
         .collect::<Result<Vec<_>, CliError>>()?;
 
     let health_check = template
@@ -229,6 +211,44 @@ pub(super) async fn convert_service(
         spec,
         ingress: template.ingress,
         egress,
+    })
+}
+
+fn convert_volume(
+    service_path: &str,
+    index: usize,
+    volume: VolumeConfig,
+    node_id: Option<&NodeId>,
+) -> Result<VolumeMountSpec, CliError> {
+    let path = format!("{service_path}.deploy.volumes[{index}]");
+    let source = match (volume.host_path, volume.managed_volume) {
+        (Some(host_path), None) => VolumeSource::HostPath {
+            path: required_text(&format!("{path}.hostPath"), &host_path)?,
+            node_id: node_id.cloned().ok_or_else(|| {
+                invalid(
+                    &format!("{service_path}.deploy.nodeAffinity.node-id"),
+                    "is required when host volumes are configured",
+                )
+            })?,
+        },
+        (None, Some(name)) => VolumeSource::Managed {
+            name: required_text(&format!("{path}.managedVolume"), &name)?,
+        },
+        _ => {
+            return Err(invalid(
+                &path,
+                "set exactly one of `hostPath` or `managedVolume`",
+            ));
+        }
+    };
+    Ok(VolumeMountSpec {
+        source,
+        target: required_text(&format!("{path}.mountPath"), &volume.mount_path)?,
+        access: if volume.read_only {
+            VolumeAccess::ReadOnly
+        } else {
+            VolumeAccess::ReadWrite
+        },
     })
 }
 

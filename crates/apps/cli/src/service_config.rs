@@ -265,7 +265,8 @@ pub(super) struct SecretConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct VolumeConfig {
-    pub(super) host_path: String,
+    pub(super) host_path: Option<String>,
+    pub(super) managed_volume: Option<String>,
     pub(super) mount_path: String,
     #[serde(default)]
     pub(super) read_only: bool,

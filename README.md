@@ -247,6 +247,41 @@ To use Depot for a service build, set `depot.token` in `maestro.jsonc` and
 `build.depot.project` in that service's `maestro.services.jsonc` entry. If either is
 missing, Maestro falls back to the default local builder automatically.
 
+## Service volumes
+
+Each `deploy.volumes` entry sets exactly one source. Use `managedVolume` for
+runtime-managed data that persists across workload replacement on the same
+node. Its backing data is node-local and is not replicated:
+
+```jsonc
+{
+  "deploy": {
+    "volumes": [
+      { "managedVolume": "api-data", "mountPath": "/var/lib/api" }
+    ]
+  }
+}
+```
+
+Use `hostPath` only for data already present on one node. Host paths require
+`deploy.nodeAffinity.node-id` so the scheduler cannot move the workload away
+from its data:
+
+```jsonc
+{
+  "deploy": {
+    "nodeAffinity": { "node-id": "node-1" },
+    "volumes": [
+      {
+        "hostPath": "/srv/api",
+        "mountPath": "/var/lib/api",
+        "readOnly": true
+      }
+    ]
+  }
+}
+```
+
 ## Per-service egress exceptions
 
 Use `deploy.egress.allow` to exempt only one service from a matching global
