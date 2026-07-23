@@ -28,6 +28,7 @@ pub(crate) fn convert_service_config(
     config: &LegacyServiceConfig,
     data: &LegacyDeploymentData,
     pinned_revision: Option<&str>,
+    artifact_override: Option<ArtifactTemplate>,
 ) -> Result<ConvertedServiceConfig, LegacyPlanError> {
     let service_id = service_id(&config.id, "service config id")?;
     if !config.deploy.flags.is_empty() {
@@ -37,7 +38,10 @@ pub(crate) fn convert_service_config(
             "native workloads cannot preserve runtime-specific flags",
         ));
     }
-    let artifact = convert_artifact(config, data, pinned_revision)?;
+    let artifact = match artifact_override {
+        Some(artifact) => artifact,
+        None => convert_artifact(config, data, pinned_revision)?,
+    };
     let environment = resolved_values(
         &config.id,
         "deploy.env",
@@ -166,7 +170,7 @@ fn convert_build(
         return Err(unsupported(
             service_id,
             "build.repo",
-            "uploaded build archives require filesystem migration",
+            "repository-less build is not associated with a resolved upload",
         ));
     };
     let environment =

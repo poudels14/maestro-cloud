@@ -21,7 +21,7 @@ use crate::legacy_nodes::LegacyNodeCatalog;
 use crate::legacy_placements::LegacyPlacementCatalog;
 use crate::legacy_requests::LegacyRequestCatalog;
 use crate::legacy_resources::{convert_policy, convert_preview, convert_route};
-use crate::legacy_schema::LegacyDeploymentStatus;
+use crate::legacy_schema::{LegacyDeployment, LegacyDeploymentStatus};
 use crate::legacy_services::{LegacyDeploymentRecord, LegacyServiceCatalog, LegacyServiceState};
 use crate::legacy_webhooks::LegacyWebhookCatalog;
 use crate::{LegacySnapshot, MigrationPlan, PlanError};
@@ -168,13 +168,13 @@ fn convert_catalog(
 fn convert_current_config(
     state: &LegacyServiceState,
 ) -> Result<ConvertedServiceConfig, LegacyPlanError> {
-    let data = state
-        .deployments
-        .last()
-        .map(|record| &record.data)
-        .cloned()
-        .unwrap_or_default();
-    convert_service_config(&state.info.config, &data, None)
+    let latest = state.deployments.last();
+    let data = latest.map(|record| record.data.clone()).unwrap_or_default();
+    let artifact = latest
+        .map(|record| uploaded_image_artifact(&record.deployment))
+        .transpose()?
+        .flatten();
+    convert_service_config(&state.info.config, &data, None, artifact)
 }
 
 fn convert_service(
@@ -201,6 +201,16 @@ fn convert_service(
         "migration.maestro.dev/legacy-history-next-index",
         state.next_history_index.to_string(),
     )]);
+    if let Some(archive) = state
+        .deployments
+        .last()
+        .and_then(|record| record.deployment.upload_archive.as_ref())
+    {
+        annotations.insert(
+            AnnotationKey("migration.maestro.dev/legacy-upload-archive".to_owned()),
+            archive.clone(),
+        );
+    }
     if let Some(revision) = state
         .deployments
         .last()
@@ -249,18 +259,17 @@ fn convert_deployment(
     record: &LegacyDeploymentRecord,
 ) -> Result<(Deployment, Option<Build>), LegacyPlanError> {
     let legacy = &record.deployment;
-    if let Some(archive) = &legacy.upload_archive {
-        return Err(LegacyPlanError::UnsupportedServiceField {
-            service_id: service_id.to_string(),
-            field: "deployment.uploadArchive".to_owned(),
-            message: format!("archive `{archive}` requires filesystem migration"),
-        });
-    }
+    let uploaded_artifact = uploaded_image_artifact(legacy)?;
     let pinned_revision = legacy
         .git_commit
         .as_ref()
         .map(|commit| commit.reference.as_str());
-    let converted = convert_service_config(&legacy.config, &record.data, pinned_revision)?;
+    let converted = convert_service_config(
+        &legacy.config,
+        &record.data,
+        pinned_revision,
+        uploaded_artifact,
+    )?;
     let deployment_id = parse_deployment_id(&legacy.id)?;
     let service_generation = Generation(record.history_index.checked_add(1).ok_or_else(|| {
         LegacyPlanError::GenerationOverflow {
@@ -309,6 +318,12 @@ fn convert_deployment(
             source_node_id.clone(),
         );
     }
+    if let Some(archive) = &legacy.upload_archive {
+        deployment_annotations.insert(
+            AnnotationKey("migration.maestro.dev/legacy-upload-archive".to_owned()),
+            archive.clone(),
+        );
+    }
     let deployment = Object {
         meta: ObjectMeta {
             id: deployment_id.clone(),
@@ -341,6 +356,29 @@ fn convert_deployment(
         .map(|build_id| convert_build(&deployment, build_id, image_digest, pinned_revision))
         .transpose()?;
     Ok((deployment, build))
+}
+
+fn uploaded_image_artifact(
+    legacy: &LegacyDeployment,
+) -> Result<Option<ArtifactTemplate>, LegacyPlanError> {
+    let Some(archive) = &legacy.upload_archive else {
+        return Ok(None);
+    };
+    let image = legacy
+        .build
+        .as_ref()
+        .map(|build| build.docker_image_id.trim())
+        .filter(|image| !image.is_empty())
+        .ok_or_else(|| LegacyPlanError::InvalidDeployment {
+            deployment_id: legacy.id.clone(),
+            message: format!(
+                "uploaded archive `{archive}` has no resolved image; finish or remove the \
+                 incomplete deployment before cutover"
+            ),
+        })?;
+    Ok(Some(ArtifactTemplate::Image {
+        reference: image.to_owned(),
+    }))
 }
 
 fn convert_build(

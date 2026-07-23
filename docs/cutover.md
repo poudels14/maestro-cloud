@@ -28,7 +28,10 @@ and are never overwritten.
 
 3. Generate and review the secret-free plan report. The command validates every
    known legacy key family and fails if leadership, requests, maintenance, or
-   node lifecycle work is still in progress.
+   node lifecycle work is still in progress. Successful legacy `up` deployments
+   are frozen to the image they already built because the old controller
+   intentionally deleted their one-use source archives. An incomplete upload
+   without a resolved image must finish or be removed before capture.
 
    ```sh
    maestro-migrate plan \
