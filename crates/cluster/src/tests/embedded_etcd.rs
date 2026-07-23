@@ -396,7 +396,7 @@ fn three_member_configs(
                 role,
                 validity()?,
             )?;
-            StoreProviderConfig::new_with_address_policy(
+            StoreProviderConfig::new_with_address_validator(
                 cluster_id.clone(),
                 local,
                 members.clone(),
@@ -404,7 +404,7 @@ fn three_member_configs(
                 root.join(node_id.as_str()),
                 SecretValue::new("test-store-encryption-secret-with-32-characters"),
                 security,
-                true,
+                valid_embedded_etcd_host_address,
             )
             .map_err(Into::into)
         })
@@ -430,7 +430,7 @@ fn one_member_config(
         NodeRole::Master,
         validity()?,
     )?;
-    StoreProviderConfig::new_with_address_policy(
+    StoreProviderConfig::new_with_address_validator(
         cluster_id,
         member.clone(),
         BTreeMap::from([(node_id, member)]),
@@ -438,7 +438,11 @@ fn one_member_config(
         root.join("store"),
         SecretValue::new("test-store-encryption-secret-with-32-characters"),
         security,
-        true,
+        valid_embedded_etcd_host_address,
     )
     .map_err(Into::into)
+}
+
+fn valid_embedded_etcd_host_address(address: Ipv4Addr) -> bool {
+    address.is_private() || address.is_loopback()
 }

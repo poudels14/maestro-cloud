@@ -32,6 +32,12 @@ pub struct JoinAdmission {
     pub admitted_at_unix_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FreshnessPolicy {
+    RequireCurrent,
+    AcceptPersistedReplay,
+}
+
 /// Authenticates and evaluates a join without performing external mutation.
 pub fn admit_join_request(
     config: &ClusterConfig,
@@ -46,7 +52,7 @@ pub fn admit_join_request(
         signature,
         source_address,
         now_unix_ms,
-        true,
+        FreshnessPolicy::RequireCurrent,
     )
 }
 
@@ -63,7 +69,7 @@ pub(crate) fn admit_replayed_join_request(
         signature,
         source_address,
         now_unix_ms,
-        false,
+        FreshnessPolicy::AcceptPersistedReplay,
     )
 }
 
@@ -73,12 +79,11 @@ fn admit_join_request_with_freshness(
     signature: &RequestSignature,
     source_address: Ipv4Addr,
     now_unix_ms: i64,
-    require_freshness: bool,
+    freshness: FreshnessPolicy,
 ) -> Result<JoinAdmission, AdmissionError> {
-    let validation_time = if require_freshness {
-        now_unix_ms
-    } else {
-        request.timestamp_unix_ms
+    let validation_time = match freshness {
+        FreshnessPolicy::RequireCurrent => now_unix_ms,
+        FreshnessPolicy::AcceptPersistedReplay => request.timestamp_unix_ms,
     };
     request.validate_wire_shape(validation_time)?;
     verify_join_request_signature(&config.join_secret, request, signature)?;

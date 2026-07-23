@@ -46,7 +46,7 @@ impl StoreProviderConfig {
         store_encryption_secret: SecretValue,
         security: NodeCertificateBundle,
     ) -> Result<Self, StoreProviderError> {
-        Self::new_with_address_policy(
+        Self::new_with_address_validator(
             cluster_id,
             local_member,
             known_members,
@@ -54,12 +54,12 @@ impl StoreProviderConfig {
             data_directory,
             store_encryption_secret,
             security,
-            false,
+            valid_private_host_address,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_address_policy(
+    pub(crate) fn new_with_address_validator(
         cluster_id: ClusterId,
         local_member: StoreMember,
         known_members: BTreeMap<NodeId, StoreMember>,
@@ -67,7 +67,7 @@ impl StoreProviderConfig {
         data_directory: PathBuf,
         store_encryption_secret: SecretValue,
         security: NodeCertificateBundle,
-        allow_loopback: bool,
+        validate_host_address: fn(Ipv4Addr) -> bool,
     ) -> Result<Self, StoreProviderError> {
         ports
             .validate()
@@ -90,7 +90,7 @@ impl StoreProviderConfig {
             });
         }
         if known_members.iter().any(|(node_id, member)| {
-            node_id != &member.node_id || !valid_host_address(member.host_address, allow_loopback)
+            node_id != &member.node_id || !validate_host_address(member.host_address)
         }) {
             return Err(StoreProviderError::InvalidConfiguration {
                 reason: "store member IDs must match their keys and addresses must be private"
@@ -408,7 +408,6 @@ pub enum StoreProviderError {
     Store(#[from] StoreError),
 }
 
-fn valid_host_address(address: Ipv4Addr, allow_loopback: bool) -> bool {
-    let production_address = address.is_private() && !address.is_loopback();
-    production_address || (allow_loopback && address.is_loopback())
+fn valid_private_host_address(address: Ipv4Addr) -> bool {
+    address.is_private() && !address.is_loopback()
 }
