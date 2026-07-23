@@ -171,6 +171,34 @@ async fn validate_reports_nested_paths_for_cluster_and_service_type_errors()
 }
 
 #[tokio::test]
+async fn validate_recognizes_the_legacy_uploaded_service_shape()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.services.jsonc";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(
+            source.to_string(),
+            r#"{
+                id: "my-service",
+                name: "My Service",
+                build: { dockerfile: "Dockerfile" },
+                ingress: { host: "my-service.local", port: 80 },
+                deploy: { healthcheckPath: "/health", replicas: 1 },
+                futureRoot: true
+            }"#
+            .to_string(),
+        )]),
+    };
+    let mut output = Vec::new();
+
+    validate(source, &mut output, &reader).await?;
+
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("is a valid uploaded-service config for `my-service`"));
+    assert!(output.contains("  - futureRoot"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_route()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.jsonc";

@@ -142,6 +142,16 @@ pub(crate) async fn load_uploaded_service(
     reader: &impl ConfigSourceReader,
 ) -> Result<LoadedUploadedService, CliError> {
     let merged = load_merged(source, reader).await?;
+    decode_uploaded_service(source, merged, service_id, archive_id, reader).await
+}
+
+pub(crate) async fn decode_uploaded_service(
+    source: &str,
+    merged: serde_json::Value,
+    service_id: Option<ServiceId>,
+    archive_id: kernel_api::ArtifactArchiveId,
+    reader: &impl ConfigSourceReader,
+) -> Result<LoadedUploadedService, CliError> {
     let (mut services, ignored_fields) = if merged.get("services").is_some() {
         let (document, ignored_fields): (ServicesDocument, _) =
             decode_document(&merged, &format!("services config `{source}`"))?;
