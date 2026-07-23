@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
@@ -161,6 +161,9 @@ pub(crate) enum ClusterCommand {
         /// Stable request key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Skip the interactive restart confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Start a rolling or all-node cluster upgrade.
     Upgrade {
@@ -214,7 +217,11 @@ pub(crate) enum UpgradeTarget {
     System,
 }
 
-pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Result<(), CliError> {
+pub(crate) async fn run(
+    command: ClusterCommand,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     match command {
         ClusterCommand::InitCa { config, data_dir } => {
             cluster_formation::init_ca(&config, &data_dir, output, &SystemConfigSourceReader).await
@@ -332,10 +339,16 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
         ClusterCommand::Upgrades => upgrades::list(&active_client()?, output).await,
         ClusterCommand::Restart {
             node_id,
-            all: _,
+            all,
             restart_run_id,
             idempotency_key,
+            yes,
         } => {
+            if !yes && !confirm_restart(all, node_id.as_deref(), input, output)? {
+                writeln!(output, "[maestro]: aborted")
+                    .map_err(|source| CliError::io("failed to write command output", source))?;
+                return Ok(());
+            }
             upgrades::restart(
                 &active_client()?,
                 node_id.into_iter().collect(),
@@ -377,6 +390,35 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             .await
         }
     }
+}
+
+fn confirm_restart(
+    all: bool,
+    node_id: Option<&str>,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<bool, CliError> {
+    let target = if all {
+        "every cluster node serially".to_string()
+    } else {
+        format!(
+            "cluster node `{}`",
+            node_id.ok_or_else(|| CliError::invalid_input("restart target is required"))?
+        )
+    };
+    write!(output, "Restart {target}? [y/N]: ")
+        .map_err(|source| CliError::io("failed to write restart confirmation", source))?;
+    output
+        .flush()
+        .map_err(|source| CliError::io("failed to flush restart confirmation", source))?;
+    let mut answer = String::new();
+    input
+        .read_line(&mut answer)
+        .map_err(|source| CliError::io("failed to read restart confirmation", source))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn active_client() -> Result<ApiClient, CliError> {

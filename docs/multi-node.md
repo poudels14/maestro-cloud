@@ -247,6 +247,9 @@ maestro cluster restart node-2
 maestro cluster restart --all
 ```
 
+Both forms ask for confirmation before creating the maintenance run. Use
+`-y` only in operator-controlled automation.
+
 Permanent removal is a separate, irreversible workflow:
 
 ```sh

@@ -111,7 +111,7 @@ pub async fn run(
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     match cli.command {
-        Command::Cluster { command } => crate::cluster_command::run(command, output).await,
+        Command::Cluster { command } => crate::cluster_command::run(command, input, output).await,
         Command::Config { command } => match command {
             ConfigCommand::Init { kind, output: path } => {
                 let kind = match kind {
