@@ -21,6 +21,29 @@ use super::{decode, request, seeded_store, token};
 use crate::{ApiServer, HttpNodeLogQueryStore, ServerSettings, TlsIdentity};
 
 #[tokio::test]
+async fn unblocking_a_missing_address_does_not_create_the_blocklist()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (kernel_store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        kernel_store.clone(),
+        cluster_id.clone(),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let response: serde_json::Value =
+        decode(patch_blocklist(&server, "203.0.113.9", false).await?).await?;
+    assert_eq!(response, serde_json::json!({"blockedIps": []}));
+
+    let keys = Keyspace::new(&cluster_id);
+    let key = keys.resource(
+        &ResourceKind::new(BuiltinKind::IngressBlocklist.as_str())?,
+        &IngressBlocklistId::new("global")?.into(),
+    );
+    assert!(kernel_store.get(&key).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn ingress_blocklist_is_canonical_idempotent_and_cluster_scoped()
 -> Result<(), Box<dyn std::error::Error>> {
     let (kernel_store, cluster_id) = seeded_store().await?;

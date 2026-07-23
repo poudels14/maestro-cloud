@@ -88,6 +88,12 @@ struct BlockedIpRequest {
     blocked: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlocklistAction {
+    Block,
+    Unblock,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BlockedIpsResponse {
@@ -120,7 +126,12 @@ async fn set_blocked_ip(
         .trim()
         .parse::<IpAddr>()
         .map_err(|_| ApiError::bad_request(format!("invalid IP address `{}`", request.ip)))?;
-    mutate_blocklist(&state, address, request.blocked)
+    let action = if request.blocked {
+        BlocklistAction::Block
+    } else {
+        BlocklistAction::Unblock
+    };
+    mutate_blocklist(&state, address, action)
         .await
         .map(|blocklist| Json(blocklist_response(blocklist.as_ref())))
 }
@@ -315,7 +326,7 @@ fn traffic_error(error: TrafficQueryError) -> ApiError {
 async fn mutate_blocklist(
     state: &AppState,
     address: IpAddr,
-    blocked: bool,
+    action: BlocklistAction,
 ) -> Result<Option<IngressBlocklist>, ApiError> {
     let keys = Keyspace::new(&state.cluster_id);
     let kind = blocklist_kind()?;
@@ -330,7 +341,7 @@ async fn mutate_blocklist(
                 resource::decode(stored, &keys, &kind, BuiltinKind::IngressBlocklist)?,
                 ExpectedVersion::Exact(stored.version),
             ),
-            None if !blocked => return Ok(None),
+            None if action == BlocklistAction::Unblock => return Ok(None),
             None => (new_blocklist(id.clone()), ExpectedVersion::Missing),
         };
         let mut addresses = blocklist
@@ -339,10 +350,9 @@ async fn mutate_blocklist(
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
-        let changed = if blocked {
-            addresses.insert(address)
-        } else {
-            addresses.remove(&address)
+        let changed = match action {
+            BlocklistAction::Block => addresses.insert(address),
+            BlocklistAction::Unblock => addresses.remove(&address),
         };
         let normalized = addresses.into_iter().collect::<Vec<_>>();
         if !changed && blocklist.spec.addresses == normalized {
