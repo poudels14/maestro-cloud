@@ -5,6 +5,7 @@ mod control_plane_resources;
 mod control_plane_store;
 mod control_plane_worker;
 mod datadog;
+mod dead_letter_admin;
 mod join_activation;
 mod launch;
 mod leadership;

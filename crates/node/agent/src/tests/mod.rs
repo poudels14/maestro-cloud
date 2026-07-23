@@ -36,6 +36,7 @@ mod log_checkpoint;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
+mod network_stats;
 #[cfg(unix)]
 mod node_api;
 #[cfg(unix)]

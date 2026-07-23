@@ -87,7 +87,7 @@ impl WorkloadNetworkStatsReader for HostNetworkStatsReader {
     }
 }
 
-fn read_interfaces(
+pub(crate) fn read_interfaces(
     root: &Path,
     interfaces: &BTreeSet<String>,
 ) -> Result<WorkloadNetworkStats, WorkloadNetworkStatsError> {
@@ -185,7 +185,3 @@ pub enum WorkloadNetworkStatsError {
     #[error("workload network counters overflowed")]
     CounterOverflow,
 }
-
-#[cfg(test)]
-#[path = "tests/network_stats.rs"]
-mod tests;

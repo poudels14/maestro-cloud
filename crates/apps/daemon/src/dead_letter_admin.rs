@@ -60,7 +60,7 @@ pub async fn administer_dead_letters(
     administer_database(&database, command).await
 }
 
-async fn administer_database(
+pub(crate) async fn administer_database(
     database: &Path,
     command: DeadLetterAdminCommand,
 ) -> Result<DeadLetterAdminOutput, DeadLetterAdminError> {
@@ -88,7 +88,7 @@ async fn administer_database(
     }
 }
 
-async fn execute(
+pub(crate) async fn execute(
     store: Arc<dyn DeadLetterStore>,
     command: DeadLetterAdminCommand,
 ) -> Result<DeadLetterAdminOutput, DeadLetterAdminError> {
@@ -344,7 +344,3 @@ pub enum DeadLetterAdminError {
     #[error("dead-letter operation failed: {operation}; store shutdown also failed: {shutdown}")]
     OperationAndShutdown { operation: String, shutdown: String },
 }
-
-#[cfg(test)]
-#[path = "tests/dead_letter_admin.rs"]
-mod tests;

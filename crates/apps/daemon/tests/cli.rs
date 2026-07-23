@@ -27,3 +27,48 @@ fn daemon_reports_its_package_version() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn explicit_and_legacy_start_forms_select_the_same_config() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("missing-launch.json");
+    let explicit = daemon_command().args(["start"]).arg(&config).output()?;
+    let legacy = daemon_command().arg(&config).output()?;
+
+    assert_eq!(explicit.status.code(), Some(1));
+    assert_eq!(legacy.status.code(), Some(1));
+    assert!(explicit.stdout.is_empty());
+    assert_eq!(explicit.stdout, legacy.stdout);
+    assert_eq!(explicit.stderr, legacy.stderr);
+    Ok(())
+}
+
+#[test]
+fn dead_letter_commands_require_explicit_purge_scope() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("missing-launch.json");
+    let rejected = daemon_command()
+        .arg("dead-letters")
+        .arg(&config)
+        .arg("purge")
+        .output()?;
+    assert_eq!(rejected.status.code(), Some(2));
+
+    let all = daemon_command()
+        .arg("dead-letters")
+        .arg(&config)
+        .args(["purge", "--all"])
+        .output()?;
+    let through = daemon_command()
+        .arg("dead-letters")
+        .arg(&config)
+        .args(["purge", "--through-seq", "42"])
+        .output()?;
+    assert_eq!(all.status.code(), Some(1));
+    assert_eq!(through.status.code(), Some(1));
+    Ok(())
+}
+
+fn daemon_command() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_daemon"))
+}

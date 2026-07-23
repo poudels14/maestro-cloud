@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use super::*;
+use crate::network_stats::{HostNetworkStatsReader, WorkloadNetworkStats, read_interfaces};
 
 #[test]
 fn sysfs_reader_sums_owned_interfaces_and_rejects_unsafe_names()

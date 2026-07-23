@@ -30,7 +30,7 @@ impl LocalBuildSourceProvider {
         Self::with_runner(workspace_root, archive_root, Arc::new(ProcessGitRunner))
     }
 
-    fn with_runner(
+    pub(crate) fn with_runner(
         workspace_root: PathBuf,
         archive_root: PathBuf,
         runner: Arc<dyn GitRunner>,
@@ -354,7 +354,3 @@ fn parse_remote_revision(stdout: &str, reference: &str) -> Result<String, BuildS
     }
     parse_revision(revision)
 }
-
-#[cfg(test)]
-#[path = "tests/local_source.rs"]
-mod tests;

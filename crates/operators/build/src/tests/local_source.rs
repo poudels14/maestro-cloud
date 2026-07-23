@@ -6,8 +6,12 @@ use kernel_api::{ArtifactArchiveId, BuildId, BuildSource, SecretValue};
 use runtime::ArtifactSource;
 use sha2::{Digest, Sha256};
 
-use super::*;
-use crate::{ArtifactArchiveStore, ArtifactArchiveWrite};
+use crate::git_process::{GitInvocation, GitOutput, GitRunError, GitRunner};
+use crate::local_source::LocalBuildSourceProvider;
+use crate::{
+    ArtifactArchiveStore, ArtifactArchiveWrite, BuildRevisionResolver, BuildSourceError,
+    BuildSourceProvider,
+};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
