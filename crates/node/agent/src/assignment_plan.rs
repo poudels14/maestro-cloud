@@ -172,6 +172,9 @@ fn workload_mount(
             });
         }
         VolumeSource::Managed { name } => MountSource::ManagedVolume(name.clone()),
+        VolumeSource::ReplicaManaged { name } => {
+            MountSource::ManagedVolume(replica_managed_volume_name(assignment, name))
+        }
     };
     Ok(WorkloadMount {
         source,
@@ -181,6 +184,16 @@ fn workload_mount(
             VolumeAccess::ReadOnly => MountAccess::ReadOnly,
         },
     })
+}
+
+fn replica_managed_volume_name(assignment: &Assignment, name: &str) -> String {
+    format!(
+        "replica:{}:{}:{}:{}:{name}",
+        assignment.spec.service_id,
+        assignment.spec.deployment_id,
+        assignment.spec.restart_generation.0,
+        assignment.spec.replica_index
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

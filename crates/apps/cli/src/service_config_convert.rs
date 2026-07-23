@@ -221,8 +221,12 @@ fn convert_volume(
     node_id: Option<&NodeId>,
 ) -> Result<VolumeMountSpec, CliError> {
     let path = format!("{service_path}.deploy.volumes[{index}]");
-    let source = match (volume.host_path, volume.managed_volume) {
-        (Some(host_path), None) => VolumeSource::HostPath {
+    let source = match (
+        volume.host_path,
+        volume.managed_volume,
+        volume.replica_managed_volume,
+    ) {
+        (Some(host_path), None, None) => VolumeSource::HostPath {
             path: required_text(&format!("{path}.hostPath"), &host_path)?,
             node_id: node_id.cloned().ok_or_else(|| {
                 invalid(
@@ -231,13 +235,16 @@ fn convert_volume(
                 )
             })?,
         },
-        (None, Some(name)) => VolumeSource::Managed {
+        (None, Some(name), None) => VolumeSource::Managed {
             name: required_text(&format!("{path}.managedVolume"), &name)?,
+        },
+        (None, None, Some(name)) => VolumeSource::ReplicaManaged {
+            name: required_text(&format!("{path}.replicaManagedVolume"), &name)?,
         },
         _ => {
             return Err(invalid(
                 &path,
-                "set exactly one of `hostPath` or `managedVolume`",
+                "set exactly one of `hostPath`, `managedVolume`, or `replicaManagedVolume`",
             ));
         }
     };

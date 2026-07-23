@@ -267,6 +267,7 @@ pub(super) struct SecretConfig {
 pub(super) struct VolumeConfig {
     pub(super) host_path: Option<String>,
     pub(super) managed_volume: Option<String>,
+    pub(super) replica_managed_volume: Option<String>,
     pub(super) mount_path: String,
     #[serde(default)]
     pub(super) read_only: bool,

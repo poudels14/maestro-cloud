@@ -68,7 +68,7 @@ impl ServiceSpec {
                 VolumeSource::HostPath { path, .. } => {
                     absolute_clean_path("volumes.source.path", path)?;
                 }
-                VolumeSource::Managed { name } => {
+                VolumeSource::Managed { name } | VolumeSource::ReplicaManaged { name } => {
                     nonempty_text("volumes.source.name", name)?;
                 }
             }

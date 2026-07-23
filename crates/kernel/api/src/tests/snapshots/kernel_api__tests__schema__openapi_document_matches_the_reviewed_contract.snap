@@ -5908,6 +5908,26 @@ expression: openapi_document()
               "name"
             ],
             "type": "object"
+          },
+          {
+            "description": "A runtime-managed volume isolated to one active rollout replica.",
+            "properties": {
+              "name": {
+                "description": "Stable volume name within the rollout replica.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "replicaManaged"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name"
+            ],
+            "type": "object"
           }
         ]
       },

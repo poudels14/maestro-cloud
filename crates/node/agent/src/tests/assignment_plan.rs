@@ -162,6 +162,81 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
     assert_ne!(assignment.spec.node_id, node_id("node-2"));
 }
 
+#[test]
+fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut first_assignment = assignment();
+    let mut deployment = deployment();
+    deployment.spec.service.volumes.first_mut().unwrap().source = VolumeSource::ReplicaManaged {
+        name: "identity".to_owned(),
+    };
+
+    let WorkloadSpec::Container(first) = workload_spec(
+        &cluster_id(),
+        &first_assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+    first_assignment.spec.replica_index = 1;
+    let WorkloadSpec::Container(second) = workload_spec(
+        &cluster_id(),
+        &first_assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+    first_assignment.spec.restart_generation = kernel_api::Generation(2);
+    let WorkloadSpec::Container(restarted) = workload_spec(
+        &cluster_id(),
+        &first_assignment,
+        &deployment,
+        dns_server(),
+        Vec::new(),
+    )?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+
+    assert_eq!(
+        first
+            .configuration
+            .mounts
+            .first()
+            .map(|mount| &mount.source),
+        Some(&MountSource::ManagedVolume(
+            "replica:api:deployment-1:1:0:identity".to_owned()
+        ))
+    );
+    assert_eq!(
+        second
+            .configuration
+            .mounts
+            .first()
+            .map(|mount| &mount.source),
+        Some(&MountSource::ManagedVolume(
+            "replica:api:deployment-1:1:1:identity".to_owned()
+        ))
+    );
+    assert_eq!(
+        restarted
+            .configuration
+            .mounts
+            .first()
+            .map(|mount| &mount.source),
+        Some(&MountSource::ManagedVolume(
+            "replica:api:deployment-1:2:1:identity".to_owned()
+        ))
+    );
+    Ok(())
+}
+
 fn dns_server() -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))
 }

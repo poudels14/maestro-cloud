@@ -354,7 +354,7 @@ fn effective_placement(
         .iter()
         .filter_map(|volume| match &volume.source {
             VolumeSource::HostPath { node_id, .. } => Some(node_id.clone()),
-            VolumeSource::Managed { .. } => None,
+            VolumeSource::Managed { .. } | VolumeSource::ReplicaManaged { .. } => None,
         })
         .collect::<BTreeSet<_>>();
     let volume_node = if volume_nodes.is_empty() {

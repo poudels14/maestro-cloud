@@ -201,6 +201,11 @@ pub enum VolumeSource {
         /// Stable runtime volume name.
         name: String,
     },
+    /// A runtime-managed volume isolated to one active rollout replica.
+    ReplicaManaged {
+        /// Stable volume name within the rollout replica.
+        name: String,
+    },
 }
 
 /// One filesystem mount in a service workload.

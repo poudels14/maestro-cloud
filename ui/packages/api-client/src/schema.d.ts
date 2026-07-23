@@ -3288,6 +3288,11 @@ export interface components {
             name: string;
             /** @enum {string} */
             type: "managed";
+        } | {
+            /** @description Stable volume name within the rollout replica. */
+            name: string;
+            /** @enum {string} */
+            type: "replicaManaged";
         };
         Webhook: components["schemas"]["Object17"];
         /** @description Notification severity selected independently from event classes. */

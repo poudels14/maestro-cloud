@@ -51,6 +51,9 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
                             volumes: [{
                                 managedVolume: "api-data",
                                 mountPath: "/var/lib/api"
+                            }, {
+                                replicaManagedVolume: "worker-state",
+                                mountPath: "/var/lib/worker"
                             }],
                             egress: {
                                 allow: [{ cidr: "10.0.0.0/24", ports: [443, 443] }]
@@ -93,6 +96,10 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
     assert!(matches!(
         desired.spec.volumes.first().map(|volume| &volume.source),
         Some(VolumeSource::Managed { name }) if name == "api-data"
+    ));
+    assert!(matches!(
+        desired.spec.volumes.get(1).map(|volume| &volume.source),
+        Some(VolumeSource::ReplicaManaged { name }) if name == "worker-state"
     ));
     assert!(desired.spec.version.starts_with("cfg-"));
     let rollout = desired.rollout_spec(&ServiceId::new("api")?)?;
@@ -280,7 +287,8 @@ async fn host_volumes_remain_compatible_and_ambiguous_sources_fail_exactly()
         .await
         .expect_err("ambiguous volume source must fail");
     assert!(error.to_string().contains(
-        "services.api.deploy.volumes[0]: set exactly one of `hostPath` or `managedVolume`"
+        "services.api.deploy.volumes[0]: set exactly one of `hostPath`, `managedVolume`, or \
+         `replicaManagedVolume`"
     ));
     Ok(())
 }

@@ -25,6 +25,13 @@ fn tagged_enum_fields_follow_the_camel_case_wire_contract() {
         serde_json::json!({"type": "hostPath", "path": "/srv/data", "nodeId": "node-1"})
     );
     assert_eq!(
+        serde_json::to_value(VolumeSource::ReplicaManaged {
+            name: "identity".to_owned()
+        })
+        .expect("serialize replica-managed volume"),
+        serde_json::json!({"type": "replicaManaged", "name": "identity"})
+    );
+    assert_eq!(
         serde_json::to_value(DeploymentGoal::Remove).expect("serialize deployment goal"),
         serde_json::json!("remove")
     );
