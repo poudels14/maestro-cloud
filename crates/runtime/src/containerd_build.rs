@@ -15,6 +15,12 @@ use crate::{
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
 
+#[derive(Clone, Copy)]
+enum BuildParameterKind {
+    Argument,
+    Secret,
+}
+
 #[derive(Debug)]
 pub(crate) struct BuildctlInvocation {
     pub(crate) executable: PathBuf,
@@ -231,7 +237,7 @@ async fn probe_buildkit(
 
 fn validate_request(request: &ArtifactBuildRequest) -> Result<(), ArtifactStoreError> {
     for (key, value) in &request.arguments {
-        validate_key("argument", key, false)?;
+        validate_key(BuildParameterKind::Argument, key)?;
         if value.contains('\0') {
             return Err(rejected(format!(
                 "BuildKit argument `{key}` contains a null byte"
@@ -239,7 +245,7 @@ fn validate_request(request: &ArtifactBuildRequest) -> Result<(), ArtifactStoreE
         }
     }
     for (key, value) in &request.secrets {
-        validate_key("secret", key, true)?;
+        validate_key(BuildParameterKind::Secret, key)?;
         if value.expose().contains('\0') {
             return Err(rejected(format!(
                 "BuildKit secret `{key}` contains a null byte"
@@ -252,13 +258,17 @@ fn validate_request(request: &ArtifactBuildRequest) -> Result<(), ArtifactStoreE
     Ok(())
 }
 
-fn validate_key(kind: &str, key: &str, csv: bool) -> Result<(), ArtifactStoreError> {
+fn validate_key(kind: BuildParameterKind, key: &str) -> Result<(), ArtifactStoreError> {
+    let (name, contains_reserved_delimiter) = match kind {
+        BuildParameterKind::Argument => ("argument", false),
+        BuildParameterKind::Secret => ("secret", key.contains(',')),
+    };
     if key.is_empty()
         || key.contains('=')
-        || (csv && key.contains(','))
+        || contains_reserved_delimiter
         || key.chars().any(char::is_control)
     {
-        Err(rejected(format!("BuildKit {kind} name `{key}` is invalid")))
+        Err(rejected(format!("BuildKit {name} name `{key}` is invalid")))
     } else {
         Ok(())
     }

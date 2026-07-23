@@ -56,7 +56,10 @@ async fn buildkit_runner_receives_exact_cli_artifact_and_environment_only_secret
             root: source.clone(),
             definition: PathBuf::from("Containerfile"),
         },
-        arguments: BTreeMap::from([("MODE".to_owned(), "release".to_owned())]),
+        arguments: BTreeMap::from([
+            ("CHANNEL,NAME".to_owned(), "stable".to_owned()),
+            ("MODE".to_owned(), "release".to_owned()),
+        ]),
         secrets: BTreeMap::from([(
             "registry-token".to_owned(),
             SecretValue::new("never-appear-in-argv"),
@@ -102,6 +105,7 @@ async fn buildkit_runner_receives_exact_cli_artifact_and_environment_only_secret
             "filename=Containerfile",
         ]
     );
+    assert!(args.contains(&"build-arg:CHANNEL,NAME=stable"));
     assert!(args.contains(&"build-arg:MODE=release"));
     assert!(args.contains(&"id=registry-token,type=env,env=MAESTRO_BUILDKIT_SECRET_0"));
     assert!(args.last().unwrap().starts_with("type=oci,dest="));
