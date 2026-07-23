@@ -136,7 +136,7 @@ pub use network_stats::{
 #[cfg(unix)]
 pub use node_api::{
     BoundWorkloadNodeApi, NodeApiServerError, NodeApiServices, NodeApiSocketOwner,
-    NodeControlHandler, NodeLogHandler, NodeMetricHandler, NodeTraceHandler,
+    NodeControlHandler, NodeLogHandler, NodeMetricHandler, NodeTraceHandler, WorkloadControlAccess,
 };
 #[cfg(unix)]
 pub use node_api_files::NodeApiMountError;

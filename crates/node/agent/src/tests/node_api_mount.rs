@@ -9,7 +9,7 @@ use tonic::metadata::MetadataValue;
 use tonic::transport::Endpoint;
 
 use crate::node_api_mount::NodeApiMountManager;
-use crate::{NodeApiMountError, NodeApiSocketOwner};
+use crate::{NodeApiMountError, NodeApiSocketOwner, WorkloadControlAccess};
 
 use super::node_api_support::node_api_services;
 
@@ -22,7 +22,12 @@ async fn credentials_survive_agent_restart_and_are_zeroized_on_cleanup()
     let workload_id = workload_id("workload-1");
     let manager = NodeApiMountManager::new(root.clone(), Some(node_api_services()))?;
     let mount = manager
-        .ensure(&workload_id, owner, claims("workload-1"), true)
+        .ensure(
+            &workload_id,
+            owner,
+            claims("workload-1"),
+            WorkloadControlAccess::Allowed,
+        )
         .await?;
     assert_eq!(mount.target.to_string_lossy(), WORKLOAD_NODE_DIRECTORY);
     assert_eq!(mount.access, MountAccess::ReadOnly);
@@ -62,7 +67,12 @@ async fn credentials_survive_agent_restart_and_are_zeroized_on_cleanup()
 
     let restarted = NodeApiMountManager::new(root.clone(), Some(node_api_services()))?;
     restarted
-        .ensure(&workload_id, owner, claims("workload-1"), true)
+        .ensure(
+            &workload_id,
+            owner,
+            claims("workload-1"),
+            WorkloadControlAccess::Allowed,
+        )
         .await?;
     assert_eq!(std::fs::read_to_string(&token_path)?, token);
     let channel = Endpoint::from_shared(format!("unix:{}", socket_path.display()))?
@@ -94,7 +104,12 @@ async fn binding_mutation_and_unsafe_stale_socket_fail_closed()
     let workload_id = workload_id("workload-1");
     let manager = NodeApiMountManager::new(root.clone(), Some(node_api_services()))?;
     manager
-        .ensure(&workload_id, owner, claims("workload-1"), false)
+        .ensure(
+            &workload_id,
+            owner,
+            claims("workload-1"),
+            WorkloadControlAccess::Denied,
+        )
         .await?;
     let mut changed_claims = claims("workload-1");
     changed_claims
@@ -102,7 +117,12 @@ async fn binding_mutation_and_unsafe_stale_socket_fail_closed()
         .insert("changed".into(), "true".into());
     assert!(matches!(
         manager
-            .ensure(&workload_id, owner, changed_claims, false)
+            .ensure(
+                &workload_id,
+                owner,
+                changed_claims,
+                WorkloadControlAccess::Denied,
+            )
             .await,
         Err(NodeApiMountError::BindingConflict { .. })
     ));
@@ -112,7 +132,12 @@ async fn binding_mutation_and_unsafe_stale_socket_fail_closed()
     std::fs::write(&socket_path, b"not a socket")?;
     assert!(matches!(
         manager
-            .ensure(&workload_id, owner, claims("workload-1"), false)
+            .ensure(
+                &workload_id,
+                owner,
+                claims("workload-1"),
+                WorkloadControlAccess::Denied,
+            )
             .await,
         Err(NodeApiMountError::UnsafePath { .. })
     ));
@@ -129,7 +154,12 @@ async fn stale_cleanup_stops_only_inactive_workload_servers()
     let manager = NodeApiMountManager::new(root.clone(), Some(node_api_services()))?;
     for id in ["workload-1", "workload-2"] {
         manager
-            .ensure(&workload_id(id), owner, claims(id), false)
+            .ensure(
+                &workload_id(id),
+                owner,
+                claims(id),
+                WorkloadControlAccess::Denied,
+            )
             .await?;
     }
 

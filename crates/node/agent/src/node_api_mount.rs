@@ -7,7 +7,9 @@ use runtime::WorkloadMount;
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::node_api::{BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner};
+use crate::node_api::{
+    BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner, WorkloadControlAccess,
+};
 use crate::node_api_files::{
     NodeApiMountError, cleanup_node_api_directory, list_workload_directories,
     prepare_node_api_files, remove_stale_socket,
@@ -37,7 +39,7 @@ impl NodeApiMountManager {
         workload_id: &WorkloadId,
         owner: NodeApiSocketOwner,
         claims: WorkloadClaims,
-        control_allowed: bool,
+        control_access: WorkloadControlAccess,
     ) -> Result<WorkloadMount, NodeApiMountError> {
         let mut running = self.running.lock().await;
         let services = self
@@ -55,7 +57,7 @@ impl NodeApiMountManager {
         let binding = NodeApiBinding {
             owner,
             claims: claims.clone(),
-            control_allowed,
+            control_access,
         };
         if let Some(existing) = running.get(workload_id) {
             if existing.binding != binding {
@@ -77,7 +79,7 @@ impl NodeApiMountManager {
             &prepared.socket_path,
             authorization,
             owner,
-            control_allowed,
+            control_access,
             services,
         )?;
         let (shutdown, shutdown_receiver) = oneshot::channel();
@@ -151,7 +153,7 @@ impl NodeApiMountManager {
 struct NodeApiBinding {
     owner: NodeApiSocketOwner,
     claims: WorkloadClaims,
-    control_allowed: bool,
+    control_access: WorkloadControlAccess,
 }
 
 struct RunningNodeApi {

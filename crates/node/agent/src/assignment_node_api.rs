@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use kernel_api::{Assignment, Deployment, DeploymentId, WorkloadId};
+use kernel_api::{Assignment, Deployment, DeploymentId, NodeApiAccess, WorkloadId};
 use node_fabric::WorkloadClaims;
 use runtime::WorkloadMount;
 
 use crate::assignment_plan::{node_api_user, workload_labels};
 use crate::assignment_status::ConvergeFailure;
-use crate::node_api::NodeApiSocketOwner;
+use crate::node_api::{NodeApiSocketOwner, WorkloadControlAccess};
 use crate::node_api_mount::NodeApiMountManager;
 
 pub(crate) async fn mount_node_api(
@@ -33,7 +33,12 @@ pub(crate) async fn mount_node_api(
                 deployment_id: assignment.spec.deployment_id.clone(),
                 labels: workload_labels(assignment, deployment),
             },
-            deployment.spec.service.node_api.allows_control(),
+            match deployment.spec.service.node_api {
+                NodeApiAccess::Privileged => WorkloadControlAccess::Allowed,
+                NodeApiAccess::Disabled | NodeApiAccess::IdentityAndTelemetry => {
+                    WorkloadControlAccess::Denied
+                }
+            },
         )
         .await?;
     Ok(Some(mount))

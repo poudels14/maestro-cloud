@@ -158,11 +158,26 @@ impl Debug for NodeApiServices {
     }
 }
 
+/// Whether a workload-private node API exposes privileged Control mutations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadControlAccess {
+    /// Identity and telemetry remain available, but Control mutations are rejected.
+    Denied,
+    /// Authenticated Control mutations are forwarded to the configured handler.
+    Allowed,
+}
+
+impl WorkloadControlAccess {
+    const fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
 /// Authenticated services bound to one workload-private Unix listener.
 #[derive(Clone)]
 struct WorkloadNodeApiService {
     authorization: Arc<WorkloadAuthorization>,
-    control_allowed: bool,
+    control_access: WorkloadControlAccess,
     services: NodeApiServices,
 }
 
@@ -228,7 +243,7 @@ impl Control for WorkloadNodeApiService {
         request: Request<ResourceMutation>,
     ) -> Result<Response<MutationResult>, Status> {
         let claims = self.authenticate(&request)?;
-        if !self.control_allowed {
+        if !self.control_access.is_allowed() {
             return Err(Status::permission_denied(
                 "workload is not allowed to use the control API",
             ));
@@ -309,7 +324,7 @@ impl BoundWorkloadNodeApi {
         socket_path: impl AsRef<Path>,
         authorization: WorkloadAuthorization,
         owner: NodeApiSocketOwner,
-        control_allowed: bool,
+        control_access: WorkloadControlAccess,
         services: NodeApiServices,
     ) -> Result<Self, NodeApiServerError> {
         let socket_path = socket_path.as_ref().to_path_buf();
@@ -347,7 +362,7 @@ impl BoundWorkloadNodeApi {
             socket_identity,
             service: WorkloadNodeApiService {
                 authorization: Arc::new(authorization),
-                control_allowed,
+                control_access,
                 services,
             },
         })

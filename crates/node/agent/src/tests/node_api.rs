@@ -19,7 +19,7 @@ use tonic::{Code, Request, Status};
 
 use crate::{
     BoundWorkloadNodeApi, NodeApiServices, NodeApiSocketOwner, NodeControlHandler, NodeLogHandler,
-    NodeMetricHandler, NodeTraceHandler,
+    NodeMetricHandler, NodeTraceHandler, WorkloadControlAccess,
 };
 
 #[derive(Debug, Default)]
@@ -116,7 +116,7 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
         },
-        true,
+        WorkloadControlAccess::Allowed,
         services,
     )
     .expect("bind node API");
@@ -218,7 +218,7 @@ async fn log_ingest_service_routes_logs_and_rejects_unconfigured_endpoints() {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
         },
-        true,
+        WorkloadControlAccess::Allowed,
         NodeApiServices::with_log_ingest(handlers.clone()),
     )
     .expect("bind node API");
@@ -280,7 +280,7 @@ async fn uds_server_rejects_unprivileged_control() {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
         },
-        false,
+        WorkloadControlAccess::Denied,
         NodeApiServices::new(
             handlers.clone(),
             handlers.clone(),
