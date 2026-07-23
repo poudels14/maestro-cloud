@@ -9,12 +9,18 @@ use crate::UpgradePlanError;
 const MAINTENANCE_CONDITION: &str = "Maintenance";
 const READY_CONDITION: &str = "Ready";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaintenanceAction {
+    Reserve,
+    Release,
+}
+
 pub(crate) fn set_maintenance(
     updates: &mut BTreeMap<NodeId, Node>,
     nodes: &BTreeMap<NodeId, Node>,
     run: &UpgradeRun,
     node_id: &NodeId,
-    enabled: bool,
+    action: MaintenanceAction,
     now: Timestamp,
 ) -> Result<(), UpgradePlanError> {
     let current = updates
@@ -29,7 +35,7 @@ pub(crate) fn set_maintenance(
         .conditions
         .iter()
         .find(|condition| condition.condition_type.0 == MAINTENANCE_CONDITION);
-    if enabled
+    if action == MaintenanceAction::Reserve
         && existing.is_some_and(|condition| {
             condition.state == ConditionState::True && condition.reason.0 != owner
         })
@@ -38,7 +44,7 @@ pub(crate) fn set_maintenance(
             node_id: node_id.clone(),
         });
     }
-    if !enabled
+    if action == MaintenanceAction::Release
         && existing.is_none_or(|condition| {
             condition.state != ConditionState::True || condition.reason.0 != owner
         })
@@ -50,15 +56,17 @@ pub(crate) fn set_maintenance(
         .status
         .conditions
         .retain(|condition| condition.condition_type.0 != MAINTENANCE_CONDITION);
-    let state = if enabled {
-        ConditionState::True
-    } else {
-        ConditionState::False
-    };
-    let reason = if enabled {
-        owner
-    } else {
-        "UpgradeReleased".to_string()
+    let (state, reason, message) = match action {
+        MaintenanceAction::Reserve => (
+            ConditionState::True,
+            owner,
+            format!("node reserved by upgrade run `{}`", run.meta.id),
+        ),
+        MaintenanceAction::Release => (
+            ConditionState::False,
+            "UpgradeReleased".to_string(),
+            format!("node released by upgrade run `{}`", run.meta.id),
+        ),
     };
     let last_transition_time = existing
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
@@ -67,11 +75,7 @@ pub(crate) fn set_maintenance(
         condition_type: ConditionType(MAINTENANCE_CONDITION.to_string()),
         state,
         reason: ConditionReason(reason),
-        message: if enabled {
-            format!("node reserved by upgrade run `{}`", run.meta.id)
-        } else {
-            format!("node released by upgrade run `{}`", run.meta.id)
-        },
+        message,
         observed_generation: desired.meta.generation,
         last_transition_time,
     });
@@ -102,16 +106,11 @@ fn maintenance_owner(run: &UpgradeRun) -> String {
 
 pub(crate) fn set_ready_condition(
     run: &mut UpgradeRun,
-    ready: bool,
+    state: ConditionState,
     reason: &str,
     message: &str,
     now: Timestamp,
 ) {
-    let state = if ready {
-        ConditionState::True
-    } else {
-        ConditionState::False
-    };
     let existing = run
         .status
         .conditions

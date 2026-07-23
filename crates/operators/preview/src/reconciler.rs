@@ -114,7 +114,7 @@ impl PreviewReconciler {
             preview.status.teardown_at = Some(preview.spec.expires_at);
             self.set_condition(
                 &mut preview,
-                false,
+                ConditionState::False,
                 "PreviewExpired",
                 "preview lifetime elapsed",
             );
@@ -217,7 +217,11 @@ impl PreviewReconciler {
         preview.status.teardown_at = None;
         self.set_condition(
             &mut preview,
-            ready,
+            if ready {
+                ConditionState::True
+            } else {
+                ConditionState::False
+            },
             if ready {
                 "PreviewReady"
             } else {
@@ -266,7 +270,7 @@ impl PreviewReconciler {
             preview.status.teardown_at = Some(teardown_at);
             self.set_condition(
                 &mut preview,
-                false,
+                ConditionState::False,
                 "PreviewClosing",
                 "preview is retained during its close grace period",
             );
@@ -296,7 +300,7 @@ impl PreviewReconciler {
                 preview.status.teardown_at = Some(teardown_at);
                 self.set_condition(
                     &mut preview,
-                    false,
+                    ConditionState::False,
                     "PreviewTeardown",
                     "derived service deletion is in progress",
                 );
@@ -319,7 +323,7 @@ impl PreviewReconciler {
             preview.status.teardown_at = Some(teardown_at);
             self.set_condition(
                 &mut preview,
-                false,
+                ConditionState::False,
                 "PreviewExpired",
                 "derived preview resources were removed",
             );
@@ -349,7 +353,7 @@ impl PreviewReconciler {
     ) -> Result<Action, ReconcileError> {
         preview.status.phase = PreviewPhase::Failed;
         preview.status.teardown_at = None;
-        self.set_condition(&mut preview, false, reason, &message);
+        self.set_condition(&mut preview, ConditionState::False, reason, &message);
         self.write(context, &preview, snapshot, None, &[], &[], Action::Done)
             .await
     }
@@ -407,12 +411,13 @@ impl PreviewReconciler {
         }
     }
 
-    fn set_condition(&self, preview: &mut Preview, ready: bool, reason: &str, message: &str) {
-        let state = if ready {
-            ConditionState::True
-        } else {
-            ConditionState::False
-        };
+    fn set_condition(
+        &self,
+        preview: &mut Preview,
+        state: ConditionState,
+        reason: &str,
+        message: &str,
+    ) {
         let previous = preview
             .status
             .conditions

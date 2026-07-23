@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    NodeId, Object, ResourceKind, Timestamp, UpgradePhase, UpgradeRun, UpgradeRunId,
-    UpgradeRunSpec, UpgradeRunStatus,
+    ConditionState, NodeId, Object, ResourceKind, Timestamp, UpgradePhase, UpgradeRun,
+    UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_controller::{
     Action, ControllerRuntime, FencedStore, ReconcileContext, ReconcileError, Reconciler,
@@ -76,10 +76,10 @@ impl UpgradeReconciler {
         &self,
         mut run: UpgradeRun,
         context: &ReconcileContext,
-        finalizing: bool,
+        mode: ReconcileMode,
     ) -> Result<Action, ReconcileError> {
         run.meta.revision = context.observed_version().resource_revision();
-        if finalizing {
+        if mode == ReconcileMode::Finalizing {
             terminate_for_deletion(&mut run, self.timestamp_clock.now());
         }
         let snapshot = UpgradeSnapshot::load(context.store(), &self.keyspace)
@@ -120,11 +120,10 @@ impl UpgradeReconciler {
             let outcome_plan =
                 record_dispatch_outcome(input, self.settings, outcome).map_err(classify_plan)?;
             return self
-                .persist(context, &run, &snapshot, &outcome_plan, finalizing)
+                .persist(context, &run, &snapshot, &outcome_plan, mode)
                 .await;
         }
-        self.persist(context, &run, &snapshot, &planned, finalizing)
-            .await
+        self.persist(context, &run, &snapshot, &planned, mode).await
     }
 
     async fn persist(
@@ -133,7 +132,7 @@ impl UpgradeReconciler {
         observed: &UpgradeRun,
         snapshot: &UpgradeSnapshot,
         plan: &UpgradePlan,
-        finalizing: bool,
+        mode: ReconcileMode,
     ) -> Result<Action, ReconcileError> {
         let write = self
             .writer
@@ -148,7 +147,9 @@ impl UpgradeReconciler {
             .map_err(classify)?;
         match write {
             UpgradeWriteOutcome::Conflict => Ok(Action::Requeue(CONFLICT_RETRY)),
-            UpgradeWriteOutcome::Applied if finalizing => Ok(Action::Requeue(Duration::ZERO)),
+            UpgradeWriteOutcome::Applied if mode == ReconcileMode::Finalizing => {
+                Ok(Action::Requeue(Duration::ZERO))
+            }
             UpgradeWriteOutcome::Applied | UpgradeWriteOutcome::Noop => action(&plan.action),
         }
     }
@@ -168,7 +169,8 @@ impl Reconciler for UpgradeReconciler {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(resource, &context, false).await
+        self.converge(resource, &context, ReconcileMode::Active)
+            .await
     }
 
     async fn finalize(
@@ -176,7 +178,8 @@ impl Reconciler for UpgradeReconciler {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(resource, &context, true).await
+        self.converge(resource, &context, ReconcileMode::Finalizing)
+            .await
     }
 }
 
@@ -201,11 +204,17 @@ fn terminate_for_deletion(run: &mut UpgradeRun, now: Timestamp) {
     run.status.phase = target;
     set_ready_condition(
         run,
-        false,
+        ConditionState::False,
         "UpgradeCanceled",
         "upgrade resource deletion restored node scheduling",
         now,
     );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileMode {
+    Active,
+    Finalizing,
 }
 
 fn action(action: &UpgradePlanAction) -> Result<Action, ReconcileError> {

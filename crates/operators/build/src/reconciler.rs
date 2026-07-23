@@ -75,7 +75,12 @@ impl BuildReconciler {
                 build.status.phase = BuildPhase::Preparing;
                 build.status.image_digest = None;
                 build.status.source_revision = None;
-                self.set_condition(&mut build, false, "Preparing", "source preparation queued");
+                self.set_condition(
+                    &mut build,
+                    ConditionState::False,
+                    "Preparing",
+                    "source preparation queued",
+                );
                 self.persist(context, &build, Action::Requeue(Duration::ZERO))
                     .await
             }
@@ -118,7 +123,12 @@ impl BuildReconciler {
                 }
                 build.status.phase = BuildPhase::Building;
                 build.status.source_revision = Some(prepared.revision);
-                self.set_condition(&mut build, false, "Building", "artifact build is running");
+                self.set_condition(
+                    &mut build,
+                    ConditionState::False,
+                    "Building",
+                    "artifact build is running",
+                );
                 self.persist(context, &build, Action::Requeue(Duration::ZERO))
                     .await
             }
@@ -197,7 +207,12 @@ impl BuildReconciler {
             Ok(digest) => {
                 build.status.phase = BuildPhase::Succeeded;
                 build.status.image_digest = Some(digest.as_str().to_string());
-                self.set_condition(&mut build, true, "BuildSucceeded", "artifact is available");
+                self.set_condition(
+                    &mut build,
+                    ConditionState::True,
+                    "BuildSucceeded",
+                    "artifact is available",
+                );
                 self.persist(context, &build, Action::Done).await
             }
             Err(
@@ -222,7 +237,7 @@ impl BuildReconciler {
     ) -> Result<Action, ReconcileError> {
         build.status.phase = BuildPhase::Failed;
         build.status.image_digest = None;
-        self.set_condition(&mut build, false, reason, &message);
+        self.set_condition(&mut build, ConditionState::False, reason, &message);
         self.persist(context, &build, Action::Done).await
     }
 
@@ -247,12 +262,7 @@ impl BuildReconciler {
         }
     }
 
-    fn set_condition(&self, build: &mut Build, ready: bool, reason: &str, message: &str) {
-        let state = if ready {
-            ConditionState::True
-        } else {
-            ConditionState::False
-        };
+    fn set_condition(&self, build: &mut Build, state: ConditionState, reason: &str, message: &str) {
         let previous = build
             .status
             .conditions

@@ -2,11 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use kernel_api::{
-    Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode, UpgradeOperation, UpgradePhase,
+    ConditionState, Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode, UpgradeOperation,
+    UpgradePhase,
 };
 use semver::Version;
 
-use crate::conditions::{reject_foreign_maintenance, set_maintenance, set_ready_condition};
+use crate::conditions::{
+    MaintenanceAction, reject_foreign_maintenance, set_maintenance, set_ready_condition,
+};
 use crate::{
     NodeUpgradeRequest, NodeUpgradeTarget, UpgradeDispatchOutcome, UpgradeInput, UpgradePlan,
     UpgradePlanAction, UpgradePlanError, UpgradeSettings,
@@ -74,7 +77,13 @@ pub fn record_dispatch_outcome(
             } else {
                 "upgrade request accepted; waiting for new daemon identities"
             };
-            set_ready_condition(&mut run, false, "Restarting", message, input.now);
+            set_ready_condition(
+                &mut run,
+                ConditionState::False,
+                "Restarting",
+                message,
+                input.now,
+            );
             Ok(plan(
                 run,
                 Vec::new(),
@@ -102,7 +111,7 @@ pub fn record_dispatch_outcome(
                 }
                 set_ready_condition(
                     &mut run,
-                    false,
+                    ConditionState::False,
                     "UpgradeRetryScheduled",
                     &message,
                     input.now,
@@ -182,11 +191,18 @@ fn initialize(
     run.status.phase = transition(run.status.phase, UpgradePhase::Draining)?;
     let mut updates = BTreeMap::new();
     for node_id in batch {
-        set_maintenance(&mut updates, &nodes, &run, &node_id, true, input.now)?;
+        set_maintenance(
+            &mut updates,
+            &nodes,
+            &run,
+            &node_id,
+            MaintenanceAction::Reserve,
+            input.now,
+        )?;
     }
     set_ready_condition(
         &mut run,
-        false,
+        ConditionState::False,
         "Draining",
         "selected nodes are leaving workload scheduling",
         input.now,
@@ -221,7 +237,14 @@ fn plan_draining(
     }
     let mut updates = BTreeMap::new();
     for node_id in &draining_ids {
-        set_maintenance(&mut updates, &nodes, &run, node_id, true, input.now)?;
+        set_maintenance(
+            &mut updates,
+            &nodes,
+            &run,
+            node_id,
+            MaintenanceAction::Reserve,
+            input.now,
+        )?;
     }
     let artifacts_pending = draining_ids.iter().any(|node_id| {
         nodes.get(node_id).is_none_or(|node| {
@@ -234,7 +257,7 @@ fn plan_draining(
     if artifacts_pending {
         set_ready_condition(
             &mut run,
-            false,
+            ConditionState::False,
             "ArtifactReplicationPending",
             "selected nodes are waiting for retained artifacts to acquire peer copies",
             input.now,
@@ -278,7 +301,13 @@ fn plan_draining(
     } else {
         "node upgrade dispatch is ready"
     };
-    set_ready_condition(&mut run, false, "Applying", message, input.now);
+    set_ready_condition(
+        &mut run,
+        ConditionState::False,
+        "Applying",
+        message,
+        input.now,
+    );
     Ok(plan(
         run,
         updates.into_values().collect(),
@@ -397,7 +426,13 @@ fn plan_restart(
     } else {
         "new daemon identities are reporting; verifying target versions"
     };
-    set_ready_condition(&mut run, false, "Verifying", message, input.now);
+    set_ready_condition(
+        &mut run,
+        ConditionState::False,
+        "Verifying",
+        message,
+        input.now,
+    );
     Ok(plan(
         run,
         Vec::new(),
@@ -457,7 +492,14 @@ fn plan_verification(
             status.phase = transition(status.phase, UpgradePhase::Completed)?;
             status.node_id.clone()
         };
-        set_maintenance(&mut updates, &nodes, &run, &node_id, false, input.now)?;
+        set_maintenance(
+            &mut updates,
+            &nodes,
+            &run,
+            &node_id,
+            MaintenanceAction::Release,
+            input.now,
+        )?;
     }
     if run.spec.mode == UpgradeMode::Rolling
         && run
@@ -468,12 +510,19 @@ fn plan_verification(
     {
         let batch = start_next_batch(&mut run)?;
         for node_id in batch {
-            set_maintenance(&mut updates, &nodes, &run, &node_id, true, input.now)?;
+            set_maintenance(
+                &mut updates,
+                &nodes,
+                &run,
+                &node_id,
+                MaintenanceAction::Reserve,
+                input.now,
+            )?;
         }
         run.status.phase = transition(run.status.phase, UpgradePhase::Draining)?;
         set_ready_condition(
             &mut run,
-            false,
+            ConditionState::False,
             "Draining",
             "next rolling node is leaving workload scheduling",
             input.now,
@@ -491,7 +540,7 @@ fn plan_verification(
                 "every selected node reports the requested version",
             )
         };
-        set_ready_condition(&mut run, true, reason, message, input.now);
+        set_ready_condition(&mut run, ConditionState::True, reason, message, input.now);
     }
     Ok(plan(
         run,
@@ -511,7 +560,7 @@ fn plan_terminal(
             &nodes,
             &input.run,
             &status.node_id,
-            false,
+            MaintenanceAction::Release,
             input.now,
         )?;
     }
@@ -534,10 +583,17 @@ fn fail_run(
     let pending = status_indices(&run, UpgradePhase::Pending);
     transition_statuses(&mut run, &pending, UpgradePhase::Canceled)?;
     run.status.phase = transition(run.status.phase, UpgradePhase::Failed)?;
-    set_ready_condition(&mut run, false, reason, &message, now);
+    set_ready_condition(&mut run, ConditionState::False, reason, &message, now);
     let mut updates = BTreeMap::new();
     for status in &run.status.nodes {
-        set_maintenance(&mut updates, &nodes, &run, &status.node_id, false, now)?;
+        set_maintenance(
+            &mut updates,
+            &nodes,
+            &run,
+            &status.node_id,
+            MaintenanceAction::Release,
+            now,
+        )?;
     }
     Ok(plan(
         run,
