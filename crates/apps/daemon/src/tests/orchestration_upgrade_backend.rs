@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use clustertest::{FixtureNodeName, MaintenanceAttempt};
-use kernel_api::{ConditionState, Node, NodeId, NodeInstanceId, ResourceKind, ResourceName};
+use kernel_api::{
+    ConditionState, Node, NodeId, NodeInstanceId, ResourceKind, ResourceName, UpgradeOperation,
+};
 use kernel_store::{CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store};
 use upgrade::{NodeUpgradeBackend, NodeUpgradeBackendError, NodeUpgradeRequest};
 
@@ -69,10 +71,16 @@ impl RecordingUpgradeBackend {
                     format!("upgrade target node `{}` disappeared", target.node_id)
                 })?;
             let mut node: Node = serde_json::from_slice(&stored.value)?;
-            node.status.version = request.target_version.clone();
+            if request.operation == UpgradeOperation::Upgrade {
+                node.status.version = request.target_version.clone();
+            }
             node.status.instance_id = NodeInstanceId::new(format!(
-                "{}-upgrade-{}",
+                "{}-{}-{}",
                 node.status.instance_id,
+                match request.operation {
+                    UpgradeOperation::Upgrade => "upgrade",
+                    UpgradeOperation::Restart => "restart",
+                },
                 request.target_version.replace('.', "-")
             ))?;
             let outcome = self
@@ -96,8 +104,9 @@ impl RecordingUpgradeBackend {
 impl NodeUpgradeBackend for RecordingUpgradeBackend {
     async fn apply(&self, request: &NodeUpgradeRequest) -> Result<(), NodeUpgradeBackendError> {
         let request_key = format!(
-            "{}:{}",
+            "{}:{:?}:{}",
             request.run_id,
+            request.operation,
             request
                 .targets
                 .iter()

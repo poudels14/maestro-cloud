@@ -319,30 +319,31 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         None => Version::parse(env!("CARGO_PKG_VERSION"))
             .map_err(|error| invalid(format!("daemon package version is invalid: {error}")))?,
     };
+    let node_upgrade = configured_upgrade.map_or_else(
+        || NodeUpgradeDependencies {
+            stager: None,
+            rebooter: Arc::new(upgrade::ProcessNodeRebooter::new()),
+        },
+        |upgrade| NodeUpgradeDependencies {
+            stager: Some(upgrade.stager),
+            rebooter: upgrade.rebooter,
+        },
+    );
     let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)
         .map_err(|error| invalid(format!("invalid Tailscale system resources: {error}")))?;
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
         .map(|preview| preview.settings.clone());
-    operator_settings.upgrade = configured_upgrade
-        .as_ref()
-        .map(|_| {
-            UpgradeSettings::new(Duration::from_secs(30), Duration::from_secs(5), 3)
-                .map_err(|error| invalid(error.to_string()))
-        })
-        .transpose()?;
+    operator_settings.upgrade = Some(
+        UpgradeSettings::new(Duration::from_secs(30), Duration::from_secs(5), 3)
+            .map_err(|error| invalid(error.to_string()))?,
+    );
     let api_firewall_settings = operator_settings.firewall.clone();
-    let store_upgrades = configured_upgrade
-        .as_ref()
-        .map(|_| {
-            StoreNodeUpgradeBackendSettings::new(
-                Duration::from_secs(60 * 60),
-                Duration::from_secs(2),
-            )
-            .map_err(|error| invalid(error.to_string()))
-        })
-        .transpose()?;
+    let store_upgrades = Some(
+        StoreNodeUpgradeBackendSettings::new(Duration::from_secs(60 * 60), Duration::from_secs(2))
+            .map_err(|error| invalid(error.to_string()))?,
+    );
     let webhook_backend = Arc::new(
         HttpWebhookBackend::new(Duration::from_secs(10))
             .map_err(|error| invalid(error.to_string()))?,
@@ -407,10 +408,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             running_version,
             monotonic_clock: clock,
             status_clock: Arc::new(SystemStatusClock),
-            node_upgrade: configured_upgrade.map(|upgrade| NodeUpgradeDependencies {
-                stager: upgrade.stager,
-                rebooter: upgrade.rebooter,
-            }),
+            node_upgrade: Some(node_upgrade),
             api_settings,
             firewall_settings: api_firewall_settings,
         },

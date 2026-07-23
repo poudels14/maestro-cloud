@@ -6,8 +6,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ClusterId, Generation, NodeId, NodeInstanceId, NodeUpgradeStatus, Object, ObjectMeta,
-    ResourceKind, ResourceName, ResourceRevision, UpgradeMode, UpgradePhase, UpgradeRun,
-    UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
+    RESTART_TARGET_VERSION, ResourceKind, ResourceName, ResourceRevision, UpgradeMode,
+    UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
@@ -51,6 +51,49 @@ async fn agent_stages_then_reboots_only_after_collective_release()
         NodeUpgradeCommandState::Restarting
     );
     assert_eq!(world.rebooter.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_operation_skips_nixos_staging_and_reboots_after_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new_without_staging(NodeInstanceId::new("instance-node-1")?).await?;
+    world.set_operation(UpgradeOperation::Restart).await?;
+
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::Staged
+    );
+    assert!(world.stager.targets().is_empty());
+
+    world
+        .set_command_state(NodeUpgradeCommandState::Released)
+        .await?;
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::RestartAccepted
+    );
+    assert_eq!(world.rebooter.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_without_a_stager_fails_closed_before_reboot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new_without_staging(NodeInstanceId::new("instance-node-1")?).await?;
+
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::Failed
+    );
+    let command = world.command().await?;
+    assert_eq!(
+        command.failure,
+        Some(NodeUpgradeCommandFailure::Rejected {
+            message: "NixOS upgrade staging is not configured".to_string(),
+        })
+    );
+    assert_eq!(world.rebooter.calls(), 0);
     Ok(())
 }
 
@@ -188,6 +231,19 @@ struct World {
 
 impl World {
     async fn new(instance_id: NodeInstanceId) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_staging(instance_id, true).await
+    }
+
+    async fn new_without_staging(
+        instance_id: NodeInstanceId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_staging(instance_id, false).await
+    }
+
+    async fn with_staging(
+        instance_id: NodeInstanceId,
+        staging_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new("agent-test")?;
         let node_id = NodeId::new("node-1")?;
         let keys = Keyspace::new(&cluster_id);
@@ -219,7 +275,7 @@ impl World {
                 running_version: Version::new(1, 0, 0),
                 resync_interval: Duration::from_secs(1),
             },
-            stager.clone(),
+            staging_enabled.then(|| stager.clone() as Arc<dyn NixosUpgradeStager>),
             rebooter.clone(),
             clock,
         )?;
@@ -278,6 +334,44 @@ impl World {
             node.phase = phase;
         }
         replace(&self.store, key, stored.version, serde_json::to_vec(&run)?).await
+    }
+
+    async fn set_operation(
+        &self,
+        operation: UpgradeOperation,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let run_key = self.keys.resource(
+            &ResourceKind::new("UpgradeRun")?,
+            &ResourceName::new("upgrade-1")?,
+        );
+        let stored_run = self.store.get(&run_key).await?.ok_or("run missing")?;
+        let mut run: UpgradeRun = serde_json::from_slice(&stored_run.value)?;
+        run.spec.operation = operation;
+        run.spec.target_version = RESTART_TARGET_VERSION.to_string();
+        replace(
+            &self.store,
+            run_key,
+            stored_run.version,
+            serde_json::to_vec(&run)?,
+        )
+        .await?;
+
+        let command_key = self.keys.node_upgrade_command(&NodeId::new("node-1")?);
+        let stored_command = self
+            .store
+            .get(&command_key)
+            .await?
+            .ok_or("command missing")?;
+        let mut command: NodeUpgradeCommand = serde_json::from_slice(&stored_command.value)?;
+        command.operation = operation;
+        command.target_version = RESTART_TARGET_VERSION.to_string();
+        replace(
+            &self.store,
+            command_key,
+            stored_command.version,
+            serde_json::to_vec(&command)?,
+        )
+        .await
     }
 }
 
@@ -365,6 +459,7 @@ fn run() -> Result<UpgradeRun, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(UpgradeRunId::new("upgrade-1")?),
         spec: UpgradeRunSpec {
+            operation: kernel_api::UpgradeOperation::Upgrade,
             target_version: "2.0.0".to_string(),
             mode: UpgradeMode::Rolling,
             node_ids: Vec::new(),
@@ -390,6 +485,7 @@ fn command(
     Ok(NodeUpgradeCommand {
         run_id: UpgradeRunId::new("upgrade-1")?,
         node_id: NodeId::new("node-1")?,
+        operation: kernel_api::UpgradeOperation::Upgrade,
         target_version: "2.0.0".to_string(),
         previous_instance_id: NodeInstanceId::new("instance-node-1")?,
         state,

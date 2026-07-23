@@ -80,7 +80,21 @@ pub struct PreviewStatus {
 /// A pull-request preview resource.
 pub type Preview = Object<PreviewId, PreviewSpec, PreviewStatus>;
 
-/// Node batching strategy for one cluster upgrade run.
+/// Host mutation performed by the shared cluster-maintenance state machine.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UpgradeOperation {
+    /// Stage a new boot generation before restarting each selected node.
+    #[default]
+    Upgrade,
+    /// Preserve the installed generation and only restart each selected node.
+    Restart,
+}
+
+/// Target-version sentinel carried by restart runs that do not stage an upgrade.
+pub const RESTART_TARGET_VERSION: &str = "0.0.0";
+
+/// Node batching strategy for one cluster maintenance run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum UpgradeMode {
@@ -137,11 +151,14 @@ impl UpgradePhase {
     }
 }
 
-/// Desired target and batching for one cluster upgrade.
+/// Desired operation, target, and batching for one cluster maintenance run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeRunSpec {
-    /// Minimum semantic version every selected node must reach.
+    /// Whether nodes stage an upgrade or only restart their installed generation.
+    #[serde(default)]
+    pub operation: UpgradeOperation,
+    /// Minimum semantic version for upgrades; restart runs carry `0.0.0`.
     pub target_version: String,
     /// Node batching strategy.
     pub mode: UpgradeMode,

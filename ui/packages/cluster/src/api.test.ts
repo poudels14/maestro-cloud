@@ -221,7 +221,7 @@ function upgrade(
 ): ApiSchemas["UpgradeRun"] {
   return {
     meta: { id, generation: 1, revision },
-    spec: { mode: "rolling", targetVersion: "0.5.1" },
+    spec: { operation: "upgrade", mode: "rolling", targetVersion: "0.5.1" },
     status: { phase, nodes: [] }
   };
 }

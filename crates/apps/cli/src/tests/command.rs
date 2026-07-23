@@ -150,6 +150,24 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(
         Cli::try_parse_from([
             "maestro-next",
+            "cluster",
+            "restart",
+            "node-a",
+            "--restart-run-id",
+            "restart-node-a",
+            "--idempotency-key",
+            "restart-node-a-1",
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart", "--all"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart"]).is_err());
+    assert!(
+        Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a", "--all"]).is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
             "exec",
             "api",
             "--deployment",

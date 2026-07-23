@@ -1,18 +1,50 @@
 use std::sync::Mutex;
 
 use kernel_api::{
-    CommandRequest, Generation, NodeId, RequestId, Timestamp, UpgradeCommandResponse,
-    UpgradeCreateRequest, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId,
+    CommandRequest, Generation, NodeId, RESTART_TARGET_VERSION, RequestId, Timestamp,
+    UpgradeCommandResponse, UpgradeCreateRequest, UpgradeMode, UpgradeOperation, UpgradePhase,
+    UpgradeRun, UpgradeRunId,
 };
 use serde_json::json;
 
 use crate::CliError;
-use crate::upgrades::{UpgradeApi, cancel, list, start};
+use crate::upgrades::{UpgradeApi, cancel, list, restart, start};
 
 struct RecordingUpgradeApi {
     runs: Vec<UpgradeRun>,
     starts: Mutex<Vec<(RequestId, UpgradeCreateRequest)>>,
     cancels: Mutex<Vec<(UpgradeRunId, RequestId, CommandRequest)>>,
+}
+
+#[tokio::test]
+async fn restart_command_uses_the_shared_rolling_maintenance_contract()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    let mut output = Vec::new();
+
+    restart(
+        &api,
+        vec!["node-a".to_string()],
+        Some("restart-node-a".to_string()),
+        RequestId::new("restart-node-a-1")?,
+        &mut output,
+    )
+    .await?;
+
+    let starts = api.starts.lock().map_err(|_| "start lock poisoned")?;
+    let (_, request) = starts.first().ok_or("restart was not started")?;
+    assert_eq!(request.upgrade_run_id.as_str(), "restart-node-a");
+    assert_eq!(request.spec.operation, UpgradeOperation::Restart);
+    assert_eq!(request.spec.target_version, RESTART_TARGET_VERSION);
+    assert_eq!(request.spec.mode, UpgradeMode::Rolling);
+    assert_eq!(
+        request.spec.node_ids.first().map(NodeId::as_str),
+        Some("node-a")
+    );
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("--restart-run-id restart-node-a"));
+    assert!(output.contains("cluster restart `restart-node-a` accepted"));
+    Ok(())
 }
 
 impl UpgradeApi for RecordingUpgradeApi {

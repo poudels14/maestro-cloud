@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::{ClusterId, NodeId, NodeInstanceId, UpgradeRunId};
+use kernel_api::{
+    ClusterId, NodeId, NodeInstanceId, RESTART_TARGET_VERSION, UpgradeOperation, UpgradeRunId,
+};
 use kernel_controller::FencedStore;
 use kernel_store::{
     Clock, Compare, ExpectedVersion, Keyspace, Mutation, StoreKey, Transaction, TransactionOutcome,
@@ -63,7 +65,10 @@ pub struct NodeUpgradeCommand {
     pub run_id: UpgradeRunId,
     /// Stable target node.
     pub node_id: NodeId,
-    /// Minimum Maestro version the staged source must satisfy.
+    /// Whether this command stages an upgrade or only reboots the current generation.
+    #[serde(default)]
+    pub operation: UpgradeOperation,
+    /// Minimum Maestro version, or the restart sentinel for restart-only commands.
     pub target_version: String,
     /// Daemon identity observed before the operator drained this node.
     pub previous_instance_id: NodeInstanceId,
@@ -80,6 +85,7 @@ impl NodeUpgradeCommand {
         Some(Self {
             run_id: request.run_id.clone(),
             node_id: target.node_id.clone(),
+            operation: request.operation,
             target_version: request.target_version.clone(),
             previous_instance_id: target.previous_instance_id.clone(),
             state: NodeUpgradeCommandState::Requested,
@@ -90,6 +96,7 @@ impl NodeUpgradeCommand {
     fn matches_request(&self, desired: &Self) -> bool {
         self.run_id == desired.run_id
             && self.node_id == desired.node_id
+            && self.operation == desired.operation
             && self.target_version == desired.target_version
             && self.previous_instance_id == desired.previous_instance_id
     }
@@ -373,6 +380,13 @@ fn validate_request(
             ),
         }
     })?;
+    if request.operation == UpgradeOperation::Restart
+        && request.target_version != RESTART_TARGET_VERSION
+    {
+        return Err(NodeUpgradeBackendError::Rejected {
+            message: format!("restart command target version must be `{RESTART_TARGET_VERSION}`"),
+        });
+    }
     if request.targets.is_empty() {
         return Err(NodeUpgradeBackendError::Rejected {
             message: "node upgrade dispatch has no targets".to_string(),

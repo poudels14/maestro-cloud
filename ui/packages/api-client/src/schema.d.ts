@@ -3283,20 +3283,27 @@ export interface components {
             spec: components["schemas"]["UpgradeRunSpec"];
             upgradeRunId: components["schemas"]["UpgradeRunId"];
         };
-        /** @description Node batching strategy for one cluster upgrade run. */
+        /** @description Node batching strategy for one cluster maintenance run. */
         UpgradeMode: "rolling" | "allNodes";
+        /** @description Host mutation performed by the shared cluster-maintenance state machine. */
+        UpgradeOperation: "upgrade" | "restart";
         /** @description Persisted lifecycle shared by rolling and all-node upgrade modes. */
         UpgradePhase: "pending" | "draining" | "applying" | "restarting" | "verifying" | "completed" | "failed" | "canceled";
         UpgradeRun: components["schemas"]["Object16"];
         /** @description Stable identity of a persisted cluster upgrade run. */
         UpgradeRunId: string;
-        /** @description Desired target and batching for one cluster upgrade. */
+        /** @description Desired operation, target, and batching for one cluster maintenance run. */
         UpgradeRunSpec: {
             /** @description Node batching strategy. */
             mode: components["schemas"]["UpgradeMode"];
             /** @description Explicit node selection, or every eligible node when empty. */
             nodeIds?: components["schemas"]["NodeId"][];
-            /** @description Minimum semantic version every selected node must reach. */
+            /**
+             * @description Whether nodes stage an upgrade or only restart their installed generation.
+             * @default upgrade
+             */
+            operation: components["schemas"]["UpgradeOperation"];
+            /** @description Minimum semantic version for upgrades; restart runs carry `0.0.0`. */
             targetVersion: string;
         };
         /** @description Observed aggregate and per-node progress of an upgrade run. */

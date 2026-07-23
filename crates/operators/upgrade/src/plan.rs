@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use kernel_api::{Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode, UpgradePhase};
+use kernel_api::{
+    Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode, UpgradeOperation, UpgradePhase,
+};
 use semver::Version;
 
 use crate::conditions::{reject_foreign_maintenance, set_maintenance, set_ready_condition};
@@ -67,13 +69,12 @@ pub fn record_dispatch_outcome(
         UpgradeDispatchOutcome::Accepted => {
             transition_statuses(&mut run, &applying, UpgradePhase::Restarting)?;
             run.status.phase = transition(run.status.phase, UpgradePhase::Restarting)?;
-            set_ready_condition(
-                &mut run,
-                false,
-                "Restarting",
-                "upgrade request accepted; waiting for new daemon identities",
-                input.now,
-            );
+            let message = if run.spec.operation == UpgradeOperation::Restart {
+                "restart request accepted; waiting for new daemon identities"
+            } else {
+                "upgrade request accepted; waiting for new daemon identities"
+            };
+            set_ready_condition(&mut run, false, "Restarting", message, input.now);
             Ok(plan(
                 run,
                 Vec::new(),
@@ -142,10 +143,16 @@ fn initialize(
     }
     let mut pending = selected
         .into_iter()
-        .filter_map(|node| match parse_node_version(node) {
-            Ok(version) if version < *target => Some(Ok(node)),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
+        .filter_map(|node| {
+            if input.run.spec.operation == UpgradeOperation::Restart {
+                Some(Ok(node))
+            } else {
+                match parse_node_version(node) {
+                    Ok(version) if version < *target => Some(Ok(node)),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            }
         })
         .collect::<Result<Vec<_>, _>>()?;
     if pending.is_empty() {
@@ -266,13 +273,12 @@ fn plan_draining(
     }
     transition_statuses(&mut run, &draining, UpgradePhase::Applying)?;
     run.status.phase = transition(run.status.phase, UpgradePhase::Applying)?;
-    set_ready_condition(
-        &mut run,
-        false,
-        "Applying",
-        "node upgrade dispatch is ready",
-        input.now,
-    );
+    let message = if run.spec.operation == UpgradeOperation::Restart {
+        "node restart dispatch is ready"
+    } else {
+        "node upgrade dispatch is ready"
+    };
+    set_ready_condition(&mut run, false, "Applying", message, input.now);
     Ok(plan(
         run,
         updates.into_values().collect(),
@@ -329,6 +335,7 @@ fn plan_dispatch(
         .collect::<Result<Vec<_>, _>>()?;
     let request = NodeUpgradeRequest {
         run_id: input.run.meta.id.clone(),
+        operation: input.run.spec.operation,
         target_version: input.run.spec.target_version.clone(),
         targets,
     };
@@ -385,13 +392,12 @@ fn plan_restart(
     }
     transition_statuses(&mut run, &restarting, UpgradePhase::Verifying)?;
     run.status.phase = transition(run.status.phase, UpgradePhase::Verifying)?;
-    set_ready_condition(
-        &mut run,
-        false,
-        "Verifying",
-        "new daemon identities are reporting; verifying target versions",
-        input.now,
-    );
+    let message = if run.spec.operation == UpgradeOperation::Restart {
+        "new daemon identities are reporting; verifying node health"
+    } else {
+        "new daemon identities are reporting; verifying target versions"
+    };
+    set_ready_condition(&mut run, false, "Verifying", message, input.now);
     Ok(plan(
         run,
         Vec::new(),
@@ -405,6 +411,7 @@ fn plan_verification(
     target: &Version,
     settings: UpgradeSettings,
 ) -> Result<UpgradePlan, UpgradePlanError> {
+    let operation = input.run.spec.operation;
     let mut run = input.run;
     let verifying = status_indices(&run, UpgradePhase::Verifying);
     if verifying.is_empty() {
@@ -423,7 +430,9 @@ fn plan_verification(
             .ok_or_else(|| UpgradePlanError::NodeMissing {
                 node_id: status.node_id.clone(),
             })?;
-        if !input.live_nodes.contains(&status.node_id) || parse_node_version(node)? < *target {
+        let version_pending =
+            operation == UpgradeOperation::Upgrade && parse_node_version(node)? < *target;
+        if !input.live_nodes.contains(&status.node_id) || version_pending {
             return Ok(plan(
                 run,
                 Vec::new(),
@@ -471,13 +480,18 @@ fn plan_verification(
         );
     } else {
         run.status.phase = transition(run.status.phase, UpgradePhase::Completed)?;
-        set_ready_condition(
-            &mut run,
-            true,
-            "UpgradeCompleted",
-            "every selected node reports the requested version",
-            input.now,
-        );
+        let (reason, message) = if operation == UpgradeOperation::Restart {
+            (
+                "RestartCompleted",
+                "every selected node restarted and returned healthy",
+            )
+        } else {
+            (
+                "UpgradeCompleted",
+                "every selected node reports the requested version",
+            )
+        };
+        set_ready_condition(&mut run, true, reason, message, input.now);
     }
     Ok(plan(
         run,

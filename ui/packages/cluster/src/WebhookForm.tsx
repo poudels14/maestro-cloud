@@ -8,7 +8,7 @@ const EVENT_OPTIONS: ReadonlyArray<{ value: WebhookEvent; label: string }> = [
   { value: "deploymentTransition", label: "Deployments" },
   { value: "nodeAvailability", label: "Nodes" },
   { value: "previewTransition", label: "Previews" },
-  { value: "upgradeTransition", label: "Upgrades" }
+  { value: "upgradeTransition", label: "Cluster maintenance" }
 ];
 
 const CATEGORY_OPTIONS: ReadonlyArray<{ value: WebhookCategory; label: string }> = [

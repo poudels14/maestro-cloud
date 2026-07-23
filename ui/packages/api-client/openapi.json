@@ -6885,7 +6885,7 @@
         "type": "object"
       },
       "UpgradeMode": {
-        "description": "Node batching strategy for one cluster upgrade run.",
+        "description": "Node batching strategy for one cluster maintenance run.",
         "oneOf": [
           {
             "description": "Upgrade one node at a time while preserving workload and store availability.",
@@ -6898,6 +6898,25 @@
             "description": "Drain all nodes, then apply one coordinated batch.",
             "enum": [
               "allNodes"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "UpgradeOperation": {
+        "description": "Host mutation performed by the shared cluster-maintenance state machine.",
+        "oneOf": [
+          {
+            "description": "Stage a new boot generation before restarting each selected node.",
+            "enum": [
+              "upgrade"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Preserve the installed generation and only restart each selected node.",
+            "enum": [
+              "restart"
             ],
             "type": "string"
           }
@@ -6972,7 +6991,7 @@
         "type": "string"
       },
       "UpgradeRunSpec": {
-        "description": "Desired target and batching for one cluster upgrade.",
+        "description": "Desired operation, target, and batching for one cluster maintenance run.",
         "properties": {
           "mode": {
             "allOf": [
@@ -6989,8 +7008,17 @@
             },
             "type": "array"
           },
+          "operation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeOperation"
+              }
+            ],
+            "default": "upgrade",
+            "description": "Whether nodes stage an upgrade or only restart their installed generation."
+          },
           "targetVersion": {
-            "description": "Minimum semantic version every selected node must reach.",
+            "description": "Minimum semantic version for upgrades; restart runs carry `0.0.0`.",
             "type": "string"
           }
         },

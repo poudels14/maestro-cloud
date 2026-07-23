@@ -104,15 +104,32 @@ where
         }
     }
 
+    let before_restart = cluster
+        .topology()
+        .await
+        .map_err(|error| driver_error("observe selected restart baseline", error))?;
     let restarted = cluster
         .restart_node(&failed_node)
         .await
         .map_err(|error| driver_error("restart selected node", error))?;
-    let selected = vec![failed_node];
+    let after_restart = cluster
+        .topology()
+        .await
+        .map_err(|error| driver_error("observe selected restart result", error))?;
+    let selected = vec![failed_node.clone()];
+    let before = before_restart.nodes.get(&failed_node).ok_or_else(|| {
+        ScenarioError::Assertion("selected restart baseline omitted its node".to_string())
+    })?;
+    let after = after_restart.nodes.get(&failed_node).ok_or_else(|| {
+        ScenarioError::Assertion("selected restart result omitted its node".to_string())
+    })?;
     if restarted.planned_nodes == selected
         && restarted.requested_nodes == selected
         && restarted.completion == MaintenanceCompletion::Succeeded
         && restarted.final_freeze == MaintenanceFreeze::Cleared
+        && after.version == before.version
+        && after.instance_id != before.instance_id
+        && after.scheduling == SchedulingEligibility::Eligible
     {
         Ok(())
     } else {

@@ -352,6 +352,7 @@ fn request(
 ) -> Result<NodeUpgradeRequest, kernel_api::InvalidIdentifier> {
     Ok(NodeUpgradeRequest {
         run_id: UpgradeRunId::new(run_id)?,
+        operation: kernel_api::UpgradeOperation::Upgrade,
         target_version: "2.0.0".to_string(),
         targets: node_ids
             .iter()
@@ -374,6 +375,7 @@ fn command_for(
     NodeUpgradeCommand {
         run_id: request.run_id.clone(),
         node_id: target.node_id.clone(),
+        operation: request.operation,
         target_version: request.target_version.clone(),
         previous_instance_id: target.previous_instance_id.clone(),
         state,

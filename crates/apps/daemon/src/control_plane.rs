@@ -42,10 +42,10 @@ pub enum AgentStore {
     Remote(Arc<dyn Store>),
 }
 
-/// Node-local seams required when NixOS host upgrades are explicitly enabled.
+/// Node-local seams used by coordinated restart and optional NixOS upgrades.
 pub struct NodeUpgradeDependencies {
-    /// Prepares a validated NixOS boot generation without activating it.
-    pub stager: Arc<dyn NixosUpgradeStager>,
+    /// Prepares a validated NixOS boot generation, when upgrades are enabled.
+    pub stager: Option<Arc<dyn NixosUpgradeStager>>,
     /// Requests host reboot only after collective leader release.
     pub rebooter: Arc<dyn NodeRebooter>,
 }

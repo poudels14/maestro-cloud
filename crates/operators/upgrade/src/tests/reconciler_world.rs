@@ -328,6 +328,7 @@ fn run(mode: UpgradeMode) -> Result<UpgradeRun, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(UpgradeRunId::new("upgrade-1")?),
         spec: UpgradeRunSpec {
+            operation: kernel_api::UpgradeOperation::Upgrade,
             target_version: "2.0.0".to_string(),
             mode,
             node_ids: Vec::new(),

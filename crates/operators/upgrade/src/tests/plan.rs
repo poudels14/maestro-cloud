@@ -5,9 +5,9 @@ use std::time::Duration;
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, Condition,
     ConditionReason, ConditionState, ConditionType, DeploymentId, Generation, Node, NodeId,
-    NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, ResourceRevision,
-    ServiceId, Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
-    UpgradeRunStatus,
+    NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, RESTART_TARGET_VERSION,
+    ResourceRevision, ServiceId, Timestamp, UpgradeMode, UpgradeOperation, UpgradePhase,
+    UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
 
 use crate::{
@@ -196,6 +196,58 @@ fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement
 }
 
 #[test]
+fn rolling_restart_selects_satisfied_nodes_and_preserves_their_versions() {
+    let settings = settings(2);
+    let mut nodes = topology_three_voters();
+    let original_versions = nodes
+        .iter()
+        .map(|node| (node.meta.id.clone(), node.status.version.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut restart = run(UpgradeMode::Rolling);
+    restart.spec.operation = UpgradeOperation::Restart;
+    restart.spec.target_version = RESTART_TARGET_VERSION.to_string();
+    restart.spec.node_ids = vec![NodeId::new("node-2").unwrap()];
+
+    let initialized = plan_upgrade(input(restart, &nodes, Vec::new(), 10_000), settings)
+        .expect("initialize selected-node restart");
+    assert_eq!(status_ids(&initialized), ["node-2"]);
+    apply_updates(&mut nodes, initialized.node_updates);
+    let applying = plan_upgrade(input(initialized.run, &nodes, Vec::new(), 10_000), settings)
+        .expect("finish restart drain");
+    let dispatch = plan_upgrade(
+        input(applying.run.clone(), &nodes, Vec::new(), 10_000),
+        settings,
+    )
+    .expect("dispatch selected-node restart");
+    assert!(matches!(
+        dispatch.action,
+        UpgradePlanAction::Dispatch(ref request)
+            if request.operation == UpgradeOperation::Restart
+                && request.target_version == RESTART_TARGET_VERSION
+    ));
+    let restarting = record_dispatch_outcome(
+        input(applying.run, &nodes, Vec::new(), 10_000),
+        settings,
+        UpgradeDispatchOutcome::Accepted,
+    )
+    .expect("accept selected-node restart");
+    restart_node(&mut nodes, "node-2");
+    let verifying = plan_upgrade(input(restarting.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("observe restarted daemon");
+    let completed = plan_upgrade(input(verifying.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("verify preserved-version restart");
+    assert_eq!(completed.run.status.phase, UpgradePhase::Completed);
+    assert!(completed.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "RestartCompleted" && condition.state == ConditionState::True
+    }));
+    assert!(
+        nodes
+            .iter()
+            .all(|node| { original_versions.get(&node.meta.id) == Some(&node.status.version) })
+    );
+}
+
+#[test]
 fn rolling_upgrade_waits_for_artifact_replication_after_assignments_leave() {
     let settings = settings(2);
     let mut nodes = topology_with_worker();
@@ -295,6 +347,7 @@ fn run(mode: UpgradeMode) -> UpgradeRun {
     Object {
         meta: metadata(UpgradeRunId::new("upgrade-1").unwrap()),
         spec: UpgradeRunSpec {
+            operation: UpgradeOperation::Upgrade,
             target_version: "2.0.0".to_string(),
             mode,
             node_ids: Vec::new(),
@@ -404,6 +457,14 @@ fn upgrade_node(nodes: &mut [Node], node_id: &str) {
         .expect("upgrade node exists");
     node.status.instance_id = NodeInstanceId::new(format!("instance-{node_id}-2")).unwrap();
     node.status.version = "2.0.0".to_string();
+}
+
+fn restart_node(nodes: &mut [Node], node_id: &str) {
+    let node = nodes
+        .iter_mut()
+        .find(|node| node.meta.id.as_str() == node_id)
+        .unwrap();
+    node.status.instance_id = NodeInstanceId::new(format!("instance-{node_id}-restarted")).unwrap();
 }
 
 fn maintained_nodes(nodes: &[Node]) -> BTreeSet<&str> {

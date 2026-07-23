@@ -12,9 +12,9 @@ use clustertest::{
 use ingress::{BackendChange, IngressBackend, IngressBackendError};
 use kernel_api::{
     ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation, Node, NodeId,
-    NodeInstanceId, NodeRole, Object, ObjectMeta, ResourceKind, ResourceName, ResourceRevision,
-    Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
-    UpgradeRunStatus,
+    NodeInstanceId, NodeRole, Object, ObjectMeta, RESTART_TARGET_VERSION, ResourceKind,
+    ResourceName, ResourceRevision, Timestamp, UpgradeMode, UpgradeOperation, UpgradePhase,
+    UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -130,6 +130,7 @@ impl UpgradeAcceptanceWorld {
         &self,
         run_name: &str,
         target: &FixtureVersion,
+        operation: UpgradeOperation,
         mode: UpgradeMode,
         node_ids: Vec<NodeId>,
         failed_node: Option<NodeId>,
@@ -141,7 +142,7 @@ impl UpgradeAcceptanceWorld {
             &self.store,
             &self.keys,
             "UpgradeRun",
-            &upgrade_run(run_id.clone(), target.as_str(), mode, node_ids),
+            &upgrade_run(run_id.clone(), target.as_str(), operation, mode, node_ids),
         )
         .await?;
         let completed = self.await_terminal(&run_id).await?;
@@ -251,6 +252,7 @@ impl UpgradeCluster for UpgradeAcceptanceWorld {
         self.run_upgrade(
             "rolling-upgrade",
             &target,
+            UpgradeOperation::Upgrade,
             UpgradeMode::Rolling,
             Vec::new(),
             Some(NodeId::new(node.as_str())?),
@@ -265,6 +267,7 @@ impl UpgradeCluster for UpgradeAcceptanceWorld {
         self.run_upgrade(
             "all-node-upgrade",
             &target,
+            UpgradeOperation::Upgrade,
             UpgradeMode::AllNodes,
             Vec::new(),
             None,
@@ -281,7 +284,8 @@ impl UpgradeCluster for UpgradeAcceptanceWorld {
         let observation = self
             .run_upgrade(
                 "selected-node-restart",
-                &FixtureVersion::new("2.0.1"),
+                &FixtureVersion::new(RESTART_TARGET_VERSION),
+                UpgradeOperation::Restart,
                 UpgradeMode::Rolling,
                 vec![node_id],
                 None,
@@ -320,6 +324,7 @@ impl IngressBackend for NoopIngressBackend {
 fn upgrade_run(
     id: UpgradeRunId,
     target: &str,
+    operation: UpgradeOperation,
     mode: UpgradeMode,
     node_ids: Vec<NodeId>,
 ) -> UpgradeRun {
@@ -335,6 +340,7 @@ fn upgrade_run(
             deletion_timestamp: None,
         },
         spec: UpgradeRunSpec {
+            operation,
             target_version: target.to_string(),
             mode,
             node_ids,

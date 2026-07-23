@@ -5,7 +5,7 @@ import type { ClusterNode, UpgradeRun } from "./types";
 
 const run = {
   meta: { id: "upgrade-1", generation: 1, revision: 8 },
-  spec: { mode: "rolling", targetVersion: "0.4.8" },
+  spec: { operation: "upgrade", mode: "rolling", targetVersion: "0.4.8" },
   status: {
     phase: "applying",
     nodes: [
@@ -59,4 +59,12 @@ test("uses the aggregate phase when there is no active node", () => {
   } satisfies UpgradeRun;
   assert.equal(activeMaintenanceNode(complete, [node]), null);
   assert.equal(maintenanceStageLabel(complete), "completed");
+});
+
+test("labels restart dispatch without implying an upgrade", () => {
+  const restart = {
+    ...run,
+    spec: { operation: "restart" as const, mode: "rolling" as const, targetVersion: "0.0.0" }
+  } satisfies UpgradeRun;
+  assert.equal(maintenanceStageLabel(restart), "preparing restart");
 });

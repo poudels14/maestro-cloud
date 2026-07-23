@@ -238,6 +238,15 @@ maestro cluster drain node-2
 maestro cluster restore node-2
 ```
 
+Restart one node through the same drain, quorum, reboot, verification, and
+restore state machine used by upgrades. Restart every node serially with the
+leader last by passing `--all`:
+
+```sh
+maestro cluster restart node-2
+maestro cluster restart --all
+```
+
 Permanent removal is a separate, irreversible workflow:
 
 ```sh

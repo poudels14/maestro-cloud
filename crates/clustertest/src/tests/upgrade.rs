@@ -136,6 +136,9 @@ impl UpgradeCluster for UpgradeWorld {
         &mut self,
         node: &FixtureNodeName,
     ) -> Result<SelectedRestartObservation, Self::Error> {
+        let state = self.topology.nodes.get_mut(node).ok_or(UpgradeWorldError)?;
+        state.instance_id = FixtureInstanceId::new(format!("{}-restarted", node.as_str()));
+        state.scheduling = SchedulingEligibility::Eligible;
         Ok(SelectedRestartObservation {
             planned_nodes: vec![node.clone()],
             requested_nodes: vec![node.clone()],

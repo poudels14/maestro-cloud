@@ -1,4 +1,4 @@
-use crate::{PreviewPhase, UpgradePhase};
+use crate::{PreviewPhase, UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRunSpec};
 
 #[test]
 fn closing_preview_can_reopen_but_expired_preview_is_terminal() {
@@ -17,4 +17,16 @@ fn upgrade_modes_share_one_retryable_state_machine() {
     assert!(UpgradePhase::Verifying.can_transition_to(UpgradePhase::Draining));
     assert!(UpgradePhase::Failed.can_transition_to(UpgradePhase::Pending));
     assert!(!UpgradePhase::Completed.can_transition_to(UpgradePhase::Pending));
+}
+
+#[test]
+fn upgrade_operation_defaults_old_resources_to_staged_upgrades() {
+    let spec: UpgradeRunSpec = serde_json::from_value(serde_json::json!({
+        "targetVersion": "2.0.0",
+        "mode": "rolling"
+    }))
+    .expect("legacy UpgradeRunSpec remains readable");
+
+    assert_eq!(spec.operation, UpgradeOperation::Upgrade);
+    assert_eq!(spec.mode, UpgradeMode::Rolling);
 }

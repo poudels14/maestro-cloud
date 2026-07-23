@@ -3,7 +3,6 @@ import type { ClusterNode, UpgradeRun } from "./types";
 const MAINTENANCE_STAGE_LABELS: Record<string, string> = {
   pending: "waiting to start",
   draining: "draining workloads",
-  applying: "applying upgrade",
   restarting: "restarting",
   verifying: "verifying health",
   completed: "completed",
@@ -39,6 +38,9 @@ function maintenanceStageLabel(run: UpgradeRun | null | undefined) {
     (candidate) => candidate.phase !== "pending" && !TERMINAL_PHASES.has(candidate.phase)
   )?.phase;
   const phase = activePhase ?? run.status.phase;
+  if (phase === "applying") {
+    return run.spec.operation === "restart" ? "preparing restart" : "applying upgrade";
+  }
   return MAINTENANCE_STAGE_LABELS[phase] ?? phase;
 }
 

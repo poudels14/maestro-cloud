@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::io::Write;
 
 use kernel_api::{
-    CommandRequest, NodeId, RequestId, UpgradeCommandResponse, UpgradeCreateRequest, UpgradeMode,
-    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
+    CommandRequest, NodeId, RESTART_TARGET_VERSION, RequestId, UpgradeCommandResponse,
+    UpgradeCreateRequest, UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunId,
+    UpgradeRunSpec,
 };
 
 use crate::CliError;
@@ -17,8 +18,8 @@ pub(crate) async fn list(client: &impl UpgradeApi, output: &mut dyn Write) -> Re
     }
     writeln!(
         output,
-        "{:<28}  {:<16}  {:<9}  {:<10}  NODES",
-        "UPGRADE RUN", "TARGET", "BATCH", "PHASE"
+        "{:<28}  {:<9}  {:<16}  {:<9}  {:<10}  NODES",
+        "MAINTENANCE RUN", "ACTION", "TARGET", "BATCH", "PHASE"
     )
     .map_err(output_error)?;
     for run in runs {
@@ -34,9 +35,10 @@ pub(crate) async fn list(client: &impl UpgradeApi, output: &mut dyn Write) -> Re
         };
         writeln!(
             output,
-            "{:<28}  {:<16}  {:<9}  {:<10}  {}",
+            "{:<28}  {:<9}  {:<16}  {:<9}  {:<10}  {}",
             run.meta.id,
-            run.spec.target_version,
+            operation_name(run.spec.operation),
+            target_name(&run),
             mode_name(run.spec.mode),
             phase_name(run.status.phase),
             nodes,
@@ -55,6 +57,49 @@ pub(crate) async fn start(
     request_id: RequestId,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
+    start_operation(
+        client,
+        UpgradeOperation::Upgrade,
+        target_version,
+        mode,
+        node_ids,
+        upgrade_run_id,
+        request_id,
+        output,
+    )
+    .await
+}
+
+pub(crate) async fn restart(
+    client: &impl UpgradeApi,
+    node_ids: Vec<String>,
+    restart_run_id: Option<String>,
+    request_id: RequestId,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    start_operation(
+        client,
+        UpgradeOperation::Restart,
+        RESTART_TARGET_VERSION.to_string(),
+        UpgradeMode::Rolling,
+        node_ids,
+        restart_run_id,
+        request_id,
+        output,
+    )
+    .await
+}
+
+async fn start_operation(
+    client: &impl UpgradeApi,
+    operation: UpgradeOperation,
+    target_version: String,
+    mode: UpgradeMode,
+    node_ids: Vec<String>,
+    run_id: Option<String>,
+    request_id: RequestId,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     let target_version = target_version.trim();
     let target_version = semver::Version::parse(target_version)
         .map_err(|error| CliError::invalid_input(format!("invalid target version: {error}")))?
@@ -67,17 +112,21 @@ pub(crate) async fn start(
         .collect::<Result<Vec<_>, _>>()?;
     if node_ids.iter().collect::<BTreeSet<_>>().len() != node_ids.len() {
         return Err(CliError::invalid_input(
-            "upgrade node selection contains a duplicate node",
+            "maintenance node selection contains a duplicate node",
         ));
     }
-    let upgrade_run_id = upgrade_run_id
+    let upgrade_run_id = run_id
         .map(UpgradeRunId::new)
         .transpose()
         .map_err(|error| CliError::invalid_input(error.to_string()))?
-        .map_or_else(generated_run_id, Ok)?;
+        .map_or_else(|| generated_run_id(operation), Ok)?;
+    let run_id_option = match operation {
+        UpgradeOperation::Upgrade => "--upgrade-run-id",
+        UpgradeOperation::Restart => "--restart-run-id",
+    };
     writeln!(
         output,
-        "[maestro]: starting `{upgrade_run_id}`; retry with --upgrade-run-id {upgrade_run_id} --idempotency-key {request_id}"
+        "[maestro]: starting `{upgrade_run_id}`; retry with {run_id_option} {upgrade_run_id} --idempotency-key {request_id}"
     )
     .map_err(output_error)?;
     let response = client
@@ -86,6 +135,7 @@ pub(crate) async fn start(
             UpgradeCreateRequest {
                 upgrade_run_id: upgrade_run_id.clone(),
                 spec: UpgradeRunSpec {
+                    operation,
                     target_version,
                     mode,
                     node_ids,
@@ -100,7 +150,8 @@ pub(crate) async fn start(
     }
     writeln!(
         output,
-        "[maestro]: cluster upgrade `{}` accepted in {} phase",
+        "[maestro]: cluster {} `{}` accepted in {} phase",
+        operation_name(operation),
         response.upgrade_run_id,
         phase_name(response.phase),
     )
@@ -191,9 +242,28 @@ impl UpgradeApi for ApiClient {
     }
 }
 
-fn generated_run_id() -> Result<UpgradeRunId, CliError> {
-    UpgradeRunId::new(format!("upgrade-{}", uuid::Uuid::new_v4().simple()))
-        .map_err(|error| CliError::invalid_input(error.to_string()))
+fn generated_run_id(operation: UpgradeOperation) -> Result<UpgradeRunId, CliError> {
+    UpgradeRunId::new(format!(
+        "{}-{}",
+        operation_name(operation),
+        uuid::Uuid::new_v4().simple()
+    ))
+    .map_err(|error| CliError::invalid_input(error.to_string()))
+}
+
+fn operation_name(operation: UpgradeOperation) -> &'static str {
+    match operation {
+        UpgradeOperation::Upgrade => "upgrade",
+        UpgradeOperation::Restart => "restart",
+    }
+}
+
+fn target_name(run: &UpgradeRun) -> &str {
+    if run.spec.operation == UpgradeOperation::Restart {
+        "-"
+    } else {
+        &run.spec.target_version
+    }
 }
 
 fn mode_name(mode: UpgradeMode) -> &'static str {

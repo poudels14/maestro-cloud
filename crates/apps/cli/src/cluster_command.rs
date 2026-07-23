@@ -143,6 +143,25 @@ pub(crate) enum ClusterCommand {
     },
     /// List retained cluster upgrade runs.
     Upgrades,
+    /// Restart one selected node or every node serially with the leader last.
+    Restart {
+        /// Stable cluster node identity; omit only with `--all`.
+        #[arg(
+            value_name = "NODE_ID",
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        node_id: Option<String>,
+        /// Drain and restart every node serially.
+        #[arg(long)]
+        all: bool,
+        /// Stable restart-run identity to reuse on retry.
+        #[arg(long)]
+        restart_run_id: Option<String>,
+        /// Stable request key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// Start a rolling or all-node cluster upgrade.
     Upgrade {
         /// Compatibility spelling retained for `cluster upgrade system`.
@@ -311,6 +330,21 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
             .await
         }
         ClusterCommand::Upgrades => upgrades::list(&active_client()?, output).await,
+        ClusterCommand::Restart {
+            node_id,
+            all: _,
+            restart_run_id,
+            idempotency_key,
+        } => {
+            upgrades::restart(
+                &active_client()?,
+                node_id.into_iter().collect(),
+                restart_run_id,
+                request_id(idempotency_key)?,
+                output,
+            )
+            .await
+        }
         ClusterCommand::Upgrade {
             target: _,
             target_version,

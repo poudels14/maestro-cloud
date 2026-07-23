@@ -1,6 +1,8 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use kernel_api::{ResourceRevision, UpgradePhase, UpgradeRun};
+use kernel_api::{
+    RESTART_TARGET_VERSION, ResourceRevision, UpgradeOperation, UpgradePhase, UpgradeRun,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -81,6 +83,7 @@ async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
     );
 
     let run = get(&server, "upgrade-1").await?;
+    assert_eq!(run.spec.operation, UpgradeOperation::Upgrade);
     assert_eq!(run.spec.target_version, "2.0.0");
     assert_eq!(run.status.phase, UpgradePhase::Pending);
     assert_eq!(list(&server).await?.len(), 1);
@@ -123,6 +126,53 @@ async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
         StatusCode::ACCEPTED
     );
     assert_eq!(get(&server, "upgrade-1").await?.meta.revision, revision);
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_runs_require_the_restart_sentinel_and_persist_the_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let wrong_target = start(
+        &server,
+        "restart-wrong-target",
+        json!({
+            "upgradeRunId": "restart-bad",
+            "spec": {
+                "operation": "restart",
+                "targetVersion": "2.0.0",
+                "mode": "rolling"
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(wrong_target.status(), StatusCode::BAD_REQUEST);
+
+    let created = start(
+        &server,
+        "restart-node-1",
+        json!({
+            "upgradeRunId": "restart-1",
+            "spec": {
+                "operation": "restart",
+                "targetVersion": RESTART_TARGET_VERSION,
+                "mode": "rolling",
+                "nodeIds": ["node-1"]
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(created.status(), StatusCode::ACCEPTED);
+    let run = get(&server, "restart-1").await?;
+    assert_eq!(run.spec.operation, UpgradeOperation::Restart);
+    assert_eq!(run.spec.target_version, RESTART_TARGET_VERSION);
+    assert_eq!(run.spec.node_ids.len(), 1);
     Ok(())
 }
 

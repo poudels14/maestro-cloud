@@ -19,10 +19,10 @@ mod service_validation;
 mod workload;
 
 pub use automation::{
-    NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, UpgradeMode,
-    UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookCategory,
-    WebhookEvent, WebhookFormat, WebhookNodeAvailability, WebhookObservation, WebhookObservedState,
-    WebhookSpec, WebhookStatus,
+    NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, RESTART_TARGET_VERSION,
+    UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus,
+    Webhook, WebhookCategory, WebhookEvent, WebhookFormat, WebhookNodeAvailability,
+    WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,

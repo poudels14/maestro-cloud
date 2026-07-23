@@ -90,9 +90,9 @@ pub struct TailscaleAuthKeyRotationResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpgradeCreateRequest {
-    /// Stable run identity used to observe and retry this upgrade.
+    /// Stable run identity used to observe and retry this maintenance operation.
     pub upgrade_run_id: UpgradeRunId,
-    /// Target version, node selection, and batching strategy.
+    /// Operation, target version, node selection, and batching strategy.
     pub spec: UpgradeRunSpec,
 }
 

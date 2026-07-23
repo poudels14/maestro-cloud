@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kernel_api::{
-    ClusterId, NodeId, NodeInstanceId, ResourceKind, ResourceName, UpgradePhase, UpgradeRun,
+    ClusterId, NodeId, NodeInstanceId, ResourceKind, ResourceName, UpgradeOperation, UpgradePhase,
+    UpgradeRun,
 };
 use kernel_store::{
     CasOutcome, Clock, DeleteRequest, ExpectedVersion, Keyspace, PutRequest, Store, StoredValue,
@@ -78,7 +79,7 @@ pub struct NodeUpgradeAgent {
     command_key: kernel_store::StoreKey,
     run_kind: ResourceKind,
     settings: NodeUpgradeAgentSettings,
-    stager: Arc<dyn NixosUpgradeStager>,
+    stager: Option<Arc<dyn NixosUpgradeStager>>,
     rebooter: Arc<dyn NodeRebooter>,
     clock: Arc<dyn Clock>,
 }
@@ -88,7 +89,7 @@ impl NodeUpgradeAgent {
     pub fn new(
         store: Arc<dyn Store>,
         settings: NodeUpgradeAgentSettings,
-        stager: Arc<dyn NixosUpgradeStager>,
+        stager: Option<Arc<dyn NixosUpgradeStager>>,
         rebooter: Arc<dyn NodeRebooter>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, NodeUpgradeAgentError> {
@@ -159,9 +160,24 @@ impl NodeUpgradeAgent {
         stored: StoredValue,
         command: NodeUpgradeCommand,
     ) -> Result<NodeUpgradeAgentAction, NodeUpgradeAgentError> {
-        let target = parse_target(&command)?;
-        if self.settings.running_version < target {
-            match self.stager.stage(&target).await {
+        let target = (command.operation == UpgradeOperation::Upgrade)
+            .then(|| parse_target(&command))
+            .transpose()?;
+        if let Some(target) = target
+            && self.settings.running_version < target
+        {
+            let Some(stager) = &self.stager else {
+                return self
+                    .persist_staging_failure(
+                        stored,
+                        command,
+                        NixosUpgradeStagingError::Rejected {
+                            message: "NixOS upgrade staging is not configured".to_string(),
+                        },
+                    )
+                    .await;
+            };
+            match stager.stage(&target).await {
                 Ok(source)
                     if source.version() > &self.settings.running_version
                         && source.version() >= &target => {}
@@ -365,7 +381,10 @@ fn command_is_active(command: &NodeUpgradeCommand, run: Option<&UpgradeRun>) -> 
     let Some(run) = run else {
         return false;
     };
-    if run.meta.deletion_timestamp.is_some() || run.spec.target_version != command.target_version {
+    if run.meta.deletion_timestamp.is_some()
+        || run.spec.operation != command.operation
+        || run.spec.target_version != command.target_version
+    {
         return false;
     }
     matches!(
@@ -386,6 +405,7 @@ fn should_clear(command: &NodeUpgradeCommand, run: Option<&UpgradeRun>) -> bool 
         return true;
     };
     if run.meta.deletion_timestamp.is_some()
+        || run.spec.operation != command.operation
         || run.spec.target_version != command.target_version
         || matches!(
             run.status.phase,

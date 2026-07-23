@@ -6,9 +6,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, CommandRequest, Generation, Object, ObjectMeta, ResourceKind, ResourceRevision,
-    UpgradeCommandResponse, UpgradeCreateRequest, UpgradePhase, UpgradeRun, UpgradeRunId,
-    UpgradeRunSpec, UpgradeRunStatus,
+    BuiltinKind, CommandRequest, Generation, Object, ObjectMeta, RESTART_TARGET_VERSION,
+    ResourceKind, ResourceRevision, UpgradeCommandResponse, UpgradeCreateRequest, UpgradeOperation,
+    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use semver::Version;
@@ -172,6 +172,12 @@ fn validate_spec(spec: &mut UpgradeRunSpec) -> Result<(), ApiError> {
             spec.target_version
         ))
     })?;
+    if spec.operation == UpgradeOperation::Restart && spec.target_version != RESTART_TARGET_VERSION
+    {
+        return Err(ApiError::bad_request(format!(
+            "restart targetVersion must be `{RESTART_TARGET_VERSION}`"
+        )));
+    }
     let unique = spec.node_ids.iter().collect::<BTreeSet<_>>();
     if unique.len() != spec.node_ids.len() {
         return Err(ApiError::bad_request(

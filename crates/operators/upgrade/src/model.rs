@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use kernel_api::{Assignment, Node, NodeId, NodeInstanceId, Timestamp, UpgradeRun, UpgradeRunId};
+use kernel_api::{
+    Assignment, Node, NodeId, NodeInstanceId, Timestamp, UpgradeOperation, UpgradeRun, UpgradeRunId,
+};
 
 /// Retry and observation cadence for one upgrade state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +85,9 @@ pub struct NodeUpgradeTarget {
 pub struct NodeUpgradeRequest {
     /// Idempotency key shared by every replay of this run.
     pub run_id: UpgradeRunId,
-    /// Minimum semantic version requested from each node.
+    /// Host mutation requested from each node.
+    pub operation: UpgradeOperation,
+    /// Minimum semantic version, or the restart sentinel for restart-only runs.
     pub target_version: String,
     /// Rolling singleton or all-node target batch.
     pub targets: Vec<NodeUpgradeTarget>,
