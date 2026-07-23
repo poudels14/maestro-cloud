@@ -143,7 +143,9 @@ fn coordinator_error(error: AdmissionCoordinatorError) -> ApiError {
         }
         AdmissionCoordinatorError::Admission(_) => ApiError::bad_request(error.to_string()),
         AdmissionCoordinatorError::ApprovalConflict { .. }
-        | AdmissionCoordinatorError::AdmissionConflict { .. } => {
+        | AdmissionCoordinatorError::AdmissionConflict { .. }
+        | AdmissionCoordinatorError::NodeRemovalInProgress { .. }
+        | AdmissionCoordinatorError::NodeRemoved { .. } => {
             ApiError::conflict("joinConflict", error.to_string())
         }
         AdmissionCoordinatorError::InvalidTopology(_)

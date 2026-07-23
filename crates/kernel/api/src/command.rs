@@ -30,6 +30,34 @@ pub struct NodeCommandResponse {
     pub draining: bool,
 }
 
+/// Observable phase of one permanent node-removal request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NodeRemovalState {
+    /// Scheduling is disabled while retained artifacts and assignments leave the node.
+    Draining,
+    /// Membership and active node resources were removed behind a durable tombstone.
+    Removed,
+}
+
+/// Explicit identity confirmation for one irreversible node removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeRemovalRequest {
+    /// Stable node identity repeated from the request path to prevent targeting mistakes.
+    pub node_id: NodeId,
+}
+
+/// Progress receipt for one permanent node-removal request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeRemovalResponse {
+    /// Node whose identity is being permanently retired.
+    pub node_id: NodeId,
+    /// Durable removal phase reached by this request.
+    pub state: NodeRemovalState,
+}
+
 /// Desired identity and behavior for a new cluster upgrade run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

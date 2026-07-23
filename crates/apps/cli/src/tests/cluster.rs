@@ -1,15 +1,19 @@
+use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use cluster::{NodeJoinApproval, NodeJoinApprovalRequest, NodeJoinApprovalState};
 use kernel_api::{
     ClusterId, ClusterInfo, CommandRequest, MaskedClusterConfig, MaskedClusterConfigNode,
-    MaskedClusterConfigPorts, Node, NodeCommandResponse, NodeId, NodeRole, RequestId,
+    MaskedClusterConfigPorts, Node, NodeCommandResponse, NodeId, NodeRemovalRequest,
+    NodeRemovalResponse, NodeRemovalState, NodeRole, RequestId,
 };
 use serde_json::json;
 
 use crate::CliError;
 use crate::cluster::{
-    ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle, show_config,
+    ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle, remove_node_with_timing,
+    show_config,
 };
 
 struct RecordingClusterApi {
@@ -18,6 +22,8 @@ struct RecordingClusterApi {
     nodes: Vec<Node>,
     commands: Mutex<Vec<(NodeId, RequestId, NodeLifecycleAction, CommandRequest)>>,
     approvals: Mutex<Vec<NodeJoinApprovalRequest>>,
+    removals: Mutex<Vec<(NodeId, RequestId, NodeRemovalRequest)>>,
+    removal_states: Mutex<VecDeque<NodeRemovalState>>,
 }
 
 impl ClusterApi for RecordingClusterApi {
@@ -74,6 +80,29 @@ impl ClusterApi for RecordingClusterApi {
         Ok(NodeCommandResponse {
             node_id: node_id.clone(),
             draining: action == NodeLifecycleAction::Drain,
+        })
+    }
+
+    async fn remove_node(
+        &self,
+        node_id: &NodeId,
+        request_id: &RequestId,
+        request: NodeRemovalRequest,
+    ) -> Result<NodeRemovalResponse, CliError> {
+        self.removals.lock().map_err(|_| poisoned())?.push((
+            node_id.clone(),
+            request_id.clone(),
+            request,
+        ));
+        let state = self
+            .removal_states
+            .lock()
+            .map_err(|_| poisoned())?
+            .pop_front()
+            .unwrap_or(NodeRemovalState::Removed);
+        Ok(NodeRemovalResponse {
+            node_id: node_id.clone(),
+            state,
         })
     }
 }
@@ -174,6 +203,42 @@ async fn node_approval_submits_and_checks_the_join_key_identity()
     Ok(())
 }
 
+#[tokio::test]
+async fn node_removal_polls_with_distinct_replayable_phase_keys()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    api.removal_states
+        .lock()
+        .map_err(|_| "removal state lock poisoned")?
+        .extend([NodeRemovalState::Draining, NodeRemovalState::Removed]);
+    let mut output = Vec::new();
+
+    remove_node_with_timing(
+        &api,
+        "node-a".to_string(),
+        RequestId::new("remove-flow")?,
+        Duration::ZERO,
+        Duration::from_secs(1),
+        &mut output,
+    )
+    .await?;
+
+    let removals = api.removals.lock().map_err(|_| "removal lock poisoned")?;
+    let [first, second] = removals.as_slice() else {
+        return Err(format!("expected two removal calls, observed {}", removals.len()).into());
+    };
+    assert_eq!(first.1.as_str(), "remove-flow");
+    assert_ne!(second.1, first.1);
+    assert!(removals.iter().all(|(node_id, _, request)| {
+        node_id.as_str() == "node-a" && &request.node_id == node_id
+    }));
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("waiting for node `node-a` to drain"));
+    assert!(output.contains("node `node-a` removed"));
+    assert!(output.contains("rotate cluster credentials"));
+    Ok(())
+}
+
 fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
     Ok(RecordingClusterApi {
         info: ClusterInfo {
@@ -208,6 +273,8 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
         ],
         commands: Mutex::new(Vec::new()),
         approvals: Mutex::new(Vec::new()),
+        removals: Mutex::new(Vec::new()),
+        removal_states: Mutex::new(VecDeque::new()),
     })
 }
 

@@ -101,6 +101,32 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
         }),
     );
     schemas.insert(
+        "NodeRemovalState".to_string(),
+        json!({"type": "string", "enum": ["draining", "removed"]}),
+    );
+    schemas.insert(
+        "NodeRemovalRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["nodeId"],
+            "properties": {
+                "nodeId": {"$ref": "#/components/schemas/NodeId"}
+            }
+        }),
+    );
+    schemas.insert(
+        "NodeRemovalResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["nodeId", "state"],
+            "properties": {
+                "nodeId": {"$ref": "#/components/schemas/NodeId"},
+                "state": {"$ref": "#/components/schemas/NodeRemovalState"}
+            }
+        }),
+    );
+    schemas.insert(
         "UpgradeCreateRequest".to_string(),
         json!({
             "type": "object",
@@ -332,6 +358,36 @@ pub(crate) fn firewall_policy_operation() -> Value {
                 "FirewallPolicyCommandResponse",
             ),
         );
+    }
+    operation
+}
+
+pub(crate) fn node_operation() -> Value {
+    let mut operation = get_operation("getNode", "nodeId", "Node");
+    if let Some(item) = operation.as_object_mut() {
+        let mut removal = command_operation(
+            "removeNode",
+            &["nodeId"],
+            "NodeRemovalRequest",
+            "NodeRemovalResponse",
+        );
+        if let Some(responses) = removal.get_mut("responses").and_then(Value::as_object_mut) {
+            if let Some(response) = responses.get_mut("202").and_then(Value::as_object_mut) {
+                response.insert(
+                    "description".to_string(),
+                    json!("Removal phase accepted for drain or membership reconciliation"),
+                );
+            }
+            responses.insert(
+                "409".to_string(),
+                json!({"description": "Idempotency, removal identity, placement, or membership conflict"}),
+            );
+            responses.insert(
+                "503".to_string(),
+                json!({"description": "Store membership removal is unavailable on this node"}),
+            );
+        }
+        item.insert("delete".to_string(), removal);
     }
     operation
 }

@@ -206,7 +206,7 @@ export interface paths {
         get: operations["getNode"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["removeNode"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2041,6 +2041,15 @@ export interface components {
             /** @description Generic readiness and configuration evidence. */
             conditions?: components["schemas"]["Condition"][];
         };
+        NodeRemovalRequest: {
+            nodeId: components["schemas"]["NodeId"];
+        };
+        NodeRemovalResponse: {
+            nodeId: components["schemas"]["NodeId"];
+            state: components["schemas"]["NodeRemovalState"];
+        };
+        /** @enum {string} */
+        NodeRemovalState: "draining" | "removed";
         /** @description Scheduling and control-plane capability assigned to a node. */
         NodeRole: "master" | "hybrid" | "controlPlane" | "worker";
         /** @description Desired identity and connectivity of a cluster node. */
@@ -3851,6 +3860,69 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeNode: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeRemovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Removal phase accepted for drain or membership reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeRemovalResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Idempotency, removal identity, placement, or membership conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Store membership removal is unavailable on this node */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

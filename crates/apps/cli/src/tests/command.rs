@@ -123,6 +123,17 @@ fn context_command_surface_matches_the_rewrite_contract() {
             .is_ok()
         );
     }
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
+            "remove-node",
+            "node-a",
+            "--idempotency-key",
+            "remove-node-1",
+        ])
+        .is_ok()
+    );
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "upgrades"]).is_ok());
     assert!(
         Cli::try_parse_from([

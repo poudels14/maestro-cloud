@@ -71,6 +71,7 @@ pub(crate) struct AppState {
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) admission_coordinator: Option<Arc<cluster::AdmissionCoordinator>>,
+    pub(crate) store_provider: Option<Arc<dyn cluster::StoreProvider>>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
     pub(crate) artifacts: Option<Arc<dyn runtime::ArtifactStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
@@ -115,6 +116,7 @@ impl ApiServer {
             requests: RequestDeduplicator::new(store.clone()),
             timestamp_clock: Arc::new(SystemTimestampClock),
             admission_coordinator: None,
+            store_provider: None,
             store,
             cluster_id,
             cluster_config: None,
@@ -163,6 +165,13 @@ impl ApiServer {
         coordinator: Arc<cluster::AdmissionCoordinator>,
     ) -> Self {
         self.state.admission_coordinator = Some(coordinator);
+        self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
+        self
+    }
+
+    /// Enables destructive membership changes from a store-owning control-plane node.
+    pub fn with_store_provider(mut self, provider: Arc<dyn cluster::StoreProvider>) -> Self {
+        self.state.store_provider = Some(provider);
         self.router = routes::router(self.state.clone(), auth_policy(&self.settings));
         self
     }

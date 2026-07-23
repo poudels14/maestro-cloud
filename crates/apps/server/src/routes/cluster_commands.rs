@@ -3,17 +3,11 @@ use axum::extract::{DefaultBodyLimit, Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use kernel_api::{
-    BuiltinKind, CommandRequest, Condition, ConditionReason, ConditionState, ConditionType, Node,
-    NodeCommandResponse, NodeId, ResourceKind, Timestamp,
-};
+use kernel_api::{BuiltinKind, CommandRequest, Node, NodeCommandResponse, NodeId, ResourceKind};
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
-
-const DRAINING_CONDITION: &str = "Draining";
-const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
@@ -104,9 +98,31 @@ async fn command(
             "Node is not at the expected revision",
         ));
     }
-    let write = set_draining(&mut node, command.draining, state.timestamp_clock.now())?;
+    if node.meta.deletion_timestamp.is_some() {
+        return Err(ApiError::conflict(
+            "deletionInProgress",
+            "Node deletion is already in progress",
+        ));
+    }
+    if !command.draining
+        && state
+            .store
+            .get(&keys.node_removal(&node_id))
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("failed to read node removal intent: {error}"))
+            })?
+            .is_some()
+    {
+        return Err(ApiError::conflict(
+            "removalInProgress",
+            "Node restore is blocked by permanent removal",
+        ));
+    }
+    let write =
+        cluster::set_node_draining(&mut node, command.draining, state.timestamp_clock.now());
     let response = NodeCommandResponse {
-        node_id,
+        node_id: node_id.clone(),
         draining: command.draining,
     };
     let mutations = if write {
@@ -120,15 +136,22 @@ async fn command(
     } else {
         Vec::new()
     };
+    let mut compares = vec![Compare {
+        key,
+        expected: ExpectedVersion::Exact(stored.version),
+    }];
+    if !command.draining {
+        compares.push(Compare {
+            key: keys.node_removal(&node_id),
+            expected: ExpectedVersion::Missing,
+        });
+    }
     let response = request
         .commit(
             &state,
             response,
             Transaction {
-                compares: vec![Compare {
-                    key,
-                    expected: ExpectedVersion::Exact(stored.version),
-                }],
+                compares,
                 mutations,
             },
             "revisionConflict",
@@ -136,58 +159,6 @@ async fn command(
         )
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
-}
-
-fn set_draining(node: &mut Node, draining: bool, now: Timestamp) -> Result<bool, ApiError> {
-    if node.meta.deletion_timestamp.is_some() {
-        return Err(ApiError::conflict(
-            "deletionInProgress",
-            "Node deletion is already in progress",
-        ));
-    }
-    let (desired, reason, message) = if draining && node.spec.role.runs_workloads() {
-        (
-            ConditionState::Unknown,
-            DRAIN_REQUEST_REASON,
-            "node drain requested; waiting for retained artifacts to acquire peer copies",
-        )
-    } else if draining {
-        (
-            ConditionState::True,
-            "Requested",
-            "node drain requested; this node does not run workloads",
-        )
-    } else {
-        (
-            ConditionState::False,
-            "Restored",
-            "node restored to scheduling",
-        )
-    };
-    let mut existing = node
-        .status
-        .conditions
-        .iter()
-        .filter(|condition| condition.condition_type.0 == DRAINING_CONDITION);
-    let canonical = existing.next().is_some_and(|condition| {
-        (draining && condition.state == ConditionState::True)
-            || (condition.state == desired && condition.reason.0 == reason)
-    }) && existing.next().is_none();
-    if canonical {
-        return Ok(false);
-    }
-    node.status
-        .conditions
-        .retain(|condition| condition.condition_type.0 != DRAINING_CONDITION);
-    node.status.conditions.push(Condition {
-        condition_type: ConditionType(DRAINING_CONDITION.to_string()),
-        state: desired,
-        reason: ConditionReason(reason.to_string()),
-        message: message.to_string(),
-        observed_generation: node.meta.generation,
-        last_transition_time: now,
-    });
-    Ok(true)
 }
 
 struct NodeCommandKind {

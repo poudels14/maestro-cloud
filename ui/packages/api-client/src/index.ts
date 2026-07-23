@@ -79,6 +79,12 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["NodeCommandResponse"]>;
+  removeNode(
+    nodeId: string,
+    request: ApiSchemas["NodeRemovalRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["NodeRemovalResponse"]>;
   listUpgrades(options?: ApiRequestOptions): Promise<ApiSchemas["UpgradeRun"][]>;
   getUpgrade(upgradeRunId: string, options?: ApiRequestOptions): Promise<ApiSchemas["UpgradeRun"]>;
   startUpgrade(
@@ -440,6 +446,14 @@ export function createApiClient(transport: ApiTransport): MaestroApiClient {
       mutate(
         "POST",
         `/api/cluster/nodes/${encodeURIComponent(nodeId)}/restore`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    removeNode: (nodeId, request, idempotencyKey, options) =>
+      mutate(
+        "DELETE",
+        `/api/cluster/nodes/${encodeURIComponent(nodeId)}`,
         request,
         idempotencyKey,
         options

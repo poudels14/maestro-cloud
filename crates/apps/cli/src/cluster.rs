@@ -1,13 +1,18 @@
 use std::io::Write;
+use std::time::Duration;
 
 use cluster::{NodeJoinApproval, NodeJoinApprovalRequest, NodeJoinApprovalState};
 use kernel_api::{
     ClusterInfo, CommandRequest, ConditionState, MaskedClusterConfig, Node, NodeCommandResponse,
-    NodeId, NodeRole, RequestId,
+    NodeId, NodeRemovalRequest, NodeRemovalResponse, NodeRemovalState, NodeRole, RequestId,
 };
+use sha2::{Digest, Sha256};
 
 use crate::CliError;
 use crate::api_client::ApiClient;
+
+const REMOVAL_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const REMOVAL_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) async fn info(client: &impl ClusterApi, output: &mut dyn Write) -> Result<(), CliError> {
     let info = client.cluster_info().await?;
@@ -137,6 +142,105 @@ pub(crate) async fn approve_node(
     .map_err(output_error)
 }
 
+pub(crate) async fn remove_node(
+    client: &impl ClusterApi,
+    node_id: String,
+    request_seed: RequestId,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    remove_node_with_timing(
+        client,
+        node_id,
+        request_seed,
+        REMOVAL_POLL_INTERVAL,
+        REMOVAL_TIMEOUT,
+        output,
+    )
+    .await
+}
+
+pub(crate) async fn remove_node_with_timing(
+    client: &impl ClusterApi,
+    node_id: String,
+    request_seed: RequestId,
+    poll_interval: Duration,
+    timeout: Duration,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let node_id =
+        NodeId::new(node_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut attempt = 0_u64;
+    loop {
+        let request_id = removal_request_id(&request_seed, &node_id, attempt)?;
+        let response = client
+            .remove_node(
+                &node_id,
+                &request_id,
+                NodeRemovalRequest {
+                    node_id: node_id.clone(),
+                },
+            )
+            .await?;
+        if response.node_id != node_id {
+            return Err(CliError::invalid_api_response(
+                "node removal receipt does not match the submitted node",
+            ));
+        }
+        match response.state {
+            NodeRemovalState::Removed => {
+                writeln!(output, "[maestro]: node `{node_id}` removed").map_err(output_error)?;
+                writeln!(
+                    output,
+                    "rotate cluster credentials if the removed node may be compromised"
+                )
+                .map_err(output_error)?;
+                return Ok(());
+            }
+            NodeRemovalState::Draining => {
+                writeln!(output, "[maestro]: waiting for node `{node_id}` to drain")
+                    .map_err(output_error)?;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CliError::cluster(
+                "remove node",
+                "timed out waiting for drain and membership cleanup",
+            ));
+        }
+        attempt = attempt.saturating_add(1);
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+fn removal_request_id(
+    seed: &RequestId,
+    node_id: &NodeId,
+    attempt: u64,
+) -> Result<RequestId, CliError> {
+    match attempt {
+        0 => Ok(seed.clone()),
+        _ => {
+            let mut digest = Sha256::new();
+            digest.update(seed.as_str().as_bytes());
+            digest.update([0]);
+            digest.update(node_id.as_str().as_bytes());
+            digest.update(attempt.to_be_bytes());
+            RequestId::new(lowercase_hex(&digest.finalize()))
+                .map_err(|error| CliError::invalid_input(error.to_string()))
+        }
+    }
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+        encoded.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+    }
+    encoded
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NodeLifecycleAction {
     Drain,
@@ -177,6 +281,13 @@ pub(crate) trait ClusterApi {
         action: NodeLifecycleAction,
         request: CommandRequest,
     ) -> Result<NodeCommandResponse, CliError>;
+
+    async fn remove_node(
+        &self,
+        node_id: &NodeId,
+        request_id: &RequestId,
+        request: NodeRemovalRequest,
+    ) -> Result<NodeRemovalResponse, CliError>;
 }
 
 impl ClusterApi for ApiClient {
@@ -212,6 +323,20 @@ impl ClusterApi for ApiClient {
     ) -> Result<NodeCommandResponse, CliError> {
         self.post(
             &format!("/api/cluster/nodes/{node_id}/{}", action.verb()),
+            request_id,
+            &request,
+        )
+        .await
+    }
+
+    async fn remove_node(
+        &self,
+        node_id: &NodeId,
+        request_id: &RequestId,
+        request: NodeRemovalRequest,
+    ) -> Result<NodeRemovalResponse, CliError> {
+        self.delete(
+            &format!("/api/cluster/nodes/{node_id}"),
             request_id,
             &request,
         )

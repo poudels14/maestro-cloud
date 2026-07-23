@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use kernel_api::{
     ClusterId, ConditionState, NodeId, NodeNetwork, ResourceKind, ResourceName, Timestamp,
 };
-use kernel_store::{Clock, DeleteRequest, InMemoryStore, Keyspace, MonotonicTime, Store};
+use kernel_store::{
+    Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
+    Store,
+};
 
 use crate::{
     MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, MeshPlanner, MeshResourceAgent,
@@ -125,6 +128,41 @@ async fn backend_failure_is_reported_without_advancing_applied_generation()
             .map(|condition| (condition.state, condition.reason.0.as_str())),
         Some((ConditionState::False, "MeshApplyFailed"))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn removed_identity_cannot_recreate_its_mesh_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TestMonotonicClock)));
+    let cluster_id = ClusterId::new("mesh-resource-removed")?;
+    let node_id = NodeId::new("node-1")?;
+    store
+        .put_cas(PutRequest {
+            key: Keyspace::new(&cluster_id).node_tombstone(&node_id),
+            value: b"removed".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    let agent = agent(
+        store.clone(),
+        &cluster_id,
+        node_id.as_str(),
+        1,
+        Ipv4Addr::new(10, 20, 0, 11),
+        "172.22.1.0/24",
+    )?;
+
+    assert!(matches!(
+        agent.reconcile_once().await,
+        Err(crate::MeshResourceError::LocalNodeRemoved)
+    ));
+    let network_key = Keyspace::new(&cluster_id).resource(
+        &ResourceKind::new("NodeNetwork")?,
+        &ResourceName::new(node_id.as_str())?,
+    );
+    assert!(store.get(&network_key).await?.is_none());
     Ok(())
 }
 

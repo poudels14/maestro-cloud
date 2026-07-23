@@ -3,6 +3,7 @@ mod automation;
 mod cluster;
 mod cluster_admission;
 mod cluster_commands;
+mod cluster_removal;
 mod config;
 mod deployment_commands;
 mod deployments;
@@ -38,6 +39,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(cluster::router())
         .merge(cluster_admission::protected_router())
         .merge(cluster_commands::router())
+        .merge(cluster_removal::router())
         .merge(config::router())
         .merge(deployment_commands::router())
         .merge(deployments::router())

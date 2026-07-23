@@ -25,6 +25,7 @@ mod artifact_archives;
 mod automation;
 mod cluster;
 mod cluster_admission;
+mod cluster_removal;
 mod config;
 mod deployment_commands;
 mod deployments;
@@ -223,6 +224,16 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1cluster~1admissions/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1nodes~1{nodeId}/delete")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/components/schemas/NodeRemovalRequest")
             .is_some()
     );
     assert!(

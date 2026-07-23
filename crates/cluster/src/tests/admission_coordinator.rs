@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use kernel_api::{NodeId, NodeRole, SecretValue};
-use kernel_store::{InMemoryStore, TokioClock};
+use kernel_store::{ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock};
 
 use crate::{
     AdmissionCoordinator, AdmissionCoordinatorError, JoinPrivateKey, JoinRequest,
@@ -91,7 +91,7 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         operator_secret.clone(),
         storage_secret.clone(),
         provider.clone(),
-        store,
+        store.clone(),
     )?;
     let node_id = NodeId::new("node-2")?;
     let join_key = JoinPrivateKey::generate();
@@ -222,6 +222,27 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         Err(AdmissionCoordinatorError::ApprovalKeyMismatch { .. })
     ));
 
+    store
+        .put_cas(PutRequest {
+            key: Keyspace::new(&config.cluster_id).node_tombstone(&node_id),
+            value: b"removed".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(
+        coordinator
+            .admit(
+                &request,
+                &signature,
+                request.endpoint.host_address,
+                1_001,
+                validity()?,
+            )
+            .await,
+        Err(AdmissionCoordinatorError::NodeRemoved { .. })
+    ));
+
     let worker_key = JoinPrivateKey::generate();
     coordinator
         .approve(
@@ -265,15 +286,16 @@ async fn approval_rejects_unknown_master_and_conflicting_keys()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = valid_config()?;
     let authority = crate::ClusterCertificateAuthority::generate(&config.name, validity()?)?;
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let coordinator = AdmissionCoordinator::new(
-        config,
+        config.clone(),
         authority,
         SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         SecretValue::new("storage-test-secret-with-at-least-32-characters"),
         Arc::new(RecordingProvider {
             staged: Mutex::new(Vec::new()),
         }),
-        Arc::new(InMemoryStore::new(Arc::new(TokioClock::new()))),
+        store.clone(),
     )?;
     assert!(matches!(
         coordinator
@@ -300,6 +322,19 @@ async fn approval_rejects_unknown_master_and_conflicting_keys()
     assert!(matches!(
         coordinator.approve(node_id, "11".repeat(32), 1_001).await,
         Err(AdmissionCoordinatorError::ApprovalConflict { .. })
+    ));
+    let removing = NodeId::new("node-2")?;
+    store
+        .put_cas(PutRequest {
+            key: Keyspace::new(&config.cluster_id).node_removal(&removing),
+            value: b"removing".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(
+        coordinator.approve(removing, "22".repeat(32), 1_002).await,
+        Err(AdmissionCoordinatorError::NodeRemovalInProgress { .. })
     ));
     Ok(())
 }

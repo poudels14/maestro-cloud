@@ -133,6 +133,16 @@ impl Keyspace {
         self.key(&format!("control/node-upgrades/{node_id}"))
     }
 
+    /// Durable progress record for one permanent node removal.
+    pub fn node_removal(&self, node_id: &NodeId) -> StoreKey {
+        self.key(&format!("control/node-removals/{node_id}"))
+    }
+
+    /// Durable typed tombstone preventing a removed node identity from returning.
+    pub fn node_tombstone(&self, node_id: &NodeId) -> StoreKey {
+        self.key(&format!("resources/NodeTombstone/{node_id}"))
+    }
+
     /// Deduplication claim for one externally supplied request identity.
     pub fn request_claim(&self, request_id: &RequestId) -> StoreKey {
         self.key(&format!("control/requests/{request_id}"))

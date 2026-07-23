@@ -2665,6 +2665,40 @@
         ],
         "type": "object"
       },
+      "NodeRemovalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          }
+        },
+        "required": [
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      "NodeRemovalResponse": {
+        "properties": {
+          "nodeId": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeRemovalState"
+          }
+        },
+        "required": [
+          "nodeId",
+          "state"
+        ],
+        "type": "object"
+      },
+      "NodeRemovalState": {
+        "enum": [
+          "draining",
+          "removed"
+        ],
+        "type": "string"
+      },
       "NodeRole": {
         "description": "Scheduling and control-plane capability assigned to a node.",
         "oneOf": [
@@ -7912,6 +7946,69 @@
       }
     },
     "/api/cluster/nodes/{nodeId}": {
+      "delete": {
+        "operationId": "removeNode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeRemovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeRemovalResponse"
+                }
+              }
+            },
+            "description": "Removal phase accepted for drain or membership reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Idempotency, removal identity, placement, or membership conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          },
+          "503": {
+            "description": "Store membership removal is unavailable on this node"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
       "get": {
         "operationId": "getNode",
         "parameters": [

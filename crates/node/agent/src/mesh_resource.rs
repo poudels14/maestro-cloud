@@ -8,8 +8,8 @@ use kernel_api::{
     ResourceKind, ResourceName, ResourceRevision, Timestamp,
 };
 use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, StoredValue,
-    WatchCursor, WatchStart,
+    CasOutcome, Clock, Compare, ExpectedVersion, Keyspace, Mutation, PutRequest, Store, StoreError,
+    StoredValue, Transaction, TransactionOutcome, WatchCursor, WatchStart,
 };
 use tokio::sync::watch;
 
@@ -46,6 +46,7 @@ pub struct MeshResourceAgent<Backend> {
     store: Arc<dyn Store>,
     keyspace: Keyspace,
     kind: ResourceKind,
+    tombstone_key: kernel_store::StoreKey,
     resource_name: ResourceName,
     resource_id: NodeNetworkId,
     local_publication: NodeNetworkSpec,
@@ -77,9 +78,11 @@ where
             return Err(MeshResourceError::LocalPublicationMismatch);
         }
         let node_id = planner.local_node_id().as_str();
+        let keyspace = Keyspace::new(cluster_id);
         Ok(Self {
             store,
-            keyspace: Keyspace::new(cluster_id),
+            tombstone_key: keyspace.node_tombstone(planner.local_node_id()),
+            keyspace,
             kind: ResourceKind::new(NODE_NETWORK_KIND)?,
             resource_name: ResourceName::new(node_id)?,
             resource_id: NodeNetworkId::new(node_id)?,
@@ -178,6 +181,9 @@ where
     async fn ensure_local_publication(&self) -> Result<(), MeshResourceError> {
         let key = self.keyspace.resource(&self.kind, &self.resource_name);
         for _attempt in 0..MAX_CAS_ATTEMPTS {
+            if self.store.get(&self.tombstone_key).await?.is_some() {
+                return Err(MeshResourceError::LocalNodeRemoved);
+            }
             let current = self.store.get(&key).await?;
             let (mut resource, expected) = match current {
                 Some(stored) => {
@@ -195,14 +201,25 @@ where
             resource.meta.revision = ResourceRevision::default();
             let outcome = self
                 .store
-                .put_cas(PutRequest {
-                    key: key.clone(),
-                    value: encode_resource(&resource)?,
-                    expected,
-                    session: None,
+                .txn(Transaction {
+                    compares: vec![
+                        Compare {
+                            key: self.tombstone_key.clone(),
+                            expected: ExpectedVersion::Missing,
+                        },
+                        Compare {
+                            key: key.clone(),
+                            expected,
+                        },
+                    ],
+                    mutations: vec![Mutation::Put {
+                        key: key.clone(),
+                        value: encode_resource(&resource)?,
+                        session: None,
+                    }],
                 })
                 .await?;
-            if matches!(outcome, CasOutcome::Applied(_)) {
+            if matches!(outcome, TransactionOutcome::Applied { .. }) {
                 return Ok(());
             }
         }
@@ -381,6 +398,9 @@ pub enum MeshResourceError {
     /// The local publication vanished between publication and status update.
     #[error("local NodeNetwork publication disappeared before status update")]
     LocalPublicationDisappeared,
+    /// A removed identity must never recreate its mesh publication.
+    #[error("local node identity was permanently removed from the cluster")]
+    LocalNodeRemoved,
     /// Repeated compare-and-swap conflicts exceeded the bounded retry budget.
     #[error("store contention prevented operation: {operation}")]
     Contention { operation: &'static str },

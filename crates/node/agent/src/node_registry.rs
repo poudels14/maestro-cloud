@@ -98,6 +98,7 @@ impl NodeRegistration {
 pub struct NodeRegistryAgent {
     store: Arc<dyn Store>,
     node_key: kernel_store::StoreKey,
+    tombstone_key: kernel_store::StoreKey,
     liveness_key: kernel_store::StoreKey,
     settings: NodeRegistrySettings,
     monotonic_clock: Arc<dyn Clock>,
@@ -118,6 +119,7 @@ impl NodeRegistryAgent {
         let resource_name = ResourceName::new(settings.node_id.as_str())?;
         Ok(Self {
             node_key: keyspace.resource(&kind, &resource_name),
+            tombstone_key: keyspace.node_tombstone(&settings.node_id),
             liveness_key: keyspace.node_liveness(&settings.node_id),
             store,
             settings,
@@ -132,6 +134,10 @@ impl NodeRegistryAgent {
         session: &dyn Session,
     ) -> Result<NodeRegistryAction, NodeRegistryError> {
         for _attempt in 0..MAX_CAS_ATTEMPTS {
+            let current_tombstone = self.store.get(&self.tombstone_key).await?;
+            if current_tombstone.is_some() {
+                return Err(NodeRegistryError::NodeRemoved);
+            }
             let current_node = self.store.get(&self.node_key).await?;
             let current_liveness = self.store.get(&self.liveness_key).await?;
             self.validate_liveness(current_liveness.as_ref())?;
@@ -143,6 +149,10 @@ impl NodeRegistryAgent {
             };
             let transaction = Transaction {
                 compares: vec![
+                    Compare {
+                        key: self.tombstone_key.clone(),
+                        expected: ExpectedVersion::Missing,
+                    },
                     Compare {
                         key: self.node_key.clone(),
                         expected: expected(current_node.as_ref()),
@@ -370,6 +380,9 @@ pub enum NodeRegistryError {
     /// A deleting node must not be silently re-registered.
     #[error("local Node resource is being deleted")]
     NodeDeleting,
+    /// A removed identity must never recreate its durable Node or liveness record.
+    #[error("local node identity was permanently removed from the cluster")]
+    NodeRemoved,
     /// The session-bound liveness value was not a valid daemon identity.
     #[error("malformed local node liveness: {message}")]
     MalformedLiveness { message: String },

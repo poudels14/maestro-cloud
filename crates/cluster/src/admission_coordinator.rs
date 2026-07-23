@@ -2,7 +2,10 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use kernel_api::{NodeId, NodeRole, SecretValue};
-use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store, StoredValue};
+use kernel_store::{
+    Compare, ExpectedVersion, Keyspace, Mutation, Store, StoredValue, Transaction,
+    TransactionOutcome,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::admit_replayed_join_request;
@@ -110,6 +113,7 @@ impl AdmissionCoordinator {
         }
         let key = self.keys.join_approval(&node_id);
         for _attempt in 0..MAXIMUM_APPROVAL_CAS_ATTEMPTS {
+            self.ensure_join_allowed(&node_id).await?;
             let stored = self.store.get(&key).await?;
             if let Some(stored) = stored {
                 let existing = decode_record(&stored)?;
@@ -128,18 +132,32 @@ impl AdmissionCoordinator {
                 },
                 accepted: None,
             };
-            match self
+            let outcome = self
                 .store
-                .put_cas(PutRequest {
-                    key: key.clone(),
-                    value: encode_record(&record)?,
-                    expected: ExpectedVersion::Missing,
-                    session: None,
+                .txn(Transaction {
+                    compares: vec![
+                        Compare {
+                            key: key.clone(),
+                            expected: ExpectedVersion::Missing,
+                        },
+                        Compare {
+                            key: self.keys.node_removal(&node_id),
+                            expected: ExpectedVersion::Missing,
+                        },
+                        Compare {
+                            key: self.keys.node_tombstone(&node_id),
+                            expected: ExpectedVersion::Missing,
+                        },
+                    ],
+                    mutations: vec![Mutation::Put {
+                        key: key.clone(),
+                        value: encode_record(&record)?,
+                        session: None,
+                    }],
                 })
-                .await?
-            {
-                CasOutcome::Applied(_) => return Ok(record.view),
-                CasOutcome::Conflict { .. } => {}
+                .await?;
+            if matches!(outcome, TransactionOutcome::Applied { .. }) {
+                return Ok(record.view);
             }
         }
         Err(AdmissionCoordinatorError::ConcurrentApproval { node_id })
@@ -201,6 +219,7 @@ impl AdmissionCoordinator {
         };
         let key = self.keys.join_approval(&evidence.node_id);
         for _attempt in 0..MAXIMUM_APPROVAL_CAS_ATTEMPTS {
+            self.ensure_join_allowed(&evidence.node_id).await?;
             let stored = self.store.get(&key).await?.ok_or_else(|| {
                 AdmissionCoordinatorError::ApprovalRequired {
                     node_id: evidence.node_id.clone(),
@@ -228,18 +247,32 @@ impl AdmissionCoordinator {
                 request_sha256: evidence.request_sha256.clone(),
                 payload: payload.clone(),
             });
-            match self
+            let outcome = self
                 .store
-                .put_cas(PutRequest {
-                    key: key.clone(),
-                    value: encode_record(&record)?,
-                    expected: ExpectedVersion::Exact(stored.version),
-                    session: None,
+                .txn(Transaction {
+                    compares: vec![
+                        Compare {
+                            key: key.clone(),
+                            expected: ExpectedVersion::Exact(stored.version),
+                        },
+                        Compare {
+                            key: self.keys.node_removal(&evidence.node_id),
+                            expected: ExpectedVersion::Missing,
+                        },
+                        Compare {
+                            key: self.keys.node_tombstone(&evidence.node_id),
+                            expected: ExpectedVersion::Missing,
+                        },
+                    ],
+                    mutations: vec![Mutation::Put {
+                        key: key.clone(),
+                        value: encode_record(&record)?,
+                        session: None,
+                    }],
                 })
-                .await?
-            {
-                CasOutcome::Applied(_) => return self.encrypt(request, &payload),
-                CasOutcome::Conflict { .. } => {}
+                .await?;
+            if matches!(outcome, TransactionOutcome::Applied { .. }) {
+                return self.encrypt(request, &payload);
             }
         }
         Err(AdmissionCoordinatorError::ConcurrentAdmission {
@@ -262,6 +295,7 @@ impl AdmissionCoordinator {
             source_address,
             now_unix_ms,
         )?;
+        self.ensure_join_allowed(&evidence.node_id).await?;
         let stored = self
             .store
             .get(&self.keys.join_approval(&evidence.node_id))
@@ -341,6 +375,30 @@ impl AdmissionCoordinator {
         )
         .map_err(Into::into)
     }
+
+    async fn ensure_join_allowed(&self, node_id: &NodeId) -> Result<(), AdmissionCoordinatorError> {
+        if self
+            .store
+            .get(&self.keys.node_tombstone(node_id))
+            .await?
+            .is_some()
+        {
+            return Err(AdmissionCoordinatorError::NodeRemoved {
+                node_id: node_id.clone(),
+            });
+        }
+        if self
+            .store
+            .get(&self.keys.node_removal(node_id))
+            .await?
+            .is_some()
+        {
+            return Err(AdmissionCoordinatorError::NodeRemovalInProgress {
+                node_id: node_id.clone(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Why approval or admission did not converge safely.
@@ -361,6 +419,12 @@ pub enum AdmissionCoordinatorError {
     /// The designated seed never joins its own already-bootstrapped cluster.
     #[error("the designated master cannot receive a join approval")]
     MasterCannotJoin,
+    /// A pending permanent removal blocks new trust or membership grants.
+    #[error("node `{node_id}` is being permanently removed")]
+    NodeRemovalInProgress { node_id: NodeId },
+    /// A tombstoned node identity can never receive another trust or membership grant.
+    #[error("node `{node_id}` was permanently removed")]
+    NodeRemoved { node_id: NodeId },
     /// A public-key fingerprint was not canonical SHA-256 hexadecimal.
     #[error("join public key fingerprint must be 64 lowercase hexadecimal characters")]
     InvalidFingerprint,

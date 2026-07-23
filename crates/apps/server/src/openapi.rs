@@ -2,7 +2,8 @@ use serde_json::{Map, Value, json};
 
 use crate::openapi_commands::{
     command_operation, command_path, deployment_command_path, firewall_dry_run_path,
-    firewall_policy_operation, insert_command_schemas, webhook_operation, webhook_test_path,
+    firewall_policy_operation, insert_command_schemas, node_operation, webhook_operation,
+    webhook_test_path,
 };
 
 /// Composes server path operations over the canonical kernel component schemas.
@@ -33,10 +34,7 @@ pub fn openapi_document() -> Value {
             "/api/artifact-archives/{archiveId}".to_string(),
             artifact_archive_operation(),
         ),
-        (
-            "/api/cluster/nodes/{nodeId}".to_string(),
-            get_operation("getNode", "nodeId", "Node"),
-        ),
+        ("/api/cluster/nodes/{nodeId}".to_string(), node_operation()),
         (
             "/api/cluster/nodes/{nodeId}/drain".to_string(),
             command_path(

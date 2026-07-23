@@ -16,8 +16,10 @@ mod join;
 mod join_crypto;
 mod join_key;
 mod network;
+mod node_lifecycle;
 mod ports;
 mod provider;
+mod removal;
 mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
@@ -41,12 +43,14 @@ pub use join_crypto::{
 };
 pub use join_key::{JoinKeyError, load_or_create_join_key};
 pub use network::{CidrError, Ipv4Cidr};
+pub use node_lifecycle::set_node_draining;
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
 pub use provider::{
     MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,
     StoreProviderConfig, StoreProviderError, StoreRecovery, StoreRecoveryPermit,
     StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
 };
+pub use removal::{NodeRemovalCoordinator, NodeRemovalError, NodeRemovalPlan};
 pub use topology::{
     ClusterConfig, ClusterPreflightError, NodeDefinition, NodeEndpoint, ValidatedTopology,
     WIREGUARD_MTU_BYTES,

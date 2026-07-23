@@ -54,6 +54,14 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/control/node-upgrades/node-1"
     );
     assert_eq!(
+        keys.node_removal(&node_id).as_str(),
+        "/maestro/clusters/production/control/node-removals/node-1"
+    );
+    assert_eq!(
+        keys.node_tombstone(&node_id).as_str(),
+        "/maestro/clusters/production/resources/NodeTombstone/node-1"
+    );
+    assert_eq!(
         keys.request_claim(&request_id).as_str(),
         "/maestro/clusters/production/control/requests/request-42"
     );

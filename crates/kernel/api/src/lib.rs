@@ -26,8 +26,9 @@ pub use automation::{
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,
-    MAXIMUM_ARTIFACT_ARCHIVE_BYTES, NodeCommandResponse, ServiceCommandResponse, ServiceDiffChange,
-    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    MAXIMUM_ARTIFACT_ARCHIVE_BYTES, NodeCommandResponse, NodeRemovalRequest, NodeRemovalResponse,
+    NodeRemovalState, ServiceCommandResponse, ServiceDiffChange, ServiceDiffRequest,
+    ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
     ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
     ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
     ServiceWriteResponse, UpgradeCommandResponse, UpgradeCreateRequest,

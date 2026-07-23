@@ -123,6 +123,14 @@ pub(crate) enum ClusterCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// Drain and permanently remove one node identity from the cluster.
+    RemoveNode {
+        /// Stable cluster node identity to retire permanently.
+        node_id: String,
+        /// Stable workflow key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// List retained cluster upgrade runs.
     Upgrades,
     /// Start a rolling or all-node cluster upgrade.
@@ -263,6 +271,18 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
                 node_id,
                 request_id(idempotency_key)?,
                 NodeLifecycleAction::Restore,
+                output,
+            )
+            .await
+        }
+        ClusterCommand::RemoveNode {
+            node_id,
+            idempotency_key,
+        } => {
+            cluster::remove_node(
+                &active_client()?,
+                node_id,
+                request_id(idempotency_key)?,
                 output,
             )
             .await

@@ -123,6 +123,35 @@ async fn registry_rejects_topology_drift_without_replacing_the_node()
     Ok(())
 }
 
+#[tokio::test]
+async fn removed_identity_cannot_recreate_node_or_liveness_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
+    let cluster_id = ClusterId::new("registry-test")?;
+    let node_id = NodeId::new("node-1")?;
+    store
+        .put_cas(PutRequest {
+            key: Keyspace::new(&cluster_id).node_tombstone(&node_id),
+            value: b"removed".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    let agent = agent(
+        store.clone(),
+        "instance-1",
+        Arc::new(MutableStatusClock::new(1_000)),
+    )?;
+
+    assert!(matches!(
+        agent.register().await,
+        Err(NodeRegistryError::NodeRemoved)
+    ));
+    assert!(store.get(&node_key()?).await?.is_none());
+    assert!(stored_liveness(&store).await?.is_none());
+    Ok(())
+}
+
 #[test]
 fn registry_settings_require_renewal_before_expiry() -> Result<(), Box<dyn std::error::Error>> {
     let mut zero_interval = settings("instance-1")?;

@@ -251,6 +251,10 @@ where
             Some(coordinator) => server.with_admission_coordinator(coordinator.clone()),
             None => server,
         };
+        let server = match &factory.agent_store {
+            AgentStore::Managed { provider, .. } => server.with_store_provider(provider.clone()),
+            AgentStore::Remote(_) => server,
+        };
         match &factory.webhook_backend {
             Some(backend) => server.with_webhook_backend(backend.clone()),
             None => server,
