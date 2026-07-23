@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Arc;
 
+use clustertest::ClusterSetupCluster;
 use kernel_api::{
     Assignment, AssignmentPhase, CommandSpec, DeploymentPhase, ReplicaState, ResourceKind,
     ServiceId, WorkloadId,
