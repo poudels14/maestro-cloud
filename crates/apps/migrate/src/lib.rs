@@ -30,7 +30,11 @@ mod plan;
 mod report;
 mod runner;
 mod snapshot;
+mod telemetry_apply;
+mod telemetry_conversion;
+mod telemetry_destination;
 mod telemetry_plan;
+mod telemetry_projection;
 
 pub use artifact::SnapshotArtifactError;
 pub use etcd_source::{
@@ -41,6 +45,11 @@ pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use report::{MigrationPlanReport, ReportError};
 pub use runner::{CutoverMigration, MigrationError, MigrationOutcome, MigrationVerification};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
+pub use telemetry_apply::{
+    LegacyTelemetryApplyOutcome, LegacyTelemetryApplyReport, LegacyTelemetryDestination,
+    LegacyTelemetryMigrationError, LegacyTelemetryStreamVerification, LegacyTelemetryVerification,
+    apply_legacy_telemetry, verify_legacy_telemetry,
+};
 pub use telemetry_plan::{
     LegacyTelemetryCounts, LegacyTelemetryFile, LegacyTelemetryPlan, LegacyTelemetryPlanError,
 };

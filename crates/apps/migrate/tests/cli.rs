@@ -14,8 +14,17 @@ fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
     assert!(stdout.contains("apply"));
     assert!(stdout.contains("verify"));
     assert!(stdout.contains("telemetry-plan"));
+    assert!(stdout.contains("telemetry-apply"));
+    assert!(stdout.contains("telemetry-verify"));
 
-    for command in ["capture", "apply", "verify", "telemetry-plan"] {
+    for command in [
+        "capture",
+        "apply",
+        "verify",
+        "telemetry-plan",
+        "telemetry-apply",
+        "telemetry-verify",
+    ] {
         let output = migration_command().arg(command).output()?;
         assert_eq!(output.status.code(), Some(2));
     }

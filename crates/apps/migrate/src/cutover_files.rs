@@ -16,6 +16,14 @@ pub(crate) fn read_snapshot(path: &Path) -> Result<Vec<u8>, CutoverFileError> {
     )
 }
 
+pub(crate) fn read_telemetry_plan(path: &Path) -> Result<Vec<u8>, CutoverFileError> {
+    read_bounded(
+        path,
+        migrate::LegacyTelemetryPlan::maximum_artifact_bytes(),
+        true,
+    )
+}
+
 pub(crate) fn read_master_secret(path: &Path) -> Result<Zeroizing<String>, CutoverFileError> {
     let bytes = Zeroizing::new(read_bounded(path, MAXIMUM_SECRET_BYTES, true)?);
     let secret = String::from_utf8(bytes.to_vec()).map_err(|_| CutoverFileError::InvalidSecret)?;

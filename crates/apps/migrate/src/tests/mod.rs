@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod telemetry_apply;
 mod telemetry_plan;
 
 use std::collections::{BTreeMap, BTreeSet};

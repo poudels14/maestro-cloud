@@ -9,14 +9,15 @@ use kernel_store::{Keyspace, Store};
 use migrate::{
     CapturedLegacySnapshot, CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource,
     LegacySnapshot, LegacyTelemetryPlan, MigrationOutcome, MigrationPlanReport,
-    MigrationVerification, plan_legacy_snapshot,
+    MigrationVerification, apply_legacy_telemetry, plan_legacy_snapshot, verify_legacy_telemetry,
 };
 use serde::Serialize;
 
 mod cutover_files;
 
 use cutover_files::{
-    read_master_secret, read_private_pem, read_public_pem, read_snapshot, write_new_private,
+    read_master_secret, read_private_pem, read_public_pem, read_snapshot, read_telemetry_plan,
+    write_new_private,
 };
 
 #[derive(Debug, Parser)]
@@ -81,6 +82,32 @@ enum Command {
         cluster_id: kernel_api::ClusterId,
         #[arg(long)]
         node_id: kernel_api::NodeId,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Converts a reviewed node-local telemetry plan into rewrite stores.
+    TelemetryApply {
+        /// Owner-only plan emitted by `telemetry-plan`.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Legacy probe data root, normally `<cluster>/system/probe/data`.
+        #[arg(long)]
+        legacy_data_directory: PathBuf,
+        /// Rewrite cluster data root containing the node-owned `agent` directory.
+        #[arg(long)]
+        data_directory: PathBuf,
+    },
+    /// Independently reprojects a source and verifies completed rewrite stores.
+    TelemetryVerify {
+        /// Owner-only plan emitted by `telemetry-plan`.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Legacy probe data root, normally `<cluster>/system/probe/data`.
+        #[arg(long)]
+        legacy_data_directory: PathBuf,
+        /// Rewrite cluster data root containing the node-owned `agent` directory.
+        #[arg(long)]
+        data_directory: PathBuf,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -155,6 +182,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let plan = LegacyTelemetryPlan::capture(&legacy_data_directory, cluster_id, node_id)?;
             write_json(&plan, output.as_deref())
+        }
+        Command::TelemetryApply {
+            plan,
+            legacy_data_directory,
+            data_directory,
+        } => {
+            let plan = load_telemetry_plan(&plan)?;
+            let report =
+                apply_legacy_telemetry(&plan, &legacy_data_directory, &data_directory).await?;
+            write_json(&report, None)
+        }
+        Command::TelemetryVerify {
+            plan,
+            legacy_data_directory,
+            data_directory,
+            output,
+        } => {
+            let plan = load_telemetry_plan(&plan)?;
+            let verification =
+                verify_legacy_telemetry(&plan, &legacy_data_directory, &data_directory).await?;
+            write_json(&verification, output.as_deref())
         }
     }
 }
@@ -243,6 +291,10 @@ async fn verify(
 
 fn load_snapshot(path: &Path) -> Result<LegacySnapshot, Box<dyn std::error::Error>> {
     Ok(LegacySnapshot::decode_artifact(&read_snapshot(path)?)?)
+}
+
+fn load_telemetry_plan(path: &Path) -> Result<LegacyTelemetryPlan, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&read_telemetry_plan(path)?)?)
 }
 
 async fn verify_source(

@@ -101,7 +101,32 @@ start empty observability stores.
    exists in the destination namespace. Run it before starting rewrite daemons
    because reconcilers legitimately update migrated resources.
 
-7. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
+7. On every stopped node, apply and independently verify the reviewed
+   telemetry plan:
+
+   ```sh
+   maestro-migrate telemetry-apply \
+     --plan /var/lib/maestro/cutover/node-a-telemetry-plan.json \
+     --legacy-data-directory /var/lib/maestro/production/system/probe/data \
+     --data-directory /var/lib/maestro/production
+
+   maestro-migrate telemetry-verify \
+     --plan /var/lib/maestro/cutover/node-a-telemetry-plan.json \
+     --legacy-data-directory /var/lib/maestro/production/system/probe/data \
+     --data-directory /var/lib/maestro/production \
+     --output /var/lib/maestro/cutover/node-a-telemetry-verification.json
+   ```
+
+   Apply creates an owner-only intent before opening the rewrite stores and
+   installs its completion marker only after recapturing the source and matching
+   an ordered logical digest of every destination record. Exact reruns are
+   idempotent. Workload and host resource samples are normalized into the
+   rewrite's cumulative metric model; cluster/service aggregates are regenerated
+   from workload samples, and retired Prometheus traffic aggregates remain in
+   the source archive because rewrite traffic history is derived from access
+   logs.
+
+8. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
    treat a successful schema migration as approval for a runtime transition;
    the production runtime adoption mode is a separate cutover gate.
 
@@ -112,12 +137,17 @@ then stop every legacy daemon while leaving etcd available. Retain that native
 snapshot, the logical snapshot, plan report, old binaries, and migration output
 through the burn-in window. Retain the verification evidence alongside them.
 
-Destination writes are collision-safe and resumable. If apply stops before its
-marker and the live source digest is unchanged, rerun the same artifact with the
-same migration ID. If the source digest changed, do not plan a different
-artifact over partial destinations: restore the native rollback snapshot first,
-re-establish quiescence, and restart capture.
+Etcd and telemetry destination writes are collision-safe and resumable. If
+either apply stops before its marker and the corresponding source digest is
+unchanged, rerun the same artifact. If an etcd source digest changed, do not
+plan a different artifact over partial destinations: restore the native
+rollback snapshot first, re-establish quiescence, and restart capture. If a
+node-local telemetry source changed, retain its untouched legacy telemetry
+directory, move the incomplete rewrite `agent` directory aside, then recapture
+and review that node before retrying.
 
 Rollback remains: stop rewrite daemons, restore the verified native etcd
-snapshot, and start the old daemons. Whether workloads can remain running during
-that operation depends on the separately approved runtime-adoption mode.
+snapshot, leave each legacy telemetry directory in place, and start the old
+daemons. The rewrite `agent` stores are isolated and can remain offline as
+forensic evidence. Whether workloads can remain running during that operation
+depends on the separately approved runtime-adoption mode.

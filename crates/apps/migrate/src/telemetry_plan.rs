@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const PLAN_SCHEMA_VERSION: u32 = 1;
+const MAXIMUM_PLAN_BYTES: usize = 256 * 1024 * 1024;
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const REQUIRED_DATABASES: [&str; 3] = [
     "metrics.duckdb",
@@ -18,7 +19,7 @@ const REQUIRED_DATABASES: [&str; 3] = [
 
 /// Reviewable inventory of one stopped legacy node's observability files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LegacyTelemetryPlan {
     /// Plan wire version.
     pub schema_version: u32,
@@ -35,6 +36,11 @@ pub struct LegacyTelemetryPlan {
 }
 
 impl LegacyTelemetryPlan {
+    /// Returns the maximum accepted serialized plan size.
+    pub const fn maximum_artifact_bytes() -> usize {
+        MAXIMUM_PLAN_BYTES
+    }
+
     /// Captures a source-fenced plan without modifying the legacy stores.
     pub fn capture(
         legacy_data_directory: &Path,
@@ -46,20 +52,52 @@ impl LegacyTelemetryPlan {
         validate_required_databases(&files)?;
         let counts = count_rows(&root, &files)?;
         let source_sha256 = inventory_digest(&files);
-        Ok(Self {
+        let plan = Self {
             schema_version: PLAN_SCHEMA_VERSION,
             cluster_id,
             node_id,
             source_sha256,
             files,
             counts,
-        })
+        };
+        let bytes = serde_json::to_vec_pretty(&plan)
+            .map_err(|error| LegacyTelemetryPlanError::Encode(error.to_string()))?
+            .len();
+        if bytes > MAXIMUM_PLAN_BYTES {
+            return Err(LegacyTelemetryPlanError::PlanTooLarge {
+                bytes,
+                maximum: MAXIMUM_PLAN_BYTES,
+            });
+        }
+        Ok(plan)
+    }
+
+    /// Recaptures a stopped source and requires it to match this reviewed plan exactly.
+    pub fn verify_source(
+        &self,
+        legacy_data_directory: &Path,
+    ) -> Result<PathBuf, LegacyTelemetryPlanError> {
+        if self.schema_version != PLAN_SCHEMA_VERSION {
+            return Err(LegacyTelemetryPlanError::UnsupportedSchema {
+                version: self.schema_version,
+            });
+        }
+        let root = validate_root(legacy_data_directory)?;
+        let captured = Self::capture(&root, self.cluster_id.clone(), self.node_id.clone())?;
+        if captured == *self {
+            Ok(root)
+        } else {
+            Err(LegacyTelemetryPlanError::SourceChanged {
+                expected: self.source_sha256.clone(),
+                actual: captured.source_sha256,
+            })
+        }
     }
 }
 
 /// One immutable input file bound into a telemetry plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LegacyTelemetryFile {
     /// Slash-separated path relative to the legacy probe data root.
     pub path: String,
@@ -71,7 +109,7 @@ pub struct LegacyTelemetryFile {
 
 /// Logical records found across the legacy hot and cold tiers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LegacyTelemetryCounts {
     /// Service log records in DuckDB and committed Parquet.
     pub service_logs: u64,
@@ -520,6 +558,18 @@ struct LegacyPartitionPart {
 /// A legacy node's telemetry could not be fenced into a reviewable plan.
 #[derive(Debug, thiserror::Error)]
 pub enum LegacyTelemetryPlanError {
+    /// Only plans produced by this migration generation are accepted.
+    #[error("legacy telemetry plan schema {version} is not supported")]
+    UnsupportedSchema { version: u32 },
+    /// A source inventory cannot exceed the bounded review artifact size.
+    #[error("legacy telemetry plan uses {bytes} bytes, exceeding the {maximum}-byte bound")]
+    PlanTooLarge { bytes: usize, maximum: usize },
+    /// A validated inventory could not be represented as JSON.
+    #[error("legacy telemetry plan could not be encoded: {0}")]
+    Encode(String),
+    /// The stopped source changed after operator review.
+    #[error("legacy telemetry source digest {actual} does not match reviewed digest {expected}")]
+    SourceChanged { expected: String, actual: String },
     /// Paths must be explicit and traversal-free.
     #[error("legacy telemetry path must be absolute without parent traversal: {}", path.display())]
     InvalidPath { path: PathBuf },

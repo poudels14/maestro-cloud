@@ -59,7 +59,7 @@ fn plan_rejects_parquet_not_committed_by_a_manifest() -> TestResult {
     Ok(())
 }
 
-fn seed_databases(root: &Path) -> TestResult {
+pub(super) fn seed_databases(root: &Path) -> TestResult {
     let databases = root.join("duckdb");
     std::fs::create_dir_all(&databases)?;
     std::fs::create_dir_all(root.join("parts"))?;
@@ -113,7 +113,7 @@ fn seed_databases(root: &Path) -> TestResult {
     Ok(())
 }
 
-fn seed_service_partition(root: &Path) -> TestResult {
+pub(super) fn seed_service_partition(root: &Path) -> TestResult {
     let partition =
         root.join("parts/service-logs/service_id=api/deployment_id=dep-a/date=2026-07-20");
     std::fs::create_dir_all(&partition)?;
