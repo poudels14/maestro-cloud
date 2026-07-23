@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use daemon::{
-    DeadLetterAdminCommand, DeadLetterAdminOutput, administer_dead_letters, launch_daemon,
-    load_launch_config,
+    DeadLetterAdminCommand, DeadLetterAdminOutput, LocalLogOptions, administer_dead_letters,
+    launch_daemon, load_launch_config, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
 use tokio::io::AsyncWriteExt;
@@ -20,6 +20,20 @@ struct Cli {
 enum DaemonCommand {
     /// Starts the declared node roles from a protected launch document.
     Start { config: PathBuf },
+    /// Reads logs from the running local node over its authenticated node API.
+    Logs {
+        /// Protected launch document used to authenticate the local query.
+        config: PathBuf,
+        /// System component or service/deployment/workload source.
+        #[arg(long)]
+        source: Option<String>,
+        /// Number of recent matching records.
+        #[arg(long, default_value_t = 100)]
+        tail: usize,
+        /// Continue polling for new matching records.
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
     /// Inspects, exports, or purges node-local sink dead letters.
     DeadLetters {
         config: PathBuf,
@@ -75,6 +89,26 @@ async fn main() {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         DaemonCommand::Start { config } => start(config).await,
+        DaemonCommand::Logs {
+            config,
+            source,
+            tail,
+            follow,
+        } => {
+            let config = load_launch_config(&config)?;
+            let mut output = std::io::stdout().lock();
+            stream_local_logs(
+                &config,
+                &LocalLogOptions {
+                    source,
+                    tail,
+                    follow,
+                },
+                &mut output,
+            )
+            .await?;
+            Ok(())
+        }
         DaemonCommand::DeadLetters { config, command } => {
             let command = admin_command(command)?;
             let output = administer_dead_letters(&config, command).await?;
@@ -166,7 +200,7 @@ fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
     let is_native_command = first.is_some_and(|argument| {
         matches!(
             argument,
-            "start" | "dead-letters" | "help" | "-h" | "--help" | "-V" | "--version"
+            "start" | "logs" | "dead-letters" | "help" | "-h" | "--help" | "-V" | "--version"
         ) || argument.starts_with('-')
     });
     if first.is_some() && !is_native_command {

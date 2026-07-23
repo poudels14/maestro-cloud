@@ -19,6 +19,7 @@ mod join_activation;
 mod launch;
 mod launch_error;
 mod leadership;
+mod local_logs;
 mod log_backup_config;
 mod log_delivery;
 mod log_maintenance;
@@ -48,6 +49,7 @@ pub use dead_letter_admin::{
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{DaemonLaunchConfig, StoreLaunchMode, launch_daemon, load_launch_config};
 pub use launch_error::DaemonLaunchError;
+pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};
 pub use log_backup_config::LogBackupLaunchConfig;
 pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,

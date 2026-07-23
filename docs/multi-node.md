@@ -224,6 +224,24 @@ Confirm that:
 The config response intentionally omits the join secret and any Tailscale auth
 key.
 
+## Inspect node-local logs
+
+Use the protected launch document to inspect one running node without an
+operator contexts file:
+
+```sh
+sudo maestro-daemon logs /run/maestro/launch.json --tail 100
+sudo maestro-daemon logs /run/maestro/launch.json --source daemon
+sudo maestro-daemon logs /run/maestro/launch.json \
+  --source api/deployment-1/workload-1 --follow
+```
+
+The command uses the node certificate and short-lived node authentication over
+the local HTTPS API; it never opens the live DuckDB file from a second process.
+`--source` accepts either one exact system component or the retained
+`service/deployment/workload` spelling. The initial tail is bounded to 1–10,000
+records and prints in chronological order before follow mode begins.
+
 ## Lifecycle constraints
 
 Cluster topology is initialization-fixed in the current rewrite. A join request

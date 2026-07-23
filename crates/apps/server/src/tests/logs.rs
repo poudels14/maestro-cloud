@@ -15,7 +15,7 @@ use logs::{
 };
 use runtime::WorkloadMetadata;
 
-use crate::{ApiServer, HttpNodeLogQueryStore, ServerSettings, TlsIdentity};
+use crate::{ApiServer, HttpNodeLogClient, HttpNodeLogQueryStore, ServerSettings, TlsIdentity};
 
 use super::deployments::deployment;
 use super::observations::build;
@@ -221,6 +221,13 @@ async fn node_client_queries_a_peer_over_authenticated_mutual_tls()
 
     let local_node = NodeId::new("node-local")?;
     let remote_node = NodeId::new("node-remote")?;
+    let direct_client = HttpNodeLogClient::new(
+        remote_node.clone(),
+        BTreeMap::from([(remote_node.clone(), remote_address)]),
+        &certificate_pem,
+        &identity,
+        &secret,
+    )?;
     let local_logs = Arc::new(InMemoryLogStore::new());
     let client = HttpNodeLogQueryStore::new(
         local_node.clone(),
@@ -236,7 +243,7 @@ async fn node_client_queries_a_peer_over_authenticated_mutual_tls()
     )?;
     let query = LogReadQuery::new(LogQueryScope::System, LogReadOrder::NewestFirst, 10)?
         .with_search(r#"message:"system""#.parse()?);
-    let entries = client.query_node_logs(&remote_node, &query).await?;
+    let entries = direct_client.query_node_logs(&remote_node, &query).await?;
     let histogram = client
         .query_node_histogram(
             &remote_node,

@@ -13,6 +13,61 @@ use logs::{
 
 use crate::TlsIdentity;
 
+/// Direct HTTPS client for authenticated node-local log queries.
+pub struct HttpNodeLogClient {
+    transport: NodeHttpClient,
+}
+
+impl HttpNodeLogClient {
+    /// Builds a bounded mutual-TLS client over one validated static topology.
+    pub fn new(
+        local_node_id: NodeId,
+        endpoints: std::collections::BTreeMap<NodeId, std::net::SocketAddr>,
+        trust_root_pem: &str,
+        identity: &TlsIdentity,
+        jwt_secret_key: &SecretValue,
+    ) -> Result<Self, NodeHttpClientError> {
+        Ok(Self {
+            transport: NodeHttpClient::new(
+                local_node_id,
+                endpoints,
+                trust_root_pem,
+                identity,
+                jwt_secret_key,
+            )?,
+        })
+    }
+}
+
+#[async_trait]
+impl NodeLogQueryStore for HttpNodeLogClient {
+    async fn query_node_logs(
+        &self,
+        node_id: &NodeId,
+        query: &LogReadQuery,
+    ) -> Result<Vec<SequencedLogEntry>, LogQueryStoreError> {
+        self.transport
+            .get_json(node_id, "/api/node/logs", &read_parameters(query))
+            .await
+            .map_err(map_request_error)
+    }
+
+    async fn query_node_histogram(
+        &self,
+        node_id: &NodeId,
+        query: &LogHistogramQuery,
+    ) -> Result<Vec<LogHistogramBucket>, LogQueryStoreError> {
+        self.transport
+            .get_json(
+                node_id,
+                "/api/node/logs/histogram",
+                &histogram_parameters(query),
+            )
+            .await
+            .map_err(map_request_error)
+    }
+}
+
 /// HTTPS node-local query proxy using cluster trust and one node certificate.
 pub struct HttpNodeLogQueryStore {
     local: Arc<dyn LogQueryStore>,

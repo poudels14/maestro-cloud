@@ -69,6 +69,30 @@ fn dead_letter_commands_require_explicit_purge_scope() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn local_logs_command_retains_source_tail_and_follow_options() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("missing-launch.json");
+    let output = daemon_command()
+        .arg("logs")
+        .arg(&config)
+        .args([
+            "--source",
+            "api/deployment/workload",
+            "--tail",
+            "25",
+            "--follow",
+        ])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr)?;
+    assert!(error.contains("daemon launch document"));
+    assert!(!error.contains("unexpected argument"));
+    Ok(())
+}
+
 fn daemon_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_daemon"))
 }

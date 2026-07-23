@@ -50,7 +50,7 @@ pub use exec_service::{
 };
 pub use node_artifact_client::{HttpNodeArtifactClient, NodeArtifactTransferError};
 pub use node_http_client::NodeHttpClientError;
-pub use node_log_client::HttpNodeLogQueryStore;
+pub use node_log_client::{HttpNodeLogClient, HttpNodeLogQueryStore};
 pub use node_metric_client::{
     HttpNodeMetricQueryStore, NodeMetricQueryError, NodeMetricQueryStore,
 };
