@@ -75,6 +75,26 @@ async fn apply_rejects_a_source_changed_after_review() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn verification_requires_an_existing_destination_without_creating_it() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("probe-data");
+    let destination = directory.path().join("missing-rewrite-data");
+    seed_databases(&source)?;
+    let plan = LegacyTelemetryPlan::capture(
+        &source,
+        ClusterId::new("cluster-a")?,
+        NodeId::new("node-a")?,
+    )?;
+
+    verify_legacy_telemetry(&plan, &source, &destination)
+        .await
+        .expect_err("verification must require an existing destination");
+
+    assert!(!destination.exists());
+    Ok(())
+}
+
 fn append_metric_samples(source: &Path) -> TestResult {
     let metrics = Connection::open(source.join("duckdb/metrics.duckdb"))?;
     metrics.execute_batch(

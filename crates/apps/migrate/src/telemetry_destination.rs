@@ -15,6 +15,12 @@ const MARKER_MAXIMUM_BYTES: u64 = 1024 * 1024;
 const INTENT_FILE: &str = ".legacy-telemetry-intent.json";
 const COMPLETION_FILE: &str = ".legacy-telemetry-complete.json";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationRootRequirement {
+    CreateIfMissing,
+    Existing,
+}
+
 #[derive(Clone)]
 pub(crate) struct DestinationPaths {
     agent: PathBuf,
@@ -52,7 +58,7 @@ fn prepare_destination_sync(
     root: &Path,
     destination: &LegacyTelemetryDestination,
 ) -> Result<DestinationPaths, LegacyTelemetryMigrationError> {
-    validate_destination_root(root, true)?;
+    validate_destination_root(root, DestinationRootRequirement::CreateIfMissing)?;
     let paths = DestinationPaths::new(root);
     if paths.intent.exists() {
         validate_agent(&paths)?;
@@ -78,7 +84,7 @@ pub(crate) async fn existing_destination(
     let root = root.to_path_buf();
     let destination = destination.clone();
     tokio::task::spawn_blocking(move || {
-        validate_destination_root(&root, false)?;
+        validate_destination_root(&root, DestinationRootRequirement::Existing)?;
         let paths = DestinationPaths::new(&root);
         validate_agent(&paths)?;
         let actual: LegacyTelemetryDestination = read_private_json(&paths.intent)?;
@@ -93,7 +99,7 @@ pub(crate) async fn existing_destination(
 
 fn validate_destination_root(
     root: &Path,
-    create: bool,
+    requirement: DestinationRootRequirement,
 ) -> Result<(), LegacyTelemetryMigrationError> {
     if !root.is_absolute()
         || root
@@ -104,7 +110,7 @@ fn validate_destination_root(
             path: root.to_path_buf(),
         });
     }
-    if create {
+    if requirement == DestinationRootRequirement::CreateIfMissing {
         std::fs::create_dir_all(root).map_err(io("create", root))?;
     }
     let canonical = std::fs::canonicalize(root).map_err(io("canonicalize", root))?;
