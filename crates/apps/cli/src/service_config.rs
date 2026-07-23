@@ -142,27 +142,32 @@ pub(crate) async fn load_uploaded_service(
     reader: &impl ConfigSourceReader,
 ) -> Result<LoadedUploadedService, CliError> {
     let merged = load_merged(source, reader).await?;
-    let (mut document, ignored_fields): (ServicesDocument, _) =
-        decode_document(&merged, &format!("services config `{source}`"))?;
+    let (mut services, ignored_fields) = if merged.get("services").is_some() {
+        let (document, ignored_fields): (ServicesDocument, _) =
+            decode_document(&merged, &format!("services config `{source}`"))?;
+        (document.services, ignored_fields)
+    } else {
+        let (document, ignored_fields): (LegacyUploadedServiceDocument, _) =
+            decode_document(&merged, &format!("uploaded service config `{source}`"))?;
+        (BTreeMap::from([document.into_entry()]), ignored_fields)
+    };
     let service_id = match service_id {
         Some(service_id) => service_id,
-        None if document.services.len() == 1 => {
-            let raw_id = document
-                .services
+        None if services.len() == 1 => {
+            let raw_id = services
                 .first_key_value()
                 .map(|(raw_id, _)| raw_id.clone())
                 .ok_or_else(|| CliError::invalid_input("services: no services configured"))?;
             ServiceId::new(raw_id.clone())
                 .map_err(|error| CliError::invalid_input(format!("services.{raw_id}: {error}")))?
         }
-        None if document.services.is_empty() => {
+        None if services.is_empty() => {
             return Err(CliError::invalid_input(format!(
                 "services: no services configured in `{source}`"
             )));
         }
         None => {
-            let configured = document
-                .services
+            let configured = services
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
@@ -173,14 +178,11 @@ pub(crate) async fn load_uploaded_service(
             )));
         }
     };
-    let template = document
-        .services
-        .remove(service_id.as_str())
-        .ok_or_else(|| {
-            CliError::invalid_input(format!(
-                "service `{service_id}` is not configured in `{source}`"
-            ))
-        })?;
+    let template = services.remove(service_id.as_str()).ok_or_else(|| {
+        CliError::invalid_input(format!(
+            "service `{service_id}` is not configured in `{source}`"
+        ))
+    })?;
     if template.build.is_none() || template.image.is_some() {
         return Err(CliError::invalid_input(format!(
             "services.{service_id}: `services up` requires `build` and does not accept `image`"
@@ -207,6 +209,40 @@ struct ServicesDocument {
     #[serde(rename = "$schema", default)]
     _schema: Option<String>,
     services: BTreeMap<String, ServiceTemplate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyUploadedServiceDocument {
+    #[serde(rename = "$schema", default)]
+    _schema: Option<String>,
+    id: String,
+    name: String,
+    #[serde(default)]
+    build: Option<BuildConfig>,
+    #[serde(default)]
+    image: Option<String>,
+    deploy: DeployConfig,
+    #[serde(default)]
+    ingress: Option<IngressConfig>,
+    #[serde(default)]
+    preview: Option<PreviewConfig>,
+}
+
+impl LegacyUploadedServiceDocument {
+    fn into_entry(self) -> (String, ServiceTemplate) {
+        (
+            self.id,
+            ServiceTemplate {
+                name: self.name,
+                build: self.build,
+                image: self.image,
+                deploy: self.deploy,
+                ingress: self.ingress,
+                preview: self.preview,
+            },
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactTemplate, ExecPolicy, FirewallDirection, FirewallSubject, FirewallVerdict, SecretValue,
-    ServiceId, TransportProtocol, VolumeSource,
+    ArtifactArchiveId, ArtifactTemplate, BuildSource, ExecPolicy, FirewallDirection,
+    FirewallSubject, FirewallVerdict, SecretValue, ServiceId, TransportProtocol, VolumeSource,
 };
 
 use crate::CliError;
 use crate::config_source::ConfigSourceReader;
-use crate::service_config::load_services;
+use crate::service_config::{load_services, load_uploaded_service};
 
 struct MemoryReader {
     sources: BTreeMap<String, String>,
@@ -124,6 +124,40 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
     assert_eq!(port.start, 443);
     assert_eq!(port.end, 443);
     assert_eq!(rule.verdict, FirewallVerdict::Allow);
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_single_manifest_maps_to_an_uploaded_service()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.services.jsonc";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(
+            source.to_string(),
+            r#"{
+                id: "my-service",
+                name: "My Service",
+                build: { dockerfile: "Dockerfile" },
+                ingress: { host: "my-service.local", port: 80 },
+                deploy: { healthcheckPath: "/health", replicas: 1 }
+            }"#
+            .to_string(),
+        )]),
+    };
+    let archive_id = ArtifactArchiveId::from_sha256([7; 32]);
+    let loaded = load_uploaded_service(source, None, archive_id.clone(), &reader).await?;
+
+    assert_eq!(loaded.service_id, ServiceId::new("my-service")?);
+    assert!(loaded.ignored_fields.is_empty());
+    assert!(matches!(
+        loaded.desired.spec.artifact,
+        ArtifactTemplate::Build { ref template }
+            if matches!(
+                template.source,
+                BuildSource::Tarball { archive_id: ref selected } if selected == &archive_id
+            )
+    ));
+    assert_eq!(loaded.desired.spec.replicas, 1);
     Ok(())
 }
 
