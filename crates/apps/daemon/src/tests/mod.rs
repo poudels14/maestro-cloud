@@ -1,12 +1,16 @@
 mod build_backend;
+mod config_view;
 mod control_plane;
 mod control_plane_resources;
 mod control_plane_store;
 mod control_plane_worker;
+mod datadog;
 mod join_activation;
 mod launch;
 mod leadership;
+mod log_delivery;
 mod log_maintenance;
+mod metric_delivery;
 mod operators;
 mod orchestration;
 mod orchestration_acceptance;

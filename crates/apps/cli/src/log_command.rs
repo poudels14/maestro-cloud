@@ -17,44 +17,44 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) struct LogCommand {
     /// Service identity to stream; omit for every node-local log.
     #[arg(short = 's', long, conflicts_with = "system")]
-    service: Option<String>,
+    pub(crate) service: Option<String>,
     /// Deployment identity within --service.
     #[arg(long, requires = "service", conflicts_with = "system")]
-    deployment: Option<String>,
+    pub(crate) deployment: Option<String>,
     /// Only stream one exact Maestro system component.
     #[arg(long, value_name = "COMPONENT", conflicts_with = "service")]
-    system: Option<String>,
+    pub(crate) system: Option<String>,
     /// Number of recent records in the initial page.
     #[arg(long, default_value_t = DEFAULT_TAIL)]
-    tail: usize,
+    pub(crate) tail: usize,
     /// Print the recent page and exit instead of polling for new records.
     #[arg(long)]
-    no_follow: bool,
+    pub(crate) no_follow: bool,
     /// Server-side LogQL expression.
     #[arg(long)]
-    query: Option<String>,
+    pub(crate) query: Option<String>,
     /// Inclusive event-time lower bound in Unix milliseconds.
     #[arg(long)]
-    from: Option<i64>,
+    pub(crate) from: Option<i64>,
     /// Exclusive event-time upper bound in Unix milliseconds.
     #[arg(long)]
-    to: Option<i64>,
+    pub(crate) to: Option<i64>,
     /// Render text lines or one complete normalized JSON object per line.
     #[arg(long, value_enum, default_value_t = LogOutput::Text)]
-    output: LogOutput,
+    pub(crate) output: LogOutput,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
-enum LogOutput {
+pub(crate) enum LogOutput {
     #[default]
     Text,
     Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LogRequest {
-    path: String,
-    parameters: Vec<(String, String)>,
+pub(crate) struct LogRequest {
+    pub(crate) path: String,
+    pub(crate) parameters: Vec<(String, String)>,
 }
 
 pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(), CliError> {
@@ -89,7 +89,7 @@ pub(crate) async fn run(command: LogCommand, output: &mut dyn Write) -> Result<(
     }
 }
 
-fn initial_request(command: &LogCommand) -> Result<LogRequest, CliError> {
+pub(crate) fn initial_request(command: &LogCommand) -> Result<LogRequest, CliError> {
     if command.tail == 0 || command.tail > logs::MAXIMUM_LOG_QUERY_LIMIT {
         return Err(CliError::invalid_input(
             "log tail must be between 1 and 10000",
@@ -149,7 +149,7 @@ fn initial_request(command: &LogCommand) -> Result<LogRequest, CliError> {
     Ok(LogRequest { path, parameters })
 }
 
-fn write_entries(
+pub(crate) fn write_entries(
     entries: &[ClusterLogEntry],
     format: LogOutput,
     output: &mut dyn Write,
@@ -200,90 +200,4 @@ fn body(body: &LogBody) -> String {
 
 fn output_error(source: std::io::Error) -> CliError {
     CliError::io("failed to write log output", source)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use kernel_api::{ClusterId, NodeId, Timestamp};
-    use logs::{LogProducer, LogRecordId, LogSequence, LogStream, OriginCursor};
-
-    use super::*;
-
-    #[test]
-    fn requests_validate_targets_and_preserve_query_values_for_url_encoding()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let request = initial_request(&LogCommand {
-            service: Some("api".to_owned()),
-            deployment: Some("api-v1".to_owned()),
-            system: None,
-            tail: 25,
-            no_follow: true,
-            query: Some("message:\"x & y\"".to_owned()),
-            from: Some(100),
-            to: Some(200),
-            output: LogOutput::Json,
-        })?;
-        assert_eq!(request.path, "/api/services/api/deployments/api-v1/logs");
-        assert!(
-            request
-                .parameters
-                .contains(&("query".to_owned(), "message:\"x & y\"".to_owned()))
-        );
-        assert!(
-            request
-                .parameters
-                .contains(&("tail".to_owned(), "25".to_owned()))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn text_and_json_outputs_keep_chronology_and_structured_details()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let node_id = NodeId::new("node-one")?;
-        let entry = ClusterLogEntry {
-            node_id: node_id.clone(),
-            sequence: LogSequence(7),
-            entry: IngestLogEntry {
-                id: LogRecordId {
-                    node_id: node_id.clone(),
-                    producer: LogProducer::System("daemon".to_owned()),
-                    cursor: OriginCursor::new("7"),
-                },
-                observed_at: Timestamp(123),
-                event_at: Timestamp(123),
-                severity: "warn".to_owned(),
-                stream: LogStream::System,
-                origin: LogOrigin::System {
-                    cluster_id: ClusterId::new("cluster-one")?,
-                    node_id: Some(node_id),
-                    component: "daemon".to_owned(),
-                },
-                body: LogBody::Text("careful".to_owned()),
-                attributes: BTreeMap::from([("attempt".to_owned(), "2".to_owned())]),
-            },
-        };
-        let mut text = Vec::new();
-        write_entries(std::slice::from_ref(&entry), LogOutput::Text, &mut text)?;
-        assert_eq!(
-            String::from_utf8(text)?.trim(),
-            "123 warn  node-one/daemon                  careful"
-        );
-
-        let mut json = Vec::new();
-        write_entries(&[entry], LogOutput::Json, &mut json)?;
-        let value: serde_json::Value = serde_json::from_slice(&json)?;
-        assert_eq!(
-            value.pointer("/nodeId"),
-            Some(&serde_json::json!("node-one"))
-        );
-        assert_eq!(value.pointer("/sequence"), Some(&serde_json::json!(7)));
-        assert_eq!(
-            value.pointer("/entry/attributes/attempt"),
-            Some(&serde_json::json!("2"))
-        );
-        Ok(())
-    }
 }
