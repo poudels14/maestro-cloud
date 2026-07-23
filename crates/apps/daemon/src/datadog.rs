@@ -4,7 +4,7 @@ use std::time::Duration;
 use kernel_api::SecretValue;
 use logs::{
     DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError, HttpTransport,
-    LogFilterKind, LogSink, LogStoreRuntime, ReqwestHttpTransport,
+    LogFilterKind, LogSink, LogSourceInclusion, LogStoreRuntime, ReqwestHttpTransport,
 };
 use metrics::{
     DatadogMetricSink, DatadogMetricSinkSettings, HostMetricSink, MetricHttpTransport, MetricSink,
@@ -53,8 +53,16 @@ impl DatadogLaunchConfig {
         };
         DatadogLogSinkSettings::new(self.api_key.expose(), &self.site).map(|settings| {
             settings
-                .include_ingress_logs(self.include_ingress_logs)
-                .include_tailscale_logs(self.include_tailscale_logs)
+                .ingress_logs(if self.include_ingress_logs {
+                    LogSourceInclusion::Include
+                } else {
+                    LogSourceInclusion::Exclude
+                })
+                .tailscale_logs(if self.include_tailscale_logs {
+                    LogSourceInclusion::Include
+                } else {
+                    LogSourceInclusion::Exclude
+                })
                 .filters(filters)
         })
     }

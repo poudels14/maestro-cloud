@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use logql::{Comparison, Expression, Field, FieldValue, Predicate};
+use logql::{Comparison, Expression, Field, FieldValue, MatchCase, Predicate};
 
 use crate::{
     InMemoryLogStore, IngestLogEntry, LogBody, LogHistogramBucket, LogHistogramGroupBy,
@@ -144,7 +144,7 @@ fn matches_predicate(entry: &IngestLogEntry, predicate: &Predicate) -> bool {
             } else {
                 format!("*{pattern}*")
             };
-            wildcard_matches(value, &pattern, true)
+            wildcard_matches(value, &pattern, MatchCase::Insensitive)
         }),
         Predicate::Field { field, value } => field_value(entry, field)
             .is_some_and(|candidate| matches_field_value(candidate, value, field)),
@@ -175,11 +175,7 @@ fn matches_field_value(candidate: &str, value: &FieldValue, field: &Field) -> bo
             if pattern == "*" {
                 true
             } else {
-                wildcard_matches(
-                    candidate,
-                    pattern,
-                    matches!(field, Field::Level | Field::Message),
-                )
+                wildcard_matches(candidate, pattern, field.match_case())
             }
         }
         FieldValue::Range { start, end } => candidate
@@ -215,11 +211,10 @@ fn contains_wildcard(value: &str) -> bool {
     value.contains(['*', '?'])
 }
 
-fn wildcard_matches(value: &str, pattern: &str, case_insensitive: bool) -> bool {
-    let (value, pattern) = if case_insensitive {
-        (value.to_lowercase(), pattern.to_lowercase())
-    } else {
-        (value.to_owned(), pattern.to_owned())
+fn wildcard_matches(value: &str, pattern: &str, match_case: MatchCase) -> bool {
+    let (value, pattern) = match match_case {
+        MatchCase::Insensitive => (value.to_lowercase(), pattern.to_lowercase()),
+        MatchCase::Sensitive => (value.to_owned(), pattern.to_owned()),
     };
     let value = value.chars().collect::<Vec<_>>();
     let pattern = pattern.chars().collect::<Vec<_>>();

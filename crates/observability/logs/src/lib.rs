@@ -48,7 +48,9 @@ pub use cluster_stats::{
 pub use controller_stats_provider::{
     BackupStatsProvider, BackupStatsProviderError, ControllerStatsProvider, LiveControllerStats,
 };
-pub use datadog::{DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError};
+pub use datadog::{
+    DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError, LogSourceInclusion,
+};
 pub use dead_letter::{
     DeadLetterStore, DeadLetterStoreError, SinkDeadLetter, SinkDeadLetterMetadata,
     SinkDeadLetterStats,

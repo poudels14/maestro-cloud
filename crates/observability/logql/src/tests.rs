@@ -2,7 +2,23 @@ use std::convert::Infallible;
 
 use proptest::prelude::*;
 
-use crate::{Comparison, Expression, Field, FieldValue, LogQuery, Predicate, QueryBackend};
+use crate::{
+    Comparison, Expression, Field, FieldValue, LogQuery, MatchCase, Predicate, QueryBackend,
+};
+
+#[test]
+fn fields_publish_one_canonical_case_policy_for_every_backend() {
+    assert_eq!(Field::Level.match_case(), MatchCase::Insensitive);
+    assert_eq!(Field::Message.match_case(), MatchCase::Insensitive);
+    for field in [
+        Field::Source,
+        Field::Service,
+        Field::HttpStatus,
+        Field::Attribute("request.id".to_owned()),
+    ] {
+        assert_eq!(field.match_case(), MatchCase::Sensitive);
+    }
+}
 
 #[test]
 fn parses_boolean_fields_ranges_and_implicit_and() -> Result<(), Box<dyn std::error::Error>> {

@@ -7,7 +7,9 @@ mod ast;
 mod parse;
 mod token;
 
-pub use ast::{Comparison, Expression, Field, FieldValue, LogQuery, Predicate, QueryBackend};
+pub use ast::{
+    Comparison, Expression, Field, FieldValue, LogQuery, MatchCase, Predicate, QueryBackend,
+};
 pub use parse::LogQueryParseError;
 
 #[cfg(test)]

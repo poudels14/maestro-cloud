@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use logql::{Comparison, Expression, Field, FieldValue, Predicate, QueryBackend};
+use logql::{Comparison, Expression, Field, FieldValue, MatchCase, Predicate, QueryBackend};
 
 const HTTP_STATUS_KEYS: &[&str] = &[
     "http.status_code",
@@ -84,12 +84,11 @@ fn compile_predicate(predicate: &Predicate, values: &mut Vec<QueryValue>) -> Str
             } else {
                 format!("*{value}*")
             };
-            compile_match(&message, &value, true, values)
+            compile_match(&message, &value, MatchCase::Insensitive, values)
         }
         Predicate::Field { field, value } => {
             let expression = field_expression(field, values);
-            let case_insensitive = matches!(field, Field::Level | Field::Message);
-            compile_field_value(&expression, value, case_insensitive, values)
+            compile_field_value(&expression, value, field.match_case(), values)
         }
     }
 }
@@ -147,11 +146,11 @@ fn json_expression(path: &str, values: &mut Vec<QueryValue>) -> String {
 fn compile_field_value(
     expression: &str,
     value: &FieldValue,
-    case_insensitive: bool,
+    match_case: MatchCase,
     values: &mut Vec<QueryValue>,
 ) -> String {
     match value {
-        FieldValue::Match(value) => compile_match(expression, value, case_insensitive, values),
+        FieldValue::Match(value) => compile_match(expression, value, match_case, values),
         FieldValue::Range { start, end } => {
             values.extend([QueryValue::Number(*start), QueryValue::Number(*end)]);
             format!("(TRY_CAST({expression} AS DOUBLE) BETWEEN ? AND ?)")
@@ -172,7 +171,7 @@ fn compile_field_value(
 fn compile_match(
     expression: &str,
     value: &str,
-    case_insensitive: bool,
+    match_case: MatchCase,
     values: &mut Vec<QueryValue>,
 ) -> String {
     if value == "*" {
@@ -180,17 +179,17 @@ fn compile_match(
     }
     if contains_wildcard(value) {
         values.push(QueryValue::Text(sql_pattern(value)));
-        if case_insensitive {
-            format!("(LOWER({expression}) LIKE LOWER(?) ESCAPE '\\')")
-        } else {
-            format!("({expression} LIKE ? ESCAPE '\\')")
+        match match_case {
+            MatchCase::Insensitive => {
+                format!("(LOWER({expression}) LIKE LOWER(?) ESCAPE '\\')")
+            }
+            MatchCase::Sensitive => format!("({expression} LIKE ? ESCAPE '\\')"),
         }
     } else {
         values.push(QueryValue::Text(value.to_owned()));
-        if case_insensitive {
-            format!("(LOWER({expression}) = LOWER(?))")
-        } else {
-            format!("({expression} = ?)")
+        match match_case {
+            MatchCase::Insensitive => format!("(LOWER({expression}) = LOWER(?))"),
+            MatchCase::Sensitive => format!("({expression} = ?)"),
         }
     }
 }

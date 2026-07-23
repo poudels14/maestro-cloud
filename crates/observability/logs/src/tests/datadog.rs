@@ -10,8 +10,8 @@ use runtime::{HEALTHCHECK_PATH_LABEL, WorkloadMetadata};
 use crate::{
     DatadogLogSink, DatadogLogSinkSettings, HttpRequest, HttpResponse, HttpTransport,
     HttpTransportError, InMemoryDeadLetterStore, IngestLogEntry, LogBody, LogFilterKind, LogOrigin,
-    LogProducer, LogRecordId, LogSequence, LogSink, LogSinkError, LogStream, OriginCursor,
-    SequencedLogEntry,
+    LogProducer, LogRecordId, LogSequence, LogSink, LogSinkError, LogSourceInclusion, LogStream,
+    OriginCursor, SequencedLogEntry,
 };
 
 #[tokio::test]
@@ -106,7 +106,7 @@ async fn datadog_origin_and_healthcheck_filters_are_counted_without_requests()
 async fn included_ingress_logs_use_the_traefik_source() -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(FakeHttpTransport::new([accepted()]));
     let sink = make_sink(
-        settings()?.include_ingress_logs(true),
+        settings()?.ingress_logs(LogSourceInclusion::Include),
         transport.clone(),
         Arc::new(InMemoryDeadLetterStore::default()),
     );

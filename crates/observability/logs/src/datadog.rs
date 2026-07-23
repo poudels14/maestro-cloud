@@ -22,9 +22,18 @@ const TAILSCALE_COMPONENTS: &[&str] = &["tailscale", "tailscaled", "maestro-tail
 pub struct DatadogLogSinkSettings {
     api_key: String,
     endpoint: String,
-    include_ingress_logs: bool,
-    include_tailscale_logs: bool,
+    ingress_logs: LogSourceInclusion,
+    tailscale_logs: LogSourceInclusion,
     filters: Vec<LogFilterKind>,
+}
+
+/// Delivery policy for an optional Datadog log source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogSourceInclusion {
+    /// Filter records from the source before delivery.
+    Exclude,
+    /// Deliver records from the source.
+    Include,
 }
 
 impl DatadogLogSinkSettings {
@@ -57,21 +66,21 @@ impl DatadogLogSinkSettings {
         Ok(Self {
             api_key,
             endpoint,
-            include_ingress_logs: false,
-            include_tailscale_logs: false,
+            ingress_logs: LogSourceInclusion::Exclude,
+            tailscale_logs: LogSourceInclusion::Exclude,
             filters: Vec::new(),
         })
     }
 
-    /// Includes ingress system-service records and their access analytics.
-    pub fn include_ingress_logs(mut self, include: bool) -> Self {
-        self.include_ingress_logs = include;
+    /// Configures delivery of ingress system-service records and their access analytics.
+    pub fn ingress_logs(mut self, inclusion: LogSourceInclusion) -> Self {
+        self.ingress_logs = inclusion;
         self
     }
 
-    /// Includes useful Tailscale records that survive source noise filtering.
-    pub fn include_tailscale_logs(mut self, include: bool) -> Self {
-        self.include_tailscale_logs = include;
+    /// Configures delivery of useful Tailscale records that survive source noise filtering.
+    pub fn tailscale_logs(mut self, inclusion: LogSourceInclusion) -> Self {
+        self.tailscale_logs = inclusion;
         self
     }
 
@@ -136,15 +145,17 @@ impl DatadogLogSink {
     }
 
     fn includes_system_component(&self, component: &str) -> bool {
-        (INGRESS_COMPONENTS.contains(&component) && self.settings.include_ingress_logs)
-            || (TAILSCALE_COMPONENTS.contains(&component) && self.settings.include_tailscale_logs)
+        (INGRESS_COMPONENTS.contains(&component)
+            && self.settings.ingress_logs == LogSourceInclusion::Include)
+            || (TAILSCALE_COMPONENTS.contains(&component)
+                && self.settings.tailscale_logs == LogSourceInclusion::Include)
     }
 
     fn includes_workload(&self, service_id: &str) -> bool {
         if INGRESS_COMPONENTS.contains(&service_id) {
-            self.settings.include_ingress_logs
+            self.settings.ingress_logs == LogSourceInclusion::Include
         } else if TAILSCALE_COMPONENTS.contains(&service_id) {
-            self.settings.include_tailscale_logs
+            self.settings.tailscale_logs == LogSourceInclusion::Include
         } else {
             true
         }

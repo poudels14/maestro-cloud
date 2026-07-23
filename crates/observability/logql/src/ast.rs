@@ -86,6 +86,25 @@ impl Field {
     pub fn supports_numeric_comparison(&self) -> bool {
         matches!(self, Self::HttpStatus | Self::Attribute(_))
     }
+
+    /// Returns the canonical text-matching case policy for this field.
+    pub fn match_case(&self) -> MatchCase {
+        match self {
+            Self::Level | Self::Message => MatchCase::Insensitive,
+            Self::Source | Self::Service | Self::HttpStatus | Self::Attribute(_) => {
+                MatchCase::Sensitive
+            }
+        }
+    }
+}
+
+/// Case policy applied by every log-query backend to text matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchCase {
+    /// Preserve case while comparing exact values and wildcard patterns.
+    Sensitive,
+    /// Fold case while comparing exact values and wildcard patterns.
+    Insensitive,
 }
 
 /// Field operand retained without storage-specific wildcard translation.
