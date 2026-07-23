@@ -5,15 +5,16 @@ use migrate::LegacySnapshot;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
-fn command_surface_separates_capture_plan_and_apply() -> TestResult {
+fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
     let help = migration_command().arg("--help").output()?;
     assert!(help.status.success());
     let stdout = String::from_utf8(help.stdout)?;
     assert!(stdout.contains("capture"));
     assert!(stdout.contains("plan"));
     assert!(stdout.contains("apply"));
+    assert!(stdout.contains("verify"));
 
-    for command in ["capture", "apply"] {
+    for command in ["capture", "apply", "verify"] {
         let output = migration_command().arg(command).output()?;
         assert_eq!(output.status.code(), Some(2));
     }

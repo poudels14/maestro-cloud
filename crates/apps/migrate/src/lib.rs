@@ -38,7 +38,7 @@ pub use etcd_source::{
 pub use legacy_convert::{LegacyPlanError, plan_legacy_snapshot};
 pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use report::{MigrationPlanReport, ReportError};
-pub use runner::{CutoverMigration, MigrationError, MigrationOutcome};
+pub use runner::{CutoverMigration, MigrationError, MigrationOutcome, MigrationVerification};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
 
 #[cfg(test)]

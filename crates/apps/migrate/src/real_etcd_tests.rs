@@ -21,7 +21,7 @@ use crate::legacy_tests::{
 };
 use crate::{
     CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource, MigrationError, MigrationOutcome,
-    plan_legacy_snapshot,
+    MigrationVerification, plan_legacy_snapshot,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -90,6 +90,14 @@ async fn real_cutover_fences_and_commits_encrypted_destinations() -> TestResult 
             request_claims: plan.request_claims().len(),
             written: plan.writes().len() + plan.request_claims().len(),
             reused: 0,
+        }
+    );
+    assert_eq!(
+        migration.verify(&plan).await?,
+        MigrationVerification::Verified {
+            resources: plan.writes().len(),
+            request_claims: plan.request_claims().len(),
+            source_sha256: hex::encode(expected_digest),
         }
     );
     for write in plan.writes() {

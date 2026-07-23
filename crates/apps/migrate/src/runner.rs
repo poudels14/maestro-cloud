@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::future::Future;
 use std::sync::Arc;
@@ -35,6 +36,58 @@ impl CutoverMigration {
             .await
     }
 
+    /// Verifies the completion marker and every destination against one reviewed plan.
+    pub async fn verify(
+        &self,
+        plan: &MigrationPlan,
+    ) -> Result<MigrationVerification, MigrationError> {
+        self.validate_destination(plan)?;
+        let expected_marker = MigrationMarker::new(&self.migration_id, plan);
+        let marker_key = self.keyspace.migration_marker(&self.migration_id);
+        let mut stored = self.destination_snapshot().await?;
+        let marker_value =
+            stored
+                .remove(&marker_key)
+                .ok_or_else(|| MigrationError::MissingMarker {
+                    key: marker_key.to_string(),
+                })?;
+        let actual_marker = decode_marker(&marker_key, &marker_value)?;
+        if actual_marker != expected_marker {
+            return Err(marker_mismatch(
+                marker_key.to_string(),
+                &expected_marker,
+                &actual_marker,
+            ));
+        }
+
+        for (key, expected) in self.plan_destinations(plan)? {
+            match stored.remove(&key) {
+                Some(actual) if actual == expected => {}
+                Some(_) => {
+                    return Err(MigrationError::DestinationMismatch {
+                        key: key.to_string(),
+                    });
+                }
+                None => {
+                    return Err(MigrationError::MissingDestination {
+                        key: key.to_string(),
+                    });
+                }
+            }
+        }
+        if let Some(key) = stored.keys().next() {
+            return Err(MigrationError::UnexpectedDestination {
+                key: key.to_string(),
+            });
+        }
+
+        Ok(MigrationVerification::Verified {
+            resources: plan.writes().len(),
+            request_claims: plan.request_claims().len(),
+            source_sha256: hex::encode(plan.source_digest()),
+        })
+    }
+
     /// Converges every destination and rechecks the source immediately before completion.
     pub async fn apply_guarded<Check, CheckFuture, CheckError>(
         &self,
@@ -46,39 +99,22 @@ impl CutoverMigration {
         CheckFuture: Future<Output = Result<(), CheckError>>,
         CheckError: Display,
     {
-        let destination_prefix = self.keyspace.cluster().to_string();
-        let expected_prefix = format!("/maestro/clusters/{}/", plan.cluster_id());
-        if destination_prefix != expected_prefix {
-            return Err(MigrationError::DestinationClusterMismatch {
-                plan_cluster_id: plan.cluster_id().clone(),
-                destination_prefix,
-            });
-        }
+        self.validate_destination(plan)?;
         let marker = MigrationMarker::new(&self.migration_id, plan);
         let marker_key = self.keyspace.migration_marker(&self.migration_id);
-        if let Some(stored) = self.store.get(&marker_key).await? {
-            let existing = decode_marker(&marker_key, &stored.value)?;
-            if existing == marker {
-                source_check()
-                    .await
-                    .map_err(|error| MigrationError::SourceFence {
-                        message: error.to_string(),
-                    })?;
-                return Ok(MigrationOutcome::AlreadyComplete {
-                    resources: plan.writes().len(),
-                    request_claims: plan.request_claims().len(),
-                });
-            }
-            return Err(MigrationError::MarkerMismatch {
-                key: marker_key.to_string(),
-                expected_digest: marker.source_sha256,
-                actual_digest: existing.source_sha256,
-                expected_resources: marker.resources,
-                actual_resources: existing.resources,
-                expected_request_claims: marker.request_claims,
-                actual_request_claims: existing.request_claims,
+        if self.store.get(&marker_key).await?.is_some() {
+            self.verify(plan).await?;
+            source_check()
+                .await
+                .map_err(|error| MigrationError::SourceFence {
+                    message: error.to_string(),
+                })?;
+            return Ok(MigrationOutcome::AlreadyComplete {
+                resources: plan.writes().len(),
+                request_claims: plan.request_claims().len(),
             });
         }
+        self.verify_partial_destination(plan).await?;
 
         let mut written = 0;
         let mut reused = 0;
@@ -90,12 +126,7 @@ impl CutoverMigration {
             }
         }
         for write in plan.writes() {
-            let kind = ResourceKind::new(write.kind().as_str()).map_err(|error| {
-                MigrationError::InvalidDestinationKind {
-                    kind: write.kind().to_string(),
-                    message: error.to_string(),
-                }
-            })?;
+            let kind = destination_kind(write.kind().as_str())?;
             let key = self.keyspace.resource(&kind, write.id());
             match self.write_exact(key, write.value().to_vec()).await? {
                 WriteDisposition::Written => written += 1,
@@ -113,6 +144,7 @@ impl CutoverMigration {
                 message: error.to_string(),
             })?;
         self.write_exact(marker_key, marker_bytes).await?;
+        self.verify(plan).await?;
 
         Ok(MigrationOutcome::Applied {
             resources: plan.writes().len(),
@@ -120,6 +152,68 @@ impl CutoverMigration {
             written,
             reused,
         })
+    }
+
+    fn validate_destination(&self, plan: &MigrationPlan) -> Result<(), MigrationError> {
+        let destination_prefix = self.keyspace.cluster().to_string();
+        let expected_prefix = format!("/maestro/clusters/{}/", plan.cluster_id());
+        if destination_prefix == expected_prefix {
+            Ok(())
+        } else {
+            Err(MigrationError::DestinationClusterMismatch {
+                plan_cluster_id: plan.cluster_id().clone(),
+                destination_prefix,
+            })
+        }
+    }
+
+    fn plan_destinations<'a>(
+        &self,
+        plan: &'a MigrationPlan,
+    ) -> Result<BTreeMap<StoreKey, &'a [u8]>, MigrationError> {
+        let mut destinations = BTreeMap::new();
+        for claim in plan.request_claims() {
+            destinations.insert(
+                self.keyspace.request_claim(claim.request_id()),
+                claim.value(),
+            );
+        }
+        for write in plan.writes() {
+            let kind = destination_kind(write.kind().as_str())?;
+            destinations.insert(self.keyspace.resource(&kind, write.id()), write.value());
+        }
+        Ok(destinations)
+    }
+
+    async fn destination_snapshot(&self) -> Result<BTreeMap<StoreKey, Vec<u8>>, MigrationError> {
+        Ok(self
+            .store
+            .list(&self.keyspace.cluster())
+            .await?
+            .values
+            .into_iter()
+            .map(|stored| (stored.key, stored.value))
+            .collect())
+    }
+
+    async fn verify_partial_destination(&self, plan: &MigrationPlan) -> Result<(), MigrationError> {
+        let expected = self.plan_destinations(plan)?;
+        for (key, actual) in self.destination_snapshot().await? {
+            match expected.get(&key) {
+                Some(value) if actual == *value => {}
+                Some(_) => {
+                    return Err(MigrationError::DestinationCollision {
+                        key: key.to_string(),
+                    });
+                }
+                None => {
+                    return Err(MigrationError::UnexpectedDestination {
+                        key: key.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn write_exact(
@@ -149,6 +243,13 @@ impl CutoverMigration {
             },
         }
     }
+}
+
+fn destination_kind(kind: &str) -> Result<ResourceKind, MigrationError> {
+    ResourceKind::new(kind).map_err(|error| MigrationError::InvalidDestinationKind {
+        kind: kind.to_owned(),
+        message: error.to_string(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +289,33 @@ fn decode_marker(key: &StoreKey, value: &[u8]) -> Result<MigrationMarker, Migrat
     })
 }
 
+fn marker_mismatch(
+    key: String,
+    expected: &MigrationMarker,
+    actual: &MigrationMarker,
+) -> MigrationError {
+    MigrationError::MarkerMismatch {
+        key,
+        message: format!(
+            "expected schema {}, migration {}, cluster {}, digest {}, {} resources, and {} request \
+             claims; found schema {}, migration {}, cluster {}, digest {}, {} resources, and {} \
+             request claims",
+            expected.schema_version,
+            expected.migration_id,
+            expected.cluster_id,
+            expected.source_sha256,
+            expected.resources,
+            expected.request_claims,
+            actual.schema_version,
+            actual.migration_id,
+            actual.cluster_id,
+            actual.source_sha256,
+            actual.resources,
+            actual.request_claims,
+        ),
+    }
+}
+
 /// Observable result of applying a cutover plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
@@ -209,6 +337,21 @@ pub enum MigrationOutcome {
         resources: usize,
         /// Total request collision barriers confirmed by the marker.
         request_claims: usize,
+    },
+}
+
+/// Read-only proof that one completion marker and all planned destinations agree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum MigrationVerification {
+    /// Every planned destination exists with its exact logical value.
+    Verified {
+        /// Total resource count confirmed against the store.
+        resources: usize,
+        /// Total request collision barriers confirmed against the store.
+        request_claims: usize,
+        /// Canonical legacy snapshot digest bound by the completion marker.
+        source_sha256: String,
     },
 }
 
@@ -254,6 +397,30 @@ pub enum MigrationError {
         /// Unstable canonical key.
         key: String,
     },
+    /// A planned destination is absent after a completion marker was committed.
+    #[error("verified migration destination `{key}` is missing")]
+    MissingDestination {
+        /// Missing canonical key.
+        key: String,
+    },
+    /// A planned destination changed after its completion marker was committed.
+    #[error("verified migration destination `{key}` does not match the reviewed plan")]
+    DestinationMismatch {
+        /// Changed canonical key.
+        key: String,
+    },
+    /// State outside the reviewed plan exists in the destination namespace.
+    #[error("unexpected destination `{key}` exists outside the reviewed migration plan")]
+    UnexpectedDestination {
+        /// Unexpected canonical key.
+        key: String,
+    },
+    /// The selected migration has not committed its completion marker.
+    #[error("migration marker `{key}` is missing")]
+    MissingMarker {
+        /// Expected canonical marker key.
+        key: String,
+    },
     /// A completion marker could not be serialized.
     #[error("could not encode migration completion marker: {message}")]
     MarkerEncode {
@@ -269,26 +436,11 @@ pub enum MigrationError {
         message: String,
     },
     /// The migration identity was already used for a different input plan.
-    #[error(
-        "migration marker `{key}` binds {actual_resources} resources and \
-         {actual_request_claims} request claims from {actual_digest}, not \
-         {expected_resources} resources and {expected_request_claims} request claims from \
-         {expected_digest}"
-    )]
+    #[error("migration marker `{key}` does not match the reviewed plan: {message}")]
     MarkerMismatch {
         /// Marker key.
         key: String,
-        /// Digest requested by this run.
-        expected_digest: String,
-        /// Digest stored by the prior run.
-        actual_digest: String,
-        /// Resource count requested by this run.
-        expected_resources: usize,
-        /// Resource count stored by the prior run.
-        actual_resources: usize,
-        /// Request claim count requested by this run.
-        expected_request_claims: usize,
-        /// Request claim count stored by the prior run.
-        actual_request_claims: usize,
+        /// Complete secret-free comparison detail.
+        message: String,
     },
 }

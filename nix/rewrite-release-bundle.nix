@@ -33,6 +33,7 @@ in
     test "$("$bundle_root/bin/maestro" --version)" = "maestro-next ${version}"
     test "$("$bundle_root/bin/maestro-daemon" --version)" = "daemon ${version}"
     test "$("$bundle_root/bin/maestro-migrate" --version)" = "maestro-migrate ${version}"
+    "$bundle_root/bin/maestro-migrate" verify --help >/dev/null
 
     tar \
       --create \

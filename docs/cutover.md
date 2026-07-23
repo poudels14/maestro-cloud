@@ -52,9 +52,31 @@ and are never overwritten.
 
    Apply compares the live legacy digest before any destination writes and
    recaptures it immediately before the completion marker. Success prints an
-   `applied` or `alreadyComplete` outcome plus the same plan report.
+   `applied` or `alreadyComplete` outcome, the same plan report, and an exact
+   destination verification.
 
-5. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
+5. While every daemon is still stopped, independently verify the completion
+   marker and every migrated resource and request barrier. Archive the
+   secret-free evidence file with the reviewed plan:
+
+   ```sh
+   maestro-migrate verify \
+     --endpoint https://127.0.0.1:2379 \
+     --certificate-authority /run/maestro/etcd-ca.pem \
+     --client-certificate /run/maestro/etcd-client.pem \
+     --client-private-key /run/maestro/etcd-client-key.pem \
+     --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
+     --master-secret-file /run/maestro/store-master-secret \
+     --migration-id legacy-v1 \
+     --output /var/lib/maestro/cutover/verification.json
+   ```
+
+   Verification fails if the marker is absent or bound to another snapshot, or
+   if any planned logical value is absent or changed, or if unreviewed state
+   exists in the destination namespace. Run it before starting rewrite daemons
+   because reconcilers legitimately update migrated resources.
+
+6. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
    treat a successful schema migration as approval for a runtime transition;
    the production runtime adoption mode is a separate cutover gate.
 
@@ -63,7 +85,7 @@ and are never overwritten.
 Immediately before production capture, take and verify a native etcd snapshot,
 then stop every legacy daemon while leaving etcd available. Retain that native
 snapshot, the logical snapshot, plan report, old binaries, and migration output
-through the burn-in window.
+through the burn-in window. Retain the verification evidence alongside them.
 
 Destination writes are collision-safe and resumable. If apply stops before its
 marker and the live source digest is unchanged, rerun the same artifact with the

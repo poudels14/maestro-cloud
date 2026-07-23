@@ -8,12 +8,13 @@ use kernel_api::{
 };
 use kernel_controller::{ControllerError, RequestDeduplicator, RequestFingerprint};
 use kernel_store::{
-    CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock,
+    CasOutcome, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store,
+    TokioClock,
 };
 
 use crate::{
     CutoverEtcdConnection, CutoverMigration, LegacyEntry, LegacySnapshot, MigrationError,
-    MigrationOutcome, MigrationPlan, PlanError, SnapshotError,
+    MigrationOutcome, MigrationPlan, MigrationVerification, PlanError, SnapshotError,
 };
 
 type TestResult<Value = ()> = Result<Value, Box<dyn std::error::Error>>;
@@ -189,6 +190,43 @@ async fn migration_commits_last_and_is_idempotent() -> TestResult {
         migration.apply(&changed_plan).await,
         Err(MigrationError::MarkerMismatch { .. })
     ));
+
+    let migrated_key = resource_key(&keyspace, "api")?;
+    let resource = store
+        .get(&migrated_key)
+        .await?
+        .ok_or("migrated resource should exist")?;
+    assert!(matches!(
+        store
+            .delete_cas(DeleteRequest {
+                key: migrated_key,
+                expected: resource.version,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    assert!(matches!(
+        migration.verify(&migration_plan).await,
+        Err(MigrationError::MissingDestination { .. })
+    ));
+    assert!(matches!(
+        migration.apply(&migration_plan).await,
+        Err(MigrationError::MissingDestination { .. })
+    ));
+    put_missing(
+        store.as_ref(),
+        resource_key(&keyspace, "api")?,
+        b"changed-after-completion".to_vec(),
+    )
+    .await?;
+    assert!(matches!(
+        migration.verify(&migration_plan).await,
+        Err(MigrationError::DestinationMismatch { .. })
+    ));
+    assert!(matches!(
+        migration.apply(&migration_plan).await,
+        Err(MigrationError::DestinationMismatch { .. })
+    ));
     Ok(())
 }
 
@@ -275,6 +313,14 @@ async fn migration_reserves_legacy_request_ids_before_completion() -> TestResult
             reused: 0,
         }
     );
+    assert_eq!(
+        migration.verify(&plan).await?,
+        MigrationVerification::Verified {
+            resources: 1,
+            request_claims: 1,
+            source_sha256: "29".repeat(32),
+        }
+    );
     let claim_key = keyspace.request_claim(&request_id);
     assert_eq!(
         RequestDeduplicator::new(store)
@@ -301,6 +347,27 @@ async fn migration_fails_closed_on_destination_collision() -> TestResult {
     assert!(matches!(
         migration.apply(&plan).await,
         Err(MigrationError::DestinationCollision { .. })
+    ));
+    assert!(store.get(&marker_key(&keyspace)?).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_rejects_state_outside_the_reviewed_plan() -> TestResult {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let keyspace = keyspace()?;
+    let migration = migration(store.clone(), keyspace.clone())?;
+    let plan = plan("api", [32; 32])?;
+    put_missing(
+        store.as_ref(),
+        keyspace.scheduler_generation(),
+        b"unexpected".to_vec(),
+    )
+    .await?;
+
+    assert!(matches!(
+        migration.apply(&plan).await,
+        Err(MigrationError::UnexpectedDestination { .. })
     ));
     assert!(store.get(&marker_key(&keyspace)?).await?.is_none());
     Ok(())

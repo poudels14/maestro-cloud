@@ -8,7 +8,8 @@ use kernel_api::ResourceName;
 use kernel_store::{Keyspace, Store};
 use migrate::{
     CapturedLegacySnapshot, CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource,
-    LegacySnapshot, MigrationOutcome, MigrationPlanReport, plan_legacy_snapshot,
+    LegacySnapshot, MigrationOutcome, MigrationPlanReport, MigrationVerification,
+    plan_legacy_snapshot,
 };
 use serde::Serialize;
 
@@ -58,6 +59,19 @@ enum Command {
         #[arg(long, default_value = "legacy-v1")]
         migration_id: ResourceName,
     },
+    /// Verifies a completed migration before rewrite daemons can mutate resources.
+    Verify {
+        #[command(flatten)]
+        etcd: EtcdArguments,
+        #[arg(long)]
+        snapshot: PathBuf,
+        #[arg(long)]
+        master_secret_file: PathBuf,
+        #[arg(long, default_value = "legacy-v1")]
+        migration_id: ResourceName,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -105,6 +119,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             master_secret_file,
             migration_id,
         } => apply(etcd.load()?, &snapshot, &master_secret_file, migration_id).await,
+        Command::Verify {
+            etcd,
+            snapshot,
+            master_secret_file,
+            migration_id,
+            output,
+        } => {
+            verify(
+                etcd.load()?,
+                &snapshot,
+                &master_secret_file,
+                migration_id,
+                output.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -153,14 +183,40 @@ async fn apply(
             Ok::<(), SourceMismatch>(())
         })
         .await?;
+    let verification = migration.verify(&plan).await?;
     write_json(
         &ApplyReport {
-            schema_version: 1,
+            schema_version: 2,
             source_verified_at_revision: final_revision.get(),
             plan: report,
             outcome,
+            verification,
         },
         None,
+    )
+}
+
+async fn verify(
+    connection: CutoverEtcdConnection,
+    snapshot_path: &Path,
+    master_secret_path: &Path,
+    migration_id: ResourceName,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let snapshot = load_snapshot(snapshot_path)?;
+    let master_secret = read_master_secret(master_secret_path)?;
+    let plan = plan_legacy_snapshot(&snapshot, master_secret.as_str())?;
+    let store: Arc<dyn Store> =
+        Arc::new(connection.destination_store(master_secret.as_str()).await?);
+    let migration = CutoverMigration::new(store, Keyspace::new(plan.cluster_id()), migration_id);
+    let verification = migration.verify(&plan).await?;
+    write_json(
+        &VerificationReport {
+            schema_version: 1,
+            plan: plan.report(),
+            verification,
+        },
+        output,
     )
 }
 
@@ -231,6 +287,15 @@ struct ApplyReport {
     source_verified_at_revision: i64,
     plan: MigrationPlanReport,
     outcome: MigrationOutcome,
+    verification: MigrationVerification,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VerificationReport {
+    schema_version: u32,
+    plan: MigrationPlanReport,
+    verification: MigrationVerification,
 }
 
 #[derive(Debug, thiserror::Error)]
