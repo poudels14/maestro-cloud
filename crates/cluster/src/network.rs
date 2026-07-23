@@ -48,6 +48,16 @@ impl Ipv4Cidr {
         u32::from(address) & prefix_mask(self.prefix) == u32::from(self.network)
     }
 
+    /// Returns whether every address in `network` belongs to this network.
+    pub fn contains_network(self, network: Self) -> bool {
+        self.contains(network.network_address()) && self.contains(network.broadcast_address())
+    }
+
+    /// Returns the number of addresses represented by this network.
+    pub fn address_count(self) -> u64 {
+        1_u64 << (32 - self.prefix)
+    }
+
     /// Returns whether either network contains any address from the other.
     pub fn overlaps(self, other: Self) -> bool {
         self.contains(other.network) || other.contains(self.network)

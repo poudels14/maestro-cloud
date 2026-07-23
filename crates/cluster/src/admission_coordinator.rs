@@ -348,6 +348,9 @@ impl AdmissionCoordinator {
         Ok(JoinPayload {
             cluster_id: self.config.cluster_id.clone(),
             cluster_name: self.config.name.clone(),
+            cluster_cidr: self.config.cluster_cidr,
+            node_limit: self.config.node_limit,
+            node_prefix: self.config.node_prefix,
             nodes: self.config.nodes.clone(),
             control_allow_cidrs: self.config.control_allow_cidrs.clone(),
             ports: self.config.ports,

@@ -42,6 +42,10 @@ fn convert_cluster(input: ClusterInput) -> Result<ClusterConfig, CliError> {
     let cluster_id = input.cluster_id.unwrap_or_else(|| name.clone());
     let cluster_id = ClusterId::new(cluster_id)
         .map_err(|error| invalid("cluster.cluster-id", error.to_string()))?;
+    let cluster_cidr = input
+        .cluster_cidr
+        .parse::<Ipv4Cidr>()
+        .map_err(|error| invalid("cluster.cluster-cidr", error.to_string()))?;
     let nodes = input
         .nodes
         .into_iter()
@@ -75,6 +79,9 @@ fn convert_cluster(input: ClusterInput) -> Result<ClusterConfig, CliError> {
     Ok(ClusterConfig {
         cluster_id,
         name,
+        cluster_cidr,
+        node_limit: input.node_limit,
+        node_prefix: input.node_prefix,
         nodes,
         control_allow_cidrs,
         ports,
@@ -155,6 +162,14 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
     let detail = error.to_string();
     let path = match &error {
         ClusterPreflightError::InvalidDnsLabel { .. } => "cluster.name".to_string(),
+        ClusterPreflightError::InvalidClusterCidr { .. }
+        | ClusterPreflightError::InsufficientClusterCapacity { .. } => {
+            "cluster.cluster-cidr".to_string()
+        }
+        ClusterPreflightError::ZeroNodeLimit | ClusterPreflightError::NodeLimitExceeded { .. } => {
+            "cluster.node-limit".to_string()
+        }
+        ClusterPreflightError::InvalidNodePrefix { .. } => "cluster.node-prefix".to_string(),
         ClusterPreflightError::InvalidNodeName { node_id } => {
             format!("cluster.nodes.{node_id}")
         }
@@ -167,16 +182,19 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
         | ClusterPreflightError::InvalidControlPlaneCount { .. }
         | ClusterPreflightError::DuplicateEndpoint { .. }
         | ClusterPreflightError::OverlappingWorkloadSubnets { .. }
-        | ClusterPreflightError::EndpointInsideWorkloadSubnet { .. } => "cluster.nodes".to_string(),
+        | ClusterPreflightError::EndpointInsideWorkloadSubnet { .. }
+        | ClusterPreflightError::EndpointInsideClusterCidr { .. } => "cluster.nodes".to_string(),
         ClusterPreflightError::InvalidEndpointAddress { node_id, .. }
         | ClusterPreflightError::ZeroApiPort { node_id } => {
             format!("cluster.nodes.{node_id}.endpoint")
         }
-        ClusterPreflightError::InvalidWorkloadSubnet { node_id, .. } => {
+        ClusterPreflightError::InvalidWorkloadSubnet { node_id, .. }
+        | ClusterPreflightError::WorkloadSubnetOutsideCluster { node_id, .. }
+        | ClusterPreflightError::WorkloadSubnetInsideTunnelRegion { node_id, .. } => {
             format!("cluster.nodes.{node_id}.subnet")
         }
         ClusterPreflightError::NonPrivateControlNetwork { index, .. }
-        | ClusterPreflightError::ControlNetworkOverlapsWorkload { index, .. } => {
+        | ClusterPreflightError::ControlNetworkOverlapsCluster { index, .. } => {
             format!("cluster.control-allow-cidrs[{index}]")
         }
         ClusterPreflightError::EndpointOutsideControlNetworks { .. } => {
@@ -216,6 +234,12 @@ struct ClusterInput {
     #[serde(default, alias = "clusterId")]
     cluster_id: Option<String>,
     name: String,
+    #[serde(alias = "clusterCidr")]
+    cluster_cidr: String,
+    #[serde(default = "default_node_limit", alias = "nodeLimit")]
+    node_limit: u32,
+    #[serde(default = "default_node_prefix", alias = "nodePrefix")]
+    node_prefix: u8,
     #[serde(default)]
     nodes: BTreeMap<String, NodeInput>,
     #[serde(default, alias = "controlAllowCidrs")]
@@ -224,6 +248,14 @@ struct ClusterInput {
     ports: PortsInput,
     #[serde(default, alias = "joinSecret")]
     join_secret: Option<String>,
+}
+
+const fn default_node_limit() -> u32 {
+    254
+}
+
+const fn default_node_prefix() -> u8 {
+    24
 }
 
 #[derive(Debug, Deserialize)]

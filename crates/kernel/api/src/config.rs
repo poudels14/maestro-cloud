@@ -14,6 +14,12 @@ pub struct MaskedClusterConfig {
     pub cluster_id: ClusterId,
     /// Human-readable DNS-safe cluster name.
     pub name: String,
+    /// Fixed private address pool for tunnels and workload networks.
+    pub cluster_cidr: String,
+    /// Maximum stable node indexes supported by the address pool.
+    pub node_limit: u32,
+    /// Prefix allocated to each node workload network.
+    pub node_prefix: u8,
     /// Node serving this view.
     pub local_node_id: NodeId,
     /// Declared cluster members in stable node-ID order.

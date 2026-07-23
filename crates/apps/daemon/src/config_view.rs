@@ -8,6 +8,9 @@ pub(crate) fn masked_cluster_config(
     MaskedClusterConfig {
         cluster_id: cluster.cluster_id.clone(),
         name: cluster.name.clone(),
+        cluster_cidr: cluster.cluster_cidr.to_string(),
+        node_limit: cluster.node_limit,
+        node_prefix: cluster.node_prefix,
         local_node_id: local_node_id.clone(),
         nodes: cluster
             .nodes

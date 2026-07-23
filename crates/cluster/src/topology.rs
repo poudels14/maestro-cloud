@@ -41,6 +41,12 @@ pub struct ClusterConfig {
     pub cluster_id: ClusterId,
     /// Lowercase DNS label used in certificates and discovery.
     pub name: String,
+    /// Private address pool containing the tunnel region and every workload subnet.
+    pub cluster_cidr: Ipv4Cidr,
+    /// Maximum stable node indexes supported by this fixed address pool.
+    pub node_limit: u32,
+    /// Prefix allocated to each node's workload network.
+    pub node_prefix: u8,
     /// Desired members keyed by stable node identity.
     pub nodes: BTreeMap<NodeId, NodeDefinition>,
     /// Optional private networks allowed to initiate control traffic.
@@ -58,9 +64,16 @@ impl ClusterConfig {
         validate_dns_label("cluster name", &self.name)?;
         self.ports.validate()?;
         validate_join_secret(&self.join_secret)?;
+        let address_pool = validate_address_pool(self)?;
 
         if self.nodes.is_empty() {
             return Err(ClusterPreflightError::NoNodes);
+        }
+        if self.nodes.len() > self.node_limit as usize {
+            return Err(ClusterPreflightError::NodeLimitExceeded {
+                count: self.nodes.len(),
+                limit: self.node_limit,
+            });
         }
 
         let mut master = None;
@@ -92,7 +105,13 @@ impl ClusterConfig {
                 });
             }
 
-            validate_workload_subnet(node_id, node.workload_subnet)?;
+            validate_workload_subnet(
+                node_id,
+                node.workload_subnet,
+                self.node_prefix,
+                self.cluster_cidr,
+                address_pool.container_start,
+            )?;
             if let Some((other_node, _)) = subnets
                 .iter()
                 .find(|(_, subnet)| subnet.overlaps(node.workload_subnet))
@@ -123,8 +142,17 @@ impl ClusterConfig {
                 }
             }
         }
+        for (node_id, node) in &self.nodes {
+            if self.cluster_cidr.contains(node.endpoint.host_address) {
+                return Err(ClusterPreflightError::EndpointInsideClusterCidr {
+                    node_id: node_id.clone(),
+                    address: node.endpoint.host_address,
+                    network: self.cluster_cidr,
+                });
+            }
+        }
 
-        self.validate_control_allowlist(&subnets)?;
+        self.validate_control_allowlist()?;
         control_plane_nodes.sort();
 
         Ok(ValidatedTopology {
@@ -133,10 +161,7 @@ impl ClusterConfig {
         })
     }
 
-    fn validate_control_allowlist(
-        &self,
-        subnets: &[(&NodeId, Ipv4Cidr)],
-    ) -> Result<(), ClusterPreflightError> {
+    fn validate_control_allowlist(&self) -> Result<(), ClusterPreflightError> {
         for (index, control) in self.control_allow_cidrs.iter().copied().enumerate() {
             if !control.is_private() {
                 return Err(ClusterPreflightError::NonPrivateControlNetwork {
@@ -144,11 +169,11 @@ impl ClusterConfig {
                     network: control,
                 });
             }
-            if let Some((node_id, _)) = subnets.iter().find(|(_, subnet)| subnet.overlaps(control))
-            {
-                return Err(ClusterPreflightError::ControlNetworkOverlapsWorkload {
+            if self.cluster_cidr.overlaps(control) {
+                return Err(ClusterPreflightError::ControlNetworkOverlapsCluster {
                     index,
-                    node_id: (*node_id).clone(),
+                    network: control,
+                    cluster_cidr: self.cluster_cidr,
                 });
             }
         }
@@ -203,6 +228,32 @@ pub enum ClusterPreflightError {
         /// Rejected value.
         value: String,
     },
+    /// The fixed address pool must remain within RFC 1918 space.
+    #[error("cluster CIDR `{network}` must be private IPv4 space")]
+    InvalidClusterCidr { network: Ipv4Cidr },
+    /// At least one node index must be allocatable.
+    #[error("node limit must be greater than zero")]
+    ZeroNodeLimit,
+    /// Per-node networks cannot be wider than the cluster or narrower than `/24`.
+    #[error(
+        "node prefix /{node_prefix} must be narrower than cluster CIDR `{cluster_cidr}` and no narrower than /24"
+    )]
+    InvalidNodePrefix {
+        node_prefix: u8,
+        cluster_cidr: Ipv4Cidr,
+    },
+    /// The fixed address pool must fit its tunnel reservation and node allocations.
+    #[error(
+        "cluster CIDR `{network}` cannot fit node limit {node_limit} with /{node_prefix} workload networks"
+    )]
+    InsufficientClusterCapacity {
+        network: Ipv4Cidr,
+        node_limit: u32,
+        node_prefix: u8,
+    },
+    /// Static topology cannot declare more members than the fixed address pool supports.
+    #[error("cluster declares {count} nodes but node limit is {limit}")]
+    NodeLimitExceeded { count: usize, limit: u32 },
     /// Node identifiers have a narrower topology constraint than resource IDs.
     #[error("node ID `{node_id}` must be a lowercase DNS label")]
     InvalidNodeName { node_id: NodeId },
@@ -232,9 +283,29 @@ pub enum ClusterPreflightError {
     /// An API endpoint must unambiguously identify one node.
     #[error("endpoint `{address}:{port}` is assigned to more than one node")]
     DuplicateEndpoint { address: Ipv4Addr, port: u16 },
-    /// Node workload allocations use a fixed prefix for deterministic IPAM.
-    #[error("node `{node_id}` workload network `{network}` must be a private IPv4 /24")]
-    InvalidWorkloadSubnet { node_id: NodeId, network: Ipv4Cidr },
+    /// Node workload allocations use the init-fixed prefix for deterministic IPAM.
+    #[error(
+        "node `{node_id}` workload network `{network}` must be a private IPv4 /{expected_prefix}"
+    )]
+    InvalidWorkloadSubnet {
+        node_id: NodeId,
+        network: Ipv4Cidr,
+        expected_prefix: u8,
+    },
+    /// Explicit workload pins must stay inside the fixed cluster address pool.
+    #[error(
+        "node `{node_id}` workload network `{network}` is outside cluster CIDR `{cluster_cidr}`"
+    )]
+    WorkloadSubnetOutsideCluster {
+        node_id: NodeId,
+        network: Ipv4Cidr,
+        cluster_cidr: Ipv4Cidr,
+    },
+    /// The low address region is reserved for stable WireGuard tunnel identities.
+    #[error(
+        "node `{node_id}` workload network `{network}` overlaps the cluster tunnel reservation"
+    )]
+    WorkloadSubnetInsideTunnelRegion { node_id: NodeId, network: Ipv4Cidr },
     /// Per-node workload address spaces cannot collide.
     #[error("workload networks for nodes `{first}` and `{second}` overlap")]
     OverlappingWorkloadSubnets { first: NodeId, second: NodeId },
@@ -247,12 +318,23 @@ pub enum ClusterPreflightError {
         endpoint_node: NodeId,
         address: Ipv4Addr,
     },
+    /// Host endpoints must remain outside the entire future workload address pool.
+    #[error("node `{node_id}` endpoint `{address}` is inside cluster CIDR `{network}`")]
+    EndpointInsideClusterCidr {
+        node_id: NodeId,
+        address: Ipv4Addr,
+        network: Ipv4Cidr,
+    },
     /// Control allowlists are restricted to private address space.
     #[error("control network {index} `{network}` must be private IPv4 space")]
     NonPrivateControlNetwork { index: usize, network: Ipv4Cidr },
-    /// Control and workload traffic use disjoint address spaces.
-    #[error("control network {index} overlaps the workload network for node `{node_id}`")]
-    ControlNetworkOverlapsWorkload { index: usize, node_id: NodeId },
+    /// Control and workload traffic use disjoint fixed address spaces.
+    #[error("control network {index} `{network}` overlaps cluster CIDR `{cluster_cidr}`")]
+    ControlNetworkOverlapsCluster {
+        index: usize,
+        network: Ipv4Cidr,
+        cluster_cidr: Ipv4Cidr,
+    },
     /// A non-empty allowlist must admit all declared members.
     #[error("node `{node_id}` endpoint `{address}` is absent from the control allowlist")]
     EndpointOutsideControlNetworks { node_id: NodeId, address: Ipv4Addr },
@@ -293,14 +375,73 @@ fn validate_endpoint(
 fn validate_workload_subnet(
     node_id: &NodeId,
     network: Ipv4Cidr,
+    expected_prefix: u8,
+    cluster_cidr: Ipv4Cidr,
+    container_start: u64,
 ) -> Result<(), ClusterPreflightError> {
-    if network.prefix() != 24 || !network.is_private() {
+    if network.prefix() != expected_prefix || !network.is_private() {
         return Err(ClusterPreflightError::InvalidWorkloadSubnet {
+            node_id: node_id.clone(),
+            network,
+            expected_prefix,
+        });
+    }
+    if !cluster_cidr.contains_network(network) {
+        return Err(ClusterPreflightError::WorkloadSubnetOutsideCluster {
+            node_id: node_id.clone(),
+            network,
+            cluster_cidr,
+        });
+    }
+    if u64::from(u32::from(network.network_address())) < container_start {
+        return Err(ClusterPreflightError::WorkloadSubnetInsideTunnelRegion {
             node_id: node_id.clone(),
             network,
         });
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AddressPool {
+    container_start: u64,
+}
+
+fn validate_address_pool(config: &ClusterConfig) -> Result<AddressPool, ClusterPreflightError> {
+    if !config.cluster_cidr.is_private() {
+        return Err(ClusterPreflightError::InvalidClusterCidr {
+            network: config.cluster_cidr,
+        });
+    }
+    if config.node_limit == 0 {
+        return Err(ClusterPreflightError::ZeroNodeLimit);
+    }
+    if config.node_prefix <= config.cluster_cidr.prefix() || config.node_prefix > 24 {
+        return Err(ClusterPreflightError::InvalidNodePrefix {
+            node_prefix: config.node_prefix,
+            cluster_cidr: config.cluster_cidr,
+        });
+    }
+
+    let subnet_size = 1_u64 << (32 - config.node_prefix);
+    let tunnel_blocks = u64::from(config.node_limit).div_ceil(254);
+    let tunnel_size = tunnel_blocks.saturating_mul(256);
+    let container_offset = tunnel_size
+        .div_ceil(subnet_size)
+        .saturating_mul(subnet_size);
+    let required =
+        container_offset.saturating_add(u64::from(config.node_limit).saturating_mul(subnet_size));
+    if required > config.cluster_cidr.address_count() {
+        return Err(ClusterPreflightError::InsufficientClusterCapacity {
+            network: config.cluster_cidr,
+            node_limit: config.node_limit,
+            node_prefix: config.node_prefix,
+        });
+    }
+    Ok(AddressPool {
+        container_start: u64::from(u32::from(config.cluster_cidr.network_address()))
+            + container_offset,
+    })
 }
 
 fn validate_hostname(node_id: &NodeId, hostname: &str) -> Result<(), ClusterPreflightError> {

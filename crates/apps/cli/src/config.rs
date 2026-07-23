@@ -171,11 +171,12 @@ const CLUSTER_TEMPLATE: &str = r#"{
   // "$extends": "file://shared-cluster.jsonc",
   "cluster": {
     "name": "my-cluster",
+    "cluster-cidr": "10.42.0.0/16",
     "nodes": {
       "node-1": {
         "hostname": "node-1.internal",
         "endpoint": "10.20.0.11",
-        "subnet": "172.22.1.0/24",
+        "subnet": "10.42.1.0/24",
         "role": "master"
       }
     },

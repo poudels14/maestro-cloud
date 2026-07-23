@@ -13,6 +13,9 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
     let cluster = ClusterConfig {
         cluster_id: ClusterId::new("config-view-test")?,
         name: "config-view-test".to_string(),
+        cluster_cidr: "172.22.0.0/16".parse()?,
+        node_limit: 254,
+        node_prefix: 24,
         nodes: BTreeMap::from([(
             node_id.clone(),
             NodeDefinition {
@@ -21,7 +24,7 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
                     host_address: Ipv4Addr::new(10, 20, 0, 11),
                     api_port: 3_011,
                 },
-                workload_subnet: "172.22.0.0/24".parse::<Ipv4Cidr>()?,
+                workload_subnet: "172.22.1.0/24".parse::<Ipv4Cidr>()?,
                 role: NodeRole::Master,
             },
         )]),

@@ -102,6 +102,9 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
     let payload = JoinPayload {
         cluster_id: loaded.cluster.cluster_id.clone(),
         cluster_name: loaded.cluster.name.clone(),
+        cluster_cidr: loaded.cluster.cluster_cidr,
+        node_limit: loaded.cluster.node_limit,
+        node_prefix: loaded.cluster.node_prefix,
         nodes: loaded.cluster.nodes.clone(),
         control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
@@ -239,6 +242,9 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
     let payload = JoinPayload {
         cluster_id: loaded.cluster.cluster_id.clone(),
         cluster_name: loaded.cluster.name.clone(),
+        cluster_cidr: loaded.cluster.cluster_cidr,
+        node_limit: loaded.cluster.node_limit,
+        node_prefix: loaded.cluster.node_prefix,
         nodes: loaded.cluster.nodes.clone(),
         control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
@@ -307,6 +313,9 @@ fn unusable_payload(
     Ok(JoinPayload {
         cluster_id: config.cluster_id.clone(),
         cluster_name: config.name.clone(),
+        cluster_cidr: config.cluster_cidr,
+        node_limit: config.node_limit,
+        node_prefix: config.node_prefix,
         nodes: config.nodes.clone(),
         control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
@@ -330,6 +339,7 @@ fn cluster_document() -> String {
     r#"{
             cluster: {
                 name: "test-cluster",
+                clusterCidr: "172.22.0.0/16",
                 nodes: {
                     "node-1": {
                         hostname: "node-1.internal",
@@ -356,6 +366,7 @@ fn control_plane_cluster_document() -> String {
     r#"{
             cluster: {
                 name: "test-cluster",
+                clusterCidr: "172.22.0.0/16",
                 nodes: {
                     "node-1": {
                         endpoint: "10.20.0.11",

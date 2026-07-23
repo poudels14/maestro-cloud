@@ -49,7 +49,7 @@ fn rejects_overlapping_workload_and_control_networks() -> Result<(), Box<dyn std
     controls.control_allow_cidrs = vec!["172.22.0.0/16".parse()?];
     assert!(matches!(
         controls.preflight(),
-        Err(ClusterPreflightError::ControlNetworkOverlapsWorkload { .. })
+        Err(ClusterPreflightError::ControlNetworkOverlapsCluster { .. })
     ));
     Ok(())
 }
@@ -63,6 +63,59 @@ fn a_control_allowlist_must_include_every_endpoint() -> Result<(), Box<dyn std::
         config.preflight(),
         Err(ClusterPreflightError::EndpointOutsideControlNetworks { .. })
     ));
+    Ok(())
+}
+
+#[test]
+fn rejects_workload_pins_outside_the_container_pool() -> Result<(), Box<dyn std::error::Error>> {
+    let mut tunnel = valid_config()?;
+    tunnel
+        .nodes
+        .get_mut(&NodeId::new("node-1")?)
+        .ok_or("missing node")?
+        .workload_subnet = "172.22.0.0/24".parse()?;
+    assert!(matches!(
+        tunnel.preflight(),
+        Err(ClusterPreflightError::WorkloadSubnetInsideTunnelRegion { .. })
+    ));
+
+    let mut outside = valid_config()?;
+    outside
+        .nodes
+        .get_mut(&NodeId::new("node-1")?)
+        .ok_or("missing node")?
+        .workload_subnet = "172.23.1.0/24".parse()?;
+    assert!(matches!(
+        outside.preflight(),
+        Err(ClusterPreflightError::WorkloadSubnetOutsideCluster { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn validates_a_wide_node_pool_and_rejects_insufficient_capacity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut config = valid_config()?;
+    config.cluster_cidr = "10.0.0.0/12".parse()?;
+    config.node_limit = 1_000;
+    config.node_prefix = 22;
+    config.control_allow_cidrs = vec!["192.168.50.0/24".parse()?];
+    for (index, node) in config.nodes.values_mut().enumerate() {
+        let block = u8::try_from((index + 1) * 4)?;
+        node.endpoint.host_address = Ipv4Addr::new(192, 168, 50, 11 + u8::try_from(index)?);
+        node.workload_subnet = format!("10.0.{block}.0/22").parse()?;
+    }
+    config.preflight()?;
+
+    config.cluster_cidr = "10.0.0.0/16".parse()?;
+    assert_eq!(
+        config.preflight(),
+        Err(ClusterPreflightError::InsufficientClusterCapacity {
+            network: "10.0.0.0/16".parse()?,
+            node_limit: 1_000,
+            node_prefix: 22,
+        })
+    );
     Ok(())
 }
 
@@ -107,6 +160,9 @@ fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
     Ok(ClusterConfig {
         cluster_id: ClusterId::new("test-cluster")?,
         name: "test-cluster".to_owned(),
+        cluster_cidr: "172.22.0.0/16".parse()?,
+        node_limit: 254,
+        node_prefix: 24,
         nodes,
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 23_79, 23_80, DEFAULT_WIREGUARD_PORT)?,

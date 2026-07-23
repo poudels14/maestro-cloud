@@ -209,6 +209,7 @@ fn cluster_document() -> String {
     r#"{
             cluster: {
                 name: "test-cluster",
+                clusterCidr: "172.22.0.0/16",
                 nodes: {
                     "node-1": {
                         hostname: "node-1.internal",

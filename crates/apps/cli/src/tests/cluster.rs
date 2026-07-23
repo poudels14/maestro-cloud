@@ -250,6 +250,9 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
         config: MaskedClusterConfig {
             cluster_id: ClusterId::new("test-cluster")?,
             name: "Test Cluster".to_string(),
+            cluster_cidr: "10.42.0.0/16".to_string(),
+            node_limit: 254,
+            node_prefix: 24,
             local_node_id: NodeId::new("node-a")?,
             nodes: vec![MaskedClusterConfigNode {
                 node_id: NodeId::new("node-a")?,

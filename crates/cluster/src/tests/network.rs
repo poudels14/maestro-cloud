@@ -11,6 +11,16 @@ fn cidr_requires_a_canonical_network_address() {
 }
 
 #[test]
+fn reports_network_containment_and_address_capacity() -> Result<(), Box<dyn std::error::Error>> {
+    let supernet = "10.42.0.0/16".parse::<Ipv4Cidr>()?;
+
+    assert!(supernet.contains_network("10.42.9.0/24".parse()?));
+    assert!(!supernet.contains_network("10.43.0.0/24".parse()?));
+    assert_eq!(supernet.address_count(), 65_536);
+    Ok(())
+}
+
+#[test]
 fn workload_range_preserves_gateway_and_system_addresses() -> Result<(), Box<dyn std::error::Error>>
 {
     let network = "172.22.4.0/24".parse::<Ipv4Cidr>()?;

@@ -24,6 +24,9 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
     let payload = JoinPayload {
         cluster_id: config.cluster_id.clone(),
         cluster_name: config.name.clone(),
+        cluster_cidr: config.cluster_cidr,
+        node_limit: config.node_limit,
+        node_prefix: config.node_prefix,
         nodes: config.nodes.clone(),
         control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,

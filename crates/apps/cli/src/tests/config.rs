@@ -175,6 +175,7 @@ fn cluster_document(subnet: &str) -> String {
         r#"{{
             cluster: {{
                 name: "test-cluster",
+                clusterCidr: "172.22.0.0/16",
                 nodes: {{
                     "node-1": {{
                         endpoint: "10.20.0.11",
