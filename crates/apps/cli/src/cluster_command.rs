@@ -9,6 +9,7 @@ use crate::api_client::{ApiClient, request_id};
 use crate::cluster::{self, NodeLifecycleAction};
 use crate::cluster_formation;
 use crate::cluster_join::{self, JoinOptions};
+use crate::cluster_restart::{self, RestartSelection, RestartSelectionArgs};
 use crate::cluster_tailscale;
 use crate::config_source::SystemConfigSourceReader;
 use crate::contexts::ContextStore;
@@ -149,15 +150,8 @@ pub(crate) enum ClusterCommand {
     Upgrades,
     /// Restart one selected node or every node serially with the leader last.
     Restart {
-        /// Stable cluster node identity; omit to select interactively.
-        #[arg(value_name = "NODE_ID", conflicts_with_all = ["all", "local"])]
-        node_id: Option<String>,
-        /// Drain and restart every node serially.
-        #[arg(long, conflicts_with = "local")]
-        all: bool,
-        /// Restart the node serving the active API context through the coordinated workflow.
-        #[arg(long, conflicts_with = "all")]
-        local: bool,
+        #[command(flatten)]
+        selection: RestartSelectionArgs,
         /// Stable restart-run identity to reuse on retry.
         #[arg(long)]
         restart_run_id: Option<String>,
@@ -357,27 +351,26 @@ pub(crate) async fn run(
         }
         ClusterCommand::Upgrades => upgrades::list(&active_client()?, output).await,
         ClusterCommand::Restart {
-            node_id,
-            all,
-            local,
+            selection,
             restart_run_id,
             idempotency_key,
             yes,
         } => {
-            let target_is_preselected = all || node_id.is_some();
+            let selection = RestartSelection::try_from(selection)?;
+            let confirm_after_resolution = selection.direct_target().is_none();
             if !yes
-                && target_is_preselected
-                && !confirm_restart(all, node_id.as_deref(), input, output)?
+                && let Some(target) = selection.direct_target()
+                && !cluster_restart::confirm(target, input, output)?
             {
                 writeln!(output, "[maestro]: aborted")
                     .map_err(|source| CliError::io("failed to write command output", source))?;
                 return Ok(());
             }
             let client = active_client()?;
-            let node_ids = restart_node_ids(&client, node_id, all, local, input, output).await?;
+            let target = cluster_restart::resolve(&client, selection, input, output).await?;
             if !yes
-                && !target_is_preselected
-                && !confirm_restart(all, node_ids.first().map(String::as_str), input, output)?
+                && confirm_after_resolution
+                && !cluster_restart::confirm(&target, input, output)?
             {
                 writeln!(output, "[maestro]: aborted")
                     .map_err(|source| CliError::io("failed to write command output", source))?;
@@ -385,7 +378,7 @@ pub(crate) async fn run(
             }
             upgrades::restart(
                 &client,
-                node_ids,
+                target,
                 restart_run_id,
                 request_id(idempotency_key)?,
                 output,
@@ -432,100 +425,6 @@ pub(crate) async fn run(
     }
 }
 
-pub(crate) async fn restart_node_ids(
-    client: &impl cluster::ClusterApi,
-    node_id: Option<String>,
-    all: bool,
-    local: bool,
-    input: &mut dyn BufRead,
-    output: &mut dyn Write,
-) -> Result<Vec<String>, CliError> {
-    let selector_count = usize::from(node_id.is_some()) + usize::from(all) + usize::from(local);
-    if selector_count > 1 {
-        return Err(CliError::invalid_input(
-            "restart accepts only one of NODE_ID, --local, or --all",
-        ));
-    }
-    if all {
-        return Ok(Vec::new());
-    }
-    if let Some(node_id) = node_id {
-        return Ok(vec![node_id]);
-    }
-    if local {
-        return Ok(vec![
-            client.cluster_config().await?.local_node_id.to_string(),
-        ]);
-    }
-
-    let mut nodes = client.list_nodes().await?;
-    nodes.sort_by(|left, right| left.meta.id.cmp(&right.meta.id));
-    if nodes.is_empty() {
-        return Err(CliError::not_found("cluster has no restartable nodes"));
-    }
-    writeln!(output, "Select a cluster node to restart:").map_err(output_error)?;
-    for (index, node) in nodes.iter().enumerate() {
-        writeln!(
-            output,
-            "  {}) {} ({})",
-            index.saturating_add(1),
-            node.meta.id,
-            node.spec.hostname,
-        )
-        .map_err(output_error)?;
-    }
-    write!(output, "Node [1-{} or ID]: ", nodes.len()).map_err(output_error)?;
-    output
-        .flush()
-        .map_err(|source| CliError::io("failed to flush restart selector", source))?;
-    let mut selection = String::new();
-    input
-        .read_line(&mut selection)
-        .map_err(|source| CliError::io("failed to read restart selector", source))?;
-    let selection = selection.trim();
-    if selection.is_empty() {
-        return Err(CliError::invalid_input(
-            "restart target is required; pass NODE_ID, --local, or --all",
-        ));
-    }
-    let selected = match selection.parse::<usize>() {
-        Ok(index) if (1..=nodes.len()).contains(&index) => nodes.get(index - 1),
-        Ok(_) => None,
-        Err(_) => nodes.iter().find(|node| node.meta.id.as_str() == selection),
-    }
-    .ok_or_else(|| CliError::invalid_input(format!("unknown restart selection `{selection}`")))?;
-    Ok(vec![selected.meta.id.to_string()])
-}
-
-fn confirm_restart(
-    all: bool,
-    node_id: Option<&str>,
-    input: &mut dyn BufRead,
-    output: &mut dyn Write,
-) -> Result<bool, CliError> {
-    let target = if all {
-        "every cluster node serially".to_string()
-    } else {
-        format!(
-            "cluster node `{}`",
-            node_id.ok_or_else(|| CliError::invalid_input("restart target is required"))?
-        )
-    };
-    write!(output, "Restart {target}? [y/N]: ")
-        .map_err(|source| CliError::io("failed to write restart confirmation", source))?;
-    output
-        .flush()
-        .map_err(|source| CliError::io("failed to flush restart confirmation", source))?;
-    let mut answer = String::new();
-    input
-        .read_line(&mut answer)
-        .map_err(|source| CliError::io("failed to read restart confirmation", source))?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
-}
-
 fn confirm_upgrade(
     target_version: &str,
     batch: UpgradeBatch,
@@ -563,8 +462,4 @@ fn confirm_upgrade(
 fn active_client() -> Result<ApiClient, CliError> {
     let contexts = ContextStore::from_environment()?;
     ApiClient::new(contexts.active()?)
-}
-
-fn output_error(source: std::io::Error) -> CliError {
-    CliError::io("failed to write command output", source)
 }

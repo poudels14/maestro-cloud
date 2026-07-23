@@ -8,6 +8,7 @@ use kernel_api::{
 use serde_json::json;
 
 use crate::CliError;
+use crate::cluster_restart::RestartTarget;
 use crate::upgrades::{UpgradeApi, cancel, list, restart, start};
 
 struct RecordingUpgradeApi {
@@ -24,7 +25,7 @@ async fn restart_command_uses_the_shared_rolling_maintenance_contract()
 
     restart(
         &api,
-        vec!["node-a".to_string()],
+        RestartTarget::Node("node-a".to_string()),
         Some("restart-node-a".to_string()),
         RequestId::new("restart-node-a-1")?,
         &mut output,
@@ -44,6 +45,27 @@ async fn restart_command_uses_the_shared_rolling_maintenance_contract()
     let output = String::from_utf8(output)?;
     assert!(output.contains("--restart-run-id restart-node-a"));
     assert!(output.contains("cluster restart `restart-node-a` accepted"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_node_restart_encodes_the_empty_wire_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+
+    restart(
+        &api,
+        RestartTarget::EveryNode,
+        Some("restart-all".to_string()),
+        RequestId::new("restart-all-1")?,
+        &mut Vec::new(),
+    )
+    .await?;
+
+    let starts = api.starts.lock().map_err(|_| "start lock poisoned")?;
+    let (_, request) = starts.first().ok_or("restart was not started")?;
+    assert_eq!(request.spec.operation, UpgradeOperation::Restart);
+    assert!(request.spec.node_ids.is_empty());
     Ok(())
 }
 

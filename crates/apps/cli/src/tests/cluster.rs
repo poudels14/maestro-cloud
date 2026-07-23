@@ -15,7 +15,7 @@ use crate::cluster::{
     ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle, remove_node_with_timing,
     show_config,
 };
-use crate::cluster_command::restart_node_ids;
+use crate::cluster_restart::{RestartSelection, RestartTarget, resolve as resolve_restart_target};
 
 struct RecordingClusterApi {
     info: ClusterInfo,
@@ -126,35 +126,31 @@ async fn restart_selection_preserves_local_all_and_interactive_compatibility()
 -> Result<(), Box<dyn std::error::Error>> {
     let api = api()?;
     assert_eq!(
-        restart_node_ids(
+        resolve_restart_target(
             &api,
-            None,
-            false,
-            true,
+            RestartSelection::LocalNode,
             &mut std::io::Cursor::new(Vec::<u8>::new()),
             &mut Vec::new(),
         )
         .await?,
-        vec!["node-a".to_string()]
+        RestartTarget::Node("node-a".to_string())
     );
-    assert!(
-        restart_node_ids(
+    assert_eq!(
+        resolve_restart_target(
             &api,
-            None,
-            true,
-            false,
+            RestartSelection::Direct(RestartTarget::EveryNode),
             &mut std::io::Cursor::new(Vec::<u8>::new()),
             &mut Vec::new(),
         )
-        .await?
-        .is_empty()
+        .await?,
+        RestartTarget::EveryNode
     );
 
     let mut input = std::io::Cursor::new(b"2\n".to_vec());
     let mut output = Vec::new();
     assert_eq!(
-        restart_node_ids(&api, None, false, false, &mut input, &mut output).await?,
-        vec!["node-z".to_string()]
+        resolve_restart_target(&api, RestartSelection::Prompt, &mut input, &mut output).await?,
+        RestartTarget::Node("node-z".to_string())
     );
     let output = String::from_utf8(output)?;
     let node_a = output.find("node-a").ok_or("node-a selection missing")?;

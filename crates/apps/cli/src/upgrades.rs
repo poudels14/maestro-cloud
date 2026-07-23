@@ -9,6 +9,7 @@ use kernel_api::{
 
 use crate::CliError;
 use crate::api_client::ApiClient;
+use crate::cluster_restart::RestartTarget;
 
 pub(crate) async fn list(client: &impl UpgradeApi, output: &mut dyn Write) -> Result<(), CliError> {
     let mut runs = client.list_upgrades().await?;
@@ -72,7 +73,7 @@ pub(crate) async fn start(
 
 pub(crate) async fn restart(
     client: &impl UpgradeApi,
-    node_ids: Vec<String>,
+    target: RestartTarget,
     restart_run_id: Option<String>,
     request_id: RequestId,
     output: &mut dyn Write,
@@ -82,7 +83,7 @@ pub(crate) async fn restart(
         UpgradeOperation::Restart,
         RESTART_TARGET_VERSION.to_string(),
         UpgradeMode::Rolling,
-        node_ids,
+        target.into_node_ids(),
         restart_run_id,
         request_id,
         output,
