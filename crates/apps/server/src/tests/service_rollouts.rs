@@ -157,7 +157,7 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
 }
 
 #[tokio::test]
-async fn forced_rollout_marks_exactly_one_frozen_service_generation()
+async fn rollout_policy_honors_freeze_and_bypasses_exactly_one_forced_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let cluster_id = ClusterId::new("forced-rollout")?;
@@ -203,6 +203,28 @@ async fn forced_rollout_marks_exactly_one_frozen_service_generation()
     assert_eq!(
         apply(
             &server,
+            "frozen-update",
+            &ServiceRolloutRequest {
+                expected_revisions: preview.expected_revisions,
+                force: false,
+                desired: updated.clone(),
+            },
+        )
+        .await?
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let service: Service = stored(&store, &Keyspace::new(&cluster_id), "Service", "api").await?;
+    assert_eq!(service.status.rollout, RolloutState::Frozen);
+    assert_eq!(service.status.rollout_bypass_generation, None);
+    assert_eq!(service.meta.generation, Generation(2));
+
+    updated.service.version = "3.0.0".to_string();
+    let preview = diff(&server, updated.clone()).await?;
+    assert_eq!(
+        apply(
+            &server,
             "forced-update",
             &ServiceRolloutRequest {
                 expected_revisions: preview.expected_revisions,
@@ -216,12 +238,11 @@ async fn forced_rollout_marks_exactly_one_frozen_service_generation()
     );
 
     let service: Service = stored(&store, &Keyspace::new(&cluster_id), "Service", "api").await?;
-    assert_eq!(service.status.rollout, RolloutState::Frozen);
     assert_eq!(
         service.status.rollout_bypass_generation,
         Some(service.meta.generation)
     );
-    assert_eq!(service.meta.generation, Generation(2));
+    assert_eq!(service.meta.generation, Generation(3));
     Ok(())
 }
 

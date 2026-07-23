@@ -112,11 +112,16 @@ async fn apply(
     if let Some(response) = request.replay(&state).await? {
         return Ok((StatusCode::ACCEPTED, Json(response)));
     }
+    let frozen_rollout = if payload.force {
+        FrozenRolloutPolicy::BypassNextGeneration
+    } else {
+        FrozenRolloutPolicy::HonorFreeze
+    };
     let managed = ManagedResources::load(&state, &service_id).await?;
     let (compares, mutations, response) = managed.plan(
         service_id,
         payload.expected_revisions,
-        payload.force,
+        frozen_rollout,
         payload.desired,
     )?;
     let response = request
@@ -148,6 +153,18 @@ struct DecodedResources {
     service: Option<Service>,
     ingress: Option<IngressRoute>,
     egress: Option<FirewallPolicy>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrozenRolloutPolicy {
+    HonorFreeze,
+    BypassNextGeneration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteDecision {
+    Skip,
+    Apply,
 }
 
 impl ManagedResources {
@@ -217,7 +234,7 @@ impl ManagedResources {
         self,
         service_id: ServiceId,
         expected: ServiceRolloutRevisions,
-        force: bool,
+        frozen_rollout: FrozenRolloutPolicy,
         desired: ServiceRolloutSpec,
     ) -> Result<(Vec<Compare>, Vec<Mutation>, ServiceRolloutResponse), ApiError> {
         let service_kind = kind(BuiltinKind::Service)?;
@@ -246,7 +263,8 @@ impl ManagedResources {
             },
         )?;
         if service_write {
-            service.status.rollout_bypass_generation = (force
+            service.status.rollout_bypass_generation = (frozen_rollout
+                == FrozenRolloutPolicy::BypassNextGeneration
                 && service.status.rollout == kernel_api::RolloutState::Frozen)
                 .then_some(service.meta.generation);
         }
@@ -316,9 +334,16 @@ fn plan_route(
     route_id: IngressRouteId,
     service_id: &ServiceId,
     desired: Option<IngressRouteSpec>,
-) -> Result<(Option<IngressRoute>, bool), ApiError> {
+) -> Result<(Option<IngressRoute>, WriteDecision), ApiError> {
     let Some(spec) = desired else {
-        return Ok((None, current.is_some()));
+        return Ok((
+            None,
+            if current.is_some() {
+                WriteDecision::Apply
+            } else {
+                WriteDecision::Skip
+            },
+        ));
     };
     let route = match current {
         None => new_route(route_id, service_id, spec)?,
@@ -332,14 +357,14 @@ fn plan_route(
                 ));
             }
             if route.spec == spec {
-                return Ok((Some(route), false));
+                return Ok((Some(route), WriteDecision::Skip));
             }
             route.meta.generation = next_generation(route.meta.generation, "IngressRoute")?;
             route.spec = spec;
             route
         }
     };
-    Ok((Some(route), true))
+    Ok((Some(route), WriteDecision::Apply))
 }
 
 fn plan_policy(
@@ -349,9 +374,16 @@ fn plan_policy(
     policy_id: FirewallPolicyId,
     service_id: &ServiceId,
     desired: Option<FirewallPolicySpec>,
-) -> Result<(Option<FirewallPolicy>, bool), ApiError> {
+) -> Result<(Option<FirewallPolicy>, WriteDecision), ApiError> {
     let Some(spec) = desired else {
-        return Ok((None, current.is_some()));
+        return Ok((
+            None,
+            if current.is_some() {
+                WriteDecision::Apply
+            } else {
+                WriteDecision::Skip
+            },
+        ));
     };
     let policy = match current {
         None => {
@@ -369,14 +401,14 @@ fn plan_policy(
                 ));
             }
             if policy.spec == spec {
-                return Ok((Some(policy), false));
+                return Ok((Some(policy), WriteDecision::Skip));
             }
             policy.meta.generation = next_generation(policy.meta.generation, "FirewallPolicy")?;
             policy.spec = spec;
             policy
         }
     };
-    Ok((Some(policy), true))
+    Ok((Some(policy), WriteDecision::Apply))
 }
 
 fn exact_expected(
@@ -400,9 +432,9 @@ fn push_optional_mutation<Resource: Serialize>(
     mutations: &mut Vec<Mutation>,
     key: kernel_store::StoreKey,
     resource: Option<&Resource>,
-    write: bool,
+    decision: WriteDecision,
 ) -> Result<(), ApiError> {
-    if !write {
+    if decision == WriteDecision::Skip {
         return Ok(());
     }
     match resource {
