@@ -12,8 +12,8 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::docker_support::{runtime_event, stream_error};
 use crate::{
-    ExecInput, ExecOutput, ExecSession, LogCursor, LogFrame, LogSource, LogStream, RuntimeError,
-    RuntimeEvent, RuntimeEventStream,
+    ExecInput, ExecMode, ExecOutput, ExecSession, LogCursor, LogFrame, LogSource, LogStream,
+    RuntimeError, RuntimeEvent, RuntimeEventStream,
 };
 
 type DockerEvents = Pin<Box<dyn Stream<Item = Result<EventMessage, DockerError>> + Send>>;
@@ -67,7 +67,7 @@ impl LogStream for DockerLogStream {
 pub(crate) struct DockerExecSession {
     client: Docker,
     exec_id: String,
-    terminal: bool,
+    mode: ExecMode,
     input: DockerInput,
     output: DockerOutput,
     input_closed: bool,
@@ -78,14 +78,14 @@ impl DockerExecSession {
     pub(crate) fn new(
         client: Docker,
         exec_id: String,
-        terminal: bool,
+        mode: ExecMode,
         input: DockerInput,
         output: DockerOutput,
     ) -> Self {
         Self {
             client,
             exec_id,
-            terminal,
+            mode,
             input,
             output,
             input_closed: false,
@@ -104,17 +104,20 @@ impl ExecSession for DockerExecSession {
             ExecInput::Stdin(_) => Err(RuntimeError::Rejected {
                 message: "docker exec standard input is already closed".to_owned(),
             }),
-            ExecInput::Resize { columns, rows } if self.terminal => self
-                .client
-                .resize_exec(
-                    &self.exec_id,
-                    docker::exec::ResizeExecOptions {
-                        height: rows,
-                        width: columns,
-                    },
-                )
-                .await
-                .map_err(stream_error),
+            ExecInput::Resize { columns, rows }
+                if matches!(self.mode, ExecMode::Terminal { .. }) =>
+            {
+                self.client
+                    .resize_exec(
+                        &self.exec_id,
+                        docker::exec::ResizeExecOptions {
+                            height: rows,
+                            width: columns,
+                        },
+                    )
+                    .await
+                    .map_err(stream_error)
+            }
             ExecInput::Resize { .. } => Err(RuntimeError::Rejected {
                 message: "cannot resize a pipe-mode docker exec session".to_owned(),
             }),

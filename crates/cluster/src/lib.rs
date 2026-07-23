@@ -44,7 +44,7 @@ pub use join_crypto::{
 };
 pub use join_key::{JoinKeyError, load_or_create_join_key};
 pub use network::{CidrError, Ipv4Cidr};
-pub use node_lifecycle::set_node_draining;
+pub use node_lifecycle::{NodeSchedulingAction, set_node_scheduling};
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
 pub use provider::{
     MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,

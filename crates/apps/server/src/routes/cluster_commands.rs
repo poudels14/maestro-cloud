@@ -3,6 +3,7 @@ use axum::extract::{DefaultBodyLimit, Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
+use cluster::NodeSchedulingAction;
 use kernel_api::{BuiltinKind, CommandRequest, Node, NodeCommandResponse, NodeId, ResourceKind};
 use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 
@@ -29,10 +30,7 @@ async fn drain(
         operator,
         headers,
         payload,
-        NodeCommandKind {
-            operation: "POST /api/cluster/nodes/{nodeId}/drain",
-            draining: true,
-        },
+        NodeSchedulingAction::Drain,
     )
     .await
 }
@@ -50,10 +48,7 @@ async fn restore(
         operator,
         headers,
         payload,
-        NodeCommandKind {
-            operation: "POST /api/cluster/nodes/{nodeId}/restore",
-            draining: false,
-        },
+        NodeSchedulingAction::Restore,
     )
     .await
 }
@@ -64,7 +59,7 @@ async fn command(
     Extension(operator): Extension<OperatorIdentity>,
     headers: HeaderMap,
     payload: Result<Json<CommandRequest>, JsonRejection>,
-    command: NodeCommandKind,
+    action: NodeSchedulingAction,
 ) -> Result<(StatusCode, Json<NodeCommandResponse>), ApiError> {
     let node_id = NodeId::new(node_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let payload = payload
@@ -74,7 +69,7 @@ async fn command(
         &state,
         &headers,
         &operator,
-        command.operation,
+        operation(action),
         &[node_id.as_str()],
         &payload,
     )?;
@@ -104,7 +99,7 @@ async fn command(
             "Node deletion is already in progress",
         ));
     }
-    if !command.draining
+    if action == NodeSchedulingAction::Restore
         && state
             .store
             .get(&keys.node_removal(&node_id))
@@ -119,11 +114,10 @@ async fn command(
             "Node restore is blocked by permanent removal",
         ));
     }
-    let write =
-        cluster::set_node_draining(&mut node, command.draining, state.timestamp_clock.now());
+    let write = cluster::set_node_scheduling(&mut node, action, state.timestamp_clock.now());
     let response = NodeCommandResponse {
         node_id: node_id.clone(),
-        draining: command.draining,
+        draining: action == NodeSchedulingAction::Drain,
     };
     let mutations = if write {
         vec![Mutation::Put {
@@ -140,7 +134,7 @@ async fn command(
         key,
         expected: ExpectedVersion::Exact(stored.version),
     }];
-    if !command.draining {
+    if action == NodeSchedulingAction::Restore {
         compares.push(Compare {
             key: keys.node_removal(&node_id),
             expected: ExpectedVersion::Missing,
@@ -161,7 +155,9 @@ async fn command(
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
-struct NodeCommandKind {
-    operation: &'static str,
-    draining: bool,
+const fn operation(action: NodeSchedulingAction) -> &'static str {
+    match action {
+        NodeSchedulingAction::Drain => "POST /api/cluster/nodes/{nodeId}/drain",
+        NodeSchedulingAction::Restore => "POST /api/cluster/nodes/{nodeId}/restore",
+    }
 }

@@ -130,7 +130,7 @@ pub(crate) async fn start_exec(
         container_id,
         exec_id,
         directory: paths.directory,
-        terminal: matches!(request.mode, ExecMode::Terminal { .. }),
+        mode: request.mode,
         stdin: Some(stdin),
         stdout,
         stderr,
@@ -146,7 +146,7 @@ struct ContainerdExecSession {
     container_id: String,
     exec_id: String,
     directory: PathBuf,
-    terminal: bool,
+    mode: ExecMode,
     stdin: Option<tokio::fs::File>,
     stdout: tokio::fs::File,
     stderr: Option<tokio::fs::File>,
@@ -168,7 +168,9 @@ impl ExecSession for ContainerdExecSession {
                 .write_all(&bytes)
                 .await
                 .map_err(exec_io_error),
-            ExecInput::Resize { columns, rows } if self.terminal => {
+            ExecInput::Resize { columns, rows }
+                if matches!(self.mode, ExecMode::Terminal { .. }) =>
+            {
                 containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
                     .resize_pty(namespaced(
                         ResizePtyRequest {

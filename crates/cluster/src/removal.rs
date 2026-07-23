@@ -12,7 +12,7 @@ use kernel_store::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{StoreProvider, StoreProviderError, set_node_draining};
+use crate::{NodeSchedulingAction, StoreProvider, StoreProviderError, set_node_scheduling};
 
 const MAXIMUM_RESOURCE_BYTES: usize = 1024 * 1_024;
 const MAXIMUM_REMOVAL_INTENT_BYTES: usize = 16 * 1_024;
@@ -129,7 +129,7 @@ impl NodeRemovalCoordinator {
                 requested_at: now,
             },
         };
-        let drain_changed = set_node_draining(&mut node, true, now);
+        let drain_changed = set_node_scheduling(&mut node, NodeSchedulingAction::Drain, now);
         if stored_intent.is_none() || drain_changed {
             return self.prepare_drain(DrainPreparation {
                 node_id,

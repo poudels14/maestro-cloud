@@ -315,7 +315,7 @@ impl WorkloadRuntime for DockerRuntime {
                 Ok(Box::new(DockerExecSession::new(
                     self.client.clone(),
                     created.id,
-                    terminal,
+                    request.mode,
                     input,
                     output,
                 )))

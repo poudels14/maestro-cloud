@@ -292,8 +292,13 @@ where
             && !resource.meta.finalizers.contains(finalizer)
         {
             resource.meta.finalizers.insert(finalizer.clone());
-            self.persist_resource(&stored.key, stored.version, &resource, false)
-                .await?;
+            self.persist_resource(
+                &stored.key,
+                stored.version,
+                &resource,
+                PersistenceAction::Store,
+            )
+            .await?;
             return Ok(ProcessResult::changed());
         }
 
@@ -303,7 +308,8 @@ where
                 .await;
         }
 
-        self.invoke(resource, stored.version, attempt, false).await
+        self.invoke(resource, stored.version, attempt, ReconcilePhase::Active)
+            .await
     }
 
     async fn process_deletion(
@@ -316,26 +322,35 @@ where
     ) -> Result<ProcessResult, ControllerError> {
         let Some(finalizer) = finalizer else {
             if resource.meta.finalizers.is_empty() {
-                self.persist_resource(&key, version, &resource, true)
+                self.persist_resource(&key, version, &resource, PersistenceAction::Delete)
                     .await?;
             }
             return Ok(ProcessResult::changed());
         };
         if !resource.meta.finalizers.contains(&finalizer) {
             if resource.meta.finalizers.is_empty() {
-                self.persist_resource(&key, version, &resource, true)
+                self.persist_resource(&key, version, &resource, PersistenceAction::Delete)
                     .await?;
             }
             return Ok(ProcessResult::changed());
         }
 
         let outcome = self
-            .invoke(resource.clone(), version, attempt, true)
+            .invoke(
+                resource.clone(),
+                version,
+                attempt,
+                ReconcilePhase::Finalizing,
+            )
             .await?;
         if outcome.action == Some(Action::Done) && outcome.successful {
             resource.meta.finalizers.remove(&finalizer);
-            let delete = resource.meta.finalizers.is_empty();
-            self.persist_resource(&key, version, &resource, delete)
+            let persistence = if resource.meta.finalizers.is_empty() {
+                PersistenceAction::Delete
+            } else {
+                PersistenceAction::Store
+            };
+            self.persist_resource(&key, version, &resource, persistence)
                 .await?;
             Ok(ProcessResult {
                 action: None,
@@ -353,7 +368,7 @@ where
         resource: Object<R::Id, R::Spec, R::Status>,
         version: Version,
         attempt: u32,
-        deleting: bool,
+        phase: ReconcilePhase,
     ) -> Result<ProcessResult, ControllerError> {
         #[cfg(feature = "test-util")]
         let started_at = self.clock.now();
@@ -361,6 +376,7 @@ where
         let resource_id = resource.meta.id.to_string();
         #[cfg(feature = "test-util")]
         let observed_revision = version.resource_revision();
+        let deleting = phase.is_deleting();
         let span = tracing::info_span!(
             "reconcile",
             kind = R::KIND,
@@ -374,16 +390,19 @@ where
             version,
             attempt,
         );
-        let result = if deleting {
-            self.reconciler
-                .finalize(resource, context)
-                .instrument(span.clone())
-                .await
-        } else {
-            self.reconciler
-                .reconcile(resource, context)
-                .instrument(span.clone())
-                .await
+        let result = match phase {
+            ReconcilePhase::Active => {
+                self.reconciler
+                    .reconcile(resource, context)
+                    .instrument(span.clone())
+                    .await
+            }
+            ReconcilePhase::Finalizing => {
+                self.reconciler
+                    .finalize(resource, context)
+                    .instrument(span.clone())
+                    .await
+            }
         };
         let outcome = match result {
             Ok(action) => ProcessResult {
@@ -445,12 +464,10 @@ where
         key: &StoreKey,
         version: Version,
         resource: &Object<R::Id, R::Spec, R::Status>,
-        delete: bool,
+        action: PersistenceAction,
     ) -> Result<(), ControllerError> {
-        let mutation = if delete {
-            Mutation::Delete { key: key.clone() }
-        } else {
-            Mutation::Put {
+        let mutation = match action {
+            PersistenceAction::Store => Mutation::Put {
                 key: key.clone(),
                 value: serde_json::to_vec(resource).map_err(|error| {
                     ControllerError::SerializeResource {
@@ -459,7 +476,8 @@ where
                     }
                 })?,
                 session: None,
-            }
+            },
+            PersistenceAction::Delete => Mutation::Delete { key: key.clone() },
         };
         let outcome = self
             .fenced_store
@@ -475,6 +493,24 @@ where
             TransactionOutcome::Applied { .. } | TransactionOutcome::Conflict => Ok(()),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcilePhase {
+    Active,
+    Finalizing,
+}
+
+impl ReconcilePhase {
+    const fn is_deleting(self) -> bool {
+        matches!(self, Self::Finalizing)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistenceAction {
+    Store,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
