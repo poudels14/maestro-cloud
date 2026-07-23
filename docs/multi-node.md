@@ -1,200 +1,254 @@
-# Multi-node Maestro
+# Multi-node rewrite operations
 
-Maestro uses the EC2 private network for its control API, consensus traffic, and
-the internal workload gateway. Tailscale remains optional and is not part of
-cluster correctness.
+Maestro uses the host's private network for control traffic and a self-managed
+WireGuard mesh for workload traffic. Tailscale is an optional operator-access
+path; it is not used for cluster membership, consensus, scheduling, or
+cross-node workload correctness.
+
+## Network model
+
+Keep these address spaces separate:
+
+- node endpoints are stable, private host addresses such as VPC addresses;
+- `cluster-cidr` is a private, non-overlapping pool reserved for Maestro;
+- each workload-capable node owns one subnet from that pool; and
+- the low end of the pool is reserved for stable mesh identities.
+
+Each workload subnet uses its first host address as the `maestro0` bridge and
+authoritative DNS resolver. For example, node subnet `172.22.1.0/24` uses
+`172.22.1.1`. Workload addresses start at `.2`; Maestro reserves the highest 55
+host addresses for system services.
+
+Workload-capable nodes publish a WireGuard public key, private host endpoint,
+and workload subnet. Their node agents converge the exact peer and route set.
+Cross-node workload packets therefore route directly between node subnets
+through WireGuard. The private key never enters the cluster store.
+
+The default pool settings are:
+
+- `node-limit`: `254`;
+- `node-prefix`: `24`; and
+- `wireguard` port: UDP `51820`.
+
+A `172.22.0.0/16` cluster pool can hold the default tunnel reservation and 254
+`/24` node allocations. With those defaults, `172.22.0.0/24` is reserved and
+workload subnets begin at `172.22.1.0/24`.
+
+Choose the pool once. Changing the pool, node limit, node prefix, node
+allocations, or cluster ports after bootstrap is not an online operation.
 
 ## Configuration contract
 
-Declare every planned node in one shared `cluster.nodes` map and select the local
-entry with the top-level `node` string:
+Declare every node that may join before bootstrapping the cluster. The shared
+document is identical on every host except for the top-level `node` selector.
 
 ```jsonc
 {
-  "node": "node1",
   "cluster": {
     "name": "prod",
+    "cluster-cidr": "172.22.0.0/16",
+    "node-limit": 254,
+    "node-prefix": 24,
     "nodes": {
-      "node1": {
-        "endpoint": "10.20.0.11",
-        "subnet": "10.1.0.0/24",
+      "node-1": {
+        "hostname": "node-1.internal",
+        "endpoint": "10.20.0.11:3000",
+        "subnet": "172.22.1.0/24",
         "role": "master"
       },
-      "node2": {
-        "endpoint": "10.20.0.12:3100",
-        "subnet": "10.2.0.0/24"
+      "node-2": {
+        "hostname": "node-2.internal",
+        "endpoint": "10.20.0.12:3000",
+        "subnet": "172.22.2.0/24",
+        "role": "hybrid"
       },
-      "node3": {
-        "endpoint": "10.20.0.13",
-        "subnet": "10.3.0.0/24",
-        "role": "voter"
+      "node-3": {
+        "hostname": "node-3.internal",
+        "endpoint": "10.20.0.13:3000",
+        "subnet": "172.22.3.0/24",
+        "role": "control-plane"
       }
     },
-    "join-secret": "<high-entropy-secret-of-at-least-32-characters>"
+    "control-allow-cidrs": ["10.20.0.0/24"],
+    "ports": {
+      "gateway": 3001,
+      "store-client": 2379,
+      "store-peer": 2380,
+      "wireguard": 51820
+    },
+    "join-secret": "<at-least-32-characters>"
   },
-  "ingress": { "port": 8080 },
-  "jwt-secret-key": "<at-least-32-character-jwt-secret>",
-  "encryption-key": "<encryption-key>",
-  "runtime": "docker"
+  "node": "node-1"
 }
 ```
 
-On the second machine, use the same cluster map and set `"node": "node2"`.
-The node entry supplies its workload subnet, private control address, optional
-API port, and optional role. The role defaults to `hybrid`; exactly one node must
-still explicitly use `master`. When the endpoint has no port, the API defaults
-to `3000`.
+An endpoint without a port uses TCP `3000`. The four cluster ports shown above
+are also the defaults. They must be nonzero and distinct, and no API endpoint
+may reuse one. Maestro validates and persists them in each protected launch
+document; it does not discover different free ports on each host.
 
-`cluster.control-allow-cidrs` is optional defense in depth. When configured, it
-restricts signed join requests to those private source ranges and must include
-every configured control endpoint. When omitted, the high-entropy join secret,
-the private source-address check, and live endpoint/subnet reservations remain
-the admission boundary.
+The topology must have:
 
-This is a breaking config format. The old node array, top-level cluster subnet,
-`node.role`, and explicit cluster gateway/etcd port fields are not accepted.
-Standalone installations continue to use a top-level `subnet` and omit both
-`cluster.nodes` and the top-level `node` selector.
+- exactly one `master`;
+- exactly one or three control-plane-capable nodes in total;
+- unique private endpoints and workload subnets; and
+- no overlap between host control networks, the cluster pool, or workload
+  subnets.
 
-The shared map lets Maestro reject duplicate API endpoints, overlapping workload
-subnets, workload/control-network overlap, missing control CIDR coverage, and an
-invalid voter count before startup. Node names are lowercase DNS labels. Every
-cluster must have exactly one `master`, and the total number of master, hybrid,
-and voter nodes must be one or three.
+Roles have narrow meanings:
 
-## Roles and bootstrap
-
-- `master` is the one-time bootstrap authority. It votes and runs workloads.
-- `hybrid` votes and runs workloads.
-- `voter` runs the control plane without workloads.
+- `master` initializes trust and etcd, participates in the control plane, and
+  runs workloads;
+- `hybrid` participates in the control plane and runs workloads;
+- `control-plane` participates in the control plane without running workloads;
+  and
 - `worker` runs workloads without a local etcd member.
 
-The master starts a one-member etcd cluster immediately. It does not wait for an
-inbound connectivity check and it does not retain permanent leadership. Once the
-cluster is formed, ordinary lease-based election selects the leader.
+The `master` designation is only bootstrap authority. Normal lease-backed
+election chooses the active controller leader after formation.
 
-Additional voters join as learners and are promoted after catching up. A signed
-join using `cluster.join-secret` is the admission authority, so adding a node does
-not require restarting existing voters. The live etcd member list and signed port
-reservations are authoritative after bootstrap; `cluster.nodes` remains the
-shared desired-membership and subnet preflight map.
-
-## Ports and AWS security groups
-
-The API port is the endpoint port or `3000`. On first startup, each node asks the
-operating system for three distinct unused TCP ports for the gateway, etcd client,
-and etcd peer listeners. Maestro writes them to:
-
-```text
-<cluster-data-dir>/system/cluster-ports.json
-```
-
-Those ports are reused on restart and advertised in the signed join request.
-They are not derived from the API port and must not be edited after a node has
-joined.
-
-AWS security groups apply to private traffic too. Allow these inbound flows from
-the cluster's security group (or a narrowly scoped private CIDR):
-
-- the configured API port on every node;
-- the persisted gateway port on master, hybrid, and worker nodes;
-- the persisted etcd client port on voters;
-- the persisted etcd peer port between voters.
-
-Do not expose etcd publicly. Maestro binds these listeners to the selected private
-endpoint IP and uses cluster-issued mTLS, but it does not modify the host firewall
-or the EC2 security group.
-
-At startup Maestro logs the selected ports. The master's admin UI also displays
-the effective ports and a formation banner while fewer live nodes are registered
-than the shared map declares. This allows the master to start and report the exact
-security-group changes even when inbound traffic is initially blocked.
-
-## Workload subnet rules
-
-Every node gets one canonical private IPv4 `/24`. These subnets must be unique and
-non-overlapping across the shared map. They also must not overlap any control CIDR
-or contain a configured EC2 private endpoint.
-
-The workload subnet is an internal container address pool behind that node's
-gateway; it is not an AWS subnet and AWS does not assign those addresses to EC2
-interfaces. Ranges such as `10.1.0.0/24`, `10.2.0.0/24`, and `10.3.0.0/24` are
-valid only when the VPC/control ranges and other routed networks do not overlap
-them.
-
-Maestro reserves the gateway and fixed-address system containers near the high
-end of each `/24`; workload replicas use the remaining addresses. Cross-node
-requests enter through the destination node's mTLS gateway rather than routing
-container subnets through Tailscale.
-
-## Form a cluster
-
-1. Put the shared map and secrets in the common config source.
-2. Give each instance a small config that extends the common source and sets only
-   its node name:
-
-   ```jsonc
-   {
-     "$extends": "aws-secret://maestro/production/common",
-     "node": "node2"
-   }
-   ```
-
-3. Start the master. It creates the cluster identity, CA, certificates, persisted
-   ports, and bootstrap permit under the daemon lock.
-4. Open the ports shown in its log/admin UI from the private cluster security
-   group.
-5. Start the other nodes. Each authenticates CA discovery with the join secret,
-   advertises its actual ports and subnet, and installs the returned identity.
-6. Verify formation with `maestro cluster info`, `maestro cluster nodes`, and the
-   admin UI.
-
-For a three-voter cluster, avoid interrupting the temporary two-voter stage; both
-members are required until the third voter is promoted.
-
-## Add or replace a node
-
-Add the named entry to the shared map, deploy that effective config to the new
-machine, and set its top-level `node` selector. Existing voters do not need a
-restart. The leader validates live endpoint/subnet reservations and updates the
-authoritative voter cache after a voter joins.
-
-Remove or drain an old node through the normal cluster lifecycle before reusing
-its name, endpoint, or subnet. Removed node identities cannot silently rejoin.
-
-## Images and scheduling
-
-`build.registry` is optional in multi-node mode. Without it, Maestro streams the
-built image directly between authenticated cluster nodes and keeps it on at
-least two eligible workload nodes when the cluster has enough capacity. Image
-availability is lease-backed, so a failed node is removed as a source and the
-leader assigns a replacement copy. Draining a node copies required images to
-its replacement nodes before their replicas start. The latest build for a
-stopped service remains replicated so a later restart does not depend on the
-original build node.
-
-With `build.registry`, Maestro instead publishes
-`<build.registry>/<service-id>:<deployment-id>`. Workload nodes must be able to
-pull from that registry and any node that can lead builds must be able to push.
-A service configured with `image` instead of `build` continues to use that
-image reference directly.
+Use `$extends` to keep the shared topology in one source while selecting a
+different local node:
 
 ```jsonc
 {
-  "services": {
-    "api": {
-      "name": "API",
-      "build": {
-        "repo": "git@github.com:acme/api.git",
-        "dockerfile": "Dockerfile"
-      },
-      "deploy": {}
-    }
-  }
+  "$extends": "aws-secret://maestro/production/cluster",
+  "node": "node-2"
 }
 ```
 
-The scheduler places workloads on ready `master`, `hybrid`, and `worker` nodes.
-Dedicated voters are never placement targets. Hard `deploy.nodeAffinity` rules
-continue to apply; writable host volumes require an exact node ID because their
-data cannot move between machines.
+Local files and AWS Secrets Manager string values are supported config sources.
+Validate the fully merged document before making any local state:
+
+```sh
+maestro config validate /etc/maestro/maestro.jsonc
+```
+
+## Host prerequisites
+
+Every node needs:
+
+- stable private IPv4 addressing and matching forward and reverse routing;
+- synchronized time;
+- native containerd;
+- Linux network administration privileges for a bridge, veth pairs,
+  WireGuard, routes, and nftables; and
+- durable, owner-only storage for `/var/lib/maestro`.
+
+Control-plane nodes also need the configured etcd executable. Build-capable
+nodes need BuildKit as described by the deployment module.
+
+Cloud security groups and upstream firewalls must allow:
+
+- TCP API traffic to each node endpoint, normally port `3000`, from operator
+  clients and cluster peers;
+- TCP store-client traffic, normally `2379`, from cluster nodes to
+  control-plane nodes;
+- TCP store-peer traffic, normally `2380`, between control-plane nodes; and
+- UDP WireGuard traffic, normally `51820`, between workload-capable nodes.
+
+Do not expose store ports publicly. `control-allow-cidrs` is an additional host
+firewall boundary for protected TCP listeners and must contain every configured
+node endpoint when nonempty. Maestro converges its own nftables table, but it
+does not edit cloud security groups or upstream network ACLs.
+
+## Form the cluster
+
+Bootstrap the declared master once:
+
+```sh
+sudo maestro cluster bootstrap \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro \
+  --etcd-binary /run/current-system/sw/bin/etcd \
+  --output /run/maestro/launch.json
+```
+
+The command creates the cluster authority, master identity, secrets, initial
+store membership, and a create-only launch document. Start the rewrite daemon
+with that launch document before admitting another node.
+
+On each joining node, create its durable join key and copy the printed SHA-256
+fingerprint to an authenticated operator workstation:
+
+```sh
+sudo maestro cluster prepare-join \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro
+```
+
+Approve the exact declared identity and fingerprint:
+
+```sh
+maestro cluster approve-node node-2 <printed-sha256>
+```
+
+Then join through a running control-plane API:
+
+```sh
+sudo maestro cluster join https://10.20.0.11:3000 \
+  --config /etc/maestro/maestro.jsonc \
+  --data-dir /var/lib/maestro \
+  --etcd-binary /run/current-system/sw/bin/etcd \
+  --output /run/maestro/launch.json
+```
+
+Omit `--etcd-binary` for a `worker`. The joiner authenticates CA discovery with
+the shared join secret, proves possession of the approved key, receives an
+encrypted node-bound grant, and starts an etcd learner when its role requires
+one. A joining control-plane member is promoted only after it catches up.
+
+Bootstrap and join output files are create-only and owner-only. A retry verifies
+and reuses matching state; it does not overwrite a conflicting launch document.
+Use the NixOS rewrite module to supervise the daemon as described in
+[nixos-rewrite.md](nixos-rewrite.md).
+
+## Verify formation
+
+From an authenticated context:
+
+```sh
+maestro cluster info
+maestro cluster nodes
+maestro cluster config
+```
+
+Confirm that:
+
+- the expected one or three control-plane nodes are ready;
+- every workload-capable node reports `Ready`;
+- each node reports the intended role and host address;
+- the masked config reports each intended workload subnet; and
+- the masked config reports the fixed ports and address-pool settings.
+
+The config response intentionally omits the join secret and any Tailscale auth
+key.
+
+## Lifecycle constraints
+
+Cluster topology is initialization-fixed in the current rewrite. A join request
+must match one declared node's endpoint, hostname, role, subnet, pool, ports,
+and cluster identity. An undeclared node cannot join, and changing a launch
+document on one host does not mutate the authoritative topology.
+
+Drain a workload node before planned maintenance:
+
+```sh
+maestro cluster drain node-2
+maestro cluster restore node-2
+```
+
+Permanent removal is a separate, irreversible workflow:
+
+```sh
+maestro cluster remove-node node-2
+```
+
+Removal drains assignments, removes eligible store membership, cleans durable
+node state, and writes a tombstone. The removed node ID cannot rejoin or be
+reused. Retain enough live control-plane members for quorum throughout a drain,
+upgrade, or removal.
+
+For remote tailnet access to workload routes and cluster DNS, continue with
+[Tailscale operator access](tailscale.md). For production migration and
+rollback, follow [cutover.md](cutover.md).

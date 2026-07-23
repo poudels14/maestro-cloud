@@ -419,117 +419,16 @@ only to that `RUN` instruction unless the Dockerfile explicitly persists it.
 
 ## Tailscale setup
 
-Tailscale enables remote access to your containers from any device on your tailnet.
-For a routed multi-node cluster, use the topology, bootstrap, security, operations,
-and chaos-test guide in [docs/multi-node.md](docs/multi-node.md).
+The rewrite runs an optional, highly available Tailscale subnet-router service
+as ordinary cluster resources. It advertises approved routes inside the fixed
+cluster CIDR and exposes the routed workload-bridge resolvers for
+`maestro.internal` split DNS. Tailscale is not used for cluster membership,
+consensus, or WireGuard east-west traffic.
 
-### 1. Start with Tailscale enabled
-
-Add Tailscale to `maestro.jsonc`. Maestro automatically advertises each node's
-container subnet so tailnet devices can access its containers; use
-`advertise-routes` only for additional networks.
-
-```jsonc
-{
-  "cluster": { "name": "my-cluster" },
-  "ingress": { "ports": [80, 443] },
-  "subnet": "172.22.0.0/16",
-  "encryption-key": "replace-with-a-strong-secret",
-  "tailscale": {
-    "auth-key": "tskey-auth-...",
-    // Additional private networks such as VPC CIDRs for RDS or Redis.
-    // The node's container subnet is advertised automatically.
-    "advertise-routes": []
-  }
-}
-```
-
-```bash
-maestro daemon start --config maestro.jsonc --data-dir ./data --project-dir .
-```
-
-### 2. Approve advertised routes
-
-Approve every route Maestro advertises. For standalone installations this includes
-the automatically discovered container subnet. For multi-node clusters, approve
-each node's container subnet plus any additional routes listed in
-`advertise-routes`.
-
-Go to [admin.tailscale.com](https://admin.tailscale.com) > Machines, find
-`maestro-tailscale-my-cluster`, select Edit route settings, and approve the
-advertised subnet.
-
-To auto-approve routes for all clusters, add this to your ACL policy under Access
-Controls:
-
-```json
-{
-  "autoApprovers": {
-    "routes": {
-      "172.16.0.0/12": ["tag:maestro"]
-    }
-  },
-  "tagOwners": {
-    "tag:maestro": ["autogroup:admin"]
-  }
-}
-```
-
-`172.16.0.0/12` covers `172.16.x.x` through `172.31.x.x`, so any container network
-in that range is auto-approved. Narrow the policy if all clusters use a smaller
-range.
-
-Then generate an auth key tagged with `tag:maestro`.
-
-### 3. Configure split DNS
-
-In Tailscale admin > DNS > Add nameserver > Custom:
-
-- Nameserver: the `.254` IP in the subnet's first `/24` (for example,
-  `172.22.0.254` for `172.22.0.0/16`), shown in Maestro's log output
-- Restrict to domain: `maestro.internal`
-
-You only need **one** split DNS entry. The DNS proxy discovers peer clusters via
-Tailscale and forwards queries across clusters.
-
-Maestro preserves the fixed system addresses in that first `/24` for existing
-single-node installations. Cluster scheduling assigns `.2` through `.199` to
-workloads and reserves `.200` through `.254` for system use. Legacy standalone
-runtime allocation continues using its configured subnet; fixed system
-containers start before workloads and are reserved as active IPAM leases.
-
-### 4. Access your services
-
-```bash
-# Via ingress
-curl -H "Host: example.com" http://web.my-cluster.maestro.internal:8888/
-
-# Via container hostname (port 80 is the container's internal port)
-curl http://my-app-abc123.my-cluster.maestro.internal/
-
-# Cross-cluster access works automatically
-curl http://web.other-cluster.maestro.internal:8888/
-```
-
-Deployment links use the human-readable `<cluster>.maestro.internal` alias. The
-suffix-bearing canonical domain remains available for diagnostics. If peer
-discovery finds another tailnet cluster claiming the same alias, Maestro reports
-the conflict in the UI but continues to show the configured alias.
-
-### Multi-cluster setup
-
-Each cluster needs a unique `cluster.name` and `subnet` to avoid routing conflicts.
-For example, use `172.22.0.0/16` for `cluster-1` and `172.23.0.0/16` for
-`cluster-2`, then start each from its own configuration and data directory:
-
-```bash
-maestro daemon start --config cluster-1.jsonc --data-dir ./data1 --project-dir .
-maestro daemon start --config cluster-2.jsonc --data-dir ./data2 --project-dir .
-```
-
-Clusters discover each other via Tailscale. DNS queries for
-`*.cluster-2.maestro.internal` that reach cluster-1 are forwarded to cluster-2's DNS
-proxy.
+See [Tailscale operator access](docs/tailscale.md) for tailnet policy, auth-key,
+configuration, split-DNS, verification, and recovery steps. See
+[Multi-node rewrite operations](docs/multi-node.md) for the underlying private
+network and cluster-formation contract.
 
 ## Log storage and backups
 
