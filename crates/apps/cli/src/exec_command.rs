@@ -26,6 +26,18 @@ const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 type ExecSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalMode {
+    Interactive,
+    Pipes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionInteraction {
+    Interactive,
+    NonInteractive,
+}
+
 /// Interactive exec target and terminal options.
 #[derive(Debug, Args)]
 pub(crate) struct ExecCommand {
@@ -57,8 +69,12 @@ pub(crate) async fn run(
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     let stdin_is_terminal = std::io::stdin().is_terminal();
-    let tty = !command.no_tty;
-    if tty && !stdin_is_terminal {
+    let terminal_mode = if command.no_tty {
+        TerminalMode::Pipes
+    } else {
+        TerminalMode::Interactive
+    };
+    if terminal_mode == TerminalMode::Interactive && !stdin_is_terminal {
         return Err(CliError::invalid_input(
             "stdin is not a terminal; use --no-tty when piping input",
         ));
@@ -97,7 +113,11 @@ pub(crate) async fn run(
         assignments,
         command.replica,
         node_id.as_ref(),
-        stdin_is_terminal,
+        if stdin_is_terminal {
+            SelectionInteraction::Interactive
+        } else {
+            SelectionInteraction::NonInteractive
+        },
         input,
         output,
     )?;
@@ -106,7 +126,10 @@ pub(crate) async fn run(
     } else {
         command.command
     };
-    let initial_size = tty.then(terminal_size).transpose()?;
+    let initial_size = match terminal_mode {
+        TerminalMode::Interactive => Some(terminal_size()?),
+        TerminalMode::Pipes => None,
+    };
     let endpoint = exec_endpoint(
         &context,
         &service_id,
@@ -116,8 +139,8 @@ pub(crate) async fn run(
         initial_size,
     )?;
     let socket = connect(&context, endpoint).await?;
-    let raw_mode = RawModeGuard::enter(tty)?;
-    let exit = drive(socket, tty, initial_size).await;
+    let raw_mode = RawModeGuard::enter(terminal_mode)?;
+    let exit = drive(socket, terminal_mode, initial_size).await;
     drop(raw_mode);
     match exit? {
         Some(0) => Ok(()),
@@ -173,7 +196,7 @@ pub(crate) fn select_assignment(
     assignments: Vec<Assignment>,
     replica: Option<u32>,
     node_id: Option<&NodeId>,
-    allow_prompt: bool,
+    interaction: SelectionInteraction,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<Assignment, CliError> {
@@ -196,7 +219,9 @@ pub(crate) fn select_assignment(
         1 => candidates
             .pop()
             .ok_or_else(|| CliError::exec("selected replica disappeared")),
-        _ if allow_prompt => prompt_assignment(candidates, input, output),
+        _ if interaction == SelectionInteraction::Interactive => {
+            prompt_assignment(candidates, input, output)
+        }
         _ => Err(CliError::invalid_input(
             "multiple running replicas match; use --replica or --node when piping input",
         )),
@@ -333,7 +358,7 @@ fn client_tls(context: &Context) -> Result<rustls::ClientConfig, CliError> {
 
 async fn drive(
     mut socket: ExecSocket,
-    tty: bool,
+    terminal_mode: TerminalMode,
     initial_size: Option<TerminalSize>,
 ) -> Result<Option<i32>, CliError> {
     let mut stdin = duplicate_file(libc::STDIN_FILENO, "standard input")?;
@@ -389,7 +414,7 @@ async fn drive(
                     Some(Err(error)) => return Err(CliError::exec(format!("exec WebSocket failed: {error}"))),
                 }
             }
-            _ = resize.tick(), if tty => {
+            _ = resize.tick(), if terminal_mode == TerminalMode::Interactive => {
                 let size = terminal_size()?;
                 if last_size != Some(size) {
                     send(&mut socket, ExecStreamFrame::Resize {
@@ -430,23 +455,27 @@ fn terminal_size() -> Result<TerminalSize, CliError> {
     Ok(TerminalSize { columns, rows })
 }
 
-struct RawModeGuard {
-    enabled: bool,
+enum RawModeGuard {
+    Inactive,
+    Active,
 }
 
 impl RawModeGuard {
-    fn enter(enabled: bool) -> Result<Self, CliError> {
-        if enabled {
-            enable_raw_mode()
-                .map_err(|source| CliError::io("failed to enter terminal raw mode", source))?;
+    fn enter(terminal_mode: TerminalMode) -> Result<Self, CliError> {
+        match terminal_mode {
+            TerminalMode::Pipes => Ok(Self::Inactive),
+            TerminalMode::Interactive => {
+                enable_raw_mode()
+                    .map_err(|source| CliError::io("failed to enter terminal raw mode", source))?;
+                Ok(Self::Active)
+            }
         }
-        Ok(Self { enabled })
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        if self.enabled {
+        if matches!(self, Self::Active) {
             let _ = disable_raw_mode();
         }
     }

@@ -8,8 +8,11 @@ use kernel_api::{
     SecretValue, ServiceId, ServiceSpec, Timestamp, WorkloadId,
 };
 
+use crate::CliError;
 use crate::contexts::Context;
-use crate::exec_command::{TerminalSize, exec_endpoint, select_assignment, select_deployment};
+use crate::exec_command::{
+    SelectionInteraction, TerminalSize, exec_endpoint, select_assignment, select_deployment,
+};
 
 #[test]
 fn deployment_selection_prefers_an_active_running_deployment_then_newest()
@@ -52,7 +55,7 @@ fn assignment_selection_filters_targets_and_prompts_for_ambiguous_replicas()
         assignments.clone(),
         None,
         None,
-        true,
+        SelectionInteraction::Interactive,
         &mut input,
         &mut output,
     )?;
@@ -63,25 +66,33 @@ fn assignment_selection_filters_targets_and_prompts_for_ambiguous_replicas()
         assignments,
         Some(0),
         Some(&NodeId::new("node-a")?),
-        false,
+        SelectionInteraction::NonInteractive,
         &mut std::io::empty(),
         &mut Vec::new(),
     )?;
     assert_eq!(selected.meta.id, AssignmentId::new("assignment-0")?);
+    let mut non_interactive_output = Vec::new();
+    let error = select_assignment(
+        vec![
+            assignment("assignment-0b", 0, "node-a", AssignmentPhase::Running)?,
+            assignment("assignment-1b", 1, "node-b", AssignmentPhase::Running)?,
+        ],
+        None,
+        None,
+        SelectionInteraction::NonInteractive,
+        &mut std::io::empty(),
+        &mut non_interactive_output,
+    )
+    .expect_err("non-interactive selection must reject an ambiguous target");
     assert!(
-        select_assignment(
-            vec![
-                assignment("assignment-0b", 0, "node-a", AssignmentPhase::Running)?,
-                assignment("assignment-1b", 1, "node-b", AssignmentPhase::Running)?,
-            ],
-            None,
-            None,
-            false,
-            &mut std::io::empty(),
-            &mut Vec::new(),
-        )
-        .is_err()
+        matches!(
+            error,
+            CliError::InvalidInput { ref message }
+                if message == "multiple running replicas match; use --replica or --node when piping input"
+        ),
+        "unexpected selection error: {error}"
     );
+    assert!(non_interactive_output.is_empty());
     Ok(())
 }
 
