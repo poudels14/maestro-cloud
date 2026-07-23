@@ -1,3 +1,7 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+mod telemetry_plan;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

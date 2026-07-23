@@ -3587,6 +3587,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "cluster",
+ "duckdb",
  "etcd-client",
  "hex",
  "http 1.4.2",

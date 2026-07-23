@@ -8,8 +8,8 @@ use kernel_api::ResourceName;
 use kernel_store::{Keyspace, Store};
 use migrate::{
     CapturedLegacySnapshot, CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource,
-    LegacySnapshot, MigrationOutcome, MigrationPlanReport, MigrationVerification,
-    plan_legacy_snapshot,
+    LegacySnapshot, LegacyTelemetryPlan, MigrationOutcome, MigrationPlanReport,
+    MigrationVerification, plan_legacy_snapshot,
 };
 use serde::Serialize;
 
@@ -69,6 +69,18 @@ enum Command {
         master_secret_file: PathBuf,
         #[arg(long, default_value = "legacy-v1")]
         migration_id: ResourceName,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Captures a reviewable, read-only inventory of one stopped node's legacy telemetry.
+    TelemetryPlan {
+        /// Legacy probe data root, normally `<cluster>/system/probe/data`.
+        #[arg(long)]
+        legacy_data_directory: PathBuf,
+        #[arg(long)]
+        cluster_id: kernel_api::ClusterId,
+        #[arg(long)]
+        node_id: kernel_api::NodeId,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -134,6 +146,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 output.as_deref(),
             )
             .await
+        }
+        Command::TelemetryPlan {
+            legacy_data_directory,
+            cluster_id,
+            node_id,
+            output,
+        } => {
+            let plan = LegacyTelemetryPlan::capture(&legacy_data_directory, cluster_id, node_id)?;
+            write_json(&plan, output.as_deref())
         }
     }
 }

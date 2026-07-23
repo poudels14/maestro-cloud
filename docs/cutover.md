@@ -10,12 +10,34 @@ owner-only files. The master-secret file contains the exact legacy/new store
 secret bytes: do not append a newline. Outputs are installed with mode `0600`
 and are never overwritten.
 
+Legacy telemetry does not share the rewrite's on-disk schema. Each node's probe
+owns three DuckDB files and a manifest-committed Parquet tree under
+`<cluster>/system/probe/data`; the rewrite owns versioned log and metric stores
+under `<cluster>/agent`. Treating those files as interchangeable would silently
+start empty observability stores.
+
 ## Rehearsal
 
 1. Restore a verified production etcd snapshot into an isolated staging
    cluster. Keep all legacy and rewrite daemons stopped and allow legacy leases
    to expire.
-2. Capture one revision-consistent logical snapshot:
+2. On every stopped node, capture and review the exact node-local telemetry
+   inventory. The command opens all three DuckDB files read-only, verifies every
+   Parquet object against its commit manifest, rejects temporary/uncommitted
+   files, and binds the ordered file inventory into `sourceSha256`:
+
+   ```sh
+   maestro-migrate telemetry-plan \
+     --legacy-data-directory /var/lib/maestro/production/system/probe/data \
+     --cluster-id production \
+     --node-id node-a \
+     --output /var/lib/maestro/cutover/node-a-telemetry-plan.json
+   ```
+
+   Repeat this for every node. Retain these artifacts with the native etcd
+   snapshot; they are the input fences for node-local telemetry conversion.
+
+3. Capture one revision-consistent logical snapshot:
 
    ```sh
    maestro-migrate capture \
@@ -26,7 +48,7 @@ and are never overwritten.
      --output /var/lib/maestro/cutover/legacy-snapshot.json
    ```
 
-3. Generate and review the secret-free plan report. The command validates every
+4. Generate and review the secret-free plan report. The command validates every
    known legacy key family and fails if leadership, requests, maintenance, or
    node lifecycle work is still in progress. Successful legacy `up` deployments
    are frozen to the image they already built because the old controller
@@ -40,7 +62,7 @@ and are never overwritten.
      --output /var/lib/maestro/cutover/plan-report.json
    ```
 
-4. Apply the exact reviewed artifact:
+5. Apply the exact reviewed artifact:
 
    ```sh
    maestro-migrate apply \
@@ -58,7 +80,7 @@ and are never overwritten.
    `applied` or `alreadyComplete` outcome, the same plan report, and an exact
    destination verification.
 
-5. While every daemon is still stopped, independently verify the completion
+6. While every daemon is still stopped, independently verify the completion
    marker and every migrated resource and request barrier. Archive the
    secret-free evidence file with the reviewed plan:
 
@@ -79,7 +101,7 @@ and are never overwritten.
    exists in the destination namespace. Run it before starting rewrite daemons
    because reconcilers legitimately update migrated resources.
 
-6. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
+7. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
    treat a successful schema migration as approval for a runtime transition;
    the production runtime adoption mode is a separate cutover gate.
 

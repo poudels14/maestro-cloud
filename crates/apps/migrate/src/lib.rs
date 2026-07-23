@@ -30,6 +30,7 @@ mod plan;
 mod report;
 mod runner;
 mod snapshot;
+mod telemetry_plan;
 
 pub use artifact::SnapshotArtifactError;
 pub use etcd_source::{
@@ -40,6 +41,9 @@ pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use report::{MigrationPlanReport, ReportError};
 pub use runner::{CutoverMigration, MigrationError, MigrationOutcome, MigrationVerification};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
+pub use telemetry_plan::{
+    LegacyTelemetryCounts, LegacyTelemetryFile, LegacyTelemetryPlan, LegacyTelemetryPlanError,
+};
 
 #[cfg(test)]
 mod legacy_cluster_tests;
