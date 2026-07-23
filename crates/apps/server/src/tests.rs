@@ -1,7 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};

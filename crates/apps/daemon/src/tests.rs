@@ -38,8 +38,7 @@ mod s3_backup;
 mod stats_metric_sampler;
 mod tailscale_resources;
 
-use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
+use std::{collections::BTreeMap, net::Ipv4Addr};
 
 use cluster::{ClusterConfig, ClusterPorts, Ipv4Cidr, NodeDefinition, NodeEndpoint};
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};

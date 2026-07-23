@@ -1,6 +1,7 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used)]
 
+#[path = "support/fixture.rs"]
 mod support;
 
 use std::collections::BTreeMap;

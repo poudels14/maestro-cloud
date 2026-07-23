@@ -3,8 +3,10 @@
 mod telemetry_apply;
 mod telemetry_plan;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use kernel_api::{
     ArtifactTemplate, BuiltinResource, ClusterId, ExecPolicy, Generation, NodeApiAccess, Object,

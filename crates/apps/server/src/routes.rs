@@ -27,8 +27,7 @@ mod traffic;
 mod upgrades;
 mod webhook_commands;
 
-use axum::Router;
-use axum::middleware;
+use axum::{Router, middleware};
 
 use crate::AppState;
 use crate::auth::{AuthPolicy, require_node, require_operator};
