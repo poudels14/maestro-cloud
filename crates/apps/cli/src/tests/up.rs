@@ -158,7 +158,7 @@ async fn up_uploads_a_content_address_then_applies_the_same_tarball_source()
     run(
         &api,
         "services.jsonc",
-        "api".to_string(),
+        None,
         context.path(),
         RequestId::new("up-1")?,
         &mut output,
@@ -166,30 +166,100 @@ async fn up_uploads_a_content_address_then_applies_the_same_tarball_source()
     )
     .await?;
 
-    let archive = api.archive.lock().map_err(|_| "archive lock poisoned")?;
-    let (archive_id, bytes) = archive.as_ref().ok_or("archive was not uploaded")?;
-    assert!(bytes.starts_with(&[0x1f, 0x8b]));
-    assert_eq!(
-        archive_id,
-        &ArtifactArchiveId::from_sha256(Sha256::digest(bytes).into())
-    );
-    let desired = api.desired.lock().map_err(|_| "desired lock poisoned")?;
-    let desired = desired.as_ref().ok_or("rollout was not diffed")?;
-    assert!(matches!(
-        &desired.service.artifact,
-        ArtifactTemplate::Build { template }
-            if matches!(&template.source, kernel_api::BuildSource::Tarball { archive_id: source_id } if source_id == archive_id)
-    ));
-    let writes = api.writes.lock().map_err(|_| "write lock poisoned")?;
-    assert_eq!(writes.len(), 1);
-    assert_eq!(
-        writes.first().map(|write| &write.0),
-        Some(&RequestId::new("up-1")?)
-    );
-    assert_eq!(writes.first().map(|write| &write.1.desired), Some(desired));
+    {
+        let archive = api.archive.lock().map_err(|_| "archive lock poisoned")?;
+        let (archive_id, bytes) = archive.as_ref().ok_or("archive was not uploaded")?;
+        assert!(bytes.starts_with(&[0x1f, 0x8b]));
+        assert_eq!(
+            archive_id,
+            &ArtifactArchiveId::from_sha256(Sha256::digest(bytes).into())
+        );
+        let desired = api.desired.lock().map_err(|_| "desired lock poisoned")?;
+        let desired = desired.as_ref().ok_or("rollout was not diffed")?;
+        assert!(matches!(
+            &desired.service.artifact,
+            ArtifactTemplate::Build { template }
+                if matches!(&template.source, kernel_api::BuildSource::Tarball { archive_id: source_id } if source_id == archive_id)
+        ));
+        let writes = api.writes.lock().map_err(|_| "write lock poisoned")?;
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes.first().map(|write| &write.0),
+            Some(&RequestId::new("up-1")?)
+        );
+        assert_eq!(writes.first().map(|write| &write.1.desired), Some(desired));
+    }
     let output = String::from_utf8(output)?;
     assert!(output.contains("local rollout accepted for `api`"));
     assert!(!output.contains("private-build-token"));
+
+    let explicit_api = RecordingApi::default();
+    run(
+        &explicit_api,
+        "services.jsonc",
+        Some("api".to_string()),
+        context.path(),
+        RequestId::new("up-explicit")?,
+        &mut Vec::new(),
+        &reader,
+    )
+    .await?;
+    assert_eq!(
+        explicit_api
+            .writes
+            .lock()
+            .map_err(|_| "explicit writes lock poisoned")?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn up_requires_a_service_id_for_a_multi_service_config_before_upload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let context = tempfile::tempdir()?;
+    std::fs::write(context.path().join("Dockerfile"), b"FROM scratch\n")?;
+    let reader = MemoryReader {
+        document: r#"{
+            services: {
+                api: {
+                    name: "API",
+                    build: { dockerfile: "Dockerfile" },
+                    deploy: { replicas: 1 }
+                },
+                worker: {
+                    name: "Worker",
+                    build: { dockerfile: "Dockerfile" },
+                    deploy: { replicas: 1 }
+                }
+            }
+        }"#
+        .to_string(),
+    };
+    let api = RecordingApi::default();
+    let error = run(
+        &api,
+        "services.jsonc",
+        None,
+        context.path(),
+        RequestId::new("up-ambiguous")?,
+        &mut Vec::new(),
+        &reader,
+    )
+    .await
+    .expect_err("an ambiguous config must require a service ID");
+
+    assert!(error.to_string().contains(
+        "`services up` requires SERVICE_ID when `services.jsonc` configures multiple services: \
+         api, worker"
+    ));
+    assert!(
+        api.archive
+            .lock()
+            .map_err(|_| "archive lock poisoned")?
+            .is_none()
+    );
     Ok(())
 }
 

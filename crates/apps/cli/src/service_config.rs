@@ -137,13 +137,42 @@ pub(crate) async fn decode_services(
 
 pub(crate) async fn load_uploaded_service(
     source: &str,
-    service_id: ServiceId,
+    service_id: Option<ServiceId>,
     archive_id: kernel_api::ArtifactArchiveId,
     reader: &impl ConfigSourceReader,
 ) -> Result<LoadedUploadedService, CliError> {
     let merged = load_merged(source, reader).await?;
     let (mut document, ignored_fields): (ServicesDocument, _) =
         decode_document(&merged, &format!("services config `{source}`"))?;
+    let service_id = match service_id {
+        Some(service_id) => service_id,
+        None if document.services.len() == 1 => {
+            let raw_id = document
+                .services
+                .first_key_value()
+                .map(|(raw_id, _)| raw_id.clone())
+                .ok_or_else(|| CliError::invalid_input("services: no services configured"))?;
+            ServiceId::new(raw_id.clone())
+                .map_err(|error| CliError::invalid_input(format!("services.{raw_id}: {error}")))?
+        }
+        None if document.services.is_empty() => {
+            return Err(CliError::invalid_input(format!(
+                "services: no services configured in `{source}`"
+            )));
+        }
+        None => {
+            let configured = document
+                .services
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::invalid_input(format!(
+                "`services up` requires SERVICE_ID when `{source}` configures multiple services: \
+                 {configured}"
+            )));
+        }
+    };
     let template = document
         .services
         .remove(service_id.as_str())

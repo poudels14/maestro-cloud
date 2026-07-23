@@ -317,6 +317,18 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "services",
+            "up",
+            "--config",
+            "services.jsonc",
+            "--context",
+            "./api",
+        ])
+        .is_ok()
+    );
 }
 
 #[tokio::test]

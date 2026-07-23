@@ -16,7 +16,7 @@ use crate::services::ServiceApi;
 pub(crate) async fn run(
     client: &impl ServiceApi,
     config_source: &str,
-    service_id: String,
+    service_id: Option<String>,
     context: &Path,
     request_id: RequestId,
     output: &mut dyn Write,
@@ -30,7 +30,9 @@ pub(crate) async fn run(
         })??;
     let archive_id = ArtifactArchiveId::from_sha256(Sha256::digest(&archive).into());
     let archive_size = u64::try_from(archive.len()).unwrap_or(u64::MAX);
-    let service_id = kernel_api::ServiceId::new(service_id)
+    let service_id = service_id
+        .map(kernel_api::ServiceId::new)
+        .transpose()
         .map_err(|error| CliError::invalid_input(error.to_string()))?;
     let loaded =
         load_uploaded_service(config_source, service_id, archive_id.clone(), reader).await?;

@@ -35,8 +35,8 @@ pub(crate) enum ServiceCommand {
     },
     /// Package a local context and deploy one configured build service.
     Up {
-        /// Service identity selected from the services config.
-        service_id: String,
+        /// Service identity; may be omitted when the config contains exactly one service.
+        service_id: Option<String>,
         /// Local, file://, or aws-secret:// services config source.
         #[arg(long, default_value = "maestro.services.jsonc")]
         config: String,
