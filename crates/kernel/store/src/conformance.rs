@@ -11,6 +11,16 @@ use crate::{
     SessionBinding, Store, StoreError, StoreKey, Transaction, TransactionOutcome, WatchStart,
 };
 
+macro_rules! require {
+    ($condition:expr, $message:expr $(,)?) => {
+        if $condition {
+            Ok(())
+        } else {
+            violation($message)
+        }
+    };
+}
+
 /// Evidence returned after a backend passes the shared store contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConformanceReport {
@@ -59,10 +69,10 @@ pub async fn run(
     }
 
     let snapshot = store.list(&prefix).await?;
-    require(snapshot.values.is_empty(), "isolated prefix was not empty")?;
+    require!(snapshot.values.is_empty(), "isolated prefix was not empty")?;
     let mut watch = store.watch(prefix.clone(), WatchStart::After(snapshot.cursor))?;
     let mut pending_next = test_util::task::spawn(watch.next());
-    require(
+    require!(
         matches!(pending_next.poll(), Poll::Pending),
         "an idle watch did not wait for a future mutation",
     )?;
@@ -96,20 +106,20 @@ pub async fn run(
     let TransactionOutcome::Applied { results, cursor } = outcome else {
         return violation("atomic create unexpectedly conflicted");
     };
-    require(results.len() == 2, "atomic create omitted mutation results")?;
+    require!(results.len() == 2, "atomic create omitted mutation results")?;
     let first_event = watch.next().await?;
     let second_event = watch.next().await?;
-    require(
+    require!(
         first_event.cursor < second_event.cursor,
         "transaction watch events were not strictly ordered",
     )?;
-    require(
+    require!(
         second_event.cursor == cursor,
         "transaction cursor did not follow its final watch event",
     )?;
 
     let mut resumed = store.watch(prefix.clone(), WatchStart::After(first_event.cursor))?;
-    require(
+    require!(
         resumed.next().await?.cursor == second_event.cursor,
         "watch did not resume within an atomic transaction",
     )?;
@@ -127,12 +137,12 @@ pub async fn run(
             session: None,
         })
         .await?;
-    require(
+    require!(
         matches!(conflict, CasOutcome::Conflict { actual: Some(actual) } if actual == first.version),
         "stale create did not report the current version",
     )?;
     let listed = store.list(&prefix).await?;
-    require(
+    require!(
         listed.values.len() == 2,
         "linearizable prefix list returned the wrong key count",
     )?;
@@ -148,13 +158,13 @@ pub async fn run(
             }),
         })
         .await?;
-    require(
+    require!(
         matches!(leased, CasOutcome::Applied(_)),
         "session-bound create unexpectedly conflicted",
     )?;
     session.keep_alive().await?;
     session.close().await?;
-    require(
+    require!(
         store.get(&leased_key).await?.is_none(),
         "closing a session did not remove its attached key",
     )?;
@@ -176,20 +186,12 @@ async fn delete_if_present(store: &dyn Store, key: &StoreKey) -> Result<(), Conf
                 expected: value.version,
             })
             .await?;
-        require(
+        require!(
             matches!(outcome, CasOutcome::Applied(_)),
             "cleanup delete conflicted in an isolated namespace",
         )?;
     }
     Ok(())
-}
-
-fn require(condition: bool, message: &str) -> Result<(), ConformanceError> {
-    if condition {
-        Ok(())
-    } else {
-        violation(message)
-    }
 }
 
 fn violation<T>(message: &str) -> Result<T, ConformanceError> {

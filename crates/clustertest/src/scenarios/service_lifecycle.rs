@@ -127,7 +127,7 @@ where
     let active_id = rollout(cluster, name.clone(), 1).await?;
     converge(cluster, "await freeze baseline").await?;
     cluster
-        .set_service_frozen(&name, true)
+        .set_service_frozen(&name, crate::ServiceFreezeState::Frozen)
         .await
         .map_err(|error| driver_error("freeze service", error))?;
     let queued_id = cluster
@@ -152,7 +152,7 @@ where
     }
 
     cluster
-        .set_service_frozen(&name, false)
+        .set_service_frozen(&name, crate::ServiceFreezeState::Active)
         .await
         .map_err(|error| driver_error("unfreeze service", error))?;
     let unfrozen = converge(cluster, "await unfrozen rollout").await?;
@@ -189,7 +189,7 @@ where
     let deployment_id = rollout(cluster, name.clone(), replica_count).await?;
     converge(cluster, "await drain baseline").await?;
     cluster
-        .set_node_draining(&target, true)
+        .set_node_draining(&target, crate::NodeDrainState::Draining)
         .await
         .map_err(|error| driver_error("drain node", error))?;
     let drained = converge(cluster, "await node drain").await?;
@@ -206,7 +206,7 @@ where
     }
 
     cluster
-        .set_node_draining(&target, false)
+        .set_node_draining(&target, crate::NodeDrainState::Available)
         .await
         .map_err(|error| driver_error("restore node", error))?;
     cluster

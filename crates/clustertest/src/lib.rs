@@ -62,7 +62,7 @@ pub use restart::RestartCluster;
 pub use rollout::CutoverCluster;
 pub use routing::RoutingCluster;
 pub use scheduling::SchedulingCluster;
-pub use service_lifecycle::ServiceLifecycleCluster;
+pub use service_lifecycle::{NodeDrainState, ServiceFreezeState, ServiceLifecycleCluster};
 pub use smoke::{
     IngressConfigurationState, IngressStartupCluster, IngressStartupObservation, PeerStoreCluster,
     PeerStoreObservation, SecurityRestartState, SeedControlRole, SeedSecurityCluster,

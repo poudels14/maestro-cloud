@@ -5,9 +5,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use clustertest::{
     AcceptanceCluster, ClusterSnapshot, DeploymentPhase as SnapshotDeploymentPhase,
-    DeploymentSnapshot, FixtureArtifact, FixtureName, FixtureVersion, IngressFixture, ReplicaCount,
-    ReplicaOverride, ReplicaSnapshot, ResourceAvailability, ServiceFixture,
-    ServiceLifecycleCluster, ServiceSnapshot, scenarios,
+    DeploymentSnapshot, FixtureArtifact, FixtureName, FixtureVersion, IngressFixture,
+    NodeDrainState, ReplicaCount, ReplicaOverride, ReplicaSnapshot, ResourceAvailability,
+    ServiceFixture, ServiceFreezeState, ServiceLifecycleCluster, ServiceSnapshot, scenarios,
 };
 use kernel_api::{
     Assignment, AssignmentPhase, Deployment, DeploymentGoal,
@@ -179,15 +179,14 @@ impl ServiceLifecycleCluster for AcceptanceWorld {
     async fn set_service_frozen(
         &mut self,
         name: &FixtureName,
-        frozen: bool,
+        state: ServiceFreezeState,
     ) -> Result<(), Self::Error> {
         let service_id = service_id(name)?;
         self.inner
             .update_service_by_id(&service_id, |service| {
-                service.status.rollout = if frozen {
-                    RolloutState::Frozen
-                } else {
-                    RolloutState::Active
+                service.status.rollout = match state {
+                    ServiceFreezeState::Frozen => RolloutState::Frozen,
+                    ServiceFreezeState::Active => RolloutState::Active,
                 };
             })
             .await
@@ -198,11 +197,11 @@ impl ServiceLifecycleCluster for AcceptanceWorld {
     async fn set_node_draining(
         &mut self,
         node: &clustertest::FixtureNodeName,
-        draining: bool,
+        state: NodeDrainState,
     ) -> Result<(), Self::Error> {
         let node_id = NodeId::new(node.as_str()).map_err(AcceptanceError::from_driver)?;
         self.inner
-            .set_node_draining(&node_id, draining)
+            .set_node_draining(&node_id, state)
             .await
             .map_err(AcceptanceError::from_driver)
     }

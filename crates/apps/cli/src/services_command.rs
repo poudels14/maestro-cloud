@@ -162,12 +162,26 @@ pub(crate) async fn run(
         } => {
             rollout::run(
                 &client,
-                &config,
-                &services,
-                apply,
-                force,
-                yes,
-                idempotency_key,
+                rollout::RolloutOptions {
+                    config_source: &config,
+                    filters: &services,
+                    mode: if apply {
+                        rollout::RolloutMode::Apply
+                    } else {
+                        rollout::RolloutMode::Preview
+                    },
+                    frozen_service_policy: if force {
+                        rollout::FrozenServicePolicy::BypassFreeze
+                    } else {
+                        rollout::FrozenServicePolicy::HonorFreeze
+                    },
+                    confirmation: if yes {
+                        rollout::ConfirmationMode::AssumeYes
+                    } else {
+                        rollout::ConfirmationMode::Prompt
+                    },
+                    idempotency_key,
+                },
                 input,
                 output,
                 &crate::config_source::SystemConfigSourceReader,

@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 
 use super::lifecycle::{LifecycleWorld, LifecycleWorldError};
-use crate::{FixtureName, FixtureNodeName, ServiceLifecycleCluster, scenarios};
+use crate::{
+    FixtureName, FixtureNodeName, NodeDrainState, ServiceFreezeState, ServiceLifecycleCluster,
+    scenarios,
+};
 
 #[async_trait]
 impl ServiceLifecycleCluster for LifecycleWorld {
@@ -36,12 +39,15 @@ impl ServiceLifecycleCluster for LifecycleWorld {
     async fn set_service_frozen(
         &mut self,
         service: &FixtureName,
-        frozen: bool,
+        state: ServiceFreezeState,
     ) -> Result<(), Self::Error> {
-        if frozen {
-            self.frozen_services.insert(service.clone());
-        } else {
-            self.frozen_services.remove(service);
+        match state {
+            ServiceFreezeState::Frozen => {
+                self.frozen_services.insert(service.clone());
+            }
+            ServiceFreezeState::Active => {
+                self.frozen_services.remove(service);
+            }
         }
         Ok(())
     }
@@ -49,15 +55,18 @@ impl ServiceLifecycleCluster for LifecycleWorld {
     async fn set_node_draining(
         &mut self,
         node: &FixtureNodeName,
-        draining: bool,
+        state: NodeDrainState,
     ) -> Result<(), Self::Error> {
         if !self.topology_nodes.contains(node) {
             return Err(LifecycleWorldError("unknown node"));
         }
-        if draining {
-            self.draining_nodes.insert(node.clone());
-        } else {
-            self.draining_nodes.remove(node);
+        match state {
+            NodeDrainState::Draining => {
+                self.draining_nodes.insert(node.clone());
+            }
+            NodeDrainState::Available => {
+                self.draining_nodes.remove(node);
+            }
         }
         Ok(())
     }

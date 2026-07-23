@@ -8,6 +8,12 @@ use crate::{
 const INITIAL_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const UPDATED_REVISION: &str = "89abcdef0123456789abcdef0123456789abcdef";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitWatchMode {
+    Disabled,
+    Enabled,
+}
+
 /// Proves Git source pinning, secret delivery, and deployment of the built artifact.
 pub async fn git_build_rolls_out_an_immutable_artifact<Cluster>(
     cluster: &mut Cluster,
@@ -20,7 +26,7 @@ where
         .await
         .map_err(|error| driver_error("set initial Git revision", error))?;
     cluster
-        .apply_build_service(build_service(false))
+        .apply_build_service(build_service(GitWatchMode::Disabled))
         .await
         .map_err(|error| driver_error("apply Git build service", error))?;
     let snapshot = cluster
@@ -69,7 +75,7 @@ where
         .await
         .map_err(|error| driver_error("set initial watched revision", error))?;
     cluster
-        .apply_build_service(build_service(true))
+        .apply_build_service(build_service(GitWatchMode::Enabled))
         .await
         .map_err(|error| driver_error("apply watched Git service", error))?;
     let initial = cluster
@@ -114,13 +120,13 @@ where
     Ok(())
 }
 
-fn build_service(watch: bool) -> BuildServiceFixture {
+fn build_service(watch_mode: GitWatchMode) -> BuildServiceFixture {
     BuildServiceFixture {
         name: FixtureName::new("build-api"),
         repository: "https://github.com/maestro-tests/build-api.git".to_string(),
         branch: "main".to_string(),
         dockerfile: "Dockerfile".to_string(),
-        watch,
+        watch: watch_mode == GitWatchMode::Enabled,
         arguments: build_arguments(),
         secret_names: build_secrets(),
     }

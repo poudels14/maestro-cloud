@@ -13,6 +13,12 @@ use crate::model::{
     UnschedulableReason, UnschedulableReplica,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CandidateAvailability {
+    None,
+    Available,
+}
+
 /// Computes stable placements without reading the store or performing side effects.
 pub fn plan(mut input: ScheduleInput) -> SchedulePlan {
     input.services.sort_by(|left, right| {
@@ -248,7 +254,15 @@ fn plan_service<'a>(
                     service_id: service.service_id.clone(),
                     deployment_id: group.deployment_id.clone(),
                     replica_index,
-                    reason: unschedulable_reason(service, &input.nodes, !candidates.is_empty()),
+                    reason: unschedulable_reason(
+                        service,
+                        &input.nodes,
+                        if candidates.is_empty() {
+                            CandidateAvailability::None
+                        } else {
+                            CandidateAvailability::Available
+                        },
+                    ),
                 });
             }
         }
@@ -283,7 +297,7 @@ fn eligible_nodes<'a>(
 fn unschedulable_reason(
     service: &ServiceSchedule,
     nodes: &[ScheduleNode],
-    had_candidates: bool,
+    candidate_availability: CandidateAvailability,
 ) -> UnschedulableReason {
     let constrained = service.placement.node_id.is_some() || !service.placement.labels.is_empty();
     let affinity_matches = nodes.iter().any(|node| {
@@ -300,7 +314,7 @@ fn unschedulable_reason(
     });
     if constrained && !affinity_matches {
         UnschedulableReason::AffinityMatchesNoNode
-    } else if had_candidates {
+    } else if candidate_availability == CandidateAvailability::Available {
         UnschedulableReason::NoAlternateNode
     } else {
         UnschedulableReason::NoSchedulableNode

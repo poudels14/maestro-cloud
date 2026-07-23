@@ -1,3 +1,4 @@
+use clustertest::NodeDrainState;
 use kernel_api::{Assignment, NodeId, TrafficGeneration, TrafficGenerationPhase};
 
 use super::orchestration::RolloutWorld;
@@ -10,7 +11,9 @@ async fn node_drain_replaces_when_possible_and_restore_accepts_new_work()
         world.converge().await?;
         let selected = NodeId::new(format!("node-{node_count}"))?;
 
-        world.set_node_draining(&selected, true).await?;
+        world
+            .set_node_draining(&selected, NodeDrainState::Draining)
+            .await?;
         world.converge().await?;
 
         let drained = world.list::<Assignment>("Assignment").await?;
@@ -30,7 +33,9 @@ async fn node_drain_replaces_when_possible_and_restore_accepts_new_work()
         }
         assert_eq!(active_target_count(&world).await?, usize::from(node_count));
 
-        world.set_node_draining(&selected, false).await?;
+        world
+            .set_node_draining(&selected, NodeDrainState::Available)
+            .await?;
         world
             .set_replica_override(Some(u32::from(node_count).saturating_add(1)))
             .await?;

@@ -10,7 +10,7 @@ use kernel_api::{
 
 use crate::CliError;
 use crate::config_source::ConfigSourceReader;
-use crate::rollout::run;
+use crate::rollout::{ConfirmationMode, FrozenServicePolicy, RolloutMode, RolloutOptions, run};
 use crate::services::{DeploymentLifecycleAction, ServiceApi, ServiceLifecycleAction};
 
 struct MemoryReader {
@@ -148,12 +148,14 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
     let mut output = Vec::new();
     run(
         &api,
-        "services.jsonc",
-        &["api".to_string()],
-        true,
-        true,
-        true,
-        Some("rollout-1".to_string()),
+        RolloutOptions {
+            config_source: "services.jsonc",
+            filters: &["api".to_string()],
+            mode: RolloutMode::Apply,
+            frozen_service_policy: FrozenServicePolicy::BypassFreeze,
+            confirmation: ConfirmationMode::AssumeYes,
+            idempotency_key: Some("rollout-1".to_string()),
+        },
         &mut input,
         &mut output,
         &reader,
@@ -202,12 +204,14 @@ async fn rollout_dry_run_never_writes_and_prompts_for_apply()
     let mut output = Vec::new();
     run(
         &api,
-        "services.jsonc",
-        &[],
-        false,
-        false,
-        false,
-        None,
+        RolloutOptions {
+            config_source: "services.jsonc",
+            filters: &[],
+            mode: RolloutMode::Preview,
+            frozen_service_policy: FrozenServicePolicy::BypassFreeze,
+            confirmation: ConfirmationMode::AssumeYes,
+            idempotency_key: None,
+        },
         &mut input,
         &mut output,
         &reader,

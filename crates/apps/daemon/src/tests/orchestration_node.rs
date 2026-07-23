@@ -1,3 +1,4 @@
+use clustertest::NodeDrainState;
 use kernel_api::{
     Condition, ConditionReason, ConditionState, ConditionType, Node, NodeId, ResourceKind,
     ResourceName, Timestamp,
@@ -10,7 +11,7 @@ impl RolloutWorld {
     pub(super) async fn set_node_draining(
         &self,
         node_id: &NodeId,
-        draining: bool,
+        state: NodeDrainState,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let key = self.keys.resource(
             &ResourceKind::new("Node")?,
@@ -23,20 +24,17 @@ impl RolloutWorld {
             .retain(|condition| condition.condition_type.0 != "Draining");
         node.status.conditions.push(Condition {
             condition_type: ConditionType("Draining".to_string()),
-            state: if draining {
-                ConditionState::True
-            } else {
-                ConditionState::False
+            state: match state {
+                NodeDrainState::Draining => ConditionState::True,
+                NodeDrainState::Available => ConditionState::False,
             },
-            reason: ConditionReason(if draining {
-                "Requested".to_string()
-            } else {
-                "Restored".to_string()
+            reason: ConditionReason(match state {
+                NodeDrainState::Draining => "Requested".to_string(),
+                NodeDrainState::Available => "Restored".to_string(),
             }),
-            message: if draining {
-                "node drain requested".to_string()
-            } else {
-                "node restored to scheduling".to_string()
+            message: match state {
+                NodeDrainState::Draining => "node drain requested".to_string(),
+                NodeDrainState::Available => "node restored to scheduling".to_string(),
             },
             observed_generation: node.meta.generation,
             last_transition_time: Timestamp(10_000),

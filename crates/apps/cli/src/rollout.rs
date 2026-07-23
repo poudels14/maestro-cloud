@@ -11,23 +11,46 @@ use crate::config_source::ConfigSourceReader;
 use crate::service_config::{DesiredService, load_services};
 use crate::services::ServiceApi;
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RolloutMode {
+    Preview,
+    Apply,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FrozenServicePolicy {
+    HonorFreeze,
+    BypassFreeze,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfirmationMode {
+    Prompt,
+    AssumeYes,
+}
+
+pub(crate) struct RolloutOptions<'a> {
+    pub(crate) config_source: &'a str,
+    pub(crate) filters: &'a [String],
+    pub(crate) mode: RolloutMode,
+    pub(crate) frozen_service_policy: FrozenServicePolicy,
+    pub(crate) confirmation: ConfirmationMode,
+    pub(crate) idempotency_key: Option<String>,
+}
+
 pub(crate) async fn run(
     client: &impl ServiceApi,
-    config_source: &str,
-    filters: &[String],
-    apply: bool,
-    force: bool,
-    yes: bool,
-    idempotency_key: Option<String>,
+    options: RolloutOptions<'_>,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
     reader: &impl ConfigSourceReader,
 ) -> Result<(), CliError> {
-    let loaded = load_services(config_source, reader).await?;
+    let loaded = load_services(options.config_source, reader).await?;
     write_ignored(&loaded.ignored_fields, output)?;
-    let selected = select(&loaded.services, filters, config_source)?;
-    if idempotency_key.is_some() && (!apply || selected.len() != 1) {
+    let selected = select(&loaded.services, options.filters, options.config_source)?;
+    if options.idempotency_key.is_some()
+        && (options.mode != RolloutMode::Apply || selected.len() != 1)
+    {
         return Err(CliError::invalid_input(
             "--idempotency-key requires --apply with exactly one selected service",
         ));
@@ -51,7 +74,7 @@ pub(crate) async fn run(
         .iter()
         .filter(|(_, _, diff)| diff.status != ServiceDiffStatus::Unchanged)
         .count();
-    if !apply {
+    if options.mode == RolloutMode::Preview {
         if change_count > 0 {
             writeln!(output, "\nrun with --apply to deploy these changes").map_err(output_error)?;
         }
@@ -61,12 +84,12 @@ pub(crate) async fn run(
         writeln!(output, "[maestro]: all selected services are unchanged").map_err(output_error)?;
         return Ok(());
     }
-    if !yes && !confirm(change_count, input, output)? {
+    if options.confirmation == ConfirmationMode::Prompt && !confirm(change_count, input, output)? {
         writeln!(output, "[maestro]: aborted").map_err(output_error)?;
         return Ok(());
     }
 
-    let mut explicit_key = idempotency_key;
+    let mut explicit_key = options.idempotency_key;
     for (service_id, spec, diff) in plans {
         if diff.status == ServiceDiffStatus::Unchanged {
             continue;
@@ -77,7 +100,7 @@ pub(crate) async fn run(
                 &request_id(explicit_key.take())?,
                 ServiceRolloutRequest {
                     expected_revisions: diff.expected_revisions,
-                    force,
+                    force: options.frozen_service_policy == FrozenServicePolicy::BypassFreeze,
                     desired: spec,
                 },
             )
