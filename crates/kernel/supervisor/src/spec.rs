@@ -10,7 +10,7 @@ use crate::SupervisorError;
 pub struct ProcessCommand {
     /// Absolute executable path.
     pub executable: PathBuf,
-    /// Argument vector passed verbatim after argv[0].
+    /// Argument vector passed verbatim after `argv[0]`.
     pub arguments: Vec<String>,
 }
 

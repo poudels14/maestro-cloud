@@ -168,8 +168,14 @@ pub enum ExecStreamProtocolError {
     InvalidUtf8,
     /// A payload was attached to a marker-only frame.
     #[error("exec frame type {kind} must not have a payload")]
-    UnexpectedPayload { kind: u8 },
+    UnexpectedPayload {
+        /// Raw wire discriminator for the marker-only frame.
+        kind: u8,
+    },
     /// The frame discriminator is not assigned by this protocol version.
     #[error("unknown exec frame type {kind}")]
-    UnknownFrame { kind: u8 },
+    UnknownFrame {
+        /// Raw wire discriminator rejected by this protocol version.
+        kind: u8,
+    },
 }
