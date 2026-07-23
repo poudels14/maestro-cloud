@@ -21,6 +21,7 @@ use kernel_store::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::settings::NodeCertificateRequirement;
 use crate::{ApiServer, ServerSettings, TlsIdentity, openapi_document};
 
 mod artifact_archives;
@@ -83,6 +84,27 @@ fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
             ),
         )
         .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn settings_name_the_node_certificate_requirement() -> Result<(), Box<dyn std::error::Error>> {
+    let optional = ServerSettings::new("127.0.0.1:3000".parse()?, None);
+    assert_eq!(
+        optional.node_certificate_requirement(),
+        NodeCertificateRequirement::Optional
+    );
+
+    let required = optional
+        .with_tls_identity(TlsIdentity::new(
+            "server certificate",
+            SecretValue::new("server private key"),
+        ))
+        .with_cluster_trust_root("cluster root");
+    assert_eq!(
+        required.node_certificate_requirement(),
+        NodeCertificateRequirement::Required
     );
     Ok(())
 }

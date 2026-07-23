@@ -8,11 +8,17 @@ use zeroize::Zeroizing;
 const MAXIMUM_SECRET_BYTES: usize = 64 * 1024;
 const MAXIMUM_PEM_BYTES: usize = 1024 * 1024;
 
+#[derive(Clone, Copy)]
+enum InputPermissions {
+    PublicAllowed,
+    OwnerOnly,
+}
+
 pub(crate) fn read_snapshot(path: &Path) -> Result<Vec<u8>, CutoverFileError> {
     read_bounded(
         path,
         migrate::LegacySnapshot::maximum_artifact_bytes(),
-        true,
+        InputPermissions::OwnerOnly,
     )
 }
 
@@ -20,12 +26,16 @@ pub(crate) fn read_telemetry_plan(path: &Path) -> Result<Vec<u8>, CutoverFileErr
     read_bounded(
         path,
         migrate::LegacyTelemetryPlan::maximum_artifact_bytes(),
-        true,
+        InputPermissions::OwnerOnly,
     )
 }
 
 pub(crate) fn read_master_secret(path: &Path) -> Result<Zeroizing<String>, CutoverFileError> {
-    let bytes = Zeroizing::new(read_bounded(path, MAXIMUM_SECRET_BYTES, true)?);
+    let bytes = Zeroizing::new(read_bounded(
+        path,
+        MAXIMUM_SECRET_BYTES,
+        InputPermissions::OwnerOnly,
+    )?);
     let secret = String::from_utf8(bytes.to_vec()).map_err(|_| CutoverFileError::InvalidSecret)?;
     if secret.chars().count() < 32 || secret.contains('\0') {
         return Err(CutoverFileError::InvalidSecret);
@@ -34,11 +44,11 @@ pub(crate) fn read_master_secret(path: &Path) -> Result<Zeroizing<String>, Cutov
 }
 
 pub(crate) fn read_public_pem(path: &Path) -> Result<Vec<u8>, CutoverFileError> {
-    read_bounded(path, MAXIMUM_PEM_BYTES, false)
+    read_bounded(path, MAXIMUM_PEM_BYTES, InputPermissions::PublicAllowed)
 }
 
 pub(crate) fn read_private_pem(path: &Path) -> Result<Vec<u8>, CutoverFileError> {
-    read_bounded(path, MAXIMUM_PEM_BYTES, true)
+    read_bounded(path, MAXIMUM_PEM_BYTES, InputPermissions::OwnerOnly)
 }
 
 pub(crate) fn write_new_private(path: &Path, value: &[u8]) -> Result<(), CutoverFileError> {
@@ -59,7 +69,11 @@ pub(crate) fn write_new_private(path: &Path, value: &[u8]) -> Result<(), Cutover
     sync_parent(parent, path)
 }
 
-fn read_bounded(path: &Path, maximum: usize, private: bool) -> Result<Vec<u8>, CutoverFileError> {
+fn read_bounded(
+    path: &Path,
+    maximum: usize,
+    permissions: InputPermissions,
+) -> Result<Vec<u8>, CutoverFileError> {
     validate_absolute(path)?;
     let mut file = open_no_follow(path)?;
     let metadata = file
@@ -71,7 +85,7 @@ fn read_bounded(path: &Path, maximum: usize, private: bool) -> Result<Vec<u8>, C
             maximum,
         });
     }
-    if private {
+    if matches!(permissions, InputPermissions::OwnerOnly) {
         validate_private(&metadata, path)?;
     }
     let limit = u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1);

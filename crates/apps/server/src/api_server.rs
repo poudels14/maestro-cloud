@@ -244,6 +244,6 @@ impl ApiServer {
 fn auth_policy(settings: &ServerSettings) -> AuthPolicy {
     AuthPolicy::new(
         settings.jwt_secret_key.clone(),
-        settings.requires_node_client_certificate(),
+        settings.node_certificate_requirement(),
     )
 }

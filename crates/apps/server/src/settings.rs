@@ -2,6 +2,12 @@ use std::net::SocketAddr;
 
 use kernel_api::SecretValue;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NodeCertificateRequirement {
+    Optional,
+    Required,
+}
+
 /// PEM identity presented by an HTTPS listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsIdentity {
@@ -95,8 +101,12 @@ impl ServerSettings {
         Ok(self)
     }
 
-    pub(crate) fn requires_node_client_certificate(&self) -> bool {
-        self.tls_identity.is_some() && self.cluster_trust_root_pem.is_some()
+    pub(crate) fn node_certificate_requirement(&self) -> NodeCertificateRequirement {
+        if self.tls_identity.is_some() && self.cluster_trust_root_pem.is_some() {
+            NodeCertificateRequirement::Required
+        } else {
+            NodeCertificateRequirement::Optional
+        }
     }
 }
 

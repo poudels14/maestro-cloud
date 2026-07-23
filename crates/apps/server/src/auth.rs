@@ -6,6 +6,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use kernel_api::SecretValue;
 use serde_json::Value;
 
+use crate::settings::NodeCertificateRequirement;
 use crate::{ApiError, VerifiedNodeCertificate};
 
 const OPERATOR_SCOPE: &str = "operator";
@@ -18,14 +19,17 @@ pub struct OperatorIdentity(pub String);
 #[derive(Clone)]
 pub(crate) struct AuthPolicy {
     secret: Option<SecretValue>,
-    require_node_certificate: bool,
+    node_certificate_requirement: NodeCertificateRequirement,
 }
 
 impl AuthPolicy {
-    pub(crate) fn new(secret: Option<SecretValue>, require_node_certificate: bool) -> Self {
+    pub(crate) fn new(
+        secret: Option<SecretValue>,
+        node_certificate_requirement: NodeCertificateRequirement,
+    ) -> Self {
         Self {
             secret,
-            require_node_certificate,
+            node_certificate_requirement,
         }
     }
 }
@@ -48,11 +52,13 @@ pub(crate) async fn require_node(
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    if policy.require_node_certificate
-        && request
-            .extensions()
-            .get::<VerifiedNodeCertificate>()
-            .is_none()
+    if matches!(
+        policy.node_certificate_requirement,
+        NodeCertificateRequirement::Required
+    ) && request
+        .extensions()
+        .get::<VerifiedNodeCertificate>()
+        .is_none()
     {
         return Err(ApiError::forbidden(
             "node endpoint requires a verified cluster client certificate",
