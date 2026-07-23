@@ -253,7 +253,9 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
         ClusterPreflightError::WeakJoinSecret => "cluster.join-secret".to_string(),
         ClusterPreflightError::InvalidPorts(_) => "cluster.ports".to_string(),
         ClusterPreflightError::InvalidTailscale(error) => match error {
-            TailscaleConfigError::WeakAuthKey => "tailscale.auth-key".to_string(),
+            TailscaleConfigError::WeakAuthKey | TailscaleConfigError::AuthKeyTooLong => {
+                "tailscale.auth-key".to_string()
+            }
             TailscaleConfigError::ZeroReplicas
             | TailscaleConfigError::InsufficientWorkloadNodes { .. } => {
                 "tailscale.replicas".to_string()

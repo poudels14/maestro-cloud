@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use kernel_store::{
-    Compare, ExpectedVersion, ListResult, Mutation, Store, StoreKey, StorePrefix, StoredValue,
-    Transaction, TransactionOutcome,
+    Compare, ExpectedVersion, ListResult, Mutation, Store, StoreKey, StorePrefix, StoreWatch,
+    StoredValue, Transaction, TransactionOutcome, WatchStart,
 };
 
 use crate::{ControllerError, LeadershipToken};
@@ -38,6 +38,15 @@ impl FencedStore {
     /// Lists one prefix from the same backend protected by this mutation fence.
     pub async fn list(&self, prefix: &StorePrefix) -> Result<ListResult, ControllerError> {
         Ok(self.store.list(prefix).await?)
+    }
+
+    /// Watches one prefix on the same backend protected by this mutation fence.
+    pub fn watch(
+        &self,
+        prefix: StorePrefix,
+        start: WatchStart,
+    ) -> Result<Box<dyn StoreWatch>, ControllerError> {
+        Ok(self.store.watch(prefix, start)?)
     }
 
     pub(crate) fn raw_store(&self) -> &dyn Store {

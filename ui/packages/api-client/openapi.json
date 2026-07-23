@@ -6404,6 +6404,42 @@
         ],
         "type": "object"
       },
+      "TailscaleAuthKeyRotationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authKey": {
+            "$ref": "#/components/schemas/SecretValue"
+          },
+          "expectedRevision": {
+            "$ref": "#/components/schemas/ResourceRevision",
+            "description": "Required current override revision; omit only when creating the first override"
+          }
+        },
+        "required": [
+          "authKey"
+        ],
+        "type": "object"
+      },
+      "TailscaleAuthKeyRotationResponse": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "TailscaleAuthKeyStatus": {
+        "properties": {
+          "overrideRevision": {
+            "$ref": "#/components/schemas/ResourceRevision",
+            "description": "Live override revision; absence means the launch-document key is active"
+          }
+        },
+        "type": "object"
+      },
       "Timestamp": {
         "description": "A UTC Unix timestamp represented in milliseconds.",
         "format": "int64",
@@ -8354,6 +8390,86 @@
           },
           "503": {
             "description": "One or more node observability stores are unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/cluster/tailscale/auth-key": {
+      "get": {
+        "operationId": "getTailscaleAuthKeyStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailscaleAuthKeyStatus"
+                }
+              }
+            },
+            "description": "Secret-free live override status"
+          },
+          "409": {
+            "description": "Managed Tailscale gateways are disabled"
+          },
+          "503": {
+            "description": "Cluster configuration is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "rotateTailscaleAuthKey",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TailscaleAuthKeyRotationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailscaleAuthKeyRotationResponse"
+                }
+              }
+            },
+            "description": "Secret override durably accepted for fenced reconciliation"
+          },
+          "400": {
+            "description": "Invalid key or request"
+          },
+          "409": {
+            "description": "Feature, revision, or idempotency conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          },
+          "503": {
+            "description": "Cluster configuration is unavailable"
           }
         },
         "security": [

@@ -1,17 +1,20 @@
 use std::fmt::Display;
+use std::sync::Arc;
 
+use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
     FirewallPolicy, FirewallPolicyId, Generation, Object, Service, ServiceId, Timestamp,
 };
-use kernel_controller::{ControllerError, FencedStore};
+use kernel_controller::{ControllerError, FencedStore, TimestampClock};
 use kernel_store::{
     Compare, ExpectedVersion, Keyspace, Mutation, StoreKey, Transaction, TransactionOutcome,
-    Version,
+    Version, WatchStart,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tokio::sync::watch;
 
-use crate::tailscale_resources::TailscaleSystemResources;
+use crate::tailscale_resources::{TailscaleResourceError, TailscaleSystemResources};
 use crate::tailscale_resources::{is_managed, resource_ids};
 
 const MAXIMUM_CONFLICT_RETRIES: usize = 8;
@@ -21,6 +24,8 @@ pub(crate) struct TailscaleResourceReconciler {
     policy_id: FirewallPolicyId,
     service_key: StoreKey,
     policy_key: StoreKey,
+    auth_key: StoreKey,
+    auth_controls: kernel_store::StorePrefix,
     desired: Option<TailscaleSystemResources>,
 }
 
@@ -36,10 +41,47 @@ impl TailscaleResourceReconciler {
         Ok(Self {
             service_key: keyspace.resource(&service_kind, &service_id.clone().into()),
             policy_key: keyspace.resource(&policy_kind, &policy_id.clone().into()),
+            auth_key: keyspace.tailscale_auth_key(),
+            auth_controls: keyspace.tailscale_controls(),
             service_id,
             policy_id,
             desired,
         })
+    }
+
+    pub(crate) async fn run(
+        &self,
+        store: Arc<FencedStore>,
+        timestamp_clock: Arc<dyn TimestampClock>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), TailscaleReconcileError> {
+        loop {
+            let snapshot = store.list(&self.auth_controls).await?;
+            self.reconcile(store.as_ref(), timestamp_clock.now())
+                .await?;
+            let mut events = store.watch(
+                self.auth_controls.clone(),
+                WatchStart::After(snapshot.cursor),
+            )?;
+            loop {
+                tokio::select! {
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            return Ok(());
+                        }
+                    }
+                    event = events.next() => {
+                        match event {
+                            Ok(_) => {
+                                self.reconcile(store.as_ref(), timestamp_clock.now()).await?;
+                            }
+                            Err(kernel_store::StoreError::CursorExpired { .. }) => break,
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) async fn reconcile(
@@ -47,6 +89,7 @@ impl TailscaleResourceReconciler {
         store: &FencedStore,
         now: Timestamp,
     ) -> Result<(), TailscaleReconcileError> {
+        let desired = self.effective_desired(store).await?;
         for _ in 0..MAXIMUM_CONFLICT_RETRIES {
             let current_service =
                 read_resource::<Service>(store, &self.service_key, "Service").await?;
@@ -61,15 +104,13 @@ impl TailscaleResourceReconciler {
             ];
             let service_write = converge(
                 current_service,
-                self.desired.as_ref().map(|desired| &desired.service),
+                desired.as_ref().map(|desired| &desired.service),
                 now,
                 "Service",
             )?;
             let policy_write = converge(
                 current_policy,
-                self.desired
-                    .as_ref()
-                    .map(|desired| &desired.firewall_policy),
+                desired.as_ref().map(|desired| &desired.firewall_policy),
                 now,
                 "FirewallPolicy",
             )?;
@@ -97,6 +138,31 @@ impl TailscaleResourceReconciler {
             }
         }
         Err(TailscaleReconcileError::ConflictExhausted)
+    }
+
+    async fn effective_desired(
+        &self,
+        store: &FencedStore,
+    ) -> Result<Option<TailscaleSystemResources>, TailscaleReconcileError> {
+        let Some(desired) = self.desired.clone() else {
+            return Ok(None);
+        };
+        let Some(stored) = store.get(&self.auth_key).await? else {
+            return Ok(Some(desired));
+        };
+        let record =
+            serde_json::from_slice::<TailscaleAuthKeyRecord>(&stored.value).map_err(|error| {
+                TailscaleReconcileError::MalformedAuthKey {
+                    key: self.auth_key.to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+        record
+            .validate()
+            .map_err(|error| TailscaleReconcileError::InvalidAuthKey {
+                message: error.to_string(),
+            })?;
+        Ok(Some(desired.with_auth_key(record.auth_key)?))
     }
 }
 
@@ -245,6 +311,10 @@ pub(crate) enum TailscaleReconcileError {
     #[error(transparent)]
     Controller(#[from] ControllerError),
     #[error(transparent)]
+    Store(#[from] kernel_store::StoreError),
+    #[error(transparent)]
+    Resource(#[from] TailscaleResourceError),
+    #[error(transparent)]
     Identifier(#[from] kernel_api::InvalidIdentifier),
     #[error("stored {kind} `{key}` is malformed: {message}")]
     Malformed {
@@ -252,6 +322,10 @@ pub(crate) enum TailscaleReconcileError {
         key: String,
         message: String,
     },
+    #[error("stored Tailscale auth-key override `{key}` is malformed: {message}")]
+    MalformedAuthKey { key: String, message: String },
+    #[error("stored Tailscale auth-key override is invalid: {message}")]
+    InvalidAuthKey { message: String },
     #[error("stored {kind} identity is `{actual}`, expected `{expected}`")]
     IdentityMismatch {
         kind: &'static str,

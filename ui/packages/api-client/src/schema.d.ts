@@ -292,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cluster/tailscale/auth-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTailscaleAuthKeyStatus"];
+        put: operations["rotateTailscaleAuthKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cluster/unschedulable": {
         parameters: {
             query?: never;
@@ -3133,6 +3149,18 @@ export interface components {
             /** @enum {string} */
             severity: "warning" | "error";
         };
+        TailscaleAuthKeyRotationRequest: {
+            authKey: components["schemas"]["SecretValue"];
+            /** @description Required current override revision; omit only when creating the first override */
+            expectedRevision?: components["schemas"]["ResourceRevision"];
+        };
+        TailscaleAuthKeyRotationResponse: {
+            requestId: string;
+        };
+        TailscaleAuthKeyStatus: {
+            /** @description Live override revision; absence means the launch-document key is active */
+            overrideRevision?: components["schemas"]["ResourceRevision"];
+        };
         /**
          * Format: int64
          * @description A UTC Unix timestamp represented in milliseconds.
@@ -4145,6 +4173,94 @@ export interface operations {
                 };
             };
             /** @description One or more node observability stores are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getTailscaleAuthKeyStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Secret-free live override status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailscaleAuthKeyStatus"];
+                };
+            };
+            /** @description Managed Tailscale gateways are disabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster configuration is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rotateTailscaleAuthKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TailscaleAuthKeyRotationRequest"];
+            };
+        };
+        responses: {
+            /** @description Secret override durably accepted for fenced reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailscaleAuthKeyRotationResponse"];
+                };
+            };
+            /** @description Invalid key or request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Feature, revision, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cluster configuration is unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -5,7 +5,8 @@ use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
 use crate::{
     ClusterConfig, ClusterPorts, ClusterPreflightError, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint, TailscaleConfigError, TailscaleGatewayConfig,
+    NodeDefinition, NodeEndpoint, TailscaleAuthKeyRecord, TailscaleConfigError,
+    TailscaleGatewayConfig,
 };
 
 #[test]
@@ -130,6 +131,18 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
         tags: vec!["tag:maestro-gateway".to_owned()],
     });
     config.preflight()?;
+
+    let record = TailscaleAuthKeyRecord::new(SecretValue::new(
+        "  tskey-auth-normalized-reusable-secret  ",
+    ))?;
+    assert_eq!(
+        record.auth_key.expose(),
+        "tskey-auth-normalized-reusable-secret"
+    );
+    assert_eq!(
+        TailscaleAuthKeyRecord::new(SecretValue::new("x".repeat(513))),
+        Err(TailscaleConfigError::AuthKeyTooLong)
+    );
 
     let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
     tailscale.advertise_routes = Some(vec!["192.168.50.0/24".parse()?]);

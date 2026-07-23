@@ -12,6 +12,7 @@ mod cluster_command;
 mod cluster_config;
 mod cluster_formation;
 mod cluster_join;
+mod cluster_tailscale;
 mod command;
 mod config;
 mod config_source;

@@ -86,6 +86,18 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro-next",
             "cluster",
+            "rotate-tailscale-key",
+            "--auth-key-source",
+            "aws-secret://maestro/production/tailscale-auth-key",
+            "--idempotency-key",
+            "tailscale-key-1",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro-next",
+            "cluster",
             "init-ca",
             "--config",
             "maestro.jsonc",

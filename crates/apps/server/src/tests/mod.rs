@@ -43,6 +43,7 @@ mod service_rollouts;
 mod services;
 mod stats;
 mod system_resources;
+mod tailscale;
 mod traffic;
 mod upgrades;
 
@@ -324,6 +325,16 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(
         document
             .pointer("/paths/~1api~1cluster~1upgrades/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1cluster~1tailscale~1auth-key/put")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/components/schemas/TailscaleAuthKeyRotationRequest")
             .is_some()
     );
     assert!(

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ArtifactArchiveId, DeploymentGoal, DeploymentId, FirewallPolicySpec, Generation,
-    IngressRouteSpec, NodeId, ResourceRevision, RolloutState, ServiceId, ServiceSpec, Timestamp,
-    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
+    IngressRouteSpec, NodeId, RequestId, ResourceRevision, RolloutState, SecretValue, ServiceId,
+    ServiceSpec, Timestamp, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
 };
 
 /// Maximum compressed bytes accepted for one uploaded build context archive.
@@ -56,6 +56,34 @@ pub struct NodeRemovalResponse {
     pub node_id: NodeId,
     /// Durable removal phase reached by this request.
     pub state: NodeRemovalState,
+}
+
+/// Secret-free state used to make an optimistic Tailscale auth-key rotation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TailscaleAuthKeyStatus {
+    /// Revision of the live override, or absence while launch configuration supplies the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub override_revision: Option<ResourceRevision>,
+}
+
+/// Optimistic replacement for the managed Tailscale gateway authentication key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TailscaleAuthKeyRotationRequest {
+    /// Override revision observed by the caller, or absence when creating the first override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<ResourceRevision>,
+    /// Replacement key used only by gateway replicas with fresh managed state.
+    pub auth_key: SecretValue,
+}
+
+/// Durable receipt for an accepted Tailscale auth-key rotation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TailscaleAuthKeyRotationResponse {
+    /// Idempotency identity atomically committed with the secret override.
+    pub request_id: RequestId,
 }
 
 /// Desired identity and behavior for a new cluster upgrade run.

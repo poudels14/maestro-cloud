@@ -52,7 +52,7 @@ pub use provider::{
     StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 pub use removal::{NodeRemovalCoordinator, NodeRemovalError, NodeRemovalPlan};
-pub use tailscale::{TailscaleConfigError, TailscaleGatewayConfig};
+pub use tailscale::{TailscaleAuthKeyRecord, TailscaleConfigError, TailscaleGatewayConfig};
 pub use topology::{
     ClusterConfig, ClusterPreflightError, NodeDefinition, NodeEndpoint, ValidatedTopology,
     WIREGUARD_MTU_BYTES,

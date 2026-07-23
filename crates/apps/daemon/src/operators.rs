@@ -107,12 +107,13 @@ impl LeaderWorkload for OperatorLeaderWorkload {
         store: Arc<FencedStore>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), RoleError> {
-        TailscaleResourceReconciler::new(&self.cluster_id, self.tailscale.clone())
+        let tailscale = TailscaleResourceReconciler::new(&self.cluster_id, self.tailscale.clone())
             .map_err(|error| {
                 RoleError::new(format!(
                     "failed to construct Tailscale resource reconciler: {error}"
                 ))
-            })?
+            })?;
+        tailscale
             .reconcile(store.as_ref(), self.timestamp_clock.now())
             .await
             .map_err(|error| {
@@ -140,7 +141,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
         ));
         let suite = OperatorSuite::new(
             self.cluster_id.clone(),
-            store,
+            store.clone(),
             self.monotonic_clock.clone(),
             self.timestamp_clock.clone(),
             self.settings.clone(),
@@ -160,10 +161,24 @@ impl LeaderWorkload for OperatorLeaderWorkload {
             },
         )
         .map_err(|error| RoleError::new(format!("failed to construct operator suite: {error}")))?;
-        suite
-            .run(shutdown)
-            .await
-            .map_err(|error| RoleError::new(format!("operator suite failed: {error}")))
+        let tailscale_shutdown = shutdown.clone();
+        let timestamp_clock = self.timestamp_clock.clone();
+        let tailscale_run = async move {
+            tailscale
+                .run(store, timestamp_clock, tailscale_shutdown)
+                .await
+                .map_err(|error| {
+                    RoleError::new(format!("Tailscale resource reconciler failed: {error}"))
+                })
+        };
+        let operator_run = async move {
+            suite
+                .run(shutdown)
+                .await
+                .map_err(|error| RoleError::new(format!("operator suite failed: {error}")))
+        };
+        tokio::try_join!(tailscale_run, operator_run)?;
+        Ok(())
     }
 }
 

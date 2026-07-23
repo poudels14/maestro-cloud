@@ -91,6 +91,14 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/observations/scheduler"
     );
     assert_eq!(
+        keys.tailscale_controls().as_str(),
+        "/maestro/clusters/production/control/tailscale/"
+    );
+    assert_eq!(
+        keys.tailscale_auth_key().as_str(),
+        "/maestro/clusters/production/control/tailscale/auth-key"
+    );
+    assert_eq!(
         keys.traefik().as_str(),
         "/maestro/clusters/production/integrations/traefik/"
     );

@@ -22,6 +22,7 @@ mod service_rollouts;
 mod services;
 mod stats;
 mod system;
+mod tailscale;
 mod traffic;
 mod upgrades;
 mod webhook_commands;
@@ -54,6 +55,7 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(service_rollouts::router())
         .merge(services::router())
         .merge(stats::router())
+        .merge(tailscale::router())
         .merge(traffic::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())

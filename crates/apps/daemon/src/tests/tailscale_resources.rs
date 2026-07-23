@@ -2,16 +2,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
     ArtifactTemplate, ClusterId, ExecPolicy, FirewallDirection, FirewallPolicy, FirewallSubject,
     FirewallVerdict, HealthProbe, NodeId, NodeInstanceId, NodeRole, ResourceKind, ResourceName,
     SecretValue, Service, Timestamp, TransportProtocol, VolumeSource,
 };
-use kernel_controller::{ControllerError, FencedStore, LeaderIdentity, LeadershipToken};
+use kernel_controller::{
+    ControllerError, FencedStore, LeaderIdentity, LeadershipToken, TimestampClock,
+};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
     Session, SessionBinding, Store,
 };
+use tokio::sync::watch;
 
 use crate::tailscale_reconciler::{TailscaleReconcileError, TailscaleResourceReconciler};
 use crate::tailscale_resources::{AUTH_SCRIPT, TAILSCALE_IMAGE, TailscaleSystemResources};
@@ -124,13 +128,27 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
         "Tailscale resources",
     )?;
 
-    TailscaleResourceReconciler::new(&cluster_id, Some(desired))?
-        .reconcile(&fenced, Timestamp(10_000))
-        .await?;
+    let reconciler = TailscaleResourceReconciler::new(&cluster_id, Some(desired))?;
+    reconciler.reconcile(&fenced, Timestamp(10_000)).await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
     let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
     assert_eq!(service.meta.generation.0, 1);
     assert_eq!(policy.meta.generation.0, 1);
+
+    put_auth_key(
+        &store,
+        &cluster_id,
+        "tskey-auth-live-rotation-secret",
+        ExpectedVersion::Missing,
+    )
+    .await?;
+    reconciler.reconcile(&fenced, Timestamp(15_000)).await?;
+    let service: Service = read(&store, &cluster_id, "Service").await?;
+    assert_eq!(service.meta.generation.0, 2);
+    assert_eq!(
+        gateway_auth_key(&service),
+        "tskey-auth-live-rotation-secret"
+    );
 
     let config = cluster
         .tailscale
@@ -147,8 +165,12 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
         .await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
     let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
-    assert_eq!(service.meta.generation.0, 2);
+    assert_eq!(service.meta.generation.0, 3);
     assert_eq!(service.spec.replicas, 1);
+    assert_eq!(
+        gateway_auth_key(&service),
+        "tskey-auth-live-rotation-secret"
+    );
     assert_eq!(policy.meta.generation.0, 1);
 
     TailscaleResourceReconciler::new(&cluster_id, None)?
@@ -159,6 +181,28 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
     assert_eq!(service.meta.deletion_timestamp, Some(Timestamp(30_000)));
     assert_eq!(policy.meta.deletion_timestamp, Some(Timestamp(30_000)));
     Ok(())
+}
+
+async fn put_auth_key(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    auth_key: &str,
+    expected: ExpectedVersion,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let record = TailscaleAuthKeyRecord::new(SecretValue::new(auth_key))?;
+    let outcome = store
+        .put_cas(PutRequest {
+            key: Keyspace::new(cluster_id).tailscale_auth_key(),
+            value: serde_json::to_vec(&record)?,
+            expected,
+            session: None,
+        })
+        .await?;
+    if matches!(outcome, CasOutcome::Applied(_)) {
+        Ok(())
+    } else {
+        Err("Tailscale auth-key write conflicted".into())
+    }
 }
 
 #[tokio::test]
@@ -236,6 +280,50 @@ async fn stale_leadership_cannot_create_gateway_resources() -> Result<(), Box<dy
             .await?
             .is_empty()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_auth_key_changes_trigger_fenced_gateway_reconciliation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("tailscale-live-rotation")?;
+    let (store, fenced, _session) = fenced_store(&cluster_id).await?;
+    let mut cluster = cluster_with_nodes(&[("node-a", NodeRole::Master)])?;
+    cluster.cluster_id = cluster_id.clone();
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-launch-document-secret"),
+        advertise_routes: None,
+        replicas: 1,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+    let desired = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    let reconciler = TailscaleResourceReconciler::new(&cluster_id, Some(desired))?;
+    let (shutdown, shutdown_receiver) = watch::channel(false);
+    let runner = tokio::spawn(async move {
+        reconciler
+            .run(
+                Arc::new(fenced),
+                Arc::new(FixedTimestampClock),
+                shutdown_receiver,
+            )
+            .await
+    });
+
+    await_gateway_auth_key(&store, &cluster_id, "tskey-auth-launch-document-secret").await?;
+    put_auth_key(
+        &store,
+        &cluster_id,
+        "tskey-auth-live-watched-secret",
+        ExpectedVersion::Missing,
+    )
+    .await?;
+    await_gateway_auth_key(&store, &cluster_id, "tskey-auth-live-watched-secret").await?;
+
+    shutdown.send(true)?;
+    runner.await??;
     Ok(())
 }
 
@@ -329,8 +417,39 @@ async fn list<Resource: serde::de::DeserializeOwned>(
         .collect()
 }
 
+async fn await_gateway_auth_key(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let services = list::<Service>(store, cluster_id, "Service").await?;
+            if services
+                .first()
+                .is_some_and(|service| gateway_auth_key(service) == expected)
+            {
+                return Ok::<_, Box<dyn std::error::Error>>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| "timed out waiting for Tailscale gateway reconciliation")?
+}
+
 trait ResourceIdentity {
     fn resource_id(&self) -> &str;
+}
+
+fn gateway_auth_key(service: &Service) -> &str {
+    service
+        .spec
+        .secrets
+        .as_ref()
+        .and_then(|secrets| secrets.items.get("TS_AUTHKEY"))
+        .map(SecretValue::expose)
+        .unwrap_or("")
 }
 
 fn required<Value>(value: Option<Value>, name: &str) -> Result<Value, std::io::Error> {
@@ -344,6 +463,14 @@ impl ResourceIdentity for Service {
 }
 
 struct NoopClock;
+
+struct FixedTimestampClock;
+
+impl TimestampClock for FixedTimestampClock {
+    fn now(&self) -> Timestamp {
+        Timestamp(10_000)
+    }
+}
 
 #[async_trait]
 impl Clock for NoopClock {

@@ -9,6 +9,7 @@ use crate::api_client::{ApiClient, request_id};
 use crate::cluster::{self, NodeLifecycleAction};
 use crate::cluster_formation;
 use crate::cluster_join::{self, JoinOptions};
+use crate::cluster_tailscale;
 use crate::config_source::SystemConfigSourceReader;
 use crate::contexts::ContextStore;
 use crate::upgrades;
@@ -107,6 +108,15 @@ pub(crate) enum ClusterCommand {
     Nodes,
     /// Show the active cluster configuration with secrets omitted.
     Config,
+    /// Replace the managed gateway key from a protected local or AWS secret source.
+    RotateTailscaleKey {
+        /// Local path, file:// URI, or aws-secret:// URI containing only the replacement key.
+        #[arg(long, value_name = "SOURCE")]
+        auth_key_source: String,
+        /// Stable key to reuse after an ambiguous transport failure.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// Stop new workload placement on a node and drain its assignments.
     Drain {
         /// Stable cluster node identity.
@@ -249,6 +259,19 @@ pub(crate) async fn run(command: ClusterCommand, output: &mut dyn Write) -> Resu
         ClusterCommand::Info => cluster::info(&active_client()?, output).await,
         ClusterCommand::Nodes => cluster::list_nodes(&active_client()?, output).await,
         ClusterCommand::Config => cluster::show_config(&active_client()?, output).await,
+        ClusterCommand::RotateTailscaleKey {
+            auth_key_source,
+            idempotency_key,
+        } => {
+            cluster_tailscale::rotate_auth_key(
+                &active_client()?,
+                &auth_key_source,
+                request_id(idempotency_key)?,
+                output,
+                &SystemConfigSourceReader,
+            )
+            .await
+        }
         ClusterCommand::Drain {
             node_id,
             idempotency_key,

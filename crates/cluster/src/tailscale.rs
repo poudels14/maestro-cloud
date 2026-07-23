@@ -5,6 +5,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ipv4Cidr;
 
+/// Durable replacement for the launch-document key used by managed gateways.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TailscaleAuthKeyRecord {
+    /// Credential used only when a gateway replica has no persisted identity.
+    pub auth_key: SecretValue,
+}
+
+impl TailscaleAuthKeyRecord {
+    /// Validates and wraps one key before it crosses the cluster-store boundary.
+    pub fn new(auth_key: SecretValue) -> Result<Self, TailscaleConfigError> {
+        let auth_key = SecretValue::new(auth_key.expose().trim());
+        validate_auth_key(&auth_key)?;
+        Ok(Self { auth_key })
+    }
+
+    /// Rejects a malformed record loaded from durable state.
+    pub fn validate(&self) -> Result<(), TailscaleConfigError> {
+        validate_auth_key(&self.auth_key)
+    }
+}
+
 /// Optional cluster-wide Tailscale subnet-router configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,9 +50,7 @@ impl TailscaleGatewayConfig {
         cluster_cidr: Ipv4Cidr,
         workload_subnets: &[Ipv4Cidr],
     ) -> Result<(), TailscaleConfigError> {
-        if self.auth_key.expose().trim().chars().count() < 16 {
-            return Err(TailscaleConfigError::WeakAuthKey);
-        }
+        validate_auth_key(&self.auth_key)?;
         if self.replicas == 0 {
             return Err(TailscaleConfigError::ZeroReplicas);
         }
@@ -100,6 +120,8 @@ impl TailscaleGatewayConfig {
 pub enum TailscaleConfigError {
     #[error("Tailscale auth key must contain at least 16 characters")]
     WeakAuthKey,
+    #[error("Tailscale auth key must contain no more than 512 characters")]
+    AuthKeyTooLong,
     #[error("Tailscale replica count must be greater than zero")]
     ZeroReplicas,
     #[error("Tailscale requests {replicas} replicas but only {workload_nodes} nodes run workloads")]
@@ -133,6 +155,17 @@ const fn default_replicas() -> u32 {
 
 fn default_tags() -> Vec<String> {
     vec!["tag:maestro-gateway".to_owned()]
+}
+
+fn validate_auth_key(auth_key: &SecretValue) -> Result<(), TailscaleConfigError> {
+    let length = auth_key.expose().trim().chars().count();
+    if length < 16 {
+        Err(TailscaleConfigError::WeakAuthKey)
+    } else if length > 512 {
+        Err(TailscaleConfigError::AuthKeyTooLong)
+    } else {
+        Ok(())
+    }
 }
 
 fn valid_tag(tag: &str) -> bool {

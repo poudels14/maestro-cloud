@@ -186,16 +186,32 @@ reuse the existing node identity.
 For auth-key rotation:
 
 1. create a replacement key with the same approved tags;
-2. update the referenced secret;
-3. regenerate and roll out protected launch documents through the approved
-   cluster-config replacement procedure; and
-4. revoke the old key only after no stateless replica can still start with it.
+2. replace the value in its protected local file or AWS Secrets Manager secret;
+3. submit that source with a stable idempotency key:
 
-Rotating the auth key does not force healthy replicas to reauthenticate. To
-replace a compromised gateway identity, revoke the affected Tailscale device
-and deliberately replace that replica's managed state so it authenticates with
-the new key. Updating an AWS secret alone does not rewrite an existing launch
-document; the current CLI has no live cluster-config mutation command.
+   ```sh
+   maestro cluster rotate-tailscale-key \
+     --auth-key-source aws-secret://maestro/production/tailscale-auth-key \
+     --idempotency-key tailscale-auth-2026-07
+   ```
+
+4. wait for every gateway replica to become healthy and approve its advertised
+   route if the tailnet does not use a matching `autoApprovers` rule; and
+5. revoke the old auth key and retired gateway devices.
+
+The CLI reads the source locally, sends the key only over the authenticated
+HTTPS API, and never prints it. The API stores one optimistic override in the
+encrypted cluster store. The active fenced leader watches that record and
+updates the reserved gateway Service. A credential change creates a new
+rollout, so every replacement replica receives fresh managed state and
+authenticates as a new Tailscale device. Healthy old replicas remain available
+during the rollout.
+
+The live override supersedes the original launch-document key across leadership
+changes without rewriting launch documents. Reusing the same idempotency key
+after an ambiguous transport failure replays the original receipt; a concurrent
+rotation fails on its observed override revision instead of silently replacing
+another operator's key.
 
 If all gateways are unavailable, use SSH or a bastion on the private host
 network, point a CLI context at a private HTTPS API endpoint, and diagnose:

@@ -173,6 +173,16 @@ impl Keyspace {
         self.key("observations/scheduler")
     }
 
+    /// Prefix containing managed Tailscale control values.
+    pub fn tailscale_controls(&self) -> StorePrefix {
+        self.prefix("control/tailscale")
+    }
+
+    /// Durable encrypted override for the managed Tailscale gateway auth key.
+    pub fn tailscale_auth_key(&self) -> StoreKey {
+        self.key("control/tailscale/auth-key")
+    }
+
     /// Root watched by Traefik's cluster-scoped dynamic configuration provider.
     pub fn traefik(&self) -> StorePrefix {
         self.prefix("integrations/traefik")

@@ -6,7 +6,7 @@ use kernel_api::{
     FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject,
     FirewallVerdict, Generation, HealthCheckSpec, HealthProbe, NodeApiAccess, Object, ObjectMeta,
     OwnerReference, Ownership, PlacementConstraint, ResourceId, ResourceKind, ResourceName,
-    ResourceRevision, RolloutState, SecretMountSpec, Service, ServiceId, ServiceSpec,
+    ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
     ServiceStatus, TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
 };
 
@@ -155,6 +155,20 @@ impl TailscaleSystemResources {
             firewall_policy,
         }))
     }
+
+    pub(crate) fn with_auth_key(
+        mut self,
+        auth_key: SecretValue,
+    ) -> Result<Self, TailscaleResourceError> {
+        let secrets = self
+            .service
+            .spec
+            .secrets
+            .as_mut()
+            .ok_or(TailscaleResourceError::MissingAuthSecretMount)?;
+        secrets.items.insert("TS_AUTHKEY".to_owned(), auth_key);
+        Ok(self)
+    }
 }
 
 pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
@@ -184,4 +198,7 @@ pub enum TailscaleResourceError {
     /// The generated service violated the public workload contract.
     #[error(transparent)]
     Service(#[from] kernel_api::ServiceSpecError),
+    /// An internal resource template lost the private auth-key mount.
+    #[error("built-in Tailscale service is missing its auth-key secret mount")]
+    MissingAuthSecretMount,
 }

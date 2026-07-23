@@ -80,6 +80,10 @@ pub fn openapi_document() -> Value {
             get_operation("getNodeFirewall", "firewallId", "NodeFirewall"),
         ),
         (
+            "/api/cluster/tailscale/auth-key".to_string(),
+            crate::openapi_tailscale::path(),
+        ),
+        (
             "/api/cluster/dns-records".to_string(),
             list_operation("listDnsRecords", "DnsRecord"),
         ),
@@ -285,6 +289,7 @@ pub fn openapi_document() -> Value {
                 crate::openapi_logs::insert_schemas(schemas);
                 crate::openapi_metrics::insert_schemas(schemas);
                 crate::openapi_stats::insert_schemas(schemas);
+                crate::openapi_tailscale::insert_schemas(schemas);
                 crate::openapi_traffic::insert_schemas(schemas);
             }
         }

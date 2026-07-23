@@ -20,6 +20,7 @@ mod openapi_commands;
 mod openapi_logs;
 mod openapi_metrics;
 mod openapi_stats;
+mod openapi_tailscale;
 mod openapi_traffic;
 mod resource;
 mod routes;
