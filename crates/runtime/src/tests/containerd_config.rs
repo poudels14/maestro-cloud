@@ -3,6 +3,7 @@ use serde_json::Value;
 use crate::containerd_config::{container_record, fingerprint};
 use crate::containerd_image::ContainerdImageConfiguration;
 use crate::containerd_settings::ContainerdRuntimeSettings;
+use crate::containerd_volume::managed_volume_path;
 use crate::{MountSource, RuntimeError, WorkloadSpec};
 
 use super::containerd_fixture::container_spec;
@@ -75,7 +76,7 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
 }
 
 #[test]
-fn container_record_uses_image_defaults_and_rejects_unsupported_inputs() {
+fn container_record_uses_image_defaults_and_managed_volume_bindings() {
     let mut spec = container_spec();
     let WorkloadSpec::Container(workload) = &mut spec else {
         unreachable!();
@@ -113,16 +114,36 @@ fn container_record_uses_image_defaults_and_rejects_unsupported_inputs() {
         target: "/data".into(),
         access: crate::MountAccess::ReadWrite,
     });
-    assert!(matches!(
-        container_record(
-            &spec,
-            &image,
-            &ContainerdRuntimeSettings::default(),
-            "snapshot".to_owned(),
-            fingerprint(&spec).unwrap(),
-        ),
-        Err(RuntimeError::InvalidSpec { .. })
-    ));
+    let settings = ContainerdRuntimeSettings::default();
+    let record = container_record(
+        &spec,
+        &image,
+        &settings,
+        "snapshot".to_owned(),
+        fingerprint(&spec).unwrap(),
+    )
+    .unwrap();
+    let oci: Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
+    let managed = oci
+        .get("mounts")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|mount| mount.get("destination").unwrap() == "/data")
+        .unwrap();
+    assert_eq!(managed.get("type").unwrap(), "bind");
+    assert_eq!(
+        managed.get("source").unwrap(),
+        managed_volume_path(
+            &settings.state_root,
+            &spec.configuration().metadata.cluster_id,
+            "data"
+        )
+        .unwrap()
+        .to_str()
+        .unwrap()
+    );
 
     let WorkloadSpec::Container(workload) = &mut spec else {
         unreachable!();

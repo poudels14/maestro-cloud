@@ -45,6 +45,8 @@ mod containerd_settings;
 mod containerd_support;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_task;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_volume;
 #[cfg(all(feature = "docker", target_os = "linux"))]
 mod docker;
 #[cfg(all(feature = "docker", target_os = "linux"))]

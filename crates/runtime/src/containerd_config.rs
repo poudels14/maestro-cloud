@@ -9,6 +9,7 @@ use crate::containerd_image::ContainerdImageConfiguration;
 use crate::containerd_resolver::resolver_path;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{container_name, metadata_labels};
+use crate::containerd_volume::managed_volume_path;
 use crate::{
     ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadConfiguration,
     WorkloadMount, WorkloadSpec,
@@ -81,7 +82,13 @@ fn oci_spec(
             .configuration
             .mounts
             .iter()
-            .map(oci_mount)
+            .map(|mount| {
+                oci_mount(
+                    mount,
+                    &workload.configuration.metadata.cluster_id,
+                    &settings.state_root,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?,
     );
     if workload.configuration.dns_server.is_some() {
@@ -95,14 +102,18 @@ fn oci_spec(
                 message: "containerd workload DNS owns `/etc/resolv.conf`".to_owned(),
             });
         }
-        mounts.push(oci_mount(&WorkloadMount {
-            source: MountSource::HostPath(resolver_path(
-                &settings.state_root,
-                &workload.configuration.metadata.workload_id,
-            )),
-            target: "/etc/resolv.conf".into(),
-            access: MountAccess::ReadOnly,
-        })?);
+        mounts.push(oci_mount(
+            &WorkloadMount {
+                source: MountSource::HostPath(resolver_path(
+                    &settings.state_root,
+                    &workload.configuration.metadata.workload_id,
+                )),
+                target: "/etc/resolv.conf".into(),
+                access: MountAccess::ReadOnly,
+            },
+            &workload.configuration.metadata.cluster_id,
+            &settings.state_root,
+        )?);
     }
     Ok(json!({
         "ociVersion": "1.0.2",
@@ -187,18 +198,21 @@ fn parse_image_user(value: &str) -> Result<(u32, u32), RuntimeError> {
     Ok((user_id, group_id))
 }
 
-fn oci_mount(mount: &WorkloadMount) -> Result<Value, RuntimeError> {
-    let MountSource::HostPath(source) = &mount.source else {
-        return Err(RuntimeError::InvalidSpec {
-            message: "containerd runtime does not support managed-volume mounts yet".to_owned(),
-        });
+fn oci_mount(
+    mount: &WorkloadMount,
+    cluster_id: &kernel_api::ClusterId,
+    state_root: &std::path::Path,
+) -> Result<Value, RuntimeError> {
+    let source = match &mount.source {
+        MountSource::HostPath(source) => source.clone(),
+        MountSource::ManagedVolume(name) => managed_volume_path(state_root, cluster_id, name)?,
     };
     if !source.is_absolute() || !mount.target.is_absolute() {
         return Err(RuntimeError::InvalidSpec {
             message: "containerd bind mount source and destination must be absolute".to_owned(),
         });
     }
-    let source = path_text(source)?;
+    let source = path_text(&source)?;
     let destination = path_text(&mount.target)?;
     let access = match mount.access {
         MountAccess::ReadOnly => "ro",

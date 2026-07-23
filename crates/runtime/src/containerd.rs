@@ -26,6 +26,7 @@ use crate::containerd_support::{
     namespaced_timeout, observed_workload, runtime_status, task_container_id, task_status,
     validate_existing,
 };
+use crate::containerd_volume::prepare_managed_volumes;
 use crate::file_log::FileLogStream;
 use crate::{
     ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest,
@@ -138,6 +139,7 @@ impl WorkloadRuntime for ContainerdRuntime {
                     &fingerprint,
                     &self.settings.namespace,
                 )?;
+                prepare_managed_volumes(&self.settings.state_root, &workload.configuration).await?;
                 if let Some(dns_server) = workload.configuration.dns_server {
                     prepare_resolver_file(&self.settings.state_root, workload_id, dns_server)
                         .await?;
@@ -188,6 +190,7 @@ impl WorkloadRuntime for ContainerdRuntime {
             snapshot_key,
             fingerprint.clone(),
         )?;
+        prepare_managed_volumes(&self.settings.state_root, &workload.configuration).await?;
         if let Some(dns_server) = workload.configuration.dns_server {
             prepare_resolver_file(&self.settings.state_root, workload_id, dns_server).await?;
         }
