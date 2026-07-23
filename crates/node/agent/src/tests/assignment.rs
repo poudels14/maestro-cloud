@@ -369,35 +369,6 @@ async fn assignment_run_retries_a_transient_whole_snapshot_failure()
 }
 
 #[tokio::test]
-async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
--> Result<(), Box<dyn std::error::Error>> {
-    let world = World::new();
-    world.seed(&deployment(), &assignment()).await?;
-    world.agent().reconcile_once().await?;
-    let key = world.assignment_key();
-    let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
-    world
-        .store
-        .delete_cas(DeleteRequest {
-            key,
-            expected: stored.version,
-        })
-        .await?;
-
-    let report = world.agent().reconcile_once().await?;
-    assert_eq!(report.garbage_collected, 1);
-    assert!(
-        world
-            .runtime
-            .list(&cluster_id(), &node_id("node-1"))
-            .await?
-            .is_empty()
-    );
-    assert_eq!(world.network.lease_count(), 0);
-    Ok(())
-}
-
-#[tokio::test]
 async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
@@ -425,41 +396,6 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
         .await?;
     world.agent().reconcile_once().await?;
     assert!(!secret_path.exists());
-    Ok(())
-}
-
-#[tokio::test]
-async fn assignment_reconcile_skips_gc_when_assignment_ownership_is_malformed()
--> Result<(), Box<dyn std::error::Error>> {
-    let world = World::new();
-    world.seed(&deployment(), &assignment()).await?;
-    world.agent().reconcile_once().await?;
-    let key = world.assignment_key();
-    let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
-    world
-        .store
-        .delete_cas(DeleteRequest {
-            key,
-            expected: stored.version,
-        })
-        .await?;
-    let malformed_key = Keyspace::new(&cluster_id()).resource(
-        &ResourceKind::new("Assignment")?,
-        &ResourceName::new("malformed-assignment")?,
-    );
-    put_resource(world.store.as_ref(), malformed_key, b"not-json".to_vec()).await?;
-
-    let report = world.agent().reconcile_once().await?;
-    assert_eq!(report.malformed_resources, 1);
-    assert_eq!(report.garbage_collected, 0);
-    assert_eq!(
-        world
-            .runtime
-            .list(&cluster_id(), &node_id("node-1"))
-            .await?
-            .len(),
-        1
-    );
     Ok(())
 }
 
@@ -576,10 +512,10 @@ async fn assert_running(world: &World) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-struct World {
-    store: Arc<InMemoryStore>,
-    runtime: Arc<FakeRuntime>,
-    network: Arc<FakeNetworkProvider>,
+pub(super) struct World {
+    pub(super) store: Arc<InMemoryStore>,
+    pub(super) runtime: Arc<FakeRuntime>,
+    pub(super) network: Arc<FakeNetworkProvider>,
     monotonic_clock: Arc<TestMonotonicClock>,
     status_clock: Arc<TestStatusClock>,
     secrets: tempfile::TempDir,
@@ -587,7 +523,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let monotonic_clock = Arc::new(TestMonotonicClock::default());
         Self {
             store: Arc::new(InMemoryStore::new(monotonic_clock.clone())),
@@ -600,7 +536,7 @@ impl World {
         }
     }
 
-    fn agent(&self) -> AssignmentAgent {
+    pub(super) fn agent(&self) -> AssignmentAgent {
         self.agent_with_node_api(None)
     }
 
@@ -635,7 +571,7 @@ impl World {
         .unwrap()
     }
 
-    async fn seed(
+    pub(super) async fn seed(
         &self,
         deployment: &Deployment,
         assignment: &Assignment,
@@ -690,7 +626,7 @@ impl World {
         Ok(serde_json::from_slice(&stored.value)?)
     }
 
-    fn assignment_key(&self) -> kernel_store::StoreKey {
+    pub(super) fn assignment_key(&self) -> kernel_store::StoreKey {
         Keyspace::new(&cluster_id()).resource(
             &ResourceKind::new("Assignment").unwrap(),
             &ResourceName::new("assignment-1").unwrap(),
@@ -736,7 +672,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
     }
 }
 
-async fn put_resource(
+pub(super) async fn put_resource(
     store: &dyn Store,
     key: kernel_store::StoreKey,
     value: Vec<u8>,

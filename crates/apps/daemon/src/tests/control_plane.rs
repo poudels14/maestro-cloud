@@ -407,108 +407,9 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     Ok(())
 }
 
-#[tokio::test]
-async fn worker_agent_uses_remote_store_without_starting_a_controller()
--> Result<(), Box<dyn std::error::Error>> {
-    let clock = Arc::new(PausedClock::new());
-    let store = Arc::new(InMemoryStore::new(clock.clone()));
-    let cluster =
-        cluster_with_nodes(&[("master", NodeRole::Master), ("worker", NodeRole::Worker)])?;
-    let worker_id = NodeId::new("worker")?;
-    let worker = cluster
-        .nodes
-        .get(&worker_id)
-        .ok_or("worker topology missing")?;
-    seed_agent_resources(
-        &store,
-        &cluster.cluster_id,
-        &worker_id,
-        worker.workload_subnet,
-        None,
-    )
-    .await?;
-    let directory = tempfile::tempdir()?;
-    let plan = DaemonPlan::new(
-        cluster.clone(),
-        worker_id.clone(),
-        directory.path().to_path_buf(),
-    )?;
-    let workload_runtime = Arc::new(FakeRuntime::new());
-    let network_provider = Arc::new(FakeNetworkProvider::default());
-    let factory = DaemonRoleFactory::new(
-        DaemonRoleDependencies {
-            agent_store: AgentStore::Remote(store.clone()),
-            mesh_backend: RecordingMeshBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
-            },
-            firewall_backend: RecordingFirewallBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
-            },
-            bridge_backend: RecordingBridgeBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
-            },
-            dns_server_binder: Arc::new(RecordingDnsBinder {
-                bindings: Arc::new(Mutex::new(Vec::new())),
-            }),
-            workload_runtime: workload_runtime.clone(),
-            artifact_store: Arc::new(FakeBuildBackend::default()) as Arc<dyn ArtifactStore>,
-            artifact_archives: Arc::new(LocalBuildSourceProvider::new(
-                directory.path().join("archive-workspaces"),
-                directory.path().join("archives"),
-            )?),
-            log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
-            log_sinks: Vec::new(),
-            metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),
-            metric_sinks: Vec::new(),
-            host_metric_sinks: Vec::new(),
-            stats_reader: Arc::new(FixedStatsReader),
-            network_stats_reader: Arc::new(FixedNetworkStatsReader),
-            host_stats_reader: Arc::new(FixedHostStatsReader),
-            host_disk_reader: Arc::new(FixedHostDiskReader),
-            network_provider: network_provider.clone(),
-            health_prober: Arc::new(RecordingHealthProber {
-                targets: Arc::new(Mutex::new(Vec::new())),
-            }),
-            volatile_root: directory.path().join("volatile"),
-            mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
-            instance_id: NodeInstanceId::new("worker-instance")?,
-            running_version: Version::new(0, 1, 0),
-            monotonic_clock: clock,
-            status_clock: Arc::new(FixedStatusClock),
-            node_upgrade: None,
-            api_settings: test_api_settings("127.0.0.1:0".parse()?)?,
-            firewall_settings: OperatorSettings::production(&cluster)?.firewall,
-        },
-        DaemonRoleSettings::default(),
-    );
-
-    let running = Daemon::new(plan, factory).start().await?;
-    assert_eq!(
-        load_assignment(&store, &cluster.cluster_id)
-            .await?
-            .status
-            .phase,
-        AssignmentPhase::Running
-    );
-    assert_eq!(
-        workload_runtime
-            .list(&cluster.cluster_id, &worker_id)
-            .await?
-            .len(),
-        1
-    );
-    assert_eq!(
-        (
-            network_provider.lease_count(),
-            network_provider.attachment_count()
-        ),
-        (1, 1)
-    );
-    running.shutdown().await?;
-    Ok(())
-}
-
-fn test_api_settings(bind_address: std::net::SocketAddr) -> Result<ServerSettings, rcgen::Error> {
+pub(super) fn test_api_settings(
+    bind_address: std::net::SocketAddr,
+) -> Result<ServerSettings, rcgen::Error> {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])?;
     let certificate_pem = certified.cert.pem();
     Ok(ServerSettings::new(
@@ -545,13 +446,13 @@ fn settings_reject_keepalive_at_or_after_leadership_ttl() {
     );
 }
 
-struct PausedClock {
+pub(super) struct PausedClock {
     now: Mutex<MonotonicTime>,
     advanced: Notify,
 }
 
 impl PausedClock {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             now: Mutex::new(MonotonicTime::from_duration(Duration::ZERO)),
             advanced: Notify::new(),
@@ -588,7 +489,7 @@ impl Clock for PausedClock {
     }
 }
 
-struct FixedStatusClock;
+pub(super) struct FixedStatusClock;
 
 impl StatusClock for FixedStatusClock {
     fn now(&self) -> Timestamp {
@@ -596,7 +497,7 @@ impl StatusClock for FixedStatusClock {
     }
 }
 
-struct FixedStatsReader;
+pub(super) struct FixedStatsReader;
 
 #[async_trait]
 impl CgroupStatsReader for FixedStatsReader {
@@ -631,7 +532,7 @@ impl CgroupStatsReader for FixedStatsReader {
     }
 }
 
-struct FixedNetworkStatsReader;
+pub(super) struct FixedNetworkStatsReader;
 
 #[async_trait]
 impl WorkloadNetworkStatsReader for FixedNetworkStatsReader {
@@ -646,7 +547,7 @@ impl WorkloadNetworkStatsReader for FixedNetworkStatsReader {
     }
 }
 
-struct FixedHostStatsReader;
+pub(super) struct FixedHostStatsReader;
 
 #[async_trait]
 impl HostStatsReader for FixedHostStatsReader {
@@ -668,7 +569,7 @@ impl HostStatsReader for FixedHostStatsReader {
     }
 }
 
-struct FixedHostDiskReader;
+pub(super) struct FixedHostDiskReader;
 
 #[async_trait]
 impl HostDiskReader for FixedHostDiskReader {
@@ -686,8 +587,8 @@ impl HostDiskReader for FixedHostDiskReader {
     }
 }
 
-struct RecordingHealthProber {
-    targets: Arc<Mutex<Vec<HealthProbeTarget>>>,
+pub(super) struct RecordingHealthProber {
+    pub(super) targets: Arc<Mutex<Vec<HealthProbeTarget>>>,
 }
 
 #[async_trait]
@@ -703,8 +604,8 @@ impl HealthProber for RecordingHealthProber {
     }
 }
 
-struct RecordingMeshBackend {
-    applications: Arc<Mutex<Vec<MeshConfiguration>>>,
+pub(super) struct RecordingMeshBackend {
+    pub(super) applications: Arc<Mutex<Vec<MeshConfiguration>>>,
 }
 
 #[derive(Default)]
@@ -751,8 +652,8 @@ impl MeshBackend for RecordingMeshBackend {
     }
 }
 
-struct RecordingFirewallBackend {
-    applications: Arc<Mutex<Vec<NodeFirewallSpec>>>,
+pub(super) struct RecordingFirewallBackend {
+    pub(super) applications: Arc<Mutex<Vec<NodeFirewallSpec>>>,
 }
 
 #[async_trait]
@@ -766,8 +667,8 @@ impl FirewallBackend for RecordingFirewallBackend {
     }
 }
 
-struct RecordingBridgeBackend {
-    applications: Arc<Mutex<Vec<WorkloadBridge>>>,
+pub(super) struct RecordingBridgeBackend {
+    pub(super) applications: Arc<Mutex<Vec<WorkloadBridge>>>,
 }
 
 #[async_trait]
@@ -781,8 +682,8 @@ impl WorkloadBridgeBackend for RecordingBridgeBackend {
     }
 }
 
-struct RecordingDnsBinder {
-    bindings: Arc<Mutex<Vec<(DnsServerSettings, AuthoritativeDnsResolver)>>>,
+pub(super) struct RecordingDnsBinder {
+    pub(super) bindings: Arc<Mutex<Vec<(DnsServerSettings, AuthoritativeDnsResolver)>>>,
 }
 
 #[async_trait]

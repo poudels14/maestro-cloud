@@ -2,6 +2,7 @@ mod build_backend;
 mod control_plane;
 mod control_plane_resources;
 mod control_plane_store;
+mod control_plane_worker;
 mod join_activation;
 mod launch;
 mod leadership;
