@@ -11,7 +11,7 @@ use runtime::{
 use tokio::sync::watch;
 
 use crate::artifact_drain::{
-    ArtifactDrainReadiness, DRAINING_CONDITION, update_artifact_drain_status,
+    ArtifactDrainReadiness, DRAINING_CONDITION, PeerCopyPolicy, update_artifact_drain_status,
 };
 use crate::artifact_retention::{preserved_digests, retained_digests};
 use crate::{ArtifactHolderRegistry, ArtifactHolderRegistryError, StatusClock};
@@ -245,11 +245,16 @@ impl ArtifactReplicationAgent {
                 }),
             }
         }
+        let peer_copy_policy = if local_runs_workloads && workload_node_count > 1 {
+            PeerCopyPolicy::RequirePeerCopy
+        } else {
+            PeerCopyPolicy::LocalCopySufficient
+        };
         let readiness = ArtifactDrainReadiness::inspect(
             &retained,
             &self.holders,
             &self.settings.node_id,
-            local_runs_workloads && workload_node_count > 1,
+            peer_copy_policy,
         )
         .await?;
         report.drain_ready = readiness.ready();

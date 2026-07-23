@@ -16,7 +16,7 @@ use runtime::ArtifactDigest;
 use crate::ArtifactHolderRegistry;
 use crate::artifact_drain::{
     ARTIFACT_REPLICATION_READY_CONDITION, ArtifactDrainReadiness, DRAIN_REQUEST_REASON,
-    DRAINING_CONDITION, update_artifact_drain_status,
+    DRAINING_CONDITION, PeerCopyPolicy, update_artifact_drain_status,
 };
 
 #[tokio::test]
@@ -41,8 +41,22 @@ async fn requested_drain_waits_for_a_peer_copy_then_becomes_unschedulable()
     let digest = ArtifactDigest::new("sha256:drain")?;
     let retained = BTreeSet::from([digest.clone()]);
 
-    let pending =
-        ArtifactDrainReadiness::inspect(&retained, &local_holders, &local_node_id, true).await?;
+    let single_node_ready = ArtifactDrainReadiness::inspect(
+        &retained,
+        &local_holders,
+        &local_node_id,
+        PeerCopyPolicy::LocalCopySufficient,
+    )
+    .await?;
+    assert!(single_node_ready.ready());
+
+    let pending = ArtifactDrainReadiness::inspect(
+        &retained,
+        &local_holders,
+        &local_node_id,
+        PeerCopyPolicy::RequirePeerCopy,
+    )
+    .await?;
     assert!(!pending.ready());
     update_artifact_drain_status(
         store.as_ref(),
@@ -63,8 +77,13 @@ async fn requested_drain_waits_for_a_peer_copy_then_becomes_unschedulable()
     );
 
     peer_holders.publish(&digest).await?;
-    let ready =
-        ArtifactDrainReadiness::inspect(&retained, &local_holders, &local_node_id, true).await?;
+    let ready = ArtifactDrainReadiness::inspect(
+        &retained,
+        &local_holders,
+        &local_node_id,
+        PeerCopyPolicy::RequirePeerCopy,
+    )
+    .await?;
     assert!(ready.ready());
     update_artifact_drain_status(
         store.as_ref(),

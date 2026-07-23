@@ -214,7 +214,7 @@ impl HealthAgent {
                         .await?;
                         self.schedule_next(
                             assignment.meta.id.clone(),
-                            true,
+                            ProbeOutcome::Healthy,
                             Duration::from_secs(u64::from(health_check.interval_secs.max(1))),
                         )
                         .await;
@@ -230,7 +230,7 @@ impl HealthAgent {
                         .await?;
                         self.schedule_next(
                             assignment.meta.id.clone(),
-                            false,
+                            ProbeOutcome::Unhealthy,
                             self.settings.poll_interval,
                         )
                         .await;
@@ -269,12 +269,17 @@ impl HealthAgent {
             .is_none_or(|schedule| now >= schedule.next_probe)
     }
 
-    async fn schedule_next(&self, assignment_id: AssignmentId, healthy: bool, interval: Duration) {
+    async fn schedule_next(
+        &self,
+        assignment_id: AssignmentId,
+        outcome: ProbeOutcome,
+        interval: Duration,
+    ) {
         let mut schedules = self.schedules.lock().await;
         let was_healthy = schedules
             .get(&assignment_id)
-            .is_some_and(|schedule| schedule.healthy);
-        let delay = if healthy && !was_healthy {
+            .is_some_and(|schedule| schedule.outcome == ProbeOutcome::Healthy);
+        let delay = if outcome == ProbeOutcome::Healthy && !was_healthy {
             healthy_stagger(
                 assignment_id.as_str(),
                 interval,
@@ -287,7 +292,7 @@ impl HealthAgent {
             assignment_id,
             ProbeSchedule {
                 next_probe: self.monotonic_clock.now().saturating_add(delay),
-                healthy,
+                outcome,
             },
         );
     }
@@ -349,9 +354,15 @@ impl HealthAgent {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProbeOutcome {
+    Healthy,
+    Unhealthy,
+}
+
 struct ProbeSchedule {
     next_probe: kernel_store::MonotonicTime,
-    healthy: bool,
+    outcome: ProbeOutcome,
 }
 
 fn probe_target(address: std::net::IpAddr, probe: &HealthProbe) -> HealthProbeTarget {

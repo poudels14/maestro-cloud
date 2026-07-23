@@ -16,6 +16,12 @@ pub(crate) const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
 const MAX_NODE_BYTES: usize = 256 * 1_024;
 const MAX_CAS_ATTEMPTS: usize = 16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeerCopyPolicy {
+    LocalCopySufficient,
+    RequirePeerCopy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArtifactDrainReadiness {
     retained: usize,
@@ -27,10 +33,10 @@ impl ArtifactDrainReadiness {
         retained: &BTreeSet<ArtifactDigest>,
         holders: &ArtifactHolderRegistry,
         local_node_id: &NodeId,
-        peer_copy_required: bool,
+        peer_copy_policy: PeerCopyPolicy,
     ) -> Result<Self, ArtifactReplicationError> {
         let mut missing_peer_copies = Vec::new();
-        if peer_copy_required {
+        if peer_copy_policy == PeerCopyPolicy::RequirePeerCopy {
             for digest in retained {
                 let has_peer = holders
                     .holders(digest)
