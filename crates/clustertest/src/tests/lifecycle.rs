@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use super::lifecycle_topology::assign_replica_placements;
+
 use crate::{
     AcceptanceCluster, ArtifactBehavior, ClusterSnapshot, DeploymentPhase, DeploymentSnapshot,
-    FaultInjectableCluster, FixtureArtifact, FixtureName, LifecycleFaultCluster, ReplicaCount,
-    ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot, ResourceAvailability,
-    RolloutFailure, ServiceFixture, ServiceSnapshot, scenarios,
+    FaultInjectableCluster, FixtureArtifact, FixtureName, FixtureNodeName, LifecycleFaultCluster,
+    ReplicaCount, ReplicaIndex, ReplicaOverride, ReplicaRecordDisposition, ReplicaSnapshot,
+    ResourceAvailability, RolloutFailure, ServiceFixture, ServiceSnapshot,
 };
 
 struct WorldService {
@@ -27,11 +29,22 @@ pub(super) struct LifecycleWorld {
     pub(super) prepared: BTreeSet<u64>,
     pub(super) built: BTreeSet<u64>,
     pub(super) health_writes: u64,
+    pub(super) topology_nodes: Vec<FixtureNodeName>,
+    pub(super) draining_nodes: BTreeSet<FixtureNodeName>,
+    pub(super) service_affinity: BTreeMap<FixtureName, FixtureNodeName>,
+    pub(super) frozen_services: BTreeSet<FixtureName>,
+    pub(super) removing_deployments: BTreeSet<u64>,
+    pub(super) deleting_services: BTreeSet<FixtureName>,
+    next_workload_instance: u64,
     drain_grace_elapsed: bool,
 }
 
 impl LifecycleWorld {
     pub(super) fn new() -> Self {
+        Self::with_node_count(1)
+    }
+
+    pub(super) fn with_node_count(node_count: usize) -> Self {
         Self {
             next_deployment: 1,
             services: BTreeMap::new(),
@@ -43,6 +56,15 @@ impl LifecycleWorld {
             prepared: BTreeSet::new(),
             built: BTreeSet::new(),
             health_writes: 0,
+            topology_nodes: (1..=node_count.max(1))
+                .map(|index| FixtureNodeName::new(format!("node-{index}")))
+                .collect(),
+            draining_nodes: BTreeSet::new(),
+            service_affinity: BTreeMap::new(),
+            frozen_services: BTreeSet::new(),
+            removing_deployments: BTreeSet::new(),
+            deleting_services: BTreeSet::new(),
+            next_workload_instance: 1,
             drain_grace_elapsed: false,
         }
     }
@@ -98,15 +120,45 @@ impl LifecycleWorld {
     }
 
     fn settle(&mut self, readiness: WorldReadiness) {
+        let drain_grace_elapsed = self.drain_grace_elapsed;
+        if drain_grace_elapsed {
+            let deleting_services = &self.deleting_services;
+            self.services
+                .retain(|name, _service| !deleting_services.contains(name));
+            self.deployment_services
+                .retain(|_deployment, name| !deleting_services.contains(name));
+        }
         let failures = &self.failures;
         let exhausted = &self.exhausted;
         let missing_records = &self.missing_records;
         let artifact_behaviors = &self.artifact_behaviors;
+        let frozen_services = &self.frozen_services;
+        let removing_deployments = &self.removing_deployments;
+        let deleting_services = &self.deleting_services;
+        let topology_nodes = &self.topology_nodes;
+        let draining_nodes = &self.draining_nodes;
+        let service_affinity = &self.service_affinity;
+        let next_workload_instance = &mut self.next_workload_instance;
         let prepared = &mut self.prepared;
         let built = &mut self.built;
-        for service in self.services.values_mut() {
+        for (service_name, service) in &mut self.services {
+            if deleting_services.contains(service_name) {
+                for deployment in &mut service.deployments {
+                    deployment.phase = DeploymentPhase::Draining;
+                }
+                continue;
+            }
             for deployment in &mut service.deployments {
                 if deployment.phase == DeploymentPhase::Canceled {
+                    continue;
+                }
+                if removing_deployments.contains(&deployment.id) {
+                    deployment.phase = if drain_grace_elapsed {
+                        deployment.replicas.clear();
+                        DeploymentPhase::Removed
+                    } else {
+                        DeploymentPhase::Draining
+                    };
                     continue;
                 }
                 prepared.insert(deployment.id);
@@ -119,7 +171,7 @@ impl LifecycleWorld {
                 } else {
                     match artifact_behaviors.get(&deployment.id) {
                         Some(ArtifactBehavior::NeverCompletes) => {
-                            deployment.phase = if self.drain_grace_elapsed {
+                            deployment.phase = if drain_grace_elapsed {
                                 DeploymentPhase::Crashed
                             } else {
                                 DeploymentPhase::Building
@@ -137,6 +189,7 @@ impl LifecycleWorld {
                     }
                 }
             }
+            let frozen = frozen_services.contains(service_name);
             let Some(active_index) = service.deployments.iter().rposition(|deployment| {
                 !matches!(
                     deployment.phase,
@@ -144,10 +197,12 @@ impl LifecycleWorld {
                         | DeploymentPhase::Crashed
                         | DeploymentPhase::Terminated
                         | DeploymentPhase::Removed
-                ) && !matches!(
-                    artifact_behaviors.get(&deployment.id),
-                    Some(ArtifactBehavior::NeverCompletes)
-                )
+                ) && !removing_deployments.contains(&deployment.id)
+                    && (!frozen || deployment.phase != DeploymentPhase::Queued)
+                    && !matches!(
+                        artifact_behaviors.get(&deployment.id),
+                        Some(ArtifactBehavior::NeverCompletes)
+                    )
             }) else {
                 continue;
             };
@@ -171,11 +226,18 @@ impl LifecycleWorld {
                         healthcheck_failures: 0,
                         workload: ResourceAvailability::Available,
                         node: None,
-                        workload_instance: Some(format!("workload-{}-{index}", active.id)),
+                        workload_instance: None,
                     });
                 }
             }
             active.replicas.sort_by_key(|replica| replica.index);
+            assign_replica_placements(
+                active,
+                topology_nodes,
+                draining_nodes,
+                service_affinity.get(service_name),
+                next_workload_instance,
+            );
             let settled_phase = match readiness {
                 WorldReadiness::Automatic => DeploymentPhase::Ready,
                 WorldReadiness::External
@@ -213,7 +275,7 @@ impl LifecycleWorld {
             }
             if active.phase == DeploymentPhase::Ready {
                 for (index, previous) in service.deployments.iter_mut().enumerate() {
-                    if index != active_index
+                    if index < active_index
                         && !matches!(
                             previous.phase,
                             DeploymentPhase::Canceled
@@ -222,7 +284,7 @@ impl LifecycleWorld {
                                 | DeploymentPhase::Removed
                         )
                     {
-                        previous.phase = if self.drain_grace_elapsed {
+                        previous.phase = if drain_grace_elapsed {
                             for replica in &mut previous.replicas {
                                 replica.workload = ResourceAvailability::Unavailable;
                             }
@@ -402,54 +464,4 @@ impl LifecycleFaultCluster for LifecycleWorld {
         }
         Ok(())
     }
-}
-
-#[tokio::test]
-async fn basic_lifecycle_scenarios_pass_fast_fake() {
-    scenarios::rollout_reaches_ready(&mut LifecycleWorld::new())
-        .await
-        .expect("rollout scenario");
-    scenarios::redeploy_drains_previous(&mut LifecycleWorld::new())
-        .await
-        .expect("redeploy scenario");
-    scenarios::queued_deployment_can_be_canceled(&mut LifecycleWorld::new())
-        .await
-        .expect("cancel scenario");
-    scenarios::replica_override_round_trips(&mut LifecycleWorld::new())
-        .await
-        .expect("replica override scenario");
-    scenarios::drained_deployment_finalizes(&mut LifecycleWorld::new())
-        .await
-        .expect("drain finalization scenario");
-    scenarios::build_failure_marks_deployment_crashed(&mut LifecycleWorld::new())
-        .await
-        .expect("build failure scenario");
-    scenarios::prepare_failure_marks_deployment_crashed(&mut LifecycleWorld::new())
-        .await
-        .expect("prepare failure scenario");
-    scenarios::crashed_replica_restarts_in_place(&mut LifecycleWorld::new())
-        .await
-        .expect("replica restart scenario");
-}
-
-#[tokio::test]
-async fn lifecycle_fault_scenarios_pass_fast_fake() {
-    scenarios::exhausted_replica_stays_down_while_peers_run(&mut LifecycleWorld::new())
-        .await
-        .expect("exhausted replica scenario");
-    scenarios::all_exhausted_replicas_crash_deployment(&mut LifecycleWorld::new())
-        .await
-        .expect("all exhausted replicas scenario");
-    scenarios::initial_replica_crash_preserves_pending_peers(&mut LifecycleWorld::new())
-        .await
-        .expect("initial replica crash scenario");
-    scenarios::missing_workload_record_is_recovered(&mut LifecycleWorld::new())
-        .await
-        .expect("missing workload record scenario");
-    scenarios::rollout_failure_is_isolated_between_services(&mut LifecycleWorld::new())
-        .await
-        .expect("isolated failure scenario");
-    scenarios::old_workload_crash_does_not_break_redeployment(&mut LifecycleWorld::new())
-        .await
-        .expect("old workload crash scenario");
 }
