@@ -64,7 +64,7 @@ async fn cluster_stats(
         probe: ProbeStatsSnapshot {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             uptime_ms: state
-                .started_at
+                .uptime_clock
                 .elapsed()
                 .as_millis()
                 .try_into()

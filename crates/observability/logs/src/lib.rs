@@ -34,6 +34,7 @@ mod stats_warnings;
 mod store;
 mod traffic;
 mod traffic_cluster;
+mod uptime;
 
 pub use cluster_query::{
     ClusterLogCursor, ClusterLogEntry, ClusterLogPage, ClusterLogQueryCoordinator,
@@ -110,6 +111,7 @@ pub use traffic::{
     project_service_traffic,
 };
 pub use traffic_cluster::{ClusterTrafficQueryCoordinator, NodeTrafficQueryStore};
+pub use uptime::{SystemUptimeClock, UptimeClock};
 
 #[cfg(test)]
 mod tests;

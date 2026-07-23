@@ -38,7 +38,7 @@ pub(crate) struct AppState {
     pub(crate) stats_metrics: Option<Arc<dyn logs::StatsMetricStore>>,
     pub(crate) cluster_stats_nodes: Arc<[NodeId]>,
     pub(crate) cluster_stats_queries: Option<Arc<dyn NodeStatsQueryStore>>,
-    pub(crate) started_at: std::time::Instant,
+    pub(crate) uptime_clock: Arc<dyn logs::UptimeClock>,
     pub(crate) exec_sessions: Option<Arc<dyn ClusterExecSessions>>,
     pub(crate) exec_relays: Arc<Semaphore>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,

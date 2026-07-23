@@ -1,11 +1,10 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 
 use crate::{
     BackupStatsSnapshot, ControllerStatsSnapshot, LogSinkId, LogStatsStore, LogStatsStoreError,
-    SinkRuntimeRegistry, collect_controller_stats,
+    SinkRuntimeRegistry, SystemUptimeClock, UptimeClock, collect_controller_stats,
 };
 
 /// Live node-local controller observability snapshot provider.
@@ -24,7 +23,7 @@ pub struct LiveControllerStats {
     sink_ids: Arc<[LogSinkId]>,
     runtime: SinkRuntimeRegistry,
     version: String,
-    started_at: Instant,
+    uptime_clock: Arc<dyn UptimeClock>,
 }
 
 impl LiveControllerStats {
@@ -42,8 +41,14 @@ impl LiveControllerStats {
             sink_ids: Arc::from(sink_ids),
             runtime,
             version: version.into(),
-            started_at: Instant::now(),
+            uptime_clock: Arc::new(SystemUptimeClock::new()),
         }
+    }
+
+    /// Replaces the production uptime clock for deterministic composition.
+    pub fn with_uptime_clock(mut self, uptime_clock: Arc<dyn UptimeClock>) -> Self {
+        self.uptime_clock = uptime_clock;
+        self
     }
 }
 
@@ -59,7 +64,7 @@ impl ControllerStatsProvider for LiveControllerStats {
             &self.runtime,
             reported_at_ms,
             self.version.clone(),
-            self.started_at
+            self.uptime_clock
                 .elapsed()
                 .as_millis()
                 .try_into()

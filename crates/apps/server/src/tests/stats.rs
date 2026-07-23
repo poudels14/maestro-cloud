@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
@@ -8,6 +9,7 @@ use logs::{
     BackupStatsProvider, BackupStatsProviderError, BackupStatsSnapshot, ClusterStatsResponse,
     ControllerStatsProvider, ControllerStatsSnapshot, InMemoryLogStore, LiveControllerStats,
     LogSinkId, SinkRuntimeRegistry, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
+    UptimeClock,
 };
 
 use super::{decode, request, seeded_store, token};
@@ -24,15 +26,19 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
     let logs = Arc::new(InMemoryLogStore::new());
     let sink_id = LogSinkId::new("datadog")?;
     let runtime = SinkRuntimeRegistry::default();
+    let uptime_clock = Arc::new(FixedUptimeClock(Duration::from_secs(42)));
     runtime.record_failure(&sink_id, "destination rejected payload");
     logs.append_stats_metrics(&[stats_metric("requests", "node-1")])
         .await?;
-    let controller = Arc::new(LiveControllerStats::new(
-        logs.clone(),
-        vec![sink_id],
-        runtime,
-        env!("CARGO_PKG_VERSION"),
-    )) as Arc<dyn ControllerStatsProvider>;
+    let controller = Arc::new(
+        LiveControllerStats::new(
+            logs.clone(),
+            vec![sink_id],
+            runtime,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .with_uptime_clock(uptime_clock.clone()),
+    ) as Arc<dyn ControllerStatsProvider>;
     let backup = Arc::new(TestBackupStats(BackupStatsSnapshot {
         configured: true,
         last_error_at_ms: Some(20),
@@ -50,14 +56,17 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
         cluster_id,
         ServerSettings::new("127.0.0.1:3000".parse()?, Some(SecretValue::new(secret))),
     )?
-    .with_stats_providers(controller, Some(backup), logs, nodes, cluster);
+    .with_stats_providers(controller, Some(backup), logs, nodes, cluster)
+    .with_uptime_clock(uptime_clock);
     let operator = token(secret, "operator")?;
     let node = token(secret, "node")?;
 
     let response = request(&server, "/api/cluster/stats", Some(&operator)).await?;
     assert_eq!(response.status(), StatusCode::OK);
     let stats: ClusterStatsResponse = decode(response).await?;
+    assert_eq!(stats.probe.uptime_ms, 42_000);
     let controller = stats.controller.ok_or("controller stats missing")?;
+    assert_eq!(controller.uptime_ms, 42_000);
     assert_eq!(controller.sinks.len(), 1);
     assert_eq!(
         controller
@@ -261,6 +270,14 @@ async fn node_stats_client_queries_a_peer_over_authenticated_mutual_tls()
 }
 
 struct TestBackupStats(BackupStatsSnapshot);
+
+struct FixedUptimeClock(Duration);
+
+impl UptimeClock for FixedUptimeClock {
+    fn elapsed(&self) -> Duration {
+        self.0
+    }
+}
 
 impl BackupStatsProvider for TestBackupStats {
     fn backup_stats(&self) -> Result<BackupStatsSnapshot, BackupStatsProviderError> {

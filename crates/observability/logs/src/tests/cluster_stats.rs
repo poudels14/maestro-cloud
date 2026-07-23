@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 use kernel_api::{ClusterId, NodeId, Timestamp};
 
 use crate::{
-    BackupStatsSnapshot, ClusterStatsResponse, DeadLetterStore, InMemoryLogStore, IngestLogEntry,
-    LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSinkId, LogStore, LogStream,
-    OriginCursor, ProbeStatsSnapshot, SinkDeadLetter, SinkRuntimeClock, SinkRuntimeRegistry,
-    StatsWarning, collect_controller_stats, derive_stats_warnings,
+    BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider, DeadLetterStore,
+    InMemoryLogStore, IngestLogEntry, LiveControllerStats, LogBody, LogDeliveryStore, LogOrigin,
+    LogProducer, LogRecordId, LogSinkId, LogStore, LogStream, OriginCursor, ProbeStatsSnapshot,
+    SinkDeadLetter, SinkRuntimeClock, SinkRuntimeRegistry, StatsWarning, UptimeClock,
+    collect_controller_stats, derive_stats_warnings,
 };
 
 #[tokio::test]
@@ -92,6 +94,24 @@ async fn controller_stats_join_durable_backlog_with_runtime_health_and_wire_shap
             && point.value == 1.0
             && point.labels.get("sink").map(String::as_str) == Some("datadog")
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_controller_stats_uses_the_injected_monotonic_uptime()
+-> Result<(), Box<dyn std::error::Error>> {
+    let provider = LiveControllerStats::new(
+        Arc::new(InMemoryLogStore::new()),
+        Vec::new(),
+        SinkRuntimeRegistry::default(),
+        "2.0.0",
+    )
+    .with_uptime_clock(Arc::new(FixedUptimeClock(Duration::from_millis(12_345))));
+
+    let stats = provider.controller_stats(50_000).await?;
+
+    assert_eq!(stats.reported_at_ms, 50_000);
+    assert_eq!(stats.uptime_ms, 12_345);
     Ok(())
 }
 
@@ -227,6 +247,14 @@ fn entry(index: u64, event_at: i64) -> Result<IngestLogEntry, kernel_api::Invali
 }
 
 struct ManualClock(AtomicI64);
+
+struct FixedUptimeClock(Duration);
+
+impl UptimeClock for FixedUptimeClock {
+    fn elapsed(&self) -> Duration {
+        self.0
+    }
+}
 
 impl ManualClock {
     fn new(now: i64) -> Self {

@@ -54,7 +54,7 @@ impl ApiServer {
             stats_metrics: None,
             cluster_stats_nodes: Arc::from([]),
             cluster_stats_queries: None,
-            started_at: std::time::Instant::now(),
+            uptime_clock: Arc::new(logs::SystemUptimeClock::new()),
             exec_sessions: None,
             exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
@@ -198,6 +198,13 @@ impl ApiServer {
         self.state.stats_metrics = Some(metrics);
         self.state.cluster_stats_nodes = Arc::from(node_ids);
         self.state.cluster_stats_queries = Some(cluster);
+        self.rebuild_router();
+        self
+    }
+
+    /// Replaces the production monotonic uptime clock for deterministic composition.
+    pub fn with_uptime_clock(mut self, uptime_clock: Arc<dyn logs::UptimeClock>) -> Self {
+        self.state.uptime_clock = uptime_clock;
         self.rebuild_router();
         self
     }
