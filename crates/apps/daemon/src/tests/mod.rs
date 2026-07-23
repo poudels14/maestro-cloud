@@ -9,6 +9,7 @@ mod dead_letter_admin;
 mod join_activation;
 mod launch;
 mod leadership;
+mod local_logs;
 mod log_delivery;
 mod log_maintenance;
 mod metric_delivery;
