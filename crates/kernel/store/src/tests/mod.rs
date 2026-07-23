@@ -2,6 +2,7 @@
 
 mod encryption;
 mod etcd;
+mod etcd_value;
 mod key;
 mod memory;
 

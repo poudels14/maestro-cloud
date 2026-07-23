@@ -208,7 +208,7 @@ async fn read_bounded(
     }
 }
 
-fn secret_fragments(invocation: &GitInvocation) -> Vec<String> {
+pub(crate) fn secret_fragments(invocation: &GitInvocation) -> Vec<String> {
     invocation
         .environment
         .iter()
@@ -221,7 +221,7 @@ fn secret_fragments(invocation: &GitInvocation) -> Vec<String> {
         .collect()
 }
 
-fn safe_git_error(stderr: &[u8], redactions: &[String]) -> String {
+pub(crate) fn safe_git_error(stderr: &[u8], redactions: &[String]) -> String {
     let mut redacted = String::from_utf8_lossy(stderr).into_owned();
     for secret in redactions {
         if !secret.is_empty() {
@@ -243,41 +243,5 @@ fn safe_git_error(stderr: &[u8], redactions: &[String]) -> String {
         "git exited unsuccessfully".to_string()
     } else {
         safe.trim().to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{GitInvocation, git_environment, safe_git_error, secret_fragments};
-    use kernel_api::SecretValue;
-
-    #[test]
-    fn git_errors_redact_header_and_encoded_credentials() {
-        let invocation = GitInvocation::new(["fetch"]).with_environment(vec![(
-            "GIT_CONFIG_VALUE_0".into(),
-            SecretValue::new("Authorization: basic encoded-secret"),
-        )]);
-        let redactions = secret_fragments(&invocation);
-        let safe = safe_git_error(
-            b"server echoed Authorization: basic encoded-secret and encoded-secret\n",
-            &redactions,
-        );
-
-        assert_eq!(safe, "server echoed [REDACTED] and [REDACTED]");
-    }
-
-    #[test]
-    fn github_token_is_not_sent_to_other_repository_hosts() -> Result<(), crate::BuildSourceError> {
-        let environment = git_environment(
-            "https://git.example.com/acme/api.git",
-            Some(&SecretValue::new("github-secret")),
-        )?;
-
-        assert_eq!(environment.len(), 1);
-        assert_eq!(
-            environment.first().and_then(|(key, _)| key.to_str()),
-            Some("GIT_TERMINAL_PROMPT")
-        );
-        Ok(())
     }
 }
