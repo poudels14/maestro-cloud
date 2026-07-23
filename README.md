@@ -152,7 +152,8 @@ maestro contexts login --days 7
 
 `contexts login` reads `JWT_SECRET_KEY` from the environment or a hidden
 prompt, signs a short-lived operator-scoped token, and stores it in the active
-context. Newly written context files use owner-only permissions.
+context. Context files use owner-only permissions; the CLI refuses an existing
+symlink, non-regular file, or group/world-readable credential file.
 
 List configured origins without exposing their credentials:
 

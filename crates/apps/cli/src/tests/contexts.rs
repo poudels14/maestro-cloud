@@ -62,3 +62,35 @@ fn contexts_file_is_owner_only() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(fs::metadata(path)?.permissions().mode() & 0o777, 0o600);
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn contexts_reject_public_or_linked_credential_files() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let directory = tempfile::tempdir()?;
+    let public = directory.path().join("public.json");
+    fs::write(&public, b"{}\n")?;
+    fs::set_permissions(&public, fs::Permissions::from_mode(0o644))?;
+
+    let public_error = ContextStore::at(public)
+        .list()
+        .expect_err("public credentials must fail closed");
+    assert!(
+        public_error
+            .to_string()
+            .contains("has insecure permissions 0o644")
+    );
+
+    let private = directory.path().join("private.json");
+    fs::write(&private, b"{}\n")?;
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o600))?;
+    let linked = directory.path().join("linked.json");
+    symlink(private, &linked)?;
+
+    let linked_error = ContextStore::at(linked)
+        .list()
+        .expect_err("linked credentials must fail closed");
+    assert!(linked_error.to_string().contains("must be a regular file"));
+    Ok(())
+}

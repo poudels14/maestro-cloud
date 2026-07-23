@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
@@ -167,26 +167,15 @@ impl ContextStore {
     }
 
     fn load(&self) -> Result<ContextsFile, CliError> {
-        if !self.path.exists() {
+        let encoded = match crate::private_document::read_private(&self.path, "contexts file") {
+            Ok(encoded) => encoded,
+            Err(CliError::NotFound { .. }) => return Ok(ContextsFile::default()),
+            Err(error) => return Err(error),
+        };
+        if encoded.iter().all(|byte| byte.is_ascii_whitespace()) {
             return Ok(ContextsFile::default());
         }
-        let mut file = fs::File::open(&self.path).map_err(|source| {
-            CliError::io(
-                format!("failed to open contexts file {}", self.path.display()),
-                source,
-            )
-        })?;
-        let mut encoded = String::new();
-        file.read_to_string(&mut encoded).map_err(|source| {
-            CliError::io(
-                format!("failed to read contexts file {}", self.path.display()),
-                source,
-            )
-        })?;
-        if encoded.trim().is_empty() {
-            return Ok(ContextsFile::default());
-        }
-        serde_json::from_str(&encoded).map_err(|source| {
+        serde_json::from_slice(&encoded).map_err(|source| {
             CliError::json(
                 format!("failed to decode contexts file {}", self.path.display()),
                 source,
