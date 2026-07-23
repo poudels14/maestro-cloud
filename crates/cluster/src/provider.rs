@@ -46,6 +46,29 @@ impl StoreProviderConfig {
         store_encryption_secret: SecretValue,
         security: NodeCertificateBundle,
     ) -> Result<Self, StoreProviderError> {
+        Self::new_with_address_policy(
+            cluster_id,
+            local_member,
+            known_members,
+            ports,
+            data_directory,
+            store_encryption_secret,
+            security,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_address_policy(
+        cluster_id: ClusterId,
+        local_member: StoreMember,
+        known_members: BTreeMap<NodeId, StoreMember>,
+        ports: ClusterPorts,
+        data_directory: PathBuf,
+        store_encryption_secret: SecretValue,
+        security: NodeCertificateBundle,
+        allow_loopback: bool,
+    ) -> Result<Self, StoreProviderError> {
         ports
             .validate()
             .map_err(|error| StoreProviderError::InvalidConfiguration {
@@ -67,7 +90,7 @@ impl StoreProviderConfig {
             });
         }
         if known_members.iter().any(|(node_id, member)| {
-            node_id != &member.node_id || !valid_host_address(member.host_address)
+            node_id != &member.node_id || !valid_host_address(member.host_address, allow_loopback)
         }) {
             return Err(StoreProviderError::InvalidConfiguration {
                 reason: "store member IDs must match their keys and addresses must be private"
@@ -385,14 +408,7 @@ pub enum StoreProviderError {
     Store(#[from] StoreError),
 }
 
-fn valid_host_address(address: Ipv4Addr) -> bool {
+fn valid_host_address(address: Ipv4Addr, allow_loopback: bool) -> bool {
     let production_address = address.is_private() && !address.is_loopback();
-    #[cfg(test)]
-    {
-        production_address || address.is_loopback()
-    }
-    #[cfg(not(test))]
-    {
-        production_address
-    }
+    production_address || (allow_loopback && address.is_loopback())
 }

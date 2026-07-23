@@ -3,8 +3,7 @@ use kernel_api::{
 };
 use serde_json::json;
 
-use crate::legacy_crypto::encrypt_for_test;
-use crate::legacy_fixtures::cluster_state;
+use crate::legacy_fixtures::{cluster_state, encrypt_for_test};
 use crate::legacy_node_tests::node_entries;
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};
 

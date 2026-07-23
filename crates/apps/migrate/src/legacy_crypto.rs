@@ -11,7 +11,7 @@ use crate::LegacyEntry;
 
 const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 const KEY_LENGTH: usize = 32;
-const NONCE_LENGTH: usize = 12;
+pub(crate) const NONCE_LENGTH: usize = 12;
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct LegacyDecryptor {
@@ -20,12 +20,9 @@ pub(crate) struct LegacyDecryptor {
 
 impl LegacyDecryptor {
     pub(crate) fn new(master_secret: &str) -> Result<Self, LegacyCryptoError> {
-        let salt = Sha256::digest(KDF_SALT);
-        let mut key = [0; KEY_LENGTH];
-        Argon2::default()
-            .hash_password_into(master_secret.as_bytes(), &salt, &mut key)
-            .map_err(|_| LegacyCryptoError::KeyDerivation)?;
-        Ok(Self { key })
+        Ok(Self {
+            key: derive_key(master_secret)?,
+        })
     }
 
     pub(crate) fn decode_json<Value>(&self, entry: &LegacyEntry) -> Result<Value, LegacyCryptoError>
@@ -74,6 +71,15 @@ impl LegacyDecryptor {
     }
 }
 
+pub(crate) fn derive_key(master_secret: &str) -> Result<[u8; KEY_LENGTH], LegacyCryptoError> {
+    let salt = Sha256::digest(KDF_SALT);
+    let mut key = [0; KEY_LENGTH];
+    Argon2::default()
+        .hash_password_into(master_secret.as_bytes(), &salt, &mut key)
+        .map_err(|_| LegacyCryptoError::KeyDerivation)?;
+    Ok(key)
+}
+
 impl std::fmt::Debug for LegacyDecryptor {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("LegacyDecryptor([REDACTED])")
@@ -100,25 +106,4 @@ pub(crate) enum LegacyCryptoError {
     Authentication { key: String },
     #[error("legacy value at `{key}` contains invalid JSON: {message}")]
     InvalidJson { key: String, message: String },
-}
-
-#[cfg(test)]
-pub(crate) fn encrypt_for_test(
-    master_secret: &str,
-    plaintext: &[u8],
-) -> Result<Vec<u8>, LegacyCryptoError> {
-    use aes_gcm::aead::OsRng;
-    use aes_gcm::aead::rand_core::RngCore;
-
-    let decryptor = LegacyDecryptor::new(master_secret)?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&decryptor.key).map_err(|_| LegacyCryptoError::KeyDerivation)?;
-    let mut nonce = [0; NONCE_LENGTH];
-    OsRng.fill_bytes(&mut nonce);
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
-        .map_err(|_| LegacyCryptoError::KeyDerivation)?;
-    let mut envelope = nonce.to_vec();
-    envelope.extend(ciphertext);
-    Ok(STANDARD.encode(envelope).into_bytes())
 }

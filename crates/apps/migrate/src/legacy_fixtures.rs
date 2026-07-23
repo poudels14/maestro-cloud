@@ -1,8 +1,30 @@
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::json;
 
 use crate::LegacyEntry;
+use crate::legacy_crypto::{LegacyCryptoError, NONCE_LENGTH, derive_key};
 
 pub(crate) const CLUSTER_ID: &str = "0123456789abcdef0123456789abcdef";
+
+pub(crate) fn encrypt_for_test(
+    master_secret: &str,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, LegacyCryptoError> {
+    let cipher = Aes256Gcm::new_from_slice(&derive_key(master_secret)?)
+        .map_err(|_| LegacyCryptoError::KeyDerivation)?;
+    let mut nonce = [0; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .map_err(|_| LegacyCryptoError::KeyDerivation)?;
+    let mut envelope = nonce.to_vec();
+    envelope.extend(ciphertext);
+    Ok(STANDARD.encode(envelope).into_bytes())
+}
 
 pub(crate) fn cluster_meta() -> LegacyEntry {
     cluster_meta_for(&[10])

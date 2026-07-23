@@ -6,8 +6,7 @@ use kernel_api::{
     RolloutState, Service, TransportProtocol,
 };
 
-use crate::legacy_crypto::encrypt_for_test;
-use crate::legacy_fixtures::cluster_state;
+use crate::legacy_fixtures::{cluster_state, encrypt_for_test};
 use crate::legacy_node_tests::node_entries;
 use crate::legacy_services::{LegacyServiceCatalog, LegacyServiceError};
 use crate::{LegacyEntry, LegacyPlanError, LegacySnapshot, plan_legacy_snapshot};

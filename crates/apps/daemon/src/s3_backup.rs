@@ -6,17 +6,11 @@ use logstore::{
     BackupObjectUpload,
 };
 
-mod digest;
+pub(crate) mod digest;
 mod multipart;
 
 use digest::{ObjectDigest, digest_bytes, digest_file};
 use multipart::upload_multipart;
-
-#[cfg(test)]
-pub(crate) use digest::{
-    DEFAULT_MULTIPART_PART_BYTES, MAX_MULTIPART_PART_BYTES, MAX_MULTIPART_PARTS,
-    MULTIPART_THRESHOLD_BYTES, composite_sha256, digest_bytes_with_part_size, multipart_part_size,
-};
 
 /// Production S3 object-store adapter with whole-object verification and SSE-KMS.
 pub struct S3BackupObjectStore {

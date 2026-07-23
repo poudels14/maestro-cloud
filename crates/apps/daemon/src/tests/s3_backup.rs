@@ -2,17 +2,17 @@ use base64::Engine;
 use logstore::{BackupObjectBody, BackupObjectUpload};
 use sha2::{Digest, Sha256};
 
-use crate::s3_backup::{
+use crate::s3_backup::digest::{
     DEFAULT_MULTIPART_PART_BYTES, MAX_MULTIPART_PART_BYTES, MAX_MULTIPART_PARTS,
-    MULTIPART_THRESHOLD_BYTES, S3BackupObjectStoreError, composite_sha256,
-    digest_bytes_with_part_size, kms_key_matches, multipart_part_size, validate_upload,
+    MULTIPART_THRESHOLD_BYTES, composite_sha256, digest_bytes_with_part_size, multipart_part_size,
 };
+use crate::s3_backup::{S3BackupObjectStoreError, kms_key_matches, validate_upload};
 
 #[test]
 fn multipart_digest_uses_s3_composite_checksum_contract() -> Result<(), Box<dyn std::error::Error>>
 {
     let bytes = vec![7_u8; 10];
-    let digest = digest_bytes_with_part_size(&bytes, 6)?;
+    let digest = digest_bytes_with_part_size(&bytes, Some(6))?;
     assert_eq!(digest.parts.len(), 2);
     assert_eq!(digest.parts.first().ok_or("first part missing")?.length, 6);
     assert_eq!(digest.parts.get(1).ok_or("second part missing")?.offset, 6);

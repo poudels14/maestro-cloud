@@ -388,7 +388,7 @@ fn three_member_configs(
             // Linux selects 127.0.0.1 as the source address when etcd peers
             // connect between loopback aliases, so peer authentication must
             // recognize both the listener alias and the observed source.
-            let security = authority.issue_node_certificate_with_additional_ip_sans(
+            let security = authority.issue_node_certificate_with_ip_sans(
                 &node_id,
                 &format!("{node_id}.internal"),
                 host_address,
@@ -396,7 +396,7 @@ fn three_member_configs(
                 role,
                 validity()?,
             )?;
-            StoreProviderConfig::new(
+            StoreProviderConfig::new_with_address_policy(
                 cluster_id.clone(),
                 local,
                 members.clone(),
@@ -404,6 +404,7 @@ fn three_member_configs(
                 root.join(node_id.as_str()),
                 SecretValue::new("test-store-encryption-secret-with-32-characters"),
                 security,
+                true,
             )
             .map_err(Into::into)
         })
@@ -429,7 +430,7 @@ fn one_member_config(
         NodeRole::Master,
         validity()?,
     )?;
-    StoreProviderConfig::new(
+    StoreProviderConfig::new_with_address_policy(
         cluster_id,
         member.clone(),
         BTreeMap::from([(node_id, member)]),
@@ -437,6 +438,7 @@ fn one_member_config(
         root.join("store"),
         SecretValue::new("test-store-encryption-secret-with-32-characters"),
         security,
+        true,
     )
     .map_err(Into::into)
 }

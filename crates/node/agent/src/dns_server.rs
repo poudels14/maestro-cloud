@@ -106,13 +106,27 @@ impl BoundDnsServer {
         settings: DnsServerSettings,
         resolver: AuthoritativeDnsResolver,
     ) -> Result<Self, DnsServerError> {
-        let bind_address = settings.bind_address();
+        Self::bind_address(settings.bind_address(), resolver).await
+    }
+
+    pub(crate) async fn bind_address(
+        bind_address: SocketAddr,
+        resolver: AuthoritativeDnsResolver,
+    ) -> Result<Self, DnsServerError> {
         let udp = UdpSocket::bind(bind_address)
             .await
             .map_err(|source| bind_error("UDP", bind_address, source))?;
-        let tcp = TcpListener::bind(bind_address)
+        let tcp_bind_address = if bind_address.port() == 0 {
+            udp.local_addr().map_err(|source| DnsServerError::Io {
+                operation: "inspect UDP listener",
+                source,
+            })?
+        } else {
+            bind_address
+        };
+        let tcp = TcpListener::bind(tcp_bind_address)
             .await
-            .map_err(|source| bind_error("TCP", bind_address, source))?;
+            .map_err(|source| bind_error("TCP", tcp_bind_address, source))?;
         Self::from_sockets(udp, tcp, resolver)
     }
 
@@ -170,29 +184,6 @@ impl BoundDnsServer {
             server,
             local_address: udp_address,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn bind_loopback_for_test(
-        resolver: AuthoritativeDnsResolver,
-    ) -> Result<Self, DnsServerError> {
-        let udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .map_err(|source| DnsServerError::Io {
-                operation: "bind test UDP listener",
-                source,
-            })?;
-        let address = udp.local_addr().map_err(|source| DnsServerError::Io {
-            operation: "inspect test UDP listener",
-            source,
-        })?;
-        let tcp = TcpListener::bind(address)
-            .await
-            .map_err(|source| DnsServerError::Io {
-                operation: "bind test TCP listener",
-                source,
-            })?;
-        Self::from_sockets(udp, tcp, resolver)
     }
 }
 

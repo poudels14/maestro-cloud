@@ -35,20 +35,18 @@ pub(crate) fn digest_file(path: &Path) -> Result<ObjectDigest, S3BackupObjectSto
 }
 
 pub(crate) fn digest_bytes(bytes: &[u8]) -> Result<ObjectDigest, S3BackupObjectStoreError> {
-    let size = u64::try_from(bytes.len()).map_err(|error| rejected(error.to_string()))?;
-    digest_reader(&mut std::io::Cursor::new(bytes), size, None)
+    digest_bytes_with_part_size(bytes, None)
 }
 
-#[cfg(test)]
 pub(crate) fn digest_bytes_with_part_size(
     bytes: &[u8],
-    part_size: u64,
+    part_size: Option<u64>,
 ) -> Result<ObjectDigest, S3BackupObjectStoreError> {
-    if part_size == 0 {
+    if part_size == Some(0) {
         return Err(rejected("multipart part size must be greater than zero"));
     }
     let size = u64::try_from(bytes.len()).map_err(|error| rejected(error.to_string()))?;
-    digest_reader(&mut std::io::Cursor::new(bytes), size, Some(part_size))
+    digest_reader(&mut std::io::Cursor::new(bytes), size, part_size)
 }
 
 fn digest_reader(

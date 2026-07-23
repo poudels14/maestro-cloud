@@ -159,27 +159,7 @@ impl ClusterCertificateAuthority {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn issue_node_certificate_with_additional_ip_sans(
-        &self,
-        node_id: &NodeId,
-        hostname: &str,
-        host_address: Ipv4Addr,
-        additional_host_addresses: &[Ipv4Addr],
-        role: NodeRole,
-        validity: CertificateValidity,
-    ) -> Result<NodeCertificateBundle, CertificateError> {
-        self.issue_node_certificate_with_ip_sans(
-            node_id,
-            hostname,
-            host_address,
-            additional_host_addresses,
-            role,
-            validity,
-        )
-    }
-
-    fn issue_node_certificate_with_ip_sans(
+    pub(crate) fn issue_node_certificate_with_ip_sans(
         &self,
         node_id: &NodeId,
         hostname: &str,

@@ -26,7 +26,7 @@ async fn hickory_server_answers_udp_and_tcp_without_recursion()
             Ipv4Addr::new(10, 42, 1, 11),
         )])
         .await?;
-    let server = BoundDnsServer::bind_loopback_for_test(resolver).await?;
+    let server = BoundDnsServer::bind_address((Ipv4Addr::LOCALHOST, 0).into(), resolver).await?;
     let address = server.local_address();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let server_task = tokio::spawn(server.serve(shutdown_rx));

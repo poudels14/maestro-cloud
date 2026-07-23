@@ -107,9 +107,9 @@ impl MeshIdentity {
         match std::fs::read_to_string(&path) {
             Ok(encoded) => {
                 validate_private_permissions(&path)?;
-                decode_key(encoded.trim()).map(|bytes| Self {
-                    private_key: WireGuardPrivateKey::from_bytes(bytes),
-                })
+                decode_key(encoded.trim())
+                    .map(WireGuardPrivateKey::from_bytes)
+                    .map(Self::from_private_key)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 create_identity(data_directory, &path)
@@ -132,7 +132,6 @@ impl MeshIdentity {
         &self.private_key
     }
 
-    #[cfg(test)]
     pub(crate) fn from_private_key(private_key: WireGuardPrivateKey) -> Self {
         Self { private_key }
     }
@@ -194,7 +193,7 @@ fn create_identity(data_directory: &Path, path: &Path) -> Result<MeshIdentity, M
             source,
         })?;
     sync_directory(data_directory, path)?;
-    Ok(MeshIdentity { private_key })
+    Ok(MeshIdentity::from_private_key(private_key))
 }
 
 fn create_private_directory(

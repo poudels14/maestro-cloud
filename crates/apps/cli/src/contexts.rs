@@ -57,10 +57,9 @@ impl ContextStore {
                     .join("contexts.json")
             }
         };
-        Ok(Self { path })
+        Ok(Self::at(path))
     }
 
-    #[cfg(test)]
     pub(crate) fn at(path: PathBuf) -> Self {
         Self { path }
     }

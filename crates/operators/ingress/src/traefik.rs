@@ -1,8 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-
-#[cfg(test)]
-use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, TrafficGenerationId, TrafficRoute, TrafficTarget};
@@ -111,22 +108,7 @@ impl IngressBackend for TraefikBackend {
             self.provider.stage(&rendered.stage).await?;
         }
         let service_label = service_label(&change.service_id);
-        let remove_prefixes = change
-            .remove
-            .iter()
-            .filter(|generation_id| {
-                change
-                    .active
-                    .as_ref()
-                    .is_none_or(|active| &active.generation_id != *generation_id)
-            })
-            .map(|generation_id| {
-                format!(
-                    "http/services/{}",
-                    generation_prefix(&service_label, generation_id)
-                )
-            })
-            .collect();
+        let remove_prefixes = owned_prefixes(change).into_iter().collect();
         self.provider
             .cutover(&TraefikCutover {
                 router_prefix: format!("http/routers/{}", router_label_prefix(&service_label)),
@@ -419,12 +401,17 @@ fn affinity_token(cluster_id: &ClusterId, node_id: &NodeId) -> String {
         .collect()
 }
 
-#[cfg(test)]
 pub(crate) fn owned_prefixes(change: &BackendChange) -> BTreeSet<String> {
     let label = service_label(&change.service_id);
     change
         .remove
         .iter()
+        .filter(|generation| {
+            change
+                .active
+                .as_ref()
+                .is_none_or(|active| &active.generation_id != *generation)
+        })
         .map(|generation| format!("http/services/{}", generation_prefix(&label, generation)))
         .collect()
 }
