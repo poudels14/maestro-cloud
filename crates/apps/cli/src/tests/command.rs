@@ -162,9 +162,16 @@ fn context_command_surface_matches_the_rewrite_contract() {
         .is_ok()
     );
     assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart", "--all", "-y"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart"]).is_err());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart", "--local"]).is_ok());
     assert!(
         Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a", "--all"]).is_err()
+    );
+    assert!(
+        Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a", "--local"]).is_err()
+    );
+    assert!(
+        Cli::try_parse_from(["maestro-next", "cluster", "restart", "--all", "--local"]).is_err()
     );
     assert!(
         Cli::try_parse_from([

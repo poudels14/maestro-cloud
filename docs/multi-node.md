@@ -262,11 +262,15 @@ leader last by passing `--all`:
 
 ```sh
 maestro cluster restart node-2
+maestro cluster restart --local
 maestro cluster restart --all
 ```
 
-Both forms ask for confirmation before creating the maintenance run. Use
-`-y` only in operator-controlled automation.
+With no target, the CLI lists the cluster nodes and prompts for one selection.
+`--local` selects the node serving the active API context but still uses the
+coordinated workflow; it does not perform the legacy immediate controller stop.
+Every form asks for confirmation before creating the maintenance run. Use `-y`
+only in operator-controlled automation.
 
 Permanent removal is a separate, irreversible workflow:
 

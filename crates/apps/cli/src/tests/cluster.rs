@@ -15,6 +15,7 @@ use crate::cluster::{
     ClusterApi, NodeLifecycleAction, info, list_nodes, node_lifecycle, remove_node_with_timing,
     show_config,
 };
+use crate::cluster_command::restart_node_ids;
 
 struct RecordingClusterApi {
     info: ClusterInfo,
@@ -117,6 +118,49 @@ async fn cluster_config_prints_the_secret_free_api_contract()
     let decoded: MaskedClusterConfig = serde_json::from_str(&document)?;
     assert_eq!(decoded, api.config);
     assert!(!document.contains("joinSecret"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_selection_preserves_local_all_and_interactive_compatibility()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    assert_eq!(
+        restart_node_ids(
+            &api,
+            None,
+            false,
+            true,
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            &mut Vec::new(),
+        )
+        .await?,
+        vec!["node-a".to_string()]
+    );
+    assert!(
+        restart_node_ids(
+            &api,
+            None,
+            true,
+            false,
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            &mut Vec::new(),
+        )
+        .await?
+        .is_empty()
+    );
+
+    let mut input = std::io::Cursor::new(b"2\n".to_vec());
+    let mut output = Vec::new();
+    assert_eq!(
+        restart_node_ids(&api, None, false, false, &mut input, &mut output).await?,
+        vec!["node-z".to_string()]
+    );
+    let output = String::from_utf8(output)?;
+    let node_a = output.find("node-a").ok_or("node-a selection missing")?;
+    let node_z = output.find("node-z").ok_or("node-z selection missing")?;
+    assert!(node_a < node_z);
+    assert!(output.contains("Node [1-2 or ID]:"));
     Ok(())
 }
 
