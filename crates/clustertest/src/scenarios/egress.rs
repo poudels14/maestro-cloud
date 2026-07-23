@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::{EgressCluster, EgressPolicyFixture, ScenarioError};
 
 /// Proves egress apply and deletion publish complete gap-free per-node artifacts.
@@ -16,10 +18,17 @@ where
         .await
         .map_err(|error| driver_error("apply egress policy", error))?;
     let nodes = cluster.nodes();
+    let expected_nodes = nodes.iter().cloned().collect::<BTreeSet<_>>();
+    let applied_nodes = applied
+        .rulesets
+        .iter()
+        .map(|ruleset| ruleset.node.clone())
+        .collect::<BTreeSet<_>>();
     if !applied.policy_present
         || !applied.policy_acknowledged
         || applied.bundle_digest.is_none()
         || applied.rulesets.len() != nodes.len()
+        || applied_nodes != expected_nodes
         || applied.rulesets.iter().any(|ruleset| {
             !ruleset.script.contains(&fixture.cidr)
                 || !ruleset.script.contains(&fixture.port.to_string())
@@ -34,9 +43,15 @@ where
         .delete_egress_policy()
         .await
         .map_err(|error| driver_error("delete egress policy", error))?;
+    let deleted_nodes = deleted
+        .rulesets
+        .iter()
+        .map(|ruleset| ruleset.node.clone())
+        .collect::<BTreeSet<_>>();
     if !deleted.policy_present
         && !deleted.policy_acknowledged
         && deleted.rulesets.len() == nodes.len()
+        && deleted_nodes == expected_nodes
         && deleted
             .rulesets
             .iter()

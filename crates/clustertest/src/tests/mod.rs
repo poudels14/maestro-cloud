@@ -3,6 +3,7 @@
 mod affinity;
 mod build;
 mod cluster_setup;
+mod egress;
 mod election;
 mod formation;
 mod lifecycle;
