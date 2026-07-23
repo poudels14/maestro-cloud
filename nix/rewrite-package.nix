@@ -111,5 +111,7 @@ in
     mkdir -p "$out/bin" "$out/share/doc/maestro"
     cp -a ${binaries}/bin/. "$out/bin/"
     install -m644 ${../docs/cutover.md} "$out/share/doc/maestro/cutover.md"
+    install -m644 ${../docs/multi-node.md} "$out/share/doc/maestro/multi-node.md"
     install -m644 ${../docs/nixos-rewrite.md} "$out/share/doc/maestro/nixos-rewrite.md"
+    install -m644 ${../docs/tailscale.md} "$out/share/doc/maestro/tailscale.md"
   ''

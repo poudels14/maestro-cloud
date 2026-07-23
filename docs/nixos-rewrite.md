@@ -98,10 +98,10 @@ tar -xzf result/*.tar.gz
 ```
 
 The archive contains standalone `maestro`, `maestro-daemon`, and
-`maestro-migrate` executables plus the cutover documentation. The daemon still
-requires the host runtime, network privileges, and external tools described by
-the NixOS module; the static bundle does not turn the daemon into an isolated
-container deployment.
+`maestro-migrate` executables plus the cutover, multi-node, NixOS, and
+Tailscale runbooks. The daemon still requires the host runtime, network
+privileges, and external tools described by the NixOS module; the static bundle
+does not turn the daemon into an isolated container deployment.
 
 Release builds also publish a minimal, deterministic daemon image archive for
 each Linux architecture. Build and verify it locally with:

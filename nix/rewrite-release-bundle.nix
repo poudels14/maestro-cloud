@@ -23,8 +23,12 @@ in
     install -m644 ${../LICENSE} "$bundle_root/LICENSE"
     install -m644 ${rewritePackage}/share/doc/maestro/cutover.md \
       "$bundle_root/share/doc/maestro/cutover.md"
+    install -m644 ${rewritePackage}/share/doc/maestro/multi-node.md \
+      "$bundle_root/share/doc/maestro/multi-node.md"
     install -m644 ${rewritePackage}/share/doc/maestro/nixos-rewrite.md \
       "$bundle_root/share/doc/maestro/nixos-rewrite.md"
+    install -m644 ${rewritePackage}/share/doc/maestro/tailscale.md \
+      "$bundle_root/share/doc/maestro/tailscale.md"
     strip --strip-all "$bundle_root"/bin/*
     test "$("$bundle_root/bin/maestro" --version)" = "maestro-next ${version}"
     test "$("$bundle_root/bin/maestro-daemon" --version)" = "daemon ${version}"
