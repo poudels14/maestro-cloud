@@ -119,7 +119,7 @@ pub(crate) async fn prepare_join(
     writeln!(output, "Join key: {}", key_path.display()).map_err(output_error)?;
     writeln!(
         output,
-        "Approve with: maestro-next cluster approve-node {} {fingerprint}",
+        "Approve with: maestro cluster approve-node {} {fingerprint}",
         loaded.node_id
     )
     .map_err(output_error)

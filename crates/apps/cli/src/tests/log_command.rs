@@ -12,10 +12,10 @@ use crate::log_command::{LogCommand, LogOutput, initial_request, write_entries};
 
 #[test]
 fn log_command_surface_matches_the_harvested_cli() {
-    assert!(Cli::try_parse_from(["maestro-next", "logs", "--no-follow"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "logs", "--no-follow"]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "logs",
             "--service",
             "api",
@@ -32,17 +32,10 @@ fn log_command_surface_matches_the_harvested_cli() {
         .is_ok()
     );
     assert!(
-        Cli::try_parse_from([
-            "maestro-next",
-            "logs",
-            "--system",
-            "daemon",
-            "--service",
-            "api",
-        ])
-        .is_err()
+        Cli::try_parse_from(["maestro", "logs", "--system", "daemon", "--service", "api",])
+            .is_err()
     );
-    assert!(Cli::try_parse_from(["maestro-next", "logs", "--deployment", "api-v1",]).is_err());
+    assert!(Cli::try_parse_from(["maestro", "logs", "--deployment", "api-v1",]).is_err());
 }
 
 #[test]

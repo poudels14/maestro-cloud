@@ -10,6 +10,13 @@ fn contexts_normalize_select_preserve_tokens_and_remove() -> Result<(), Box<dyn 
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("contexts.json");
     let store = ContextStore::at(path.clone());
+    assert!(
+        store
+            .active()
+            .expect_err("empty context store must reject active lookup")
+            .to_string()
+            .contains("maestro contexts set")
+    );
     assert_eq!(
         store.set("dev", "127.0.0.1:3000", None)?,
         "http://127.0.0.1:3000"

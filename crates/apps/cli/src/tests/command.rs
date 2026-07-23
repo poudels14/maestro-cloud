@@ -1,13 +1,20 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use crate::{Cli, run};
 
 #[test]
+fn packaged_command_identity_is_maestro() {
+    let command = Cli::command();
+    assert_eq!(command.get_name(), "maestro");
+    assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
 fn context_command_surface_matches_the_rewrite_contract() {
-    assert!(Cli::try_parse_from(["maestro-next", "config", "init", "cluster"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "config", "init", "cluster"]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "config",
             "init",
             "services",
@@ -18,7 +25,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "bootstrap",
             "--config",
@@ -34,7 +41,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "join",
             "https://10.20.0.11:3000",
@@ -51,7 +58,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "prepare-join",
             "--config",
@@ -63,7 +70,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "approve-node",
             "node-a",
@@ -71,20 +78,18 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["maestro-next", "config", "validate", "maestro.jsonc"]).is_ok());
-    assert!(
-        Cli::try_parse_from(["maestro-next", "contexts", "set", "dev", "localhost:3000",]).is_ok()
-    );
-    assert!(Cli::try_parse_from(["maestro-next", "contexts", "use", "dev"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "contexts", "ls"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "contexts", "remove", "dev"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "contexts", "login", "--days", "30"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "info"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "nodes"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "config"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "config", "validate", "maestro.jsonc"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "contexts", "set", "dev", "localhost:3000",]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "contexts", "use", "dev"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "contexts", "ls"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "contexts", "remove", "dev"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "contexts", "login", "--days", "30"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "info"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "nodes"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "config"]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "rotate-tailscale-key",
             "--auth-key-source",
@@ -96,7 +101,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "init-ca",
             "--config",
@@ -108,7 +113,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "issue-node",
             "--config",
@@ -125,7 +130,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     for command in ["drain", "restore"] {
         assert!(
             Cli::try_parse_from([
-                "maestro-next",
+                "maestro",
                 "cluster",
                 command,
                 "node-a",
@@ -137,7 +142,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     }
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "remove-node",
             "node-a",
@@ -146,10 +151,10 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "upgrades"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "upgrades"]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "restart",
             "node-a",
@@ -161,21 +166,15 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart", "--all", "-y"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "cluster", "restart", "--local"]).is_ok());
-    assert!(
-        Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a", "--all"]).is_err()
-    );
-    assert!(
-        Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a", "--local"]).is_err()
-    );
-    assert!(
-        Cli::try_parse_from(["maestro-next", "cluster", "restart", "--all", "--local"]).is_err()
-    );
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "--all", "-y"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "--local"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "node-a", "--all"]).is_err());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "node-a", "--local"]).is_err());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "restart", "--all", "--local"]).is_err());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "exec",
             "api",
             "--deployment",
@@ -193,7 +192,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "upgrade",
             "system",
@@ -211,7 +210,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "upgrade",
             "system",
@@ -222,7 +221,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "cluster",
             "unfreeze",
             "--upgrade-run",
@@ -230,11 +229,11 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["maestro-next", "services", "ls"]).is_ok());
-    assert!(Cli::try_parse_from(["maestro-next", "services", "deployments", "api"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "services", "ls"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "services", "deployments", "api"]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "services",
             "rollout",
             "--config",
@@ -248,7 +247,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
     );
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "services",
             "redeploy",
             "api",
@@ -257,25 +256,20 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from(["maestro-next", "services", "cancel", "api", "deployment-1",]).is_ok()
-    );
+    assert!(Cli::try_parse_from(["maestro", "services", "cancel", "api", "deployment-1",]).is_ok());
     for command in ["restart", "remove"] {
         assert!(
-            Cli::try_parse_from(["maestro-next", "services", command, "api", "deployment-1",])
-                .is_ok()
+            Cli::try_parse_from(["maestro", "services", command, "api", "deployment-1",]).is_ok()
         );
     }
     for command in ["freeze", "unfreeze", "delete"] {
-        assert!(Cli::try_parse_from(["maestro-next", "services", command, "api",]).is_ok());
+        assert!(Cli::try_parse_from(["maestro", "services", command, "api",]).is_ok());
     }
-    assert!(
-        Cli::try_parse_from(["maestro-next", "services", "replicas", "set", "api", "3",]).is_ok()
-    );
-    assert!(Cli::try_parse_from(["maestro-next", "services", "replicas", "clear", "api",]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "services", "replicas", "set", "api", "3",]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "services", "replicas", "clear", "api",]).is_ok());
     assert!(
         Cli::try_parse_from([
-            "maestro-next",
+            "maestro",
             "services",
             "up",
             "api",
@@ -296,7 +290,7 @@ async fn config_init_prompts_without_loading_an_api_context()
     let directory = tempfile::tempdir()?;
     let destination = directory.path().join("services.jsonc");
     let cli = Cli::try_parse_from([
-        "maestro-next",
+        "maestro",
         "config",
         "init",
         "--output",
@@ -315,7 +309,7 @@ async fn config_init_prompts_without_loading_an_api_context()
 #[tokio::test]
 async fn restart_confirmation_can_abort_before_loading_an_api_context()
 -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::try_parse_from(["maestro-next", "cluster", "restart", "node-a"])?;
+    let cli = Cli::try_parse_from(["maestro", "cluster", "restart", "node-a"])?;
     let mut input = std::io::Cursor::new(b"no\n".to_vec());
     let mut output = Vec::new();
 
@@ -331,7 +325,7 @@ async fn restart_confirmation_can_abort_before_loading_an_api_context()
 async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
 -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::try_parse_from([
-        "maestro-next",
+        "maestro",
         "cluster",
         "upgrade",
         "system",

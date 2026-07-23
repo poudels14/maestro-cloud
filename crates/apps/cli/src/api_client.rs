@@ -33,7 +33,7 @@ impl ApiClient {
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .default_headers(headers)
-            .user_agent(concat!("maestro-next/", env!("CARGO_PKG_VERSION")));
+            .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")));
         if let Some(certificate) = context.ca_certificate_pem {
             let certificate =
                 reqwest::Certificate::from_pem(certificate.as_bytes()).map_err(|_| {

@@ -305,9 +305,7 @@ fn is_loopback_host(host: Option<&str>) -> bool {
 }
 
 fn no_active_context() -> CliError {
-    CliError::invalid_input(
-        "no active context; run `maestro-next contexts set <name> <host>` first",
-    )
+    CliError::invalid_input("no active context; run `maestro contexts set <name> <host>` first")
 }
 
 #[cfg(unix)]

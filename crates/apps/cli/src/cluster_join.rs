@@ -224,7 +224,7 @@ fn client_builder() -> reqwest::ClientBuilder {
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("maestro-next/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")))
 }
 
 fn parse_leader_origin(value: &str) -> Result<reqwest::Url, CliError> {

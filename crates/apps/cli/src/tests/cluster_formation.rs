@@ -130,7 +130,7 @@ async fn join_preparation_persists_one_private_key_and_prints_approval_command()
     let output = String::from_utf8(first_output)?;
     assert!(output.contains("Node: node-2"));
     assert!(output.contains("Join key SHA-256:"));
-    assert!(output.contains("maestro-next cluster approve-node node-2"));
+    assert!(output.contains("maestro cluster approve-node node-2"));
     let key_path = directory.path().join("security/join.key");
     assert!(key_path.exists());
     #[cfg(unix)]

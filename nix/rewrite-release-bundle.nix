@@ -30,7 +30,7 @@ in
     install -m644 ${rewritePackage}/share/doc/maestro/tailscale.md \
       "$bundle_root/share/doc/maestro/tailscale.md"
     strip --strip-all "$bundle_root"/bin/*
-    test "$("$bundle_root/bin/maestro" --version)" = "maestro-next ${version}"
+    test "$("$bundle_root/bin/maestro" --version)" = "maestro ${version}"
     test "$("$bundle_root/bin/maestro-daemon" --version)" = "daemon ${version}"
     test "$("$bundle_root/bin/maestro-migrate" --version)" = "maestro-migrate ${version}"
     "$bundle_root/bin/maestro-migrate" verify --help >/dev/null
