@@ -9,6 +9,7 @@ const clusterQueryKeys = {
   info: ["cluster"] as const,
   stats: ["cluster", "stats"] as const,
   nodes: ["cluster", "nodes"] as const,
+  admissions: ["cluster", "admissions"] as const,
   unschedulable: ["cluster", "unschedulable"] as const,
   config: ["config"] as const,
   webhooks: ["webhooks"] as const
@@ -39,6 +40,12 @@ const clusterNodesQuery = (api: ClusterApi) => ({
   refetchInterval: 5_000
 });
 
+const clusterAdmissionsQuery = (api: ClusterApi) => ({
+  queryKey: clusterQueryKeys.admissions,
+  queryFn: ssrSafe(api.listAdmissions, []),
+  refetchInterval: 5_000
+});
+
 const unschedulableQuery = (api: ClusterApi) => ({
   queryKey: clusterQueryKeys.unschedulable,
   queryFn: ssrSafe(api.listUnschedulableReplicas, []),
@@ -52,6 +59,7 @@ const webhooksQuery = (api: ClusterApi) => ({
 
 export {
   clusterConfigQuery,
+  clusterAdmissionsQuery,
   clusterInfoQuery,
   clusterNodesQuery,
   clusterQueryKeys,

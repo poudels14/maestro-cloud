@@ -5,6 +5,8 @@ import type {
   ClusterNode,
   ClusterStats,
   MaskedConfig,
+  NodeJoinApproval,
+  NodeJoinApprovalRequest,
   StatsMetricPoint,
   UnschedulableReplica,
   Webhook,
@@ -16,6 +18,8 @@ type ClusterErrorMapper = (error: unknown, fallback: string) => Error;
 
 interface ClusterApi {
   listNodes: () => Promise<ClusterNode[]>;
+  listAdmissions: () => Promise<NodeJoinApproval[]>;
+  approveAdmission: (request: NodeJoinApprovalRequest) => Promise<NodeJoinApproval>;
   listUnschedulableReplicas: () => Promise<UnschedulableReplica[]>;
   setNodeDrain: (node: ClusterNode, drain: boolean) => Promise<void>;
   getInfo: () => Promise<ClusterInfo>;
@@ -51,6 +55,13 @@ function createClusterApi(
 
   return {
     listNodes,
+    listAdmissions: () =>
+      mapped(() => client().listClusterAdmissions(), "Failed to load node admissions"),
+    approveAdmission: (request) =>
+      mapped(
+        () => client().approveClusterAdmission(request),
+        `Failed to approve admission for ${request.nodeId}`
+      ),
     listUnschedulableReplicas: () =>
       mapped(() => client().listUnschedulableReplicas(), "Failed to load scheduling errors"),
     setNodeDrain: (node, drain) =>

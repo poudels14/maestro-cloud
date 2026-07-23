@@ -8,3 +8,11 @@ test("cluster logs is not nested beneath the nodes page", () => {
   expect(clusterLogs).toBeDefined();
   expect(clusterLogs.parentRoute).toBe(router.routeTree);
 });
+
+test("cluster admissions is not nested beneath the nodes page", () => {
+  const router = getRouter();
+  const admissions = router.routesByPath["/cluster/admissions"];
+
+  expect(admissions).toBeDefined();
+  expect(admissions.parentRoute).toBe(router.routeTree);
+});

@@ -160,6 +160,42 @@ test("selects the newest active upgrade when composing cluster info", async () =
   expect(info.nodes[0]?.nodeId).toBe("node-a");
 });
 
+test("lists and approves node admissions without inventing command fields", async () => {
+  const approval = {
+    nodeId: "worker-a",
+    publicKeySha256: "ab".repeat(32),
+    approvedAtUnixMs: 100,
+    state: "approved"
+  } satisfies ApiSchemas["NodeJoinApproval"];
+  const calls: Array<{ operation: string; args: unknown[] }> = [];
+  const client = {
+    async listClusterAdmissions() {
+      calls.push({ operation: "list", args: [] });
+      return [approval];
+    },
+    async approveClusterAdmission(request: ApiSchemas["NodeJoinApprovalRequest"]) {
+      calls.push({ operation: "approve", args: [request] });
+      return approval;
+    }
+  } as unknown as MaestroApiClient;
+  const api = createClusterApi(
+    () => client,
+    (error) => error as Error
+  );
+
+  await expect(api.listAdmissions()).resolves.toEqual([approval]);
+  await expect(
+    api.approveAdmission({ nodeId: approval.nodeId, publicKeySha256: approval.publicKeySha256 })
+  ).resolves.toEqual(approval);
+  expect(calls).toEqual([
+    { operation: "list", args: [] },
+    {
+      operation: "approve",
+      args: [{ nodeId: "worker-a", publicKeySha256: "ab".repeat(32) }]
+    }
+  ]);
+});
+
 test("maps generated client failures at the cluster boundary", async () => {
   const client = {
     async getClusterStats() {

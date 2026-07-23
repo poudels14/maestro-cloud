@@ -14,6 +14,8 @@ type BackupStats = ApiSchemas["BackupStatsSnapshot"];
 type StatsWarning = ApiSchemas["StatsWarning"];
 type StatsMetricPoint = ApiSchemas["StatsMetricPoint"];
 type MaskedConfig = ApiSchemas["MaskedClusterConfig"];
+type NodeJoinApproval = ApiSchemas["NodeJoinApproval"];
+type NodeJoinApprovalRequest = ApiSchemas["NodeJoinApprovalRequest"];
 
 interface ClusterNode {
   nodeId: string;
@@ -69,6 +71,8 @@ export type {
   ClusterSummary,
   ControllerStats,
   MaskedConfig,
+  NodeJoinApproval,
+  NodeJoinApprovalRequest,
   SinkStats,
   StatsMetricPoint,
   StatsWarning,
