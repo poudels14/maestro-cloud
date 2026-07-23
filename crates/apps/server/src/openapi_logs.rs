@@ -1,50 +1,74 @@
 use serde_json::{Map, Value, json};
 
+#[derive(Clone, Copy)]
+enum LogScope {
+    Standard,
+    System,
+}
+
+#[derive(Clone, Copy)]
+enum ResponseShape {
+    Object,
+    Array,
+}
+
 pub(crate) fn paths() -> Map<String, Value> {
     Map::from_iter([
         (
             "/api/logs".to_owned(),
-            read_operation("listLogs", &[], false),
+            read_operation("listLogs", &[], LogScope::Standard),
         ),
         (
             "/api/logs/histogram".to_owned(),
-            histogram_operation("getLogHistogram", &[], false),
+            histogram_operation("getLogHistogram", &[], LogScope::Standard),
         ),
         (
             "/api/system/logs".to_owned(),
-            read_operation("listSystemLogs", &[], true),
+            read_operation("listSystemLogs", &[], LogScope::System),
         ),
         (
             "/api/system/logs/histogram".to_owned(),
-            histogram_operation("getSystemLogHistogram", &[], true),
+            histogram_operation("getSystemLogHistogram", &[], LogScope::System),
         ),
         (
             "/api/services/{serviceId}/logs".to_owned(),
-            read_operation("listServiceLogs", &["serviceId"], false),
+            read_operation("listServiceLogs", &["serviceId"], LogScope::Standard),
         ),
         (
             "/api/services/{serviceId}/logs/histogram".to_owned(),
-            histogram_operation("getServiceLogHistogram", &["serviceId"], false),
+            histogram_operation("getServiceLogHistogram", &["serviceId"], LogScope::Standard),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}/logs".to_owned(),
-            read_operation("listDeploymentLogs", &["serviceId", "deploymentId"], false),
+            read_operation(
+                "listDeploymentLogs",
+                &["serviceId", "deploymentId"],
+                LogScope::Standard,
+            ),
         ),
         (
             "/api/services/{serviceId}/deployments/{deploymentId}/logs/histogram".to_owned(),
             histogram_operation(
                 "getDeploymentLogHistogram",
                 &["serviceId", "deploymentId"],
-                false,
+                LogScope::Standard,
             ),
         ),
         (
             "/api/services/{serviceId}/builds/{buildId}/logs".to_owned(),
-            read_operation("listBuildLogs", &["serviceId", "buildId"], false),
+            read_operation(
+                "listBuildLogs",
+                &["serviceId", "buildId"],
+                LogScope::Standard,
+            ),
         ),
         (
             "/api/services/{serviceId}/builds/{buildId}/logs/histogram".to_owned(),
-            histogram_operation("getBuildLogHistogram", &["serviceId", "buildId"], false),
+            histogram_operation(
+                "getBuildLogHistogram",
+                &["serviceId", "buildId"],
+                LogScope::Standard,
+            ),
         ),
     ])
 }
@@ -131,7 +155,7 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
     );
 }
 
-fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Value {
+fn read_operation(operation_id: &str, path_names: &[&str], scope: LogScope) -> Value {
     let mut parameters = path_parameters(path_names);
     parameters.extend([
         query_parameter(
@@ -144,7 +168,7 @@ fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Valu
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),
         query_parameter("nodeId", json!({"$ref": "#/components/schemas/NodeId"})),
     ]);
-    if system {
+    if matches!(scope, LogScope::System) {
         parameters.push(query_parameter(
             "component",
             json!({"type": "string", "minLength": 1, "maxLength": 128}),
@@ -155,11 +179,11 @@ fn read_operation(operation_id: &str, path_names: &[&str], system: bool) -> Valu
         parameters,
         "Ordered normalized logs",
         "ClusterLogPage",
-        false,
+        ResponseShape::Object,
     )
 }
 
-fn histogram_operation(operation_id: &str, path_names: &[&str], system: bool) -> Value {
+fn histogram_operation(operation_id: &str, path_names: &[&str], scope: LogScope) -> Value {
     let mut parameters = path_parameters(path_names);
     parameters.extend([
         query_parameter("from", json!({"type": "integer", "format": "int64"})),
@@ -172,7 +196,7 @@ fn histogram_operation(operation_id: &str, path_names: &[&str], system: bool) ->
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),
         query_parameter("nodeId", json!({"$ref": "#/components/schemas/NodeId"})),
     ]);
-    if system {
+    if matches!(scope, LogScope::System) {
         parameters.push(query_parameter(
             "component",
             json!({"type": "string", "minLength": 1, "maxLength": 128}),
@@ -183,7 +207,7 @@ fn histogram_operation(operation_id: &str, path_names: &[&str], system: bool) ->
         parameters,
         "Event-time log histogram",
         "LogHistogramBucket",
-        true,
+        ResponseShape::Array,
     )
 }
 
@@ -192,15 +216,16 @@ fn operation(
     parameters: Vec<Value>,
     description: &str,
     schema: &str,
-    array: bool,
+    response_shape: ResponseShape,
 ) -> Value {
-    let response_schema = if array {
-        json!({
+    let response_schema = match response_shape {
+        ResponseShape::Array => json!({
             "type": "array",
             "items": {"$ref": format!("#/components/schemas/{schema}")}
-        })
-    } else {
-        json!({"$ref": format!("#/components/schemas/{schema}")})
+        }),
+        ResponseShape::Object => {
+            json!({"$ref": format!("#/components/schemas/{schema}")})
+        }
     };
     json!({
         "get": {

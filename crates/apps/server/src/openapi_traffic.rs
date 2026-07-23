@@ -1,15 +1,21 @@
 use serde_json::{Map, Value, json};
 
+#[derive(Clone, Copy)]
+enum TrafficScope {
+    Cluster,
+    Service,
+}
+
 pub(crate) fn paths() -> Map<String, Value> {
     Map::from_iter([
         (
             "/api/ingress/traffic".to_owned(),
-            breakdown_operation("getIngressTraffic", false),
+            breakdown_operation("getIngressTraffic", TrafficScope::Cluster),
         ),
         ("/api/ingress/routes".to_owned(), ingress_routes_operation()),
         (
             "/api/ingress/blocked-traffic".to_owned(),
-            breakdown_operation("getBlockedIngressTraffic", false),
+            breakdown_operation("getBlockedIngressTraffic", TrafficScope::Cluster),
         ),
         (
             "/api/ingress/blocked-ips".to_owned(),
@@ -21,7 +27,7 @@ pub(crate) fn paths() -> Map<String, Value> {
         ),
         (
             "/api/services/{serviceId}/traffic/breakdown".to_owned(),
-            breakdown_operation("getServiceTrafficBreakdown", true),
+            breakdown_operation("getServiceTrafficBreakdown", TrafficScope::Service),
         ),
     ])
 }
@@ -167,9 +173,9 @@ fn blocked_ips_operation() -> Value {
     })
 }
 
-fn breakdown_operation(operation_id: &str, service_scoped: bool) -> Value {
+fn breakdown_operation(operation_id: &str, scope: TrafficScope) -> Value {
     let mut parameters = common_parameters(500);
-    if service_scoped {
+    if matches!(scope, TrafficScope::Service) {
         parameters.insert(0, service_parameter());
     }
     json!({

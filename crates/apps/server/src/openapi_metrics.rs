@@ -1,30 +1,50 @@
 use serde_json::{Map, Value, json};
 
+#[derive(Clone, Copy)]
+enum MetricResolution {
+    Raw,
+    Bucketed,
+}
+
+#[derive(Clone, Copy)]
+enum DiskScope {
+    Local,
+    Cluster,
+}
+
 pub(crate) fn paths() -> Map<String, Value> {
     Map::from_iter([
         (
             "/api/metrics/node".to_owned(),
-            metric_operation("listNodeMetrics", &[], false),
+            metric_operation("listNodeMetrics", &[], MetricResolution::Raw),
         ),
         (
             "/api/metrics/cluster".to_owned(),
-            metric_operation("listClusterMetrics", &[], true),
+            metric_operation("listClusterMetrics", &[], MetricResolution::Bucketed),
         ),
         (
             "/api/services/{serviceId}/metrics".to_owned(),
-            metric_operation("listServiceMetrics", &["serviceId"], true),
+            metric_operation(
+                "listServiceMetrics",
+                &["serviceId"],
+                MetricResolution::Bucketed,
+            ),
         ),
         (
             "/api/services/{serviceId}/metrics/containers".to_owned(),
-            metric_operation("listContainerMetrics", &["serviceId"], false),
+            metric_operation(
+                "listContainerMetrics",
+                &["serviceId"],
+                MetricResolution::Raw,
+            ),
         ),
         (
             "/api/disks".to_owned(),
-            disk_operation("listLocalDisks", false),
+            disk_operation("listLocalDisks", DiskScope::Local),
         ),
         (
             "/api/disks/nodes".to_owned(),
-            disk_operation("listNodeDisks", true),
+            disk_operation("listNodeDisks", DiskScope::Cluster),
         ),
     ])
 }
@@ -77,7 +97,11 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
     );
 }
 
-fn metric_operation(operation_id: &str, path_names: &[&str], bucketed: bool) -> Value {
+fn metric_operation(
+    operation_id: &str,
+    path_names: &[&str],
+    resolution: MetricResolution,
+) -> Value {
     let mut parameters = path_parameters(path_names);
     parameters.extend([
         query_parameter("from", json!({"type": "integer", "format": "int64"})),
@@ -87,7 +111,7 @@ fn metric_operation(operation_id: &str, path_names: &[&str], bucketed: bool) -> 
             json!({"type": "integer", "minimum": 1, "maximum": 10000}),
         ),
     ]);
-    if bucketed {
+    if matches!(resolution, MetricResolution::Bucketed) {
         parameters.push(query_parameter(
             "bucketMs",
             json!({"type": "integer", "minimum": 1000, "maximum": 3600000}),
@@ -114,14 +138,13 @@ fn metric_operation(operation_id: &str, path_names: &[&str], bucketed: bool) -> 
     })
 }
 
-fn disk_operation(operation_id: &str, cluster: bool) -> Value {
-    let schema = if cluster {
-        json!({"$ref": "#/components/schemas/NodeDiskMap"})
-    } else {
-        json!({
+fn disk_operation(operation_id: &str, scope: DiskScope) -> Value {
+    let schema = match scope {
+        DiskScope::Cluster => json!({"$ref": "#/components/schemas/NodeDiskMap"}),
+        DiskScope::Local => json!({
             "type": "array",
             "items": {"$ref": "#/components/schemas/DiskInfo"}
-        })
+        }),
     };
     json!({
         "get": {
