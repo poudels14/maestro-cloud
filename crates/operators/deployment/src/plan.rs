@@ -42,6 +42,7 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             .values()
             .filter(|deployment| deployment.spec.service_id == service.meta.id)
             .collect::<Vec<_>>();
+        let mut desired_service_status = service.status.clone();
         let desired_deployment_id = if service.meta.deletion_timestamp.is_none() {
             let desired = new_deployment(&input.cluster_id, service, input.now)?;
             let desired_id = desired.meta.id.clone();
@@ -83,6 +84,14 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 input.settings.drain_grace,
                 &mut output.create_builds,
             )?;
+            if deployment.status.phase == DeploymentPhase::Queued
+                && desired.phase != DeploymentPhase::Queued
+                && deployment.spec.bypass_rollout_freeze
+                && desired_service_status.rollout_bypass_generation
+                    == Some(deployment.spec.service_generation)
+            {
+                desired_service_status.rollout_bypass_generation = None;
+            }
             desired_statuses.insert(deployment.meta.id.clone(), desired);
         }
 
@@ -94,8 +103,15 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 input.now,
                 desired_deployment_id.as_ref(),
                 &mut desired_statuses,
-                &mut output.service_updates,
+                &mut desired_service_status,
             );
+            if desired_service_status != service.status {
+                output.service_updates.push(ResourceStatusUpdate {
+                    id: service.meta.id.clone(),
+                    observed_revision: service.meta.revision,
+                    status: desired_service_status,
+                });
+            }
         } else {
             collect_finalized_children(
                 service,
@@ -199,7 +215,10 @@ fn desired_deployment_status(
     }
     let mut desired = deployment.status.clone();
     match desired.phase {
-        DeploymentPhase::Queued if service.status.rollout == kernel_api::RolloutState::Active => {
+        DeploymentPhase::Queued
+            if service.status.rollout == kernel_api::RolloutState::Active
+                || deployment.spec.bypass_rollout_freeze =>
+        {
             if matches!(
                 deployment.spec.service.artifact,
                 ArtifactTemplate::Build { .. }
@@ -304,7 +323,7 @@ fn coordinate_active_deployment(
     now: Timestamp,
     desired_deployment_id: Option<&DeploymentId>,
     desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
-    service_updates: &mut Vec<ResourceStatusUpdate<ServiceId, kernel_api::ServiceStatus>>,
+    desired_service: &mut kernel_api::ServiceStatus,
 ) {
     let desired_candidate = desired_deployment_id.and_then(|desired_id| {
         deployments.iter().find(|deployment| {
@@ -331,8 +350,7 @@ fn coordinate_active_deployment(
             })
             .copied()
     });
-    let active_deployment = service
-        .status
+    let active_deployment = desired_service
         .active_deployment_id
         .as_ref()
         .and_then(|id| {
@@ -346,7 +364,6 @@ fn coordinate_active_deployment(
             && active_deployment.is_none_or(|active| active.meta.id != candidate.meta.id))
             || active_deployment.is_none_or(|active| rollout_order(candidate, active).is_gt())
     });
-    let mut desired_service = service.status.clone();
     if should_activate {
         desired_service.active_deployment_id =
             candidate.map(|deployment| deployment.meta.id.clone());
@@ -362,15 +379,7 @@ fn coordinate_active_deployment(
     {
         desired_service.active_deployment_id = None;
     }
-    if desired_service != service.status {
-        service_updates.push(ResourceStatusUpdate {
-            id: service.meta.id.clone(),
-            observed_revision: service.meta.revision,
-            status: desired_service.clone(),
-        });
-    }
-
-    let Some(active_id) = desired_service.active_deployment_id else {
+    let Some(active_id) = desired_service.active_deployment_id.clone() else {
         return;
     };
     let Some(active_deployment) = deployments

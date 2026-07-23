@@ -94,6 +94,16 @@ maestro services rollout          # preview the diff
 maestro services rollout --apply  # apply it
 ```
 
+Frozen services keep new deployments queued. An operator can release one
+previewed generation without changing that long-lived state:
+
+```bash
+maestro services rollout --service my-app --apply --force
+```
+
+The bypass is captured by that deployment and consumed as it leaves the queue;
+later generations remain frozen until explicitly unfrozen or forced themselves.
+
 ### 4. Redeploy a service
 
 ```bash

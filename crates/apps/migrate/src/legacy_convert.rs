@@ -249,6 +249,7 @@ fn convert_service(
             } else {
                 RolloutState::Active
             },
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     })
@@ -339,6 +340,7 @@ fn convert_deployment(
             service_id: service_id.clone(),
             service_generation,
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             service: converted.spec,
             goal: deployment_goal(legacy.status),
             build_id: build_id.clone(),

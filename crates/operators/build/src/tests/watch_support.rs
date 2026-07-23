@@ -163,6 +163,7 @@ pub(super) fn fixture(
             active_deployment_id: None,
             replica_override: None,
             rollout: RolloutState::Active,
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     };
@@ -172,6 +173,7 @@ pub(super) fn fixture(
             service_id: service_id.clone(),
             service_generation: Generation(2),
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             service: spec.clone(),
             goal: DeploymentGoal::Run,
             build_id: Some(build_id.clone()),

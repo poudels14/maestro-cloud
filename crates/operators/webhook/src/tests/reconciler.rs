@@ -256,6 +256,7 @@ fn deployment(phase: DeploymentPhase) -> Result<Deployment, kernel_api::InvalidI
             service_id: ServiceId::new("api")?,
             service_generation: Generation(1),
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             service: ServiceSpec {
                 name: "API".to_string(),
                 version: "1.0.0".to_string(),

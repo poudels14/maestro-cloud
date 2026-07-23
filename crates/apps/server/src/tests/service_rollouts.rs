@@ -4,9 +4,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use kernel_api::{
-    ClusterId, FirewallDirection, FirewallPolicy, FirewallPolicySpec, FirewallRule,
+    ClusterId, CommandRequest, FirewallDirection, FirewallPolicy, FirewallPolicySpec, FirewallRule,
     FirewallSubject, FirewallVerdict, Generation, IngressRoute, IngressRouteSpec,
-    IngressRouteStatus, Object, ObjectMeta, PortRange, ResourceRevision, Service,
+    IngressRouteStatus, Object, ObjectMeta, PortRange, ResourceRevision, RolloutState, Service,
     ServiceDiffStatus, ServiceId, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
     ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutSpec, TransportProtocol,
 };
@@ -34,6 +34,7 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
 
     let request = ServiceRolloutRequest {
         expected_revisions: preview.expected_revisions,
+        force: false,
         desired: desired.clone(),
     };
     let applied = apply(&server, "atomic-create", &request).await?;
@@ -85,6 +86,7 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
         "atomic-update",
         &ServiceRolloutRequest {
             expected_revisions: update.expected_revisions,
+            force: false,
             desired: updated.clone(),
         },
     )
@@ -142,6 +144,7 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
         "remove-auxiliary",
         &ServiceRolloutRequest {
             expected_revisions: removal.expected_revisions,
+            force: false,
             desired: without_auxiliary,
         },
     )
@@ -150,6 +153,75 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
     assert!(missing(&store, &keys, "IngressRoute", "api-ingress").await?);
     assert!(missing(&store, &keys, "FirewallPolicy", "api-egress").await?);
     assert!(!missing(&store, &keys, "Service", "api").await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn forced_rollout_marks_exactly_one_frozen_service_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let cluster_id = ClusterId::new("forced-rollout")?;
+    let server = ApiServer::new(
+        store.clone(),
+        cluster_id.clone(),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+    let initial = desired()?;
+    let create = diff(&server, initial.clone()).await?;
+    assert_eq!(
+        apply(
+            &server,
+            "forced-create",
+            &ServiceRolloutRequest {
+                expected_revisions: create.expected_revisions,
+                force: false,
+                desired: initial.clone(),
+            },
+        )
+        .await?
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let current = diff(&server, initial.clone()).await?;
+    assert_eq!(
+        freeze(
+            &server,
+            current
+                .expected_revisions
+                .service
+                .ok_or("service revision missing")?,
+        )
+        .await?
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut updated = initial;
+    updated.service.version = "2.0.0".to_string();
+    let preview = diff(&server, updated.clone()).await?;
+    assert_eq!(
+        apply(
+            &server,
+            "forced-update",
+            &ServiceRolloutRequest {
+                expected_revisions: preview.expected_revisions,
+                force: true,
+                desired: updated,
+            },
+        )
+        .await?
+        .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let service: Service = stored(&store, &Keyspace::new(&cluster_id), "Service", "api").await?;
+    assert_eq!(service.status.rollout, RolloutState::Frozen);
+    assert_eq!(
+        service.status.rollout_bypass_generation,
+        Some(service.meta.generation)
+    );
+    assert_eq!(service.meta.generation, Generation(2));
     Ok(())
 }
 
@@ -271,6 +343,25 @@ async fn apply(
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("Idempotency-Key", request_id)
                 .body(Body::from(serde_json::to_vec(payload)?))?,
+        )
+        .await?)
+}
+
+async fn freeze(
+    server: &ApiServer,
+    expected_revision: ResourceRevision,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    Ok(server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/services/api/freeze")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("Idempotency-Key", "forced-freeze")
+                .body(Body::from(serde_json::to_vec(&CommandRequest {
+                    expected_revision,
+                })?))?,
         )
         .await?)
 }

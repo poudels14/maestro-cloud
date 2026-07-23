@@ -298,6 +298,10 @@ pub struct ServiceRolloutDiffResponse {
 pub struct ServiceRolloutRequest {
     /// Revisions returned by the immediately preceding diff.
     pub expected_revisions: ServiceRolloutRevisions,
+    /// Allow this service generation to begin even when rollout is frozen.
+    #[serde(default)]
+    #[schemars(default)]
+    pub force: bool,
     /// Complete desired resource set.
     pub desired: ServiceRolloutSpec,
 }

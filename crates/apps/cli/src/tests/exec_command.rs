@@ -135,6 +135,7 @@ fn deployment(
             service_id: ServiceId::new("api")?,
             service_generation: Generation(1),
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             service: service_spec(),
             goal: DeploymentGoal::Run,
             build_id: None,

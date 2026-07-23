@@ -57,6 +57,8 @@ pub(crate) fn new_deployment(
             service_id: service.meta.id.clone(),
             service_generation: service.meta.generation,
             restart_generation: Generation(1),
+            bypass_rollout_freeze: service.status.rollout_bypass_generation
+                == Some(service.meta.generation),
             service: captured_service,
             goal: DeploymentGoal::Run,
             build_id,

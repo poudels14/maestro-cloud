@@ -152,6 +152,7 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
         &["api".to_string()],
         true,
         true,
+        true,
         Some("rollout-1".to_string()),
         &mut input,
         &mut output,
@@ -172,6 +173,7 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
         request.expected_revisions.service,
         Some(kernel_api::ResourceRevision(7)),
     );
+    assert!(request.force);
     assert_eq!(
         request
             .desired
@@ -202,6 +204,7 @@ async fn rollout_dry_run_never_writes_and_prompts_for_apply()
         &api,
         "services.jsonc",
         &[],
+        false,
         false,
         false,
         None,

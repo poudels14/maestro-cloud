@@ -136,6 +136,7 @@ impl World {
                 active_deployment_id: Some(deployment_id.clone()),
                 replica_override: None,
                 rollout: RolloutState::Active,
+                rollout_bypass_generation: None,
                 conditions: Vec::new(),
             },
         };

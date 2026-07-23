@@ -318,6 +318,9 @@ pub struct ServiceStatus {
     pub replica_override: Option<u32>,
     /// Whether new rollouts may begin.
     pub rollout: RolloutState,
+    /// Service generation whose next deployment may bypass a rollout freeze once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_bypass_generation: Option<Generation>,
     /// Generic readiness and rollout evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
@@ -397,6 +400,10 @@ pub struct DeploymentSpec {
     #[serde(default = "initial_restart_generation")]
     #[schemars(default = "initial_restart_generation")]
     pub restart_generation: Generation,
+    /// Whether this immutable deployment may begin while its service is frozen.
+    #[serde(default)]
+    #[schemars(default)]
+    pub bypass_rollout_freeze: bool,
     /// Immutable service configuration used for every replica.
     pub service: ServiceSpec,
     /// User-requested lifecycle outcome reconciled by the deployment operator.

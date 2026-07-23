@@ -94,6 +94,7 @@ pub(super) fn deployment_in_phase(
             service_id: ServiceId::new(service_id)?,
             service_generation: kernel_api::Generation(1),
             restart_generation: kernel_api::Generation(1),
+            bypass_rollout_freeze: false,
             service: captured_service,
             goal: DeploymentGoal::Run,
             build_id: None,

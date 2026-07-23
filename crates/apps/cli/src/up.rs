@@ -80,6 +80,7 @@ pub(crate) async fn run(
             &request_id,
             ServiceRolloutRequest {
                 expected_revisions: diff.expected_revisions,
+                force: false,
                 desired,
             },
         )

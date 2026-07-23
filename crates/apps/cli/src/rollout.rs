@@ -17,6 +17,7 @@ pub(crate) async fn run(
     config_source: &str,
     filters: &[String],
     apply: bool,
+    force: bool,
     yes: bool,
     idempotency_key: Option<String>,
     input: &mut dyn BufRead,
@@ -76,6 +77,7 @@ pub(crate) async fn run(
                 &request_id(explicit_key.take())?,
                 ServiceRolloutRequest {
                     expected_revisions: diff.expected_revisions,
+                    force,
                     desired: spec,
                 },
             )

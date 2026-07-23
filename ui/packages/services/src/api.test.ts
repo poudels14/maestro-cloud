@@ -23,6 +23,7 @@ function deployment(): Deployment {
   return {
     meta: { id: "deployment/a", generation: 1, revision: 17 },
     spec: {
+      bypassRolloutFreeze: false,
       goal: "run",
       restartGeneration: 0,
       service: service().spec,

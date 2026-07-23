@@ -36,7 +36,7 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
     deployment = world.one::<Deployment>("Deployment").await?;
     assert_eq!(deployment.status.phase, DeploymentPhase::Building);
 
-    let assignment = crate::tests::plan::assignment(&deployment, "assignment-1", 1);
+    let assignment = crate::tests::plan_support::assignment(&deployment, "assignment-1", 1);
     world
         .put("Assignment", &assignment.meta.id, &assignment)
         .await?;
@@ -419,6 +419,7 @@ fn service(artifact: ArtifactTemplate) -> Service {
             active_deployment_id: None,
             replica_override: None,
             rollout: RolloutState::Active,
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     }

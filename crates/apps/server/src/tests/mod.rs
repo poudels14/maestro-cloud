@@ -513,6 +513,7 @@ pub(super) fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             active_deployment_id: None,
             replica_override: None,
             rollout: RolloutState::Active,
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     })

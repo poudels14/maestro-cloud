@@ -20,6 +20,9 @@ pub(crate) enum ServiceCommand {
         /// Persist the previewed desired state.
         #[arg(long)]
         apply: bool,
+        /// Allow this rollout to begin even when the service is frozen.
+        #[arg(long)]
+        force: bool,
         /// Limit the rollout to one or more service IDs.
         #[arg(long = "service")]
         services: Vec<String>,
@@ -152,6 +155,7 @@ pub(crate) async fn run(
         ServiceCommand::Rollout {
             config,
             apply,
+            force,
             services,
             yes,
             idempotency_key,
@@ -161,6 +165,7 @@ pub(crate) async fn run(
                 &config,
                 &services,
                 apply,
+                force,
                 yes,
                 idempotency_key,
                 input,

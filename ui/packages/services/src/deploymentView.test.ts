@@ -6,6 +6,7 @@ function deployment(id: string, createdAt: number): Deployment {
   return {
     meta: { id, generation: 1, revision: 2 },
     spec: {
+      bypassRolloutFreeze: false,
       goal: "run",
       restartGeneration: 1,
       service: {

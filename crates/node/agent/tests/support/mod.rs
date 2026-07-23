@@ -187,6 +187,7 @@ fn deployment() -> Deployment {
             service_id: ServiceId::new("api").unwrap(),
             service_generation: Generation(1),
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             goal: kernel_api::DeploymentGoal::Run,
             service: ServiceSpec {
                 name: "API".to_owned(),

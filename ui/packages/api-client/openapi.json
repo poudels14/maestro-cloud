@@ -1129,6 +1129,11 @@
             ],
             "description": "Build generated for this deployment, when the artifact needs building."
           },
+          "bypassRolloutFreeze": {
+            "default": false,
+            "description": "Whether this immutable deployment may begin while its service is frozen.",
+            "type": "boolean"
+          },
           "goal": {
             "allOf": [
               {
@@ -5808,6 +5813,11 @@
               }
             ],
             "description": "Revisions returned by the immediately preceding diff."
+          },
+          "force": {
+            "default": false,
+            "description": "Allow this service generation to begin even when rollout is frozen.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -6164,6 +6174,20 @@
               }
             ],
             "description": "Whether new rollouts may begin."
+          },
+          "rolloutBypassGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Generation"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Service generation whose next deployment may bypass a rollout freeze once."
           }
         },
         "required": [

@@ -98,6 +98,7 @@ async fn apply(
     let desired = validate_desired(&state, &service_id, payload.desired).await?;
     let payload = ServiceRolloutRequest {
         expected_revisions: payload.expected_revisions,
+        force: payload.force,
         desired,
     };
     let request = MutationRequest::new(
@@ -112,8 +113,12 @@ async fn apply(
         return Ok((StatusCode::ACCEPTED, Json(response)));
     }
     let managed = ManagedResources::load(&state, &service_id).await?;
-    let (compares, mutations, response) =
-        managed.plan(service_id, payload.expected_revisions, payload.desired)?;
+    let (compares, mutations, response) = managed.plan(
+        service_id,
+        payload.expected_revisions,
+        payload.force,
+        payload.desired,
+    )?;
     let response = request
         .commit(
             &state,
@@ -212,6 +217,7 @@ impl ManagedResources {
         self,
         service_id: ServiceId,
         expected: ServiceRolloutRevisions,
+        force: bool,
         desired: ServiceRolloutSpec,
     ) -> Result<(Vec<Compare>, Vec<Mutation>, ServiceRolloutResponse), ApiError> {
         let service_kind = kind(BuiltinKind::Service)?;
@@ -229,7 +235,7 @@ impl ManagedResources {
         let service_expected = exact_expected(&self.service, expected.service, "Service")?;
         let route_expected = exact_expected(&self.ingress, expected.ingress, "IngressRoute")?;
         let policy_expected = exact_expected(&self.egress, expected.egress, "FirewallPolicy")?;
-        let (service, _, service_write) = services::plan_service_write(
+        let (mut service, _, service_write) = services::plan_service_write(
             self.service.as_ref(),
             &self.keys,
             &service_kind,
@@ -239,6 +245,11 @@ impl ManagedResources {
                 spec: desired.service,
             },
         )?;
+        if service_write {
+            service.status.rollout_bypass_generation = (force
+                && service.status.rollout == kernel_api::RolloutState::Frozen)
+                .then_some(service.meta.generation);
+        }
         let (route, route_write) = plan_route(
             self.ingress.as_ref(),
             &self.keys,

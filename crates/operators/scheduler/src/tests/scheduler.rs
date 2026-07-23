@@ -435,6 +435,7 @@ fn service(replicas: u32) -> Service {
             active_deployment_id: Some(deployment_id()),
             replica_override: None,
             rollout: RolloutState::Active,
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     }
@@ -447,6 +448,7 @@ fn deployment() -> Deployment {
             service_id: service_id(),
             service_generation: Generation(1),
             restart_generation: Generation(1),
+            bypass_rollout_freeze: false,
             service: service(1).spec,
             goal: kernel_api::DeploymentGoal::Run,
             build_id: None,

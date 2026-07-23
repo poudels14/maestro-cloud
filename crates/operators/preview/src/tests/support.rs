@@ -55,6 +55,7 @@ pub(super) fn base_service() -> Service {
             active_deployment_id: None,
             replica_override: Some(5),
             rollout: RolloutState::Frozen,
+            rollout_bypass_generation: None,
             conditions: Vec::new(),
         },
     }

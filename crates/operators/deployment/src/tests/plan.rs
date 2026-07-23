@@ -1,18 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
-
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
-    Build, BuildPhase, BuildSource, BuildStatus, BuildTemplate, ClusterId, Deployment,
-    DeploymentId, DeploymentPhase, ExecPolicy, Generation, IngressRouteId, NodeApiAccess, NodeId,
-    Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec,
-    ReplicaStateStatus, ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec,
-    ServiceStatus, Timestamp, TrafficGeneration, TrafficGenerationId, TrafficGenerationPhase,
-    TrafficGenerationSpec, TrafficGenerationStatus,
+    ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, DeploymentId, DeploymentPhase,
+    Generation, RolloutState, Timestamp,
 };
 
-use crate::{DeploymentInput, LifecycleSettings, plan};
+use super::plan_support::*;
+use crate::plan;
 
 #[test]
 fn creates_one_stable_deployment_per_service_generation() {
@@ -160,6 +152,50 @@ fn frozen_build_stays_queued_then_unfreeze_creates_its_build() {
         DeploymentPhase::Building
     );
     assert_eq!(active.create_builds.len(), 1);
+}
+
+#[test]
+fn forced_frozen_rollout_consumes_only_its_captured_generation() {
+    let mut frozen = service(Generation(1), RolloutState::Frozen);
+    frozen.status.rollout_bypass_generation = Some(Generation(1));
+    let created = plan(input(frozen.clone(), Vec::new())).expect("create forced deployment");
+    let mut forced = created.create_deployments[0].clone();
+    assert!(forced.spec.bypass_rollout_freeze);
+
+    let advancing =
+        plan(input(frozen.clone(), vec![forced.clone()])).expect("advance forced deployment");
+    assert_eq!(
+        advancing.deployment_updates[0].status.phase,
+        DeploymentPhase::Building
+    );
+    assert_eq!(advancing.service_updates.len(), 1);
+    assert_eq!(
+        advancing.service_updates[0]
+            .status
+            .rollout_bypass_generation,
+        None
+    );
+    assert_eq!(
+        advancing.service_updates[0].status.rollout,
+        RolloutState::Frozen
+    );
+
+    forced.status = advancing.deployment_updates[0].status.clone();
+    frozen.status = advancing.service_updates[0].status.clone();
+    frozen.meta.generation = Generation(2);
+    frozen.spec.version = "2.0.0".to_string();
+    let next =
+        plan(input(frozen.clone(), vec![forced.clone()])).expect("create later frozen deployment");
+    let queued = next.create_deployments[0].clone();
+    assert!(!queued.spec.bypass_rollout_freeze);
+
+    let held =
+        plan(input(frozen, vec![forced, queued.clone()])).expect("hold later frozen deployment");
+    assert!(
+        held.deployment_updates
+            .iter()
+            .all(|update| update.id != queued.meta.id)
+    );
 }
 
 #[test]
@@ -526,220 +562,4 @@ fn removed_children_are_collected_before_service_finalization() {
     assert_eq!(collected.delete_builds, vec![build.meta.id]);
     assert_eq!(collected.delete_replicas, vec![replica.meta.id]);
     assert!(collected.deployment_updates.is_empty());
-}
-
-fn input(service: Service, deployments: Vec<Deployment>) -> DeploymentInput {
-    DeploymentInput {
-        cluster_id: ClusterId::new("cluster-1").unwrap(),
-        now: Timestamp(40_000),
-        settings: LifecycleSettings {
-            drain_grace: Duration::from_secs(30),
-        },
-        services: vec![service],
-        deployments,
-        builds: Vec::new(),
-        assignments: Vec::new(),
-        replicas: Vec::new(),
-        traffic_generations: Vec::new(),
-    }
-}
-
-fn service(generation: Generation, rollout: RolloutState) -> Service {
-    Object {
-        meta: metadata(ServiceId::new("api").unwrap(), generation),
-        spec: ServiceSpec {
-            name: "API".to_string(),
-            version: "1.0.0".to_string(),
-            artifact: ArtifactTemplate::Image {
-                reference: "registry.test/api:latest".to_string(),
-            },
-            preview: None,
-            command: None,
-            replicas: 1,
-            exposed_ports: vec![8080],
-            health_check: None,
-            max_restarts: Some(3),
-            environment: BTreeMap::new(),
-            user: None,
-            node_api: NodeApiAccess::Disabled,
-            secrets: None,
-            volumes: Vec::new(),
-            placement: PlacementConstraint::default(),
-            exec: ExecPolicy::Allowed,
-        },
-        status: ServiceStatus {
-            active_deployment_id: None,
-            replica_override: None,
-            rollout,
-            conditions: Vec::new(),
-        },
-    }
-}
-
-fn build_artifact() -> ArtifactTemplate {
-    ArtifactTemplate::Build {
-        template: build_template(),
-    }
-}
-
-fn build_template() -> BuildTemplate {
-    BuildTemplate {
-        source: BuildSource::Git {
-            repository: "https://example.test/repo.git".to_string(),
-            revision: "main".to_string(),
-        },
-        dockerfile: "Dockerfile".to_string(),
-        watch: false,
-        environment: BTreeMap::new(),
-        secrets: BTreeMap::new(),
-    }
-}
-
-fn deployment(service: &Service, phase: DeploymentPhase) -> Deployment {
-    deployment_generation(service, "deployment-1", service.meta.generation, phase)
-}
-
-fn deployment_generation(
-    service: &Service,
-    id: &str,
-    generation: Generation,
-    phase: DeploymentPhase,
-) -> Deployment {
-    Object {
-        meta: metadata(DeploymentId::new(id).unwrap(), Generation(1)),
-        spec: kernel_api::DeploymentSpec {
-            service_id: service.meta.id.clone(),
-            service_generation: generation,
-            restart_generation: Generation(1),
-            service: service.spec.clone(),
-            goal: kernel_api::DeploymentGoal::Run,
-            build_id: matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
-                .then(|| kernel_api::BuildId::new(format!("build-{id}")).unwrap()),
-        },
-        status: kernel_api::DeploymentStatus {
-            phase,
-            created_at: Timestamp(i64::from(generation.0 as u32)),
-            ready_at: (phase == DeploymentPhase::Ready).then_some(Timestamp(1_000)),
-            draining_at: None,
-            image_digest: None,
-            conditions: Vec::new(),
-        },
-    }
-}
-
-pub(super) fn assignment(deployment: &Deployment, id: &str, epoch: u64) -> Assignment {
-    assignment_slot(deployment, id, 0, epoch)
-}
-
-fn assignment_slot(
-    deployment: &Deployment,
-    id: &str,
-    replica_index: u32,
-    epoch: u64,
-) -> Assignment {
-    Object {
-        meta: metadata(AssignmentId::new(id).unwrap(), Generation(1)),
-        spec: AssignmentSpec {
-            service_id: deployment.spec.service_id.clone(),
-            deployment_id: deployment.meta.id.clone(),
-            restart_generation: deployment.spec.restart_generation,
-            replica_index,
-            node_id: NodeId::new("node-1").unwrap(),
-            placement_epoch: epoch,
-            workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10)),
-            replaces_assignment_id: None,
-        },
-        status: AssignmentStatus {
-            phase: AssignmentPhase::Running,
-            workload_id: None,
-            conditions: Vec::new(),
-        },
-    }
-}
-
-fn replica(
-    deployment: &Deployment,
-    assignment: &Assignment,
-    phase: DeploymentPhase,
-    restart_attempts: u32,
-) -> ReplicaState {
-    Object {
-        meta: metadata(
-            ReplicaStateId::new(format!("replica-{}", assignment.meta.id)).unwrap(),
-            Generation(1),
-        ),
-        spec: ReplicaStateSpec {
-            service_id: deployment.spec.service_id.clone(),
-            deployment_id: deployment.meta.id.clone(),
-            assignment_id: assignment.meta.id.clone(),
-            replica_index: assignment.spec.replica_index,
-        },
-        status: ReplicaStateStatus {
-            phase,
-            node_id: Some(assignment.spec.node_id.clone()),
-            workload_id: None,
-            healthcheck_failures: 0,
-            restart_attempts,
-            restart_pending_attempt: None,
-            restart_not_before: None,
-            conditions: Vec::new(),
-        },
-    }
-}
-
-fn traffic(deployment: &Deployment) -> TrafficGeneration {
-    Object {
-        meta: metadata(
-            TrafficGenerationId::new("traffic-1").unwrap(),
-            Generation(1),
-        ),
-        spec: TrafficGenerationSpec {
-            service_id: deployment.spec.service_id.clone(),
-            deployment_id: deployment.meta.id.clone(),
-            epoch: 1,
-            routes: vec![kernel_api::TrafficRoute {
-                route_id: IngressRouteId::new("route-1").unwrap(),
-                route_generation: Generation(1),
-                hosts: vec!["api.example.test".to_string()],
-                path_prefix: None,
-                target_port: 8080,
-                session_affinity: None,
-            }],
-            targets: vec![kernel_api::TrafficTarget {
-                assignment_id: AssignmentId::new("assignment-new").unwrap(),
-                node_id: NodeId::new("node-1").unwrap(),
-                endpoint: SocketAddr::from(([10, 42, 1, 10], 8080)),
-            }],
-        },
-        status: TrafficGenerationStatus {
-            phase: TrafficGenerationPhase::Active,
-            staged_at: Timestamp(900),
-            activated_at: Some(Timestamp(1_000)),
-            retired_at: None,
-            conditions: Vec::new(),
-        },
-    }
-}
-
-fn metadata<Id>(id: Id, generation: Generation) -> ObjectMeta<Id> {
-    ObjectMeta {
-        id,
-        labels: BTreeMap::new(),
-        annotations: BTreeMap::new(),
-        revision: ResourceRevision(7),
-        generation,
-        owner_refs: Vec::new(),
-        finalizers: BTreeSet::new(),
-        deletion_timestamp: None,
-    }
-}
-
-#[allow(dead_code)]
-fn succeeded(build: &mut Build) {
-    build.status = BuildStatus {
-        phase: BuildPhase::Succeeded,
-        image_digest: Some("registry.test/api@sha256:abc".to_string()),
-        source_revision: Some("abc".to_string()),
-        conditions: Vec::new(),
-    };
 }

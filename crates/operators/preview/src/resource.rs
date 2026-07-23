@@ -71,6 +71,7 @@ pub(crate) fn desired_service(
                 active_deployment_id: None,
                 replica_override: None,
                 rollout: base.status.rollout,
+                rollout_bypass_generation: None,
                 conditions: Vec::new(),
             },
         },

@@ -1580,6 +1580,11 @@ export interface components {
             /** @description Build generated for this deployment, when the artifact needs building. */
             buildId?: components["schemas"]["BuildId"] | (null);
             /**
+             * @description Whether this immutable deployment may begin while its service is frozen.
+             * @default false
+             */
+            bypassRolloutFreeze: boolean;
+            /**
              * @description User-requested lifecycle outcome reconciled by the deployment operator.
              * @default run
              */
@@ -2987,6 +2992,11 @@ export interface components {
             desired: components["schemas"]["ServiceRolloutSpec"];
             /** @description Revisions returned by the immediately preceding diff. */
             expectedRevisions: components["schemas"]["ServiceRolloutRevisions"];
+            /**
+             * @description Allow this service generation to begin even when rollout is frozen.
+             * @default false
+             */
+            force: boolean;
         };
         /** @description Accepted generations for an atomic declarative service apply. */
         ServiceRolloutResponse: {
@@ -3079,6 +3089,8 @@ export interface components {
             replicaOverride?: number | null;
             /** @description Whether new rollouts may begin. */
             rollout: components["schemas"]["RolloutState"];
+            /** @description Service generation whose next deployment may bypass a rollout freeze once. */
+            rolloutBypassGeneration?: components["schemas"]["Generation"] | (null);
         };
         /** @description Optimistic desired-state replacement for one service. */
         ServiceWriteRequest: {
