@@ -57,6 +57,7 @@ pub(crate) fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 23_79, 23_80, DEFAULT_WIREGUARD_PORT)?,
         join_secret: SecretValue::new("a-test-join-secret-with-at-least-32-characters"),
+        tailscale: None,
     })
 }
 

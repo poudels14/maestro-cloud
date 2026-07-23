@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     ClusterCertificateAuthority, ClusterPorts, Ipv4Cidr, JoinPrivateKey, JoinProtocolError,
-    JoinRequest, NodeCertificateBundle, NodeDefinition,
+    JoinRequest, NodeCertificateBundle, NodeDefinition, TailscaleGatewayConfig,
     join::{canonical_body, decode_leader_public_key, decode_public_key, validate_shared_secret},
 };
 
@@ -44,6 +44,9 @@ pub struct JoinPayload {
     pub control_allow_cidrs: Vec<Ipv4Cidr>,
     /// Persisted cluster service ports.
     pub ports: ClusterPorts,
+    /// Optional managed Tailscale subnet-router fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleGatewayConfig>,
     /// Node-specific mutual-authentication identity.
     pub certificates: NodeCertificateBundle,
     /// Cluster-wide key used to authenticate operator API requests.

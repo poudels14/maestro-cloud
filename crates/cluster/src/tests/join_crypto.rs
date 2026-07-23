@@ -30,6 +30,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         nodes: config.nodes.clone(),
         control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
+        tailscale: config.tailscale.clone(),
         certificates,
         operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new("store-test-secret-with-at-least-32-characters"),

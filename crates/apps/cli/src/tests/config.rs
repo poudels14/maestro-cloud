@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::CliError;
-use crate::config::{ConfigKind, init, validate};
+use crate::config::{ConfigKind, init, load_cluster, validate};
 use crate::config_source::{ConfigSourceReader, SystemConfigSourceReader};
 
 struct MemoryReader {
@@ -167,6 +167,44 @@ async fn validate_reports_nested_paths_for_cluster_and_service_type_errors()
             .to_string()
             .contains("services.api.deploy.replicas:")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_route()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            tailscale: {
+                authKey: "aws-secret://tailscale-auth",
+                advertiseRoutes: null,
+                replicas: 1
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (source.to_owned(), document),
+            (
+                "aws-secret://tailscale-auth".to_owned(),
+                "tskey-auth-reusable-test-secret\n".to_owned(),
+            ),
+        ]),
+    };
+
+    let loaded = load_cluster(source, &reader).await?;
+    let tailscale = loaded.cluster.tailscale.ok_or("tailscale config missing")?;
+    assert_eq!(
+        tailscale.auth_key.expose(),
+        "tskey-auth-reusable-test-secret"
+    );
+    assert_eq!(
+        tailscale.advertised_routes(loaded.cluster.cluster_cidr),
+        ["172.22.0.0/16".parse()?]
+    );
+    assert_eq!(tailscale.tags, ["tag:maestro-gateway"]);
     Ok(())
 }
 

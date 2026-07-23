@@ -28,6 +28,9 @@ pub struct MaskedClusterConfig {
     pub control_allow_cidrs: Vec<String>,
     /// Cluster-wide service ports.
     pub ports: MaskedClusterConfigPorts,
+    /// Optional Tailscale gateway settings with the credential omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<MaskedTailscaleConfig>,
 }
 
 /// Secret-free topology for one configured cluster member.
@@ -60,4 +63,18 @@ pub struct MaskedClusterConfigPorts {
     pub store_peer: u16,
     /// WireGuard mesh UDP port.
     pub wireguard: u16,
+}
+
+/// Secret-free view of the managed Tailscale gateway fleet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskedTailscaleConfig {
+    /// Effective routes advertised to the tailnet.
+    pub advertise_routes: Vec<String>,
+    /// Cluster bridge resolvers reachable through the advertised routes.
+    pub dns_nameservers: Vec<String>,
+    /// Desired gateway replica count.
+    pub replicas: u32,
+    /// Tailnet policy tags applied during authentication.
+    pub tags: Vec<String>,
 }

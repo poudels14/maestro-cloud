@@ -72,6 +72,7 @@ impl DaemonLaunchDocument {
             control_allow_cidrs: payload.control_allow_cidrs,
             ports: payload.ports,
             join_secret,
+            tailscale: payload.tailscale,
         };
         let role = cluster
             .nodes

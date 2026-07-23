@@ -269,6 +269,7 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
                 store_peer: 2_380,
                 wireguard: 51_820,
             },
+            tailscale: None,
         },
         nodes: vec![
             node("node-z", "worker-z", "worker", "10.0.0.12", 3, false)?,

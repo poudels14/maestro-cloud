@@ -4,7 +4,9 @@ use std::net::Ipv4Addr;
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 use serde::{Deserialize, Serialize};
 
-use crate::{ClusterPorts, ClusterPortsError, Ipv4Cidr};
+use crate::{
+    ClusterPorts, ClusterPortsError, Ipv4Cidr, TailscaleConfigError, TailscaleGatewayConfig,
+};
 
 /// WireGuard MTU applied consistently to the mesh and workload interfaces.
 pub const WIREGUARD_MTU_BYTES: u16 = 1_420;
@@ -56,6 +58,9 @@ pub struct ClusterConfig {
     pub ports: ClusterPorts,
     /// Shared bootstrap credential; replaced by node certificates after join.
     pub join_secret: SecretValue,
+    /// Optional managed Tailscale subnet-router fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleGatewayConfig>,
 }
 
 impl ClusterConfig {
@@ -153,6 +158,15 @@ impl ClusterConfig {
         }
 
         self.validate_control_allowlist()?;
+        if let Some(tailscale) = &self.tailscale {
+            let workload_subnets = self
+                .nodes
+                .values()
+                .filter(|node| node.role.runs_workloads())
+                .map(|node| node.workload_subnet)
+                .collect::<Vec<_>>();
+            tailscale.validate(self.cluster_cidr, &workload_subnets)?;
+        }
         control_plane_nodes.sort();
 
         Ok(ValidatedTopology {
@@ -344,6 +358,9 @@ pub enum ClusterPreflightError {
     /// Persisted port allocation is invalid.
     #[error(transparent)]
     InvalidPorts(#[from] ClusterPortsError),
+    /// Optional Tailscale gateway settings are invalid.
+    #[error(transparent)]
+    InvalidTailscale(#[from] TailscaleConfigError),
 }
 
 fn validate_join_secret(secret: &SecretValue) -> Result<(), ClusterPreflightError> {

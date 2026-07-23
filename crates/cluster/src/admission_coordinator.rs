@@ -354,6 +354,7 @@ impl AdmissionCoordinator {
             nodes: self.config.nodes.clone(),
             control_allow_cidrs: self.config.control_allow_cidrs.clone(),
             ports: self.config.ports,
+            tailscale: self.config.tailscale.clone(),
             certificates,
             operator_jwt_secret: self.operator_jwt_secret.clone(),
             store_encryption_secret: self.store_encryption_secret.clone(),

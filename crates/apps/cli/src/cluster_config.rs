@@ -3,14 +3,14 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use cluster::{
     ClusterConfig, ClusterPorts, ClusterPreflightError, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint,
+    NodeDefinition, NodeEndpoint, TailscaleConfigError, TailscaleGatewayConfig,
 };
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::CliError;
-use crate::config_source::decode_document;
+use crate::config_source::{ConfigSourceReader, decode_document, resolve_relative_source};
 
 const DEFAULT_API_PORT: u16 = 3_000;
 const DEFAULT_GATEWAY_PORT: u16 = 3_001;
@@ -24,10 +24,15 @@ pub(crate) struct LoadedClusterConfig {
     pub(crate) ignored_fields: Vec<String>,
 }
 
-pub(crate) fn decode_cluster(source: &str, value: Value) -> Result<LoadedClusterConfig, CliError> {
+pub(crate) async fn decode_cluster(
+    source: &str,
+    value: Value,
+    reader: &impl ConfigSourceReader,
+) -> Result<LoadedClusterConfig, CliError> {
     let (document, ignored_fields): (ClusterDocument, _) =
         decode_document(&value, &format!("cluster config `{source}`"))?;
-    let cluster = convert_cluster(document.cluster)?;
+    let tailscale = convert_tailscale(source, document.tailscale, reader).await?;
+    let cluster = convert_cluster(document.cluster, tailscale)?;
     let node_id = select_node(document.node, &cluster.nodes)?;
     cluster.preflight().map_err(preflight_error)?;
     Ok(LoadedClusterConfig {
@@ -37,7 +42,10 @@ pub(crate) fn decode_cluster(source: &str, value: Value) -> Result<LoadedCluster
     })
 }
 
-fn convert_cluster(input: ClusterInput) -> Result<ClusterConfig, CliError> {
+fn convert_cluster(
+    input: ClusterInput,
+    tailscale: Option<TailscaleGatewayConfig>,
+) -> Result<ClusterConfig, CliError> {
     let name = required("cluster.name", input.name)?;
     let cluster_id = input.cluster_id.unwrap_or_else(|| name.clone());
     let cluster_id = ClusterId::new(cluster_id)
@@ -86,7 +94,49 @@ fn convert_cluster(input: ClusterInput) -> Result<ClusterConfig, CliError> {
         control_allow_cidrs,
         ports,
         join_secret: SecretValue::new(join_secret),
+        tailscale,
     })
+}
+
+async fn convert_tailscale(
+    config_source: &str,
+    input: Option<TailscaleInput>,
+    reader: &impl ConfigSourceReader,
+) -> Result<Option<TailscaleGatewayConfig>, CliError> {
+    let Some(input) = input else {
+        return Ok(None);
+    };
+    let auth_key =
+        if input.auth_key.starts_with("aws-secret://") || input.auth_key.starts_with("file://") {
+            let source = resolve_relative_source(config_source, &input.auth_key)?;
+            reader.read(&source).await?
+        } else {
+            input.auth_key
+        };
+    let auth_key = required("tailscale.auth-key", auth_key)?;
+    let advertise_routes = input
+        .advertise_routes
+        .map(|routes| {
+            routes
+                .into_iter()
+                .enumerate()
+                .map(|(index, route)| {
+                    route.parse::<Ipv4Cidr>().map_err(|error| {
+                        invalid(
+                            &format!("tailscale.advertise-routes[{index}]"),
+                            error.to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    Ok(Some(TailscaleGatewayConfig {
+        auth_key: SecretValue::new(auth_key),
+        advertise_routes,
+        replicas: input.replicas,
+        tags: input.tags,
+    }))
 }
 
 fn convert_node(raw_id: String, input: NodeInput) -> Result<(NodeId, NodeDefinition), CliError> {
@@ -202,6 +252,26 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
         }
         ClusterPreflightError::WeakJoinSecret => "cluster.join-secret".to_string(),
         ClusterPreflightError::InvalidPorts(_) => "cluster.ports".to_string(),
+        ClusterPreflightError::InvalidTailscale(error) => match error {
+            TailscaleConfigError::WeakAuthKey => "tailscale.auth-key".to_string(),
+            TailscaleConfigError::ZeroReplicas
+            | TailscaleConfigError::InsufficientWorkloadNodes { .. } => {
+                "tailscale.replicas".to_string()
+            }
+            TailscaleConfigError::EmptyAdvertiseRoutes
+            | TailscaleConfigError::NoReachableDnsResolver => {
+                "tailscale.advertise-routes".to_string()
+            }
+            TailscaleConfigError::RouteOutsideCluster { index, .. }
+            | TailscaleConfigError::DuplicateRoute { index, .. } => {
+                format!("tailscale.advertise-routes[{index}]")
+            }
+            TailscaleConfigError::NoTags => "tailscale.tags".to_string(),
+            TailscaleConfigError::InvalidTag { index, .. }
+            | TailscaleConfigError::DuplicateTag { index, .. } => {
+                format!("tailscale.tags[{index}]")
+            }
+        },
     };
     invalid(&path, detail)
 }
@@ -226,6 +296,29 @@ struct ClusterDocument {
     cluster: ClusterInput,
     #[serde(default)]
     node: Option<String>,
+    #[serde(default)]
+    tailscale: Option<TailscaleInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct TailscaleInput {
+    #[serde(alias = "authKey")]
+    auth_key: String,
+    #[serde(default, alias = "advertiseRoutes")]
+    advertise_routes: Option<Vec<String>>,
+    #[serde(default = "default_tailscale_replicas")]
+    replicas: u32,
+    #[serde(default = "default_tailscale_tags")]
+    tags: Vec<String>,
+}
+
+const fn default_tailscale_replicas() -> u32 {
+    2
+}
+
+fn default_tailscale_tags() -> Vec<String> {
+    vec!["tag:maestro-gateway".to_owned()]
 }
 
 #[derive(Debug, Deserialize)]

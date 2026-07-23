@@ -5,7 +5,7 @@ use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
 use crate::{
     ClusterConfig, ClusterPorts, ClusterPreflightError, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint,
+    NodeDefinition, NodeEndpoint, TailscaleConfigError, TailscaleGatewayConfig,
 };
 
 #[test]
@@ -119,6 +119,61 @@ fn validates_a_wide_node_pool_and_rejects_insufficient_capacity()
     Ok(())
 }
 
+#[test]
+fn validates_tailscale_routes_replicas_tags_and_secret_strength()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut config = valid_config()?;
+    config.tailscale = Some(TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 2,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+    config.preflight()?;
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale.advertise_routes = Some(vec!["192.168.50.0/24".parse()?]);
+    assert!(matches!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidTailscale(
+            TailscaleConfigError::RouteOutsideCluster { index: 0, .. }
+        ))
+    ));
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale.advertise_routes = Some(vec!["172.22.250.0/24".parse()?]);
+    assert_eq!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidTailscale(
+            TailscaleConfigError::NoReachableDnsResolver
+        ))
+    );
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale.advertise_routes = None;
+    tailscale.replicas = 3;
+    assert_eq!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidTailscale(
+            TailscaleConfigError::InsufficientWorkloadNodes {
+                replicas: 3,
+                workload_nodes: 2,
+            }
+        ))
+    );
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale.replicas = 2;
+    tailscale.tags = vec!["maestro-gateway".to_owned()];
+    assert!(matches!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidTailscale(
+            TailscaleConfigError::InvalidTag { index: 0, .. }
+        ))
+    ));
+    Ok(())
+}
+
 fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
     let nodes = [
         (
@@ -167,5 +222,6 @@ fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 23_79, 23_80, DEFAULT_WIREGUARD_PORT)?,
         join_secret: SecretValue::new("a-test-join-secret-with-at-least-32-characters"),
+        tailscale: None,
     })
 }

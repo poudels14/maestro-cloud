@@ -31,6 +31,8 @@ mod preview_config;
 mod runtime;
 mod s3_backup;
 mod stats_metric_sampler;
+mod tailscale_reconciler;
+mod tailscale_resources;
 mod upgrade_config;
 mod workload_agents;
 

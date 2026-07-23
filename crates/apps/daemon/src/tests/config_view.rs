@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use cluster::{ClusterConfig, ClusterPorts, Ipv4Cidr, NodeDefinition, NodeEndpoint};
+use cluster::{
+    ClusterConfig, ClusterPorts, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleGatewayConfig,
+};
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
 use crate::config_view::masked_cluster_config;
@@ -10,6 +12,7 @@ use crate::config_view::masked_cluster_config;
 fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::error::Error>> {
     let node_id = NodeId::new("node-a")?;
     let secret = "join-secret-that-must-never-cross-the-api";
+    let tailscale_secret = "tskey-auth-secret-that-must-never-cross-the-api";
     let cluster = ClusterConfig {
         cluster_id: ClusterId::new("config-view-test")?,
         name: "config-view-test".to_string(),
@@ -31,10 +34,19 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,
         join_secret: SecretValue::new(secret),
+        tailscale: Some(TailscaleGatewayConfig {
+            auth_key: SecretValue::new(tailscale_secret),
+            advertise_routes: None,
+            replicas: 1,
+            tags: vec!["tag:maestro-gateway".to_owned()],
+        }),
     };
 
     let encoded = serde_json::to_string(&masked_cluster_config(&cluster, &node_id))?;
     assert!(!encoded.contains(secret));
+    assert!(!encoded.contains(tailscale_secret));
     assert!(encoded.contains("node-a.internal"));
+    assert!(encoded.contains("\"advertiseRoutes\":[\"172.22.0.0/16\"]"));
+    assert!(encoded.contains("\"dnsNameservers\":[\"172.22.1.1\"]"));
     Ok(())
 }

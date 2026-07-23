@@ -35,6 +35,7 @@ mod plan;
 mod runtime;
 mod s3_backup;
 mod stats_metric_sampler;
+mod tailscale_resources;
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
@@ -74,5 +75,6 @@ fn cluster_with_nodes(
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,
         join_secret: SecretValue::new("daemon-test-join-secret-with-32-characters"),
+        tailscale: None,
     })
 }

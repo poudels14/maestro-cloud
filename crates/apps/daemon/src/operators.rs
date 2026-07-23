@@ -20,6 +20,8 @@ use upgrade::{
 };
 use webhook::{WebhookDeliveryBackend, WebhookReconciler};
 
+use crate::tailscale_reconciler::TailscaleResourceReconciler;
+use crate::tailscale_resources::TailscaleSystemResources;
 use crate::{LeaderWorkload, OperatorSettings, OperatorSuiteError, RoleError};
 
 /// Side-effect integrations shared by leader-owned operators.
@@ -67,6 +69,7 @@ pub struct OperatorLeaderWorkload {
     timestamp_clock: Arc<dyn TimestampClock>,
     settings: OperatorSettings,
     builds: BuildOperatorBackends,
+    tailscale: Option<TailscaleSystemResources>,
 }
 
 impl OperatorLeaderWorkload {
@@ -84,7 +87,16 @@ impl OperatorLeaderWorkload {
             timestamp_clock,
             settings,
             builds,
+            tailscale: None,
         }
+    }
+
+    pub(crate) fn with_tailscale_resources(
+        mut self,
+        tailscale: Option<TailscaleSystemResources>,
+    ) -> Self {
+        self.tailscale = tailscale;
+        self
     }
 }
 
@@ -95,6 +107,17 @@ impl LeaderWorkload for OperatorLeaderWorkload {
         store: Arc<FencedStore>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), RoleError> {
+        TailscaleResourceReconciler::new(&self.cluster_id, self.tailscale.clone())
+            .map_err(|error| {
+                RoleError::new(format!(
+                    "failed to construct Tailscale resource reconciler: {error}"
+                ))
+            })?
+            .reconcile(store.as_ref(), self.timestamp_clock.now())
+            .await
+            .map_err(|error| {
+                RoleError::new(format!("failed to reconcile Tailscale resources: {error}"))
+            })?;
         let upgrades: Option<Arc<dyn NodeUpgradeBackend>> =
             match (&self.builds.upgrades, self.builds.store_upgrades) {
                 (Some(_), Some(_)) => {

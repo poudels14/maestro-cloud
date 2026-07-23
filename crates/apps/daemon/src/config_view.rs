@@ -1,5 +1,8 @@
 use cluster::ClusterConfig;
-use kernel_api::{MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts, NodeId};
+use kernel_api::{
+    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedTailscaleConfig,
+    NodeId,
+};
 
 pub(crate) fn masked_cluster_config(
     cluster: &ClusterConfig,
@@ -35,5 +38,21 @@ pub(crate) fn masked_cluster_config(
             store_peer: cluster.ports.store_peer,
             wireguard: cluster.ports.wireguard,
         },
+        tailscale: cluster.tailscale.as_ref().map(|tailscale| {
+            let routes = tailscale.advertised_routes(cluster.cluster_cidr);
+            MaskedTailscaleConfig {
+                advertise_routes: routes.iter().map(ToString::to_string).collect(),
+                dns_nameservers: cluster
+                    .nodes
+                    .values()
+                    .filter(|node| node.role.runs_workloads())
+                    .filter_map(|node| node.workload_subnet.gateway_address())
+                    .filter(|address| routes.iter().any(|route| route.contains(*address)))
+                    .map(|address| address.to_string())
+                    .collect(),
+                replicas: tailscale.replicas,
+                tags: tailscale.tags.clone(),
+            }
+        }),
     }
 }

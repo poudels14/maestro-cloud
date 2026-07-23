@@ -1927,6 +1927,8 @@ export interface components {
             nodes: components["schemas"]["MaskedClusterConfigNode"][];
             /** @description Cluster-wide service ports. */
             ports: components["schemas"]["MaskedClusterConfigPorts"];
+            /** @description Optional Tailscale gateway settings with the credential omitted. */
+            tailscale?: components["schemas"]["MaskedTailscaleConfig"] | (null);
         };
         /** @description Secret-free topology for one configured cluster member. */
         MaskedClusterConfigNode: {
@@ -1968,6 +1970,20 @@ export interface components {
              * @description WireGuard mesh UDP port.
              */
             wireguard: number;
+        };
+        /** @description Secret-free view of the managed Tailscale gateway fleet. */
+        MaskedTailscaleConfig: {
+            /** @description Effective routes advertised to the tailnet. */
+            advertiseRoutes: string[];
+            /** @description Cluster bridge resolvers reachable through the advertised routes. */
+            dnsNameservers: string[];
+            /**
+             * Format: uint32
+             * @description Desired gateway replica count.
+             */
+            replicas: number;
+            /** @description Tailnet policy tags applied during authentication. */
+            tags: string[];
         };
         Node: components["schemas"]["Object"];
         /** @description Workload access to the private node API mounted at `/run/maestro`. */

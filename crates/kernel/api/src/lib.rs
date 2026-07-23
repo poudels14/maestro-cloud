@@ -34,7 +34,9 @@ pub use command::{
     ServiceWriteResponse, UpgradeCommandResponse, UpgradeCreateRequest,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
-pub use config::{MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts};
+pub use config::{
+    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedTailscaleConfig,
+};
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,

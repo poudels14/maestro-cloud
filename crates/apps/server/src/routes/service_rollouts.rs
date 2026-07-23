@@ -20,6 +20,7 @@ use super::service_rollout_validation::{
 };
 use super::{service_diff, services};
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
+use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
@@ -90,6 +91,7 @@ async fn apply(
     payload: Result<Json<ServiceRolloutRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ServiceRolloutResponse>), ApiError> {
     let service_id = parse_service_id(service_id)?;
+    ensure_user_resource_id("Service", service_id.as_str())?;
     let payload = payload
         .map_err(|rejection| mutation::json_rejection(rejection, "service rollout"))?
         .0;

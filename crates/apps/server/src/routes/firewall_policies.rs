@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::service_commands::next_generation;
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
+use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
@@ -35,6 +36,7 @@ async fn write(
     payload: Result<Json<FirewallPolicyWriteRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<FirewallPolicyCommandResponse>), ApiError> {
     let policy_id = parse_id(policy_id)?;
+    ensure_user_resource_id("FirewallPolicy", policy_id.as_str())?;
     let mut payload = payload
         .map_err(|rejection| mutation::json_rejection(rejection, "firewall policy"))?
         .0;
@@ -92,6 +94,7 @@ async fn delete_policy(
     payload: Result<Json<FirewallPolicyDeleteRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<FirewallPolicyCommandResponse>), ApiError> {
     let policy_id = parse_id(policy_id)?;
+    ensure_user_resource_id("FirewallPolicy", policy_id.as_str())?;
     let payload = payload
         .map_err(|rejection| mutation::json_rejection(rejection, "firewall policy command"))?
         .0;

@@ -11,6 +11,7 @@ use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::Serialize;
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
+use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
@@ -167,6 +168,7 @@ async fn command_with_payload<Payload: Serialize>(
     } = input;
     let service_id =
         ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    ensure_user_resource_id("Service", service_id.as_str())?;
     let request = MutationRequest::new(
         &state,
         &headers,

@@ -43,6 +43,7 @@ async fn config_view_is_explicitly_configured_and_secret_free()
             store_peer: 2380,
             wireguard: 51_820,
         },
+        tailscale: None,
     };
     let server = ApiServer::new(
         store,

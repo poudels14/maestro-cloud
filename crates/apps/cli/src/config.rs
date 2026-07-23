@@ -107,7 +107,7 @@ pub(crate) async fn validate(
     let has_services = object.contains_key("services");
     match (has_cluster, has_services) {
         (true, false) => {
-            let loaded = decode_cluster(source, merged)?;
+            let loaded = decode_cluster(source, merged, reader).await?;
             writeln!(
                 output,
                 "[maestro]: {source} is a valid cluster config for `{}` on node `{}`",
@@ -139,7 +139,7 @@ pub(crate) async fn load_cluster(
     source: &str,
     reader: &impl ConfigSourceReader,
 ) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
-    decode_cluster(source, load_merged(source, reader).await?)
+    decode_cluster(source, load_merged(source, reader).await?, reader).await
 }
 
 fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {

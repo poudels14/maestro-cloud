@@ -28,6 +28,7 @@ use webhook::HttpWebhookBackend;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
+use crate::tailscale_resources::TailscaleSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
     DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig,
@@ -318,6 +319,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         None => Version::parse(env!("CARGO_PKG_VERSION"))
             .map_err(|error| invalid(format!("daemon package version is invalid: {error}")))?,
     };
+    let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)
+        .map_err(|error| invalid(format!("invalid Tailscale system resources: {error}")))?;
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
@@ -344,21 +347,24 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         HttpWebhookBackend::new(Duration::from_secs(10))
             .map_err(|error| invalid(error.to_string()))?,
     );
-    let operator_workload = Arc::new(OperatorLeaderWorkload::new(
-        cluster.cluster_id.clone(),
-        clock.clone(),
-        timestamp_clock.clone(),
-        operator_settings,
-        BuildOperatorBackends {
-            source: build_source.clone(),
-            revisions: build_source.clone(),
-            artifacts: containerd.clone(),
-            pull_requests: configured_preview.map(|preview| preview.pull_requests),
-            upgrades: None,
-            store_upgrades,
-            webhooks: webhook_backend.clone(),
-        },
-    ));
+    let operator_workload = Arc::new(
+        OperatorLeaderWorkload::new(
+            cluster.cluster_id.clone(),
+            clock.clone(),
+            timestamp_clock.clone(),
+            operator_settings,
+            BuildOperatorBackends {
+                source: build_source.clone(),
+                revisions: build_source.clone(),
+                artifacts: containerd.clone(),
+                pull_requests: configured_preview.map(|preview| preview.pull_requests),
+                upgrades: None,
+                store_upgrades,
+                webhooks: webhook_backend.clone(),
+            },
+        )
+        .with_tailscale_resources(tailscale_resources),
+    );
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =

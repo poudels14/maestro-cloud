@@ -24,6 +24,7 @@ mod openapi_traffic;
 mod resource;
 mod routes;
 mod settings;
+mod system_resources;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

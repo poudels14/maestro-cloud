@@ -20,6 +20,7 @@ mod node_lifecycle;
 mod ports;
 mod provider;
 mod removal;
+mod tailscale;
 mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
@@ -51,6 +52,7 @@ pub use provider::{
     StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 pub use removal::{NodeRemovalCoordinator, NodeRemovalError, NodeRemovalPlan};
+pub use tailscale::{TailscaleConfigError, TailscaleGatewayConfig};
 pub use topology::{
     ClusterConfig, ClusterPreflightError, NodeDefinition, NodeEndpoint, ValidatedTopology,
     WIREGUARD_MTU_BYTES,

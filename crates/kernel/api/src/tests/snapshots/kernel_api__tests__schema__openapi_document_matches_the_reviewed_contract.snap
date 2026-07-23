@@ -1661,6 +1661,20 @@ expression: openapi_document()
               }
             ],
             "description": "Cluster-wide service ports."
+          },
+          "tailscale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaskedTailscaleConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional Tailscale gateway settings with the credential omitted."
           }
         },
         "required": [
@@ -1762,6 +1776,45 @@ expression: openapi_document()
           "storeClient",
           "storePeer",
           "wireguard"
+        ],
+        "type": "object"
+      },
+      "MaskedTailscaleConfig": {
+        "description": "Secret-free view of the managed Tailscale gateway fleet.",
+        "properties": {
+          "advertiseRoutes": {
+            "description": "Effective routes advertised to the tailnet.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dnsNameservers": {
+            "description": "Cluster bridge resolvers reachable through the advertised routes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replicas": {
+            "description": "Desired gateway replica count.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tags": {
+            "description": "Tailnet policy tags applied during authentication.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "advertiseRoutes",
+          "dnsNameservers",
+          "replicas",
+          "tags"
         ],
         "type": "object"
       },

@@ -42,6 +42,7 @@ mod service_commands;
 mod service_rollouts;
 mod services;
 mod stats;
+mod system_resources;
 mod traffic;
 mod upgrades;
 

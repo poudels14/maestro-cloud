@@ -272,6 +272,7 @@ fn cluster_config() -> Result<(ClusterConfig, NodeId), Box<dyn std::error::Error
             control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
             ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,
             join_secret: SecretValue::new("join-test-secret-with-at-least-32-characters"),
+            tailscale: None,
         },
         worker_id,
     ))

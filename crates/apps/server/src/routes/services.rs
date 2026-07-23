@@ -14,6 +14,7 @@ use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::routes::service_diff;
+use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mask, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
@@ -36,6 +37,7 @@ async fn put_service(
 ) -> Result<(StatusCode, Json<ServiceWriteResponse>), ApiError> {
     let service_id =
         ServiceId::new(service_id).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    ensure_user_resource_id("Service", service_id.as_str())?;
     let payload = payload
         .map_err(|rejection| mutation::json_rejection(rejection, "service"))?
         .0;

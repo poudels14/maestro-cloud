@@ -1,0 +1,357 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use kernel_api::{
+    ArtifactTemplate, ClusterId, ExecPolicy, FirewallDirection, FirewallPolicy, FirewallSubject,
+    FirewallVerdict, HealthProbe, NodeId, NodeInstanceId, NodeRole, ResourceKind, ResourceName,
+    SecretValue, Service, Timestamp, TransportProtocol, VolumeSource,
+};
+use kernel_controller::{ControllerError, FencedStore, LeaderIdentity, LeadershipToken};
+use kernel_store::{
+    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
+    Session, SessionBinding, Store,
+};
+
+use crate::tailscale_reconciler::{TailscaleReconcileError, TailscaleResourceReconciler};
+use crate::tailscale_resources::{AUTH_SCRIPT, TAILSCALE_IMAGE, TailscaleSystemResources};
+
+use super::cluster_with_nodes;
+
+#[test]
+fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cluster =
+        cluster_with_nodes(&[("node-a", NodeRole::Master), ("node-b", NodeRole::Worker)])?;
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 2,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+
+    let resources = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    let service = resources.service;
+    assert_eq!(service.spec.replicas, 2);
+    assert_eq!(service.spec.exec, ExecPolicy::Denied);
+    assert_eq!(service.spec.exposed_ports, vec![9_002]);
+    assert!(matches!(
+        service.spec.artifact,
+        ArtifactTemplate::Image { reference } if reference == TAILSCALE_IMAGE
+    ));
+    let command = required(service.spec.command, "gateway command")?;
+    assert_eq!(command.executable, "/bin/sh");
+    assert_eq!(command.arguments, vec!["-ceu", AUTH_SCRIPT]);
+    assert_eq!(
+        service
+            .spec
+            .environment
+            .get("TS_ROUTES")
+            .map(String::as_str),
+        Some("172.20.0.0/14")
+    );
+    assert_eq!(
+        service
+            .spec
+            .environment
+            .get("TS_EXTRA_ARGS")
+            .map(String::as_str),
+        Some("--advertise-tags=tag:maestro-gateway")
+    );
+    assert!(!service.spec.environment.contains_key("TS_AUTHKEY"));
+    let secrets = required(service.spec.secrets, "gateway secret mount")?;
+    assert_eq!(secrets.mount_path, "/run/secrets/tailscale.env");
+    assert_eq!(
+        secrets.items.get("TS_AUTHKEY").map(SecretValue::expose),
+        Some("tskey-auth-reusable-test-secret")
+    );
+    assert!(matches!(
+        service.spec.volumes.as_slice(),
+        [kernel_api::VolumeMountSpec {
+            source: VolumeSource::ReplicaManaged { name },
+            target,
+            ..
+        }] if name == "tailscale-state" && target == "/state"
+    ));
+    assert!(matches!(
+        required(service.spec.health_check, "gateway health check")?.probe,
+        HealthProbe::Http { port: 9_002, ref path } if path == "/healthz"
+    ));
+
+    let policy = resources.firewall_policy;
+    assert_eq!(policy.spec.direction, FirewallDirection::Egress);
+    assert_eq!(
+        policy.spec.subject,
+        FirewallSubject::Service(service.meta.id)
+    );
+    assert_eq!(policy.spec.default_verdict, FirewallVerdict::Allow);
+    assert!(matches!(
+        policy.spec.rules.as_slice(),
+        [rule]
+            if rule.cidr == "172.20.0.0/14"
+                && rule.protocol == TransportProtocol::Any
+                && rule.ports.is_empty()
+                && rule.verdict == FirewallVerdict::Allow
+    ));
+    Ok(())
+}
+
+#[test]
+fn omitting_tailscale_omits_both_resources() -> Result<(), Box<dyn std::error::Error>> {
+    let cluster = cluster_with_nodes(&[("node-a", NodeRole::Master)])?;
+    assert!(TailscaleSystemResources::from_cluster(&cluster)?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("tailscale-reconcile")?;
+    let (store, fenced, _session) = fenced_store(&cluster_id).await?;
+    let mut cluster =
+        cluster_with_nodes(&[("node-a", NodeRole::Master), ("node-b", NodeRole::Worker)])?;
+    cluster.cluster_id = cluster_id.clone();
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-first-reusable-secret"),
+        advertise_routes: None,
+        replicas: 2,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+    let desired = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+
+    TailscaleResourceReconciler::new(&cluster_id, Some(desired))?
+        .reconcile(&fenced, Timestamp(10_000))
+        .await?;
+    let service: Service = read(&store, &cluster_id, "Service").await?;
+    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
+    assert_eq!(service.meta.generation.0, 1);
+    assert_eq!(policy.meta.generation.0, 1);
+
+    let config = cluster
+        .tailscale
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("Tailscale config is missing"))?;
+    config.replicas = 1;
+    config.auth_key = SecretValue::new("tskey-auth-rotated-reusable-secret");
+    let desired = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    TailscaleResourceReconciler::new(&cluster_id, Some(desired))?
+        .reconcile(&fenced, Timestamp(20_000))
+        .await?;
+    let service: Service = read(&store, &cluster_id, "Service").await?;
+    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
+    assert_eq!(service.meta.generation.0, 2);
+    assert_eq!(service.spec.replicas, 1);
+    assert_eq!(policy.meta.generation.0, 1);
+
+    TailscaleResourceReconciler::new(&cluster_id, None)?
+        .reconcile(&fenced, Timestamp(30_000))
+        .await?;
+    let service: Service = read(&store, &cluster_id, "Service").await?;
+    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
+    assert_eq!(service.meta.deletion_timestamp, Some(Timestamp(30_000)));
+    assert_eq!(policy.meta.deletion_timestamp, Some(Timestamp(30_000)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn refuses_a_reserved_id_collision_without_creating_the_other_resource()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("tailscale-collision")?;
+    let (store, fenced, _session) = fenced_store(&cluster_id).await?;
+    let mut cluster = cluster_with_nodes(&[("node-a", NodeRole::Master)])?;
+    cluster.cluster_id = cluster_id.clone();
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 1,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+    let desired = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    let mut collision = desired.service.clone();
+    collision.meta.annotations.clear();
+    put(&store, &cluster_id, "Service", &collision).await?;
+
+    assert!(matches!(
+        TailscaleResourceReconciler::new(&cluster_id, Some(desired))?
+            .reconcile(&fenced, Timestamp(10_000))
+            .await,
+        Err(TailscaleReconcileError::ResourceCollision {
+            kind: "Service",
+            ..
+        })
+    ));
+    assert!(
+        list::<FirewallPolicy>(&store, &cluster_id, "FirewallPolicy")
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_leadership_cannot_create_gateway_resources() -> Result<(), Box<dyn std::error::Error>>
+{
+    let cluster_id = ClusterId::new("tailscale-stale")?;
+    let (store, fenced, session) = fenced_store(&cluster_id).await?;
+    let mut cluster = cluster_with_nodes(&[("node-a", NodeRole::Master)])?;
+    cluster.cluster_id = cluster_id.clone();
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 1,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+    });
+    let desired = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    session.close().await?;
+
+    assert!(matches!(
+        TailscaleResourceReconciler::new(&cluster_id, Some(desired))?
+            .reconcile(&fenced, Timestamp(10_000))
+            .await,
+        Err(TailscaleReconcileError::Controller(
+            ControllerError::LeadershipLost
+        ))
+    ));
+    assert!(
+        list::<Service>(&store, &cluster_id, "Service")
+            .await?
+            .is_empty()
+    );
+    assert!(
+        list::<FirewallPolicy>(&store, &cluster_id, "FirewallPolicy")
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
+async fn fenced_store(
+    cluster_id: &ClusterId,
+) -> Result<(Arc<InMemoryStore>, FencedStore, Box<dyn Session>), Box<dyn std::error::Error>> {
+    let clock: Arc<dyn Clock> = Arc::new(NoopClock);
+    let store = Arc::new(InMemoryStore::new(clock));
+    let keys = Keyspace::new(cluster_id);
+    let session = store.session(Duration::from_secs(30)).await?;
+    let leader = store
+        .put_cas(PutRequest {
+            key: keys.leader(),
+            value: b"tailscale-reconciler".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: Some(SessionBinding {
+                session_id: session.id(),
+            }),
+        })
+        .await?;
+    let CasOutcome::Applied(leader) = leader else {
+        return Err("leader campaign conflicted".into());
+    };
+    let fenced = FencedStore::new(
+        store.clone(),
+        keys.leader(),
+        LeadershipToken::from_campaign(
+            LeaderIdentity {
+                node_id: NodeId::new("node-a")?,
+                instance_id: NodeInstanceId::new("tailscale-reconciler")?,
+            },
+            session.id(),
+            leader.version,
+        ),
+    );
+    Ok((store, fenced, session))
+}
+
+async fn put<Resource>(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    kind: &str,
+    resource: &Resource,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    Resource: ResourceIdentity + serde::Serialize,
+{
+    let key = Keyspace::new(cluster_id).resource(
+        &ResourceKind::new(kind)?,
+        &ResourceName::new(resource.resource_id())?,
+    );
+    let outcome = store
+        .put_cas(PutRequest {
+            key,
+            value: serde_json::to_vec(resource)?,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    if matches!(outcome, CasOutcome::Applied(_)) {
+        Ok(())
+    } else {
+        Err(format!("{kind} create conflicted").into())
+    }
+}
+
+async fn read<Resource: serde::de::DeserializeOwned>(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    kind: &str,
+) -> Result<Resource, Box<dyn std::error::Error>> {
+    let mut resources = list(store, cluster_id, kind).await?;
+    if resources.len() != 1 {
+        return Err(format!("expected one {kind}, found {}", resources.len()).into());
+    }
+    Ok(resources.remove(0))
+}
+
+async fn list<Resource: serde::de::DeserializeOwned>(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    kind: &str,
+) -> Result<Vec<Resource>, Box<dyn std::error::Error>> {
+    let values = store
+        .list(&Keyspace::new(cluster_id).resource_kind(&ResourceKind::new(kind)?))
+        .await?
+        .values;
+    values
+        .into_iter()
+        .map(|stored| serde_json::from_slice(&stored.value).map_err(Into::into))
+        .collect()
+}
+
+trait ResourceIdentity {
+    fn resource_id(&self) -> &str;
+}
+
+fn required<Value>(value: Option<Value>, name: &str) -> Result<Value, std::io::Error> {
+    value.ok_or_else(|| std::io::Error::other(format!("{name} are missing")))
+}
+
+impl ResourceIdentity for Service {
+    fn resource_id(&self) -> &str {
+        self.meta.id.as_str()
+    }
+}
+
+struct NoopClock;
+
+#[async_trait]
+impl Clock for NoopClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::default()
+    }
+
+    async fn sleep_until(&self, _deadline: MonotonicTime) {
+        std::future::pending::<()>().await;
+    }
+}
