@@ -1,14 +1,15 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use kernel_api::WorkloadId;
 use runtime::LogCursor;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 
 const DIRECTORY_MODE: u32 = 0o700;
 const CURSOR_MODE: u32 = 0o600;
@@ -40,17 +41,51 @@ pub trait LogCheckpointStore: Send + Sync + 'static {
 /// Private local-filesystem checkpoint store for one node agent.
 pub struct FileLogCheckpointStore {
     root: PathBuf,
-    operation: Mutex<()>,
+    files: Arc<dyn LogCheckpointFileSystem>,
+    cleanup_gate: RwLock<()>,
+    operation_gates: Mutex<BTreeMap<WorkloadId, Weak<Semaphore>>>,
 }
 
 impl FileLogCheckpointStore {
     /// Validates the root without creating it.
     pub fn new(root: PathBuf) -> Result<Self, LogCheckpointError> {
+        Self::with_file_system(root, Arc::new(HostLogCheckpointFileSystem))
+    }
+
+    pub(crate) fn with_file_system(
+        root: PathBuf,
+        files: Arc<dyn LogCheckpointFileSystem>,
+    ) -> Result<Self, LogCheckpointError> {
         validate_root(&root)?;
         Ok(Self {
             root,
-            operation: Mutex::new(()),
+            files,
+            cleanup_gate: RwLock::new(()),
+            operation_gates: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    async fn operation(
+        &self,
+        workload_id: &WorkloadId,
+    ) -> Result<OwnedSemaphorePermit, LogCheckpointError> {
+        let gate = {
+            let mut gates = self.operation_gates.lock().await;
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(workload_id).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Semaphore::new(1));
+                    gates.insert(workload_id.clone(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        gate.acquire_owned()
+            .await
+            .map_err(|error| LogCheckpointError::Task {
+                message: format!("log checkpoint operation gate closed unexpectedly: {error}"),
+            })
     }
 }
 
@@ -60,10 +95,12 @@ impl LogCheckpointStore for FileLogCheckpointStore {
         &self,
         workload_id: &WorkloadId,
     ) -> Result<Option<LogCursor>, LogCheckpointError> {
-        let _operation = self.operation.lock().await;
+        let _cleanup = self.cleanup_gate.read().await;
+        let _operation = self.operation(workload_id).await?;
+        let files = self.files.clone();
         let root = self.root.clone();
         let workload_id = workload_id.clone();
-        tokio::task::spawn_blocking(move || load_cursor(&root, &workload_id))
+        tokio::task::spawn_blocking(move || files.load(&root, &workload_id))
             .await
             .map_err(task_error)?
     }
@@ -73,11 +110,13 @@ impl LogCheckpointStore for FileLogCheckpointStore {
         workload_id: &WorkloadId,
         cursor: &LogCursor,
     ) -> Result<(), LogCheckpointError> {
-        let _operation = self.operation.lock().await;
+        let _cleanup = self.cleanup_gate.read().await;
+        let _operation = self.operation(workload_id).await?;
+        let files = self.files.clone();
         let root = self.root.clone();
         let workload_id = workload_id.clone();
         let cursor = cursor.clone();
-        tokio::task::spawn_blocking(move || commit_cursor(&root, &workload_id, &cursor))
+        tokio::task::spawn_blocking(move || files.commit(&root, &workload_id, &cursor))
             .await
             .map_err(task_error)?
     }
@@ -86,16 +125,67 @@ impl LogCheckpointStore for FileLogCheckpointStore {
         &self,
         active_workloads: &BTreeSet<WorkloadId>,
     ) -> Result<usize, LogCheckpointError> {
-        let _operation = self.operation.lock().await;
+        let _cleanup = self.cleanup_gate.write().await;
+        let files = self.files.clone();
         let root = self.root.clone();
         let active_workloads = active_workloads.clone();
-        tokio::task::spawn_blocking(move || cleanup_stale(&root, &active_workloads))
+        tokio::task::spawn_blocking(move || files.cleanup_stale(&root, &active_workloads))
             .await
             .map_err(task_error)?
     }
 }
 
-fn load_cursor(
+pub(crate) trait LogCheckpointFileSystem: Send + Sync {
+    fn load(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+    ) -> Result<Option<LogCursor>, LogCheckpointError>;
+
+    fn commit(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+        cursor: &LogCursor,
+    ) -> Result<(), LogCheckpointError>;
+
+    fn cleanup_stale(
+        &self,
+        root: &Path,
+        active_workloads: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, LogCheckpointError>;
+}
+
+struct HostLogCheckpointFileSystem;
+
+impl LogCheckpointFileSystem for HostLogCheckpointFileSystem {
+    fn load(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+    ) -> Result<Option<LogCursor>, LogCheckpointError> {
+        load_cursor(root, workload_id)
+    }
+
+    fn commit(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+        cursor: &LogCursor,
+    ) -> Result<(), LogCheckpointError> {
+        commit_cursor(root, workload_id, cursor)
+    }
+
+    fn cleanup_stale(
+        &self,
+        root: &Path,
+        active_workloads: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, LogCheckpointError> {
+        cleanup_stale(root, active_workloads)
+    }
+}
+
+pub(crate) fn load_cursor(
     root: &Path,
     workload_id: &WorkloadId,
 ) -> Result<Option<LogCursor>, LogCheckpointError> {
@@ -123,7 +213,7 @@ fn load_cursor(
     Ok(Some(LogCursor::new(cursor)))
 }
 
-fn commit_cursor(
+pub(crate) fn commit_cursor(
     root: &Path,
     workload_id: &WorkloadId,
     cursor: &LogCursor,
@@ -172,7 +262,7 @@ fn commit_cursor(
         .map_err(|source| io_error("sync checkpoint directory", root, source))
 }
 
-fn cleanup_stale(
+pub(crate) fn cleanup_stale(
     root: &Path,
     active_workloads: &BTreeSet<WorkloadId>,
 ) -> Result<usize, LogCheckpointError> {
