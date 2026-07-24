@@ -207,6 +207,7 @@ impl ExecWorld {
             &deployment,
             assignment.spec.workload_address,
             Vec::new(),
+            Vec::new(),
         )?;
         let handle = runtime.create(&spec).await?;
         runtime.start(&handle).await?;

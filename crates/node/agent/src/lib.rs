@@ -56,6 +56,7 @@ mod node_registry;
 mod secret_mount;
 mod secret_mount_files;
 mod stats;
+mod system_host_ports;
 mod workload_bridge;
 
 #[cfg(target_os = "linux")]

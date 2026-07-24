@@ -609,6 +609,7 @@ impl World {
                 node_id: node_id("node-1"),
                 network: network_spec,
                 dns_server,
+                system_host_ports: Default::default(),
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),

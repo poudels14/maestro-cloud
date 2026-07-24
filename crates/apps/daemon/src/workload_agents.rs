@@ -100,6 +100,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             node_id: spec.node_id.clone(),
             network: network.spec,
             dns_server: network.dns_server,
+            system_host_ports: factory.system_host_ports.clone(),
             stop_timeout: factory.settings.workload_stop_timeout,
             resync_interval: factory.settings.assignment_resync_interval,
             restart_backoff_base: factory.settings.restart_backoff_base,

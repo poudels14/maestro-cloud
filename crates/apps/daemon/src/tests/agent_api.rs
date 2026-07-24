@@ -112,6 +112,7 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
                 applications: Arc::new(Mutex::new(Vec::<WorkloadBridge>::new())),
             },
             workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
+            system_host_ports: Default::default(),
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),

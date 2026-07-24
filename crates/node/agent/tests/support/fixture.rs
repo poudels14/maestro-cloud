@@ -110,6 +110,7 @@ impl ExitWorld {
                     mtu_bytes: 1_420,
                 },
                 dns_server: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))),
+                system_host_ports: Default::default(),
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),

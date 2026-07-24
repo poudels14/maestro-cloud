@@ -8,8 +8,9 @@ use kernel_api::{
 };
 use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
-    ArtifactReference, ContainerWorkload, HEALTHCHECK_PATH_LABEL, MountAccess, MountSource,
-    WorkloadConfiguration, WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
+    ArtifactReference, ContainerWorkload, HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess,
+    MountSource, WorkloadConfiguration, WorkloadMetadata, WorkloadMount, WorkloadSpec,
+    WorkloadUser,
 };
 
 pub(crate) fn workload_spec(
@@ -18,6 +19,7 @@ pub(crate) fn workload_spec(
     deployment: &Deployment,
     dns_server: Option<IpAddr>,
     additional_mounts: Vec<WorkloadMount>,
+    published_ports: Vec<HostPortPublication>,
 ) -> Result<WorkloadSpec, WorkloadPlanError> {
     if assignment.spec.deployment_id != deployment.meta.id
         || assignment.spec.service_id != deployment.spec.service_id
@@ -58,7 +60,7 @@ pub(crate) fn workload_spec(
         },
         image,
         command: deployment.spec.service.command.clone(),
-        published_ports: Vec::new(),
+        published_ports,
     }))
 }
 

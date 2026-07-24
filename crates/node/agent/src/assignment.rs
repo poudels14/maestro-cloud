@@ -34,6 +34,7 @@ use crate::assignment_types::{
     AssignmentAgentSettings, AssignmentReconcileReport, ConvergedAssignment, earliest,
 };
 use crate::secret_mount::SecretMountManager;
+use crate::system_host_ports::validate_system_host_ports;
 #[cfg(unix)]
 use crate::{NodeApiServices, node_api_mount::NodeApiMountManager};
 
@@ -80,6 +81,7 @@ impl AssignmentAgent {
         {
             return Err(AssignmentAgentError::ZeroDeadline);
         }
+        validate_system_host_ports(runtime.as_ref(), &settings.system_host_ports)?;
         let secrets = SecretMountManager::new(settings.secrets_root.clone())?;
         #[cfg(unix)]
         let node_api = NodeApiMountManager::new(settings.node_api_root.clone(), node_api_services)?;
@@ -300,6 +302,11 @@ impl AssignmentAgent {
             deployment,
             self.settings.dns_server,
             additional_mounts,
+            self.settings
+                .system_host_ports
+                .get(&assignment.spec.service_id)
+                .cloned()
+                .unwrap_or_default(),
         )?;
         let handle = self.runtime.create(&spec).await?;
         let before = self.runtime.status(&handle).await?;

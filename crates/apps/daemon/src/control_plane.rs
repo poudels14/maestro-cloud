@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cluster::{StoreProvider, StoreStartMode};
-use kernel_api::{NodeInstanceId, WorkloadNetworkMode};
+use kernel_api::{NodeInstanceId, ServiceId, WorkloadNetworkMode};
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry};
@@ -13,7 +14,7 @@ use node_agent::{
     HostStatsReader, MeshBackend, MeshIdentity, StatusClock, WorkloadBridgeBackend,
     WorkloadNetworkStatsReader,
 };
-use runtime::{ArtifactStore, NetworkProvider, WorkloadRuntime};
+use runtime::{ArtifactStore, HostPortPublication, NetworkProvider, WorkloadRuntime};
 use semver::Version;
 use server::ServerSettings;
 use tokio::sync::watch;
@@ -87,6 +88,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub bridge_backend: BridgeBackendType,
     /// Address ownership and node-local network agents enabled for workloads.
     pub workload_network_mode: WorkloadNetworkMode,
+    /// Host-port grants reserved for daemon-owned system services.
+    pub system_host_ports: BTreeMap<ServiceId, Vec<HostPortPublication>>,
     /// UDP/TCP listener binder for the node-local authoritative DNS server.
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Native backend used for workload lifecycle, adoption, and events.
@@ -142,6 +145,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
     pub(crate) workload_network_mode: WorkloadNetworkMode,
+    pub(crate) system_host_ports: BTreeMap<ServiceId, Vec<HostPortPublication>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
@@ -192,6 +196,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
             workload_network_mode: dependencies.workload_network_mode,
+            system_host_ports: dependencies.system_host_ports,
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
             artifact_store: dependencies.artifact_store,

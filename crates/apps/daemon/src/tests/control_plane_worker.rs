@@ -70,6 +70,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
                 applications: bridge_applications.clone(),
             },
             workload_network_mode: kernel_api::WorkloadNetworkMode::RuntimeDelegated,
+            system_host_ports: Default::default(),
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: dns_bindings.clone(),
             }),

@@ -135,6 +135,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
                 applications: bridge_applications.clone(),
             },
             workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
+            system_host_ports: Default::default(),
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: dns_bindings.clone(),
             }),

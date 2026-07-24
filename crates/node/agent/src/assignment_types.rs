@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kernel_api::{ClusterId, NodeId, Timestamp};
+use kernel_api::{ClusterId, NodeId, ServiceId, Timestamp};
 use kernel_store::{Clock, MonotonicTime};
-use runtime::{NetworkSpec, WorkloadHandle};
+use runtime::{HostPortPublication, NetworkSpec, WorkloadHandle};
 
 use crate::StatusClock;
 
@@ -19,6 +20,8 @@ pub struct AssignmentAgentSettings {
     pub network: NetworkSpec,
     /// Resolver address injected into workloads, when the network exposes one.
     pub dns_server: Option<IpAddr>,
+    /// Host ports granted only to daemon-owned system service identities.
+    pub system_host_ports: BTreeMap<ServiceId, Vec<HostPortPublication>>,
     /// Graceful workload shutdown deadline before forced termination.
     pub stop_timeout: Duration,
     /// Level-triggered full reconciliation interval.

@@ -1,7 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use kernel_api::{HealthCheckSpec, HealthProbe, VolumeSource, WorkloadUserSpec};
-use runtime::{HEALTHCHECK_PATH_LABEL, MountAccess, MountSource, WorkloadSpec, WorkloadUser};
+use runtime::{
+    HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess, MountSource, PortProtocol,
+    WorkloadSpec, WorkloadUser,
+};
 
 use crate::assignment_plan::{WorkloadPlanError, node_api_user, workload_spec};
 
@@ -17,6 +20,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         &assignment,
         &deployment,
         Some(dns_server()),
+        Vec::new(),
         Vec::new(),
     )?
     else {
@@ -74,6 +78,7 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
         &deployment,
         Some(dns_server()),
         Vec::new(),
+        Vec::new(),
     )?
     else {
         return Err("assignment did not produce a container workload".into());
@@ -85,6 +90,31 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
             group_id: 1_001,
         })
     );
+    Ok(())
+}
+
+#[test]
+fn assignment_plan_carries_daemon_granted_host_ports() -> Result<(), Box<dyn std::error::Error>> {
+    let assignment = assignment();
+    let deployment = deployment();
+    let publication = HostPortPublication {
+        container_port: 80,
+        host_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        host_port: 80,
+        protocol: PortProtocol::Tcp,
+    };
+    let WorkloadSpec::Container(workload) = workload_spec(
+        &cluster_id(),
+        &assignment,
+        &deployment,
+        Some(dns_server()),
+        Vec::new(),
+        vec![publication.clone()],
+    )?
+    else {
+        return Err("assignment did not produce a container workload".into());
+    };
+    assert_eq!(workload.published_ports, vec![publication]);
     Ok(())
 }
 
@@ -107,6 +137,7 @@ fn assignment_plan_carries_the_http_healthcheck_path_as_observability_metadata()
         &assignment,
         &deployment,
         Some(dns_server()),
+        Vec::new(),
         Vec::new(),
     )?
     else {
@@ -156,6 +187,7 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
             &deployment,
             Some(dns_server()),
             Vec::new(),
+            Vec::new(),
         ),
         Err(WorkloadPlanError::HostVolumeNodeMismatch { .. })
     ));
@@ -177,6 +209,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &deployment,
         Some(dns_server()),
         Vec::new(),
+        Vec::new(),
     )?
     else {
         return Err("assignment did not produce a container workload".into());
@@ -188,6 +221,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &deployment,
         Some(dns_server()),
         Vec::new(),
+        Vec::new(),
     )?
     else {
         return Err("assignment did not produce a container workload".into());
@@ -198,6 +232,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &first_assignment,
         &deployment,
         Some(dns_server()),
+        Vec::new(),
         Vec::new(),
     )?
     else {
