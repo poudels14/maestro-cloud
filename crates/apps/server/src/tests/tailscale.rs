@@ -209,6 +209,7 @@ fn config(
             dns_nameservers: vec!["10.42.1.1".to_owned()],
             replicas: 1,
             tags: vec!["tag:maestro-gateway".to_owned()],
+            cross_cluster_dns: Vec::new(),
         }),
     })
 }
