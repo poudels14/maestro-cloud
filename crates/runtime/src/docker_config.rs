@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use docker::models::{
-    ContainerCreateBody, HostConfig, Mount, MountType, RestartPolicy, RestartPolicyNameEnum,
+    ContainerCreateBody, HostConfig, Mount, MountType, PortBinding, PortMap, RestartPolicy,
+    RestartPolicyNameEnum,
 };
 use sha2::{Digest, Sha256};
 
 use crate::managed_volume::managed_volume_key;
 use crate::{
-    ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadConfiguration,
-    WorkloadMount, WorkloadSpec,
+    ContainerWorkload, HostPortPublication, MountAccess, MountSource, PortProtocol, RuntimeError,
+    WorkloadConfiguration, WorkloadMount, WorkloadSpec,
 };
 
 pub(crate) const MANAGED_LABEL: &str = "com.maestro.managed";
@@ -46,6 +47,7 @@ pub(crate) fn container_config(spec: &WorkloadSpec) -> Result<DockerContainerCon
         ),
         (SPEC_LABEL.to_owned(), fingerprint.clone()),
     ]);
+    let (exposed_ports, port_bindings) = published_ports(&container.published_ports)?;
     let body = ContainerCreateBody {
         hostname: Some(container.configuration.hostname.clone()),
         user: container
@@ -55,7 +57,8 @@ pub(crate) fn container_config(spec: &WorkloadSpec) -> Result<DockerContainerCon
         env: Some(environment(&container.configuration)),
         image: Some(container.image.as_str().to_owned()),
         labels: Some(labels),
-        host_config: Some(host_config(container)?),
+        exposed_ports,
+        host_config: Some(host_config(container, port_bindings)?),
         ..Default::default()
     };
     let body = apply_command(body, container);
@@ -135,7 +138,10 @@ fn environment(configuration: &WorkloadConfiguration) -> Vec<String> {
         .collect()
 }
 
-fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError> {
+fn host_config(
+    container: &ContainerWorkload,
+    port_bindings: Option<PortMap>,
+) -> Result<HostConfig, RuntimeError> {
     let cluster_id = &container.configuration.metadata.cluster_id;
     let mounts = container
         .configuration
@@ -149,6 +155,7 @@ fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError
             .configuration
             .dns_server
             .map(|server| vec![server.to_string()]),
+        port_bindings,
         restart_policy: Some(RestartPolicy {
             name: Some(RestartPolicyNameEnum::NO),
             maximum_retry_count: Some(0),
@@ -156,6 +163,62 @@ fn host_config(container: &ContainerWorkload) -> Result<HostConfig, RuntimeError
         mounts: Some(mounts),
         ..Default::default()
     })
+}
+
+fn published_ports(
+    publications: &[HostPortPublication],
+) -> Result<(Option<Vec<String>>, Option<PortMap>), RuntimeError> {
+    let mut exposed_ports = BTreeSet::new();
+    let mut host_endpoints = BTreeSet::new();
+    let mut bindings = PortMap::new();
+    for publication in publications {
+        if publication.container_port == 0 || publication.host_port == 0 {
+            return Err(RuntimeError::InvalidSpec {
+                message: "published container and host ports must be nonzero".to_owned(),
+            });
+        }
+        let endpoint = (
+            publication.host_address,
+            publication.host_port,
+            publication.protocol,
+        );
+        if !host_endpoints.insert(endpoint) {
+            return Err(RuntimeError::InvalidSpec {
+                message: format!(
+                    "host endpoint `{}:{}/{}` is published more than once",
+                    publication.host_address,
+                    publication.host_port,
+                    protocol_name(publication.protocol)
+                ),
+            });
+        }
+        let container_endpoint = format!(
+            "{}/{}",
+            publication.container_port,
+            protocol_name(publication.protocol)
+        );
+        exposed_ports.insert(container_endpoint.clone());
+        bindings
+            .entry(container_endpoint)
+            .or_insert_with(|| Some(Vec::new()))
+            .get_or_insert_with(Vec::new)
+            .push(PortBinding {
+                host_ip: Some(publication.host_address.to_string()),
+                host_port: Some(publication.host_port.to_string()),
+            });
+    }
+    if bindings.is_empty() {
+        Ok((None, None))
+    } else {
+        Ok((Some(exposed_ports.into_iter().collect()), Some(bindings)))
+    }
+}
+
+fn protocol_name(protocol: PortProtocol) -> &'static str {
+    match protocol {
+        PortProtocol::Tcp => "tcp",
+        PortProtocol::Udp => "udp",
+    }
 }
 
 fn docker_mount(

@@ -58,6 +58,7 @@ pub(crate) fn workload_spec(
         },
         image,
         command: deployment.spec.service.command.clone(),
+        published_ports: Vec::new(),
     }))
 }
 

@@ -4,7 +4,9 @@ use crate::containerd_config::{container_record, fingerprint};
 use crate::containerd_image::ContainerdImageConfiguration;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_volume::managed_volume_path;
-use crate::{MountSource, RuntimeError, WorkloadSpec};
+use crate::{
+    HostPortPublication, MountSource, PortProtocol, RuntimeCapability, RuntimeError, WorkloadSpec,
+};
 
 use super::containerd_fixture::container_spec;
 
@@ -164,4 +166,36 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
         ),
         Err(RuntimeError::InvalidSpec { .. })
     ));
+}
+
+#[test]
+fn container_record_rejects_host_port_publication_without_capability() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.published_ports.push(HostPortPublication {
+        container_port: 80,
+        host_address: "0.0.0.0".parse().unwrap(),
+        host_port: 80,
+        protocol: PortProtocol::Tcp,
+    });
+    assert_eq!(
+        container_record(
+            &spec,
+            &ContainerdImageConfiguration {
+                environment: Vec::new(),
+                entrypoint: vec!["/bin/true".to_owned()],
+                command: Vec::new(),
+                working_directory: None,
+                user: String::new(),
+            },
+            &ContainerdRuntimeSettings::default(),
+            "snapshot".to_owned(),
+            fingerprint(&spec).unwrap(),
+        ),
+        Err(RuntimeError::Unsupported {
+            capability: RuntimeCapability::HostPortPublishing,
+        })
+    );
 }

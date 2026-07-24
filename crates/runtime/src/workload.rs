@@ -106,6 +106,30 @@ pub struct WorkloadConfiguration {
     pub user: Option<WorkloadUser>,
 }
 
+/// Transport protocol for one container port published on its runtime host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortProtocol {
+    /// Transmission Control Protocol.
+    Tcp,
+    /// User Datagram Protocol.
+    Udp,
+}
+
+/// One explicit container-to-host port publication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPortPublication {
+    /// Port accepted by the workload inside its container network.
+    pub container_port: u16,
+    /// Address on the runtime host that accepts incoming traffic.
+    pub host_address: IpAddr,
+    /// Port on the runtime host that accepts incoming traffic.
+    pub host_port: u16,
+    /// Transport protocol published for both endpoints.
+    pub protocol: PortProtocol,
+}
+
 /// Container-specific immutable workload fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +140,9 @@ pub struct ContainerWorkload {
     pub image: ArtifactReference,
     /// Entrypoint override, or the image default when absent.
     pub command: Option<CommandSpec>,
+    /// Container ports explicitly published on the runtime host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub published_ports: Vec<HostPortPublication>,
 }
 
 /// Host-process-specific immutable workload fields.

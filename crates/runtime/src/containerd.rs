@@ -13,7 +13,7 @@ use kernel_api::{ClusterId, NodeId, WorkloadId};
 
 use crate::cgroup;
 use crate::containerd_build::{BuildctlRunner, ProcessBuildctlRunner};
-use crate::containerd_config::{container_record, fingerprint};
+use crate::containerd_config::{container_record, fingerprint, validate_runtime_features};
 use crate::containerd_event::ContainerdEventStream;
 use crate::containerd_exec::start_exec;
 use crate::containerd_image::load_image;
@@ -128,6 +128,7 @@ impl WorkloadRuntime for ContainerdRuntime {
                 message: "containerd runtime accepts only container workloads".to_owned(),
             });
         };
+        validate_runtime_features(workload)?;
         let workload_id = &workload.configuration.metadata.workload_id;
         let fingerprint = fingerprint(spec)?;
         let container_id = container_name(workload_id);

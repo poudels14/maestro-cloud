@@ -14,6 +14,8 @@ pub enum RuntimeCapability {
     KillExec,
     /// Attach a workload to a network after creation.
     DynamicNetwork,
+    /// Publish a container port on the runtime host.
+    HostPortPublishing,
     /// Pause and resume an existing workload without stopping it.
     Pause,
     /// Build an immutable artifact from source.

@@ -105,6 +105,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
                     .to_owned(),
             ],
         }),
+        published_ports: Vec::new(),
     })
 }
 

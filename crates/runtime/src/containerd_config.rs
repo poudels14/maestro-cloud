@@ -36,6 +36,7 @@ pub(crate) fn container_record(
             message: "containerd runtime accepts only container workloads".to_owned(),
         });
     };
+    validate_runtime_features(workload)?;
     let metadata = &workload.configuration.metadata;
     Ok(Container {
         id: container_name(&metadata.workload_id),
@@ -57,6 +58,15 @@ pub(crate) fn container_record(
         snapshot_key,
         ..Default::default()
     })
+}
+
+pub(crate) fn validate_runtime_features(workload: &ContainerWorkload) -> Result<(), RuntimeError> {
+    if !workload.published_ports.is_empty() {
+        return Err(RuntimeError::Unsupported {
+            capability: crate::RuntimeCapability::HostPortPublishing,
+        });
+    }
+    Ok(())
 }
 
 fn oci_spec(

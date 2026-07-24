@@ -1,7 +1,9 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use docker::models::{MountType, RestartPolicyNameEnum};
 
 use crate::docker_config::{METADATA_LABEL, SPEC_LABEL, container_config};
-use crate::{MountSource, RuntimeError, WorkloadSpec};
+use crate::{HostPortPublication, MountSource, PortProtocol, RuntimeError, WorkloadSpec};
 
 use super::docker_fixture::container_spec;
 
@@ -62,6 +64,83 @@ fn docker_managed_volumes_are_isolated_between_clusters() {
     let second_source = second_mounts.get(1).unwrap().source.clone();
     assert_ne!(first_source, second_source);
     assert_ne!(first_source.as_deref(), Some("workload-data"));
+}
+
+#[test]
+fn docker_config_publishes_explicit_host_ports() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(container) = &mut spec else {
+        unreachable!();
+    };
+    container.published_ports = vec![
+        HostPortPublication {
+            container_port: 80,
+            host_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            host_port: 80,
+            protocol: PortProtocol::Tcp,
+        },
+        HostPortPublication {
+            container_port: 53,
+            host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            host_port: 5353,
+            protocol: PortProtocol::Udp,
+        },
+    ];
+
+    let body = container_config(&spec).unwrap().body;
+    assert_eq!(
+        body.exposed_ports,
+        Some(vec!["53/udp".to_owned(), "80/tcp".to_owned()])
+    );
+    let bindings = body.host_config.unwrap().port_bindings.unwrap();
+    let http = bindings.get("80/tcp").unwrap().as_ref().unwrap();
+    let http = http.first().unwrap();
+    assert_eq!(http.host_ip.as_deref(), Some("0.0.0.0"));
+    assert_eq!(http.host_port.as_deref(), Some("80"));
+    let dns = bindings.get("53/udp").unwrap().as_ref().unwrap();
+    let dns = dns.first().unwrap();
+    assert_eq!(dns.host_ip.as_deref(), Some("127.0.0.1"));
+    assert_eq!(dns.host_port.as_deref(), Some("5353"));
+}
+
+#[test]
+fn docker_config_rejects_invalid_or_conflicting_host_ports() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(container) = &mut spec else {
+        unreachable!();
+    };
+    container.published_ports.push(HostPortPublication {
+        container_port: 0,
+        host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        host_port: 80,
+        protocol: PortProtocol::Tcp,
+    });
+    assert!(matches!(
+        container_config(&spec),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let WorkloadSpec::Container(container) = &mut spec else {
+        unreachable!();
+    };
+    container.published_ports = vec![
+        HostPortPublication {
+            container_port: 80,
+            host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            host_port: 8080,
+            protocol: PortProtocol::Tcp,
+        },
+        HostPortPublication {
+            container_port: 8080,
+            host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            host_port: 8080,
+            protocol: PortProtocol::Tcp,
+        },
+    ];
+    assert!(matches!(
+        container_config(&spec),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
 }
 
 #[test]

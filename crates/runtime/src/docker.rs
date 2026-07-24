@@ -67,6 +67,7 @@ impl WorkloadRuntime for DockerRuntime {
             RuntimeCapability::Exec,
             RuntimeCapability::InteractiveExec,
             RuntimeCapability::DynamicNetwork,
+            RuntimeCapability::HostPortPublishing,
             RuntimeCapability::PushArtifact,
             RuntimeCapability::TransferArtifact,
         ])

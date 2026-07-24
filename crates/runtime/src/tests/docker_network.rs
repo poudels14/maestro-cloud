@@ -69,10 +69,10 @@ fn docker_container_starts_detached_from_default_networking() {
 }
 
 #[test]
-fn docker_runtime_advertises_dynamic_networking_only_with_the_provider() {
+fn docker_runtime_advertises_dynamic_networking_and_host_port_publication() {
     let client = docker::Docker::connect_with_http_defaults().unwrap();
     let runtime = crate::DockerRuntime::new(client);
-    assert!(
-        crate::WorkloadRuntime::capabilities(&runtime).supports(RuntimeCapability::DynamicNetwork)
-    );
+    let capabilities = crate::WorkloadRuntime::capabilities(&runtime);
+    assert!(capabilities.supports(RuntimeCapability::DynamicNetwork));
+    assert!(capabilities.supports(RuntimeCapability::HostPortPublishing));
 }

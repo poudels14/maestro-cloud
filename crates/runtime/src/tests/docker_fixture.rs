@@ -39,6 +39,7 @@ pub(crate) fn container_spec() -> WorkloadSpec {
             executable: "/bin/service".to_owned(),
             arguments: vec!["--foreground".to_owned()],
         }),
+        published_ports: Vec::new(),
     })
 }
 
