@@ -1,23 +1,23 @@
-use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use etcd_client::{
-    Certificate, Client, Compare as EtcdCompare, CompareOp, ConnectOptions, DeleteOptions,
-    EventType, GetOptions, Identity, KeyValue, LeaseKeepAliveStream, LeaseKeeper, PutOptions,
-    TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, WatchStream,
+    Certificate, Client, ConnectOptions, GetOptions, Identity, TlsOptions, Txn, TxnOpResponse,
 };
-use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
+use crate::etcd_session::EtcdSession;
+use crate::etcd_support::{
+    duration_to_ttl, etcd_compare, etcd_operation, operation_error, response_revision, session_id,
+    stored_value, unavailable, validate_transaction, version,
+};
 use crate::etcd_value::ValueProtector;
+use crate::etcd_watch::EtcdWatch;
 use crate::{
     CasOutcome, Compare, DeleteRequest, EncryptionKey, ExpectedVersion, ListResult, Mutation,
-    MutationResult, PutRequest, Session, SessionBinding, SessionId, Store, StoreError, StoreKey,
-    StorePrefix, StoreWatch, StoredValue, Transaction, TransactionOutcome, Version, WatchCursor,
-    WatchEvent, WatchEventKind, WatchStart,
+    MutationResult, PutRequest, Session, Store, StoreError, StoreKey, StorePrefix, StoreWatch,
+    StoredValue, Transaction, TransactionOutcome, Version, WatchCursor, WatchStart,
 };
 
 /// Production linearizable store backed by an etcd v3 cluster.
@@ -375,16 +375,12 @@ impl Store for EtcdStore {
             WatchStart::Current => None,
             WatchStart::After(cursor) => Some(cursor),
         };
-        Ok(Box::new(EtcdWatch {
-            client: self.client.clone(),
-            values: self.values.clone(),
+        Ok(Box::new(EtcdWatch::new(
+            self.client.clone(),
+            self.values.clone(),
             prefix,
             resume_after,
-            stream: None,
-            pending: VecDeque::new(),
-            active_revision: None,
-            next_event_index: 0,
-        }))
+        )))
     }
 
     async fn session(&self, ttl: Duration) -> Result<Box<dyn Session>, StoreError> {
@@ -396,328 +392,6 @@ impl Store for EtcdStore {
             .await
             .map_err(unavailable)?;
         let id = session_id(response.id())?;
-        Ok(Box::new(EtcdSession {
-            client: self.client.clone(),
-            id,
-            ttl,
-            closed: AtomicBool::new(false),
-            keepalive: Mutex::new(None),
-        }))
-    }
-}
-
-struct EtcdWatch {
-    client: Client,
-    values: ValueProtector,
-    prefix: StorePrefix,
-    resume_after: Option<WatchCursor>,
-    stream: Option<WatchStream>,
-    pending: VecDeque<WatchEvent>,
-    active_revision: Option<u64>,
-    next_event_index: u32,
-}
-
-#[async_trait]
-impl StoreWatch for EtcdWatch {
-    async fn next(&mut self) -> Result<WatchEvent, StoreError> {
-        loop {
-            if let Some(event) = self.pending.pop_front() {
-                return Ok(event);
-            }
-            if self.stream.is_none() {
-                let mut options = WatchOptions::new().with_prefix().with_prev_key();
-                if let Some(cursor) = self.resume_after {
-                    options = options.with_start_revision(revision_i64(cursor.revision)?);
-                }
-                let stream = self
-                    .client
-                    .watch(self.prefix.as_str(), Some(options))
-                    .await
-                    .map_err(unavailable)?;
-                self.stream = Some(stream);
-            }
-            let response = self
-                .stream
-                .as_mut()
-                .ok_or_else(|| StoreError::Contract {
-                    message: "etcd watch stream was not initialized".to_string(),
-                })?
-                .message()
-                .await
-                .map_err(unavailable)?
-                .ok_or_else(|| StoreError::Unavailable {
-                    message: "etcd closed the watch stream".to_string(),
-                })?;
-            if response.compact_revision() > 0 {
-                return Err(StoreError::CursorExpired {
-                    cursor: self.resume_after.unwrap_or_default(),
-                });
-            }
-            if response.canceled() {
-                return Err(StoreError::Unavailable {
-                    message: format!("etcd canceled the watch: {}", response.cancel_reason()),
-                });
-            }
-            for event in response.events() {
-                let kv = event.kv().ok_or_else(|| StoreError::Contract {
-                    message: "etcd watch event omitted its key/value metadata".to_string(),
-                })?;
-                let revision = revision(kv.mod_revision())?;
-                if self.active_revision != Some(revision) {
-                    self.active_revision = Some(revision);
-                    self.next_event_index = 0;
-                }
-                let cursor = WatchCursor::event(revision, self.next_event_index);
-                self.next_event_index = self.next_event_index.saturating_add(1);
-                if self.resume_after.is_some_and(|resume| cursor <= resume) {
-                    continue;
-                }
-                let kind = match event.event_type() {
-                    EventType::Put => WatchEventKind::Put(stored_value(kv, &self.values)?),
-                    EventType::Delete => {
-                        let previous = event.prev_kv().ok_or_else(|| StoreError::Contract {
-                            message: "etcd delete watch event omitted its previous value"
-                                .to_string(),
-                        })?;
-                        WatchEventKind::Delete {
-                            key: StoreKey::from_backend(kv.key())?,
-                            previous_version: version(previous.mod_revision())?,
-                        }
-                    }
-                };
-                self.pending.push_back(WatchEvent {
-                    prefix: self.prefix.clone(),
-                    cursor,
-                    kind,
-                });
-            }
-        }
-    }
-}
-
-struct EtcdSession {
-    client: Client,
-    id: SessionId,
-    ttl: Duration,
-    closed: AtomicBool,
-    keepalive: Mutex<Option<(LeaseKeeper, LeaseKeepAliveStream)>>,
-}
-
-#[async_trait]
-impl Session for EtcdSession {
-    fn id(&self) -> SessionId {
-        self.id
-    }
-
-    fn ttl(&self) -> Duration {
-        self.ttl
-    }
-
-    async fn keep_alive(&self) -> Result<(), StoreError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(StoreError::SessionExpired {
-                session_id: self.id,
-            });
-        }
-        let mut keepalive = self.keepalive.lock().await;
-        if keepalive.is_none() {
-            let pair = self
-                .client
-                .clone()
-                .lease_keep_alive(session_i64(self.id)?)
-                .await
-                .map_err(|error| {
-                    operation_error(
-                        error,
-                        Some(SessionBinding {
-                            session_id: self.id,
-                        }),
-                    )
-                })?;
-            *keepalive = Some(pair);
-        }
-        let (keeper, responses) = keepalive.as_mut().ok_or_else(|| StoreError::Contract {
-            message: "etcd keepalive stream was not initialized".to_string(),
-        })?;
-        keeper.keep_alive().await.map_err(|error| {
-            operation_error(
-                error,
-                Some(SessionBinding {
-                    session_id: self.id,
-                }),
-            )
-        })?;
-        let response = responses
-            .message()
-            .await
-            .map_err(|error| {
-                operation_error(
-                    error,
-                    Some(SessionBinding {
-                        session_id: self.id,
-                    }),
-                )
-            })?
-            .ok_or(StoreError::SessionExpired {
-                session_id: self.id,
-            })?;
-        if response.ttl() <= 0 {
-            self.closed.store(true, Ordering::Release);
-            Err(StoreError::SessionExpired {
-                session_id: self.id,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn close(&self) -> Result<(), StoreError> {
-        if self.closed.swap(true, Ordering::AcqRel) {
-            return Err(StoreError::SessionExpired {
-                session_id: self.id,
-            });
-        }
-        self.client
-            .clone()
-            .lease_revoke(session_i64(self.id)?)
-            .await
-            .map_err(|error| {
-                operation_error(
-                    error,
-                    Some(SessionBinding {
-                        session_id: self.id,
-                    }),
-                )
-            })?;
-        Ok(())
-    }
-}
-
-fn etcd_compare(compare: Compare) -> Result<EtcdCompare, StoreError> {
-    let key = compare.key.as_str();
-    match compare.expected {
-        ExpectedVersion::Missing => Ok(EtcdCompare::version(key, CompareOp::Equal, 0)),
-        ExpectedVersion::Exact(version) => Ok(EtcdCompare::mod_revision(
-            key,
-            CompareOp::Equal,
-            revision_i64(version.0)?,
-        )),
-    }
-}
-
-fn etcd_operation(mutation: &Mutation, values: &ValueProtector) -> Result<TxnOp, StoreError> {
-    match mutation {
-        Mutation::Put {
-            key,
-            value,
-            session,
-        } => {
-            let options = session
-                .map(|binding| session_i64(binding.session_id))
-                .transpose()?
-                .map(|lease| PutOptions::new().with_lease(lease));
-            let value = values.protect(key, value)?;
-            Ok(TxnOp::put(key.as_str(), value, options))
-        }
-        Mutation::Delete { key } => Ok(TxnOp::delete(
-            key.as_str(),
-            Some(DeleteOptions::new().with_prev_key()),
-        )),
-    }
-}
-
-fn stored_value(value: &KeyValue, values: &ValueProtector) -> Result<StoredValue, StoreError> {
-    let key = StoreKey::from_backend(value.key())?;
-    Ok(StoredValue {
-        value: values.unprotect(&key, value.value())?,
-        key,
-        version: version(value.mod_revision())?,
-    })
-}
-
-fn validate_transaction(transaction: &Transaction) -> Result<(), StoreError> {
-    let unique_keys = transaction
-        .mutations
-        .iter()
-        .map(|mutation| match mutation {
-            Mutation::Put { key, .. } | Mutation::Delete { key } => key,
-        })
-        .collect::<BTreeSet<_>>();
-    if unique_keys.len() == transaction.mutations.len() {
-        Ok(())
-    } else {
-        Err(StoreError::Contract {
-            message: "a transaction cannot mutate the same key more than once".to_string(),
-        })
-    }
-}
-
-fn response_revision(header: Option<&etcd_client::ResponseHeader>) -> Result<u64, StoreError> {
-    let header = header.ok_or_else(|| StoreError::Contract {
-        message: "etcd response omitted its linearizable revision header".to_string(),
-    })?;
-    revision(header.revision())
-}
-
-fn revision(value: i64) -> Result<u64, StoreError> {
-    u64::try_from(value).map_err(|_| StoreError::Contract {
-        message: format!("etcd returned an invalid negative revision: {value}"),
-    })
-}
-
-fn version(value: i64) -> Result<Version, StoreError> {
-    revision(value).map(Version)
-}
-
-fn revision_i64(value: u64) -> Result<i64, StoreError> {
-    i64::try_from(value).map_err(|_| StoreError::Contract {
-        message: format!("store revision does not fit etcd's signed revision space: {value}"),
-    })
-}
-
-fn session_id(value: i64) -> Result<SessionId, StoreError> {
-    u64::try_from(value)
-        .map(SessionId)
-        .map_err(|_| StoreError::Contract {
-            message: format!("etcd returned an invalid negative lease identity: {value}"),
-        })
-}
-
-fn session_i64(value: SessionId) -> Result<i64, StoreError> {
-    i64::try_from(value.0).map_err(|_| StoreError::Contract {
-        message: "store session identity does not fit etcd's lease space".to_string(),
-    })
-}
-
-fn duration_to_ttl(ttl: Duration) -> Result<i64, StoreError> {
-    if ttl.is_zero() {
-        return Err(StoreError::Contract {
-            message: "store session TTL must be greater than zero".to_string(),
-        });
-    }
-    let seconds = ttl
-        .as_secs()
-        .saturating_add(u64::from(ttl.subsec_nanos() > 0));
-    i64::try_from(seconds).map_err(|_| StoreError::Contract {
-        message: "store session TTL exceeds etcd's supported range".to_string(),
-    })
-}
-
-fn operation_error(error: etcd_client::Error, session: Option<SessionBinding>) -> StoreError {
-    let message = error.to_string();
-    if message.contains("requested lease not found")
-        && let Some(binding) = session
-    {
-        StoreError::SessionExpired {
-            session_id: binding.session_id,
-        }
-    } else {
-        StoreError::Unavailable { message }
-    }
-}
-
-fn unavailable(error: etcd_client::Error) -> StoreError {
-    StoreError::Unavailable {
-        message: error.to_string(),
+        Ok(Box::new(EtcdSession::new(self.client.clone(), id, ttl)))
     }
 }
