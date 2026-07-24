@@ -22,9 +22,9 @@ use crate::legacy_tests::{
     MASTER_SECRET, cutover_service_snapshot, encrypted as encrypted_fixture,
 };
 use crate::{
-    CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource, MigrationError, MigrationOutcome,
-    MigrationVerification, plan_legacy_snapshot, plan_legacy_store_restore, restore_legacy_store,
-    verify_legacy_store_restore,
+    CutoverEtcdConnection, CutoverMigration, LegacyEntry, LegacyEtcdSource, LegacySnapshot,
+    MigrationError, MigrationOutcome, MigrationVerification, plan_legacy_snapshot,
+    plan_legacy_store_restore, restore_legacy_store, verify_legacy_store_restore,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -53,16 +53,20 @@ async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestRe
     let runtime = provider.start(StoreStartMode::Bootstrap).await?;
     let mut raw = raw_client(&config, &endpoint).await?;
 
-    let snapshot = cutover_service_snapshot(vec![
-        encrypted_fixture(
-            "/maetro/services/api/deploy-1/deploy/env",
-            json!({"PUBLIC_NAME": "api"}),
-        )?,
-        encrypted_fixture(
-            "/maetro/services/api/deploy-1/deploy/secrets",
-            json!({"TOKEN": "secret"}),
-        )?,
-    ])?;
+    let snapshot = bind_snapshot_topology(
+        cutover_service_snapshot(vec![
+            encrypted_fixture(
+                "/maetro/services/api/deploy-1/deploy/env",
+                json!({"PUBLIC_NAME": "api"}),
+            )?,
+            encrypted_fixture(
+                "/maetro/services/api/deploy-1/deploy/secrets",
+                json!({"TOKEN": "secret"}),
+            )?,
+        ])?,
+        host_address,
+        ports,
+    )?;
     for entry in snapshot.entries() {
         raw.put(entry.key(), entry.value(), None).await?;
     }
@@ -206,6 +210,95 @@ fn provider_config(
         SecretValue::new(store_secret),
         security,
     )?)
+}
+
+fn bind_snapshot_topology(
+    snapshot: LegacySnapshot,
+    host_address: Ipv4Addr,
+    ports: ClusterPorts,
+) -> Result<LegacySnapshot, Box<dyn std::error::Error>> {
+    let api_port = ports.wireguard;
+    let mut entries = Vec::new();
+    for entry in snapshot.entries() {
+        let mut key = entry.key().to_owned();
+        let mut value = entry.value().to_vec();
+        match entry.key() {
+            "/maetro/system/cluster-meta" => {
+                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
+                set_json(&mut document, "/bootstrapHostIp", json!(host_address))?;
+                set_json(&mut document, "/initialVoterHostIps", json!([host_address]))?;
+                set_json(
+                    &mut document,
+                    "/initialVoterEndpoints",
+                    json!([{
+                        "hostIp": host_address,
+                        "apiPort": api_port,
+                        "gatewayPort": ports.gateway,
+                        "etcdClientPort": ports.store_client,
+                        "etcdPeerPort": ports.store_peer
+                    }]),
+                )?;
+                value = serde_json::to_vec(&document)?;
+            }
+            "/maetro/cluster/node-records/node-a" => {
+                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
+                set_json(
+                    &mut document,
+                    "/lastInfo/clusterHostIp",
+                    json!(host_address),
+                )?;
+                set_json(&mut document, "/lastInfo/clusterApiPort", json!(api_port))?;
+                set_json(
+                    &mut document,
+                    "/lastInfo/clusterGatewayPort",
+                    json!(ports.gateway),
+                )?;
+                value = serde_json::to_vec(&document)?;
+            }
+            candidate if candidate.starts_with("/maetro/cluster/control-addresses/") => {
+                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
+                set_json(&mut document, "/hostIp", json!(host_address))?;
+                set_json(&mut document, "/apiPort", json!(api_port))?;
+                set_json(&mut document, "/gatewayPort", json!(ports.gateway))?;
+                set_json(&mut document, "/etcdClientPort", json!(ports.store_client))?;
+                set_json(&mut document, "/etcdPeerPort", json!(ports.store_peer))?;
+                key = format!(
+                    "/maetro/cluster/control-addresses/{:08x}-{api_port:04x}",
+                    u32::from_be_bytes(host_address.octets())
+                );
+                value = serde_json::to_vec(&document)?;
+            }
+            candidate if candidate.starts_with("/maetro/cluster/voters/") => {
+                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
+                set_json(
+                    &mut document,
+                    "/peerUrls",
+                    json!([format!("https://{host_address}:{}", ports.store_peer)]),
+                )?;
+                set_json(
+                    &mut document,
+                    "/clientUrls",
+                    json!([format!("https://{host_address}:{}", ports.store_client)]),
+                )?;
+                value = serde_json::to_vec(&document)?;
+            }
+            _ => {}
+        }
+        entries.push(LegacyEntry::new(key, value));
+    }
+    Ok(LegacySnapshot::new(entries)?)
+}
+
+fn set_json(
+    document: &mut serde_json::Value,
+    pointer: &str,
+    value: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target = document
+        .pointer_mut(pointer)
+        .ok_or_else(|| std::io::Error::other(format!("fixture has no `{pointer}`")))?;
+    *target = value;
+    Ok(())
 }
 
 async fn save_native_snapshot(client: &mut Client, path: &Path) -> TestResult {
