@@ -1,66 +1,25 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  Show,
-  Switch,
-  Match,
-  on,
-  onCleanup
-} from "solid-js";
-import { ChevronDown, Loader2, X } from "lucide-solid";
+import { createEffect, createMemo, createSignal, Show, on, onCleanup } from "solid-js";
+import { ChevronDown } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry, LogHistogram, LogHistogramBucket, LogPage, LogScope, LogsApi } from "./api";
 import { ErrorBanner } from "@maestro/kit";
-import { StackedHistogramChart } from "@maestro/charts";
-import { dateFormatter, httpFields } from "./logFormat";
-import { LOG_COLUMNS, LogRow } from "./LogRow";
+import { httpFields } from "./logFormat";
+import { LogHistogramPanel, type LogTimeRange, type SelectedLogBucket } from "./LogHistogramPanel";
 import { LogQueryInput, type LogQueryCatalog } from "./LogQueryInput";
-import {
-  combineLogQueries,
-  logQueryPills,
-  removeLogQueryPill,
-  withLogHistogramGroupFilter
-} from "./logQueryPills";
-
-const minuteFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false
-});
+import { LogTable } from "./LogTable";
+import { combineLogQueries, withLogHistogramGroupFilter } from "./logQueryPills";
+import { buildLogQueryCatalog, logEntryKey, mergeLogEntries } from "./logViewerModel";
 
 const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
 const HISTOGRAM_POLL_INTERVAL_MS = 30_000;
-const TIME_RANGES = [
+const TIME_RANGES: readonly LogTimeRange[] = [
   { label: "1h", ms: 3_600_000, bucketMs: 60_000 },
   { label: "6h", ms: 21_600_000, bucketMs: 300_000 },
   { label: "24h", ms: 86_400_000, bucketMs: 600_000 },
   { label: "7d", ms: 604_800_000, bucketMs: 7_200_000 }
 ];
 const DEFAULT_TIME_RANGE = TIME_RANGES[0]!;
-
-type SelectedLogBucket = {
-  ts: number;
-  from: number;
-  to: number;
-};
-
-function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
-  const existing = new Set(current.map(logEntryKey));
-  const unique = incoming.filter((entry) => {
-    const key = logEntryKey(entry);
-    if (existing.has(key)) return false;
-    existing.add(key);
-    return true;
-  });
-  return prepend ? [...unique, ...current] : [...current, ...unique];
-}
-
-function logEntryKey(entry: LogEntry) {
-  return `${entry.nodeId ?? "local"}:${entry.tier ?? "logs"}:${entry.seq}`;
-}
 
 function LogViewer(props: {
   api: LogsApi;
@@ -126,50 +85,9 @@ function LogViewer(props: {
     return all.filter((line) => !line.source?.endsWith("/build"));
   };
 
-  const queryCatalog = createMemo<LogQueryCatalog>(() => {
-    const fields = new Set<string>();
-    const values = new Map<string, Set<string>>();
-    const addValue = (field: string, value: string | undefined) => {
-      const normalized = value?.trim();
-      if (!normalized || normalized.length > 160) return;
-      let candidates = values.get(field);
-      if (!candidates) {
-        candidates = new Set();
-        values.set(field, candidates);
-      }
-      if (candidates.size < 25) candidates.add(normalized);
-    };
-
-    addValue("service", props.serviceId);
-    for (const line of phaseLines()) {
-      addValue("service", line.serviceId);
-      addValue("level", line.level.toLowerCase());
-      addValue("status", line.level.toLowerCase());
-      addValue("source", line.source);
-      const http = httpFields(line.attrs);
-      addValue("@http.status_code", http.status);
-      for (const [name, value] of line.attrs ?? []) {
-        if (!/^[A-Za-z0-9._-]+$/.test(name)) continue;
-        const field = `@${name}`;
-        fields.add(field);
-        addValue(field, value);
-      }
-    }
-
-    return {
-      fields: Array.from(fields)
-        .sort((left, right) => left.localeCompare(right))
-        .slice(0, 100),
-      values: new Map(
-        Array.from(values, ([field, candidates]) => [
-          field,
-          Array.from(candidates).sort((left, right) =>
-            left.localeCompare(right, undefined, { numeric: true })
-          )
-        ])
-      )
-    };
-  });
+  const queryCatalog = createMemo<LogQueryCatalog>(() =>
+    buildLogQueryCatalog(props.serviceId, phaseLines())
+  );
 
   const filteredLines = () => {
     return phaseLines();
@@ -228,27 +146,6 @@ function LogViewer(props: {
     });
     setQueryDraft("");
     setQuery(withLogHistogramGroupFilter(query(), props.histogramGroupBy ?? "level", group));
-  };
-
-  const histogramTotal = () =>
-    histogram()?.buckets.reduce((total, bucket) => total + bucket.count, 0) ?? 0;
-
-  const selectedBucketCount = () => {
-    const selected = selectedBucket();
-    if (!selected) return 0;
-    return histogram()?.buckets.find((bucket) => bucket.ts === selected.ts)?.count ?? 0;
-  };
-
-  const selectedIntervalLabel = () => {
-    const selected = selectedBucket();
-    if (!selected) return "";
-    const from = new Date(selected.from);
-    const to = new Date(selected.to);
-    const fromLabel = `${dateFormatter.format(from)} ${minuteFormatter.format(from)}`;
-    if (from.toDateString() === to.toDateString()) {
-      return `${fromLabel}–${minuteFormatter.format(to)}`;
-    }
-    return `${fromLabel} – ${dateFormatter.format(to)} ${minuteFormatter.format(to)}`;
   };
 
   const showHost = () => {
@@ -453,94 +350,19 @@ function LogViewer(props: {
       })}
     >
       <Show when={props.showHistogram}>
-        <div class="shrink-0 border-b border-gray-100 px-3 pt-3 pb-1.5">
-          <div class="flex flex-wrap items-center justify-between gap-2 px-1">
-            <div class="flex items-center gap-2 min-w-0">
-              <Show when={histogram()}>
-                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                  <span class="text-sm font-medium tabular-nums whitespace-nowrap text-gray-700">
-                    {histogramTotal().toLocaleString()} {histogramTotal() === 1 ? "log" : "logs"}
-                  </span>
-                  <Show when={selectedBucket()}>
-                    <span class="inline-flex max-w-full items-center overflow-hidden rounded-md border border-gray-200 bg-gray-100">
-                      <span class="min-w-0 truncate py-0.5 pl-2 pr-1 font-mono text-gray-700">
-                        {selectedIntervalLabel()}
-                        <span class="text-gray-400"> · </span>
-                        {selectedBucketCount().toLocaleString()}{" "}
-                        {selectedBucketCount() === 1 ? "log" : "logs"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedBucket(null)}
-                        aria-label="Clear selected log interval"
-                        title="Clear selected interval"
-                        class="self-stretch pl-0.5 pr-1.5 text-gray-400 outline-none transition-colors hover:bg-gray-200 hover:text-gray-700"
-                      >
-                        <X class="size-3" />
-                      </button>
-                    </span>
-                  </Show>
-                </div>
-              </Show>
-              <Show when={histogramLoading() && histogram()}>
-                <Loader2 class="size-3 animate-spin text-gray-400" />
-              </Show>
-            </div>
-            <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
-              <For each={TIME_RANGES}>
-                {(range) => (
-                  <button
-                    type="button"
-                    onClick={() => selectRange(range.ms)}
-                    class={clsx(
-                      "text-[11px] px-2.5 py-1 rounded outline-none tabular-nums transition-[transform,color,background-color,box-shadow] duration-150 ease-out-strong active:scale-[0.96]",
-                      {
-                        "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
-                        "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
-                      }
-                    )}
-                  >
-                    {range.label}
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-          <Show when={histogramError()}>
-            <div
-              class={clsx("flex items-center justify-center gap-2 text-xs text-red-500", {
-                "h-28": !histogram(),
-                "pt-2": histogram()
-              })}
-            >
-              <span>{histogramError()}</span>
-              <button
-                type="button"
-                onClick={() => setHistogramRefresh((value) => value + 1)}
-                class="font-medium hover:text-red-700 outline-none"
-              >
-                Retry
-              </button>
-            </div>
-          </Show>
-          <Show when={!histogramError() && histogramLoading() && !histogram()}>
-            <div class="h-28 flex items-center justify-center text-gray-400">
-              <Loader2 class="size-4 animate-spin" />
-            </div>
-          </Show>
-          <Show when={histogram()}>
-            <StackedHistogramChart
-              data={histogram()!.buckets}
-              from={histogram()!.from}
-              to={histogram()!.to}
-              bucketMs={histogram()!.bucketMs}
-              itemName="log"
-              {...(selectedBucket() ? { selectedTs: selectedBucket()!.ts } : {})}
-              onSelectInterval={selectHistogramInterval}
-              onSelect={selectHistogramBucket}
-            />
-          </Show>
-        </div>
+        <LogHistogramPanel
+          histogram={histogram()}
+          loading={histogramLoading()}
+          error={histogramError()}
+          selectedBucket={selectedBucket()}
+          rangeMs={rangeMs()}
+          ranges={TIME_RANGES}
+          onClearSelected={() => setSelectedBucket(null)}
+          onSelectRange={selectRange}
+          onRetry={() => setHistogramRefresh((value) => value + 1)}
+          onSelectInterval={selectHistogramInterval}
+          onSelectBucket={selectHistogramBucket}
+        />
       </Show>
       <Show when={error()}>
         <div class="shrink-0 p-3">
@@ -576,85 +398,16 @@ function LogViewer(props: {
           "max-h-[600px]": !props.fillHeight
         })}
       >
-        <Switch>
-          <Match when={loading()}>
-            <div class="text-gray-400 text-center py-8 font-mono text-xs">Loading logs…</div>
-          </Match>
-          <Match when={!loading() && filteredLines().length === 0}>
-            <div class="text-gray-400 text-center py-8 font-mono text-xs">No logs available.</div>
-          </Match>
-          <Match when={filteredLines().length > 0}>
-            <ul class="font-mono text-xs">
-              <li class="hidden sm:flex items-stretch py-1.5 px-2 border-b border-gray-200 bg-gray-100 text-[11px] font-sans font-medium text-gray-500 sticky top-0 z-10">
-                <span class={clsx("shrink-0", streamView() ? "w-2" : "w-[18px]")} />
-                <span class={clsx(LOG_COLUMNS.time, "shrink-0 pr-2 truncate")}>Time</span>
-                <Show when={showHost()}>
-                  <span
-                    class={clsx(
-                      LOG_COLUMNS.host,
-                      "shrink-0 px-2 truncate border-l border-gray-300"
-                    )}
-                  >
-                    {props.cluster ? "Node" : "Host"}
-                  </span>
-                </Show>
-                <Show when={props.cluster}>
-                  <span
-                    class={clsx(
-                      LOG_COLUMNS.service,
-                      "shrink-0 px-2 truncate border-l border-gray-300"
-                    )}
-                  >
-                    Service
-                  </span>
-                </Show>
-                <span
-                  class={clsx(LOG_COLUMNS.level, "shrink-0 px-2 truncate border-l border-gray-300")}
-                >
-                  Level
-                </span>
-                <Show when={showHttp()}>
-                  <span
-                    class={clsx(
-                      LOG_COLUMNS.method,
-                      "shrink-0 px-2 truncate border-l border-gray-300"
-                    )}
-                  >
-                    Method
-                  </span>
-                  <span
-                    class={clsx(
-                      LOG_COLUMNS.status,
-                      "shrink-0 px-2 truncate border-l border-gray-300"
-                    )}
-                  >
-                    Status
-                  </span>
-                </Show>
-                <span class="flex-1 pl-2 truncate border-l border-gray-300">
-                  {showHttp() ? "Request" : "Message"}
-                </span>
-              </li>
-              <For each={filteredLines()}>
-                {(line, index) => {
-                  const key = () => logEntryKey(line);
-                  return (
-                    <LogRow
-                      line={line}
-                      index={index()}
-                      showHost={showHost()}
-                      showService={Boolean(props.cluster)}
-                      showHttp={showHttp()}
-                      stream={streamView()}
-                      expanded={expanded().has(key())}
-                      onToggle={() => toggleExpanded(key())}
-                    />
-                  );
-                }}
-              </For>
-            </ul>
-          </Match>
-        </Switch>
+        <LogTable
+          lines={filteredLines()}
+          loading={loading()}
+          cluster={Boolean(props.cluster)}
+          showHost={showHost()}
+          showHttp={showHttp()}
+          stream={streamView()}
+          expanded={expanded()}
+          onToggle={toggleExpanded}
+        />
       </div>
       <Show when={!atBottom() && filteredLines().length > 0}>
         <button
