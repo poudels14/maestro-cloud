@@ -206,68 +206,6 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
 }
 
 #[tokio::test]
-async fn log_ingest_service_routes_logs_and_rejects_unconfigured_endpoints() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let socket_path = temporary.path().join("node.sock");
-    let metadata = std::fs::metadata(temporary.path()).expect("directory metadata");
-    let handlers = Arc::new(RecordingHandlers::default());
-    let bound = BoundWorkloadNodeApi::bind(
-        &socket_path,
-        WorkloadAuthorization::new(WorkloadToken::from_bytes([7; 32]), metadata.uid(), claims()),
-        NodeApiSocketOwner {
-            user_id: metadata.uid(),
-            group_id: metadata.gid(),
-        },
-        WorkloadControlAccess::Allowed,
-        NodeApiServices::with_log_ingest(handlers.clone()),
-    )
-    .expect("bind node API");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(bound.serve_with_shutdown(async move {
-        let _ = shutdown_rx.await;
-    }));
-    let channel = connect(&socket_path).await;
-
-    logs::logs_service_client::LogsServiceClient::new(channel.clone())
-        .export(authenticated(logs::ExportLogsServiceRequest::default(), 7))
-        .await
-        .expect("configured log export");
-    let metric_error = metrics::metrics_service_client::MetricsServiceClient::new(channel.clone())
-        .export(authenticated(
-            metrics::ExportMetricsServiceRequest::default(),
-            7,
-        ))
-        .await
-        .expect_err("unconfigured metrics must fail");
-    assert_eq!(metric_error.code(), Code::Unimplemented);
-    let trace_error = traces::trace_service_client::TraceServiceClient::new(channel.clone())
-        .export(authenticated(
-            traces::ExportTraceServiceRequest::default(),
-            7,
-        ))
-        .await
-        .expect_err("unconfigured traces must fail");
-    assert_eq!(trace_error.code(), Code::Unimplemented);
-    let control_error = ControlClient::new(channel.clone())
-        .mutate(authenticated(ResourceMutation::default(), 7))
-        .await
-        .expect_err("unconfigured control must fail");
-    assert_eq!(control_error.code(), Code::Unimplemented);
-    assert_eq!(
-        handlers.telemetry.lock().await.as_slice(),
-        &[(workload_id(), "logs")]
-    );
-    assert!(handlers.mutations.lock().await.is_empty());
-
-    drop(channel);
-    shutdown_tx.send(()).expect("request shutdown");
-    server
-        .await
-        .expect("server task")
-        .expect("clean server shutdown");
-}
-
-#[tokio::test]
 async fn uds_server_rejects_unprivileged_control() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let socket_path = temporary.path().join("node.sock");

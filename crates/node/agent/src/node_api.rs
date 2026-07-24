@@ -74,7 +74,10 @@ pub struct NodeApiServices {
 }
 
 impl NodeApiServices {
-    /// Constructs the service set shared by per-workload listeners.
+    /// Constructs the complete service set shared by per-workload listeners.
+    ///
+    /// Every listener delegates all OTLP requests to durable handlers. Control
+    /// access remains independently restricted by [`WorkloadControlAccess`].
     pub fn new(
         control: Arc<dyn NodeControlHandler>,
         logs: Arc<dyn NodeLogHandler>,
@@ -87,80 +90,6 @@ impl NodeApiServices {
             metrics,
             traces,
         }
-    }
-
-    /// Constructs the production-ready identity and OTLP-log subset.
-    ///
-    /// Control, metric, and trace calls fail explicitly until their durable
-    /// handlers are attached; they never acknowledge data that was discarded.
-    pub fn with_log_ingest(logs: Arc<dyn NodeLogHandler>) -> Self {
-        let unavailable = Arc::new(UnavailableNodeApiHandler);
-        Self {
-            control: unavailable.clone(),
-            logs,
-            metrics: unavailable.clone(),
-            traces: unavailable,
-        }
-    }
-
-    /// Attaches the privileged mutation handler used when a workload's access policy permits it.
-    pub fn with_control(mut self, control: Arc<dyn NodeControlHandler>) -> Self {
-        self.control = control;
-        self
-    }
-
-    /// Attaches the durable OTLP metric receiver used by telemetry-enabled workloads.
-    pub fn with_metric_ingest(mut self, metrics: Arc<dyn NodeMetricHandler>) -> Self {
-        self.metrics = metrics;
-        self
-    }
-
-    /// Attaches the durable OTLP trace receiver used by telemetry-enabled workloads.
-    pub fn with_trace_ingest(mut self, traces: Arc<dyn NodeTraceHandler>) -> Self {
-        self.traces = traces;
-        self
-    }
-}
-
-#[derive(Debug)]
-struct UnavailableNodeApiHandler;
-
-#[async_trait]
-impl NodeControlHandler for UnavailableNodeApiHandler {
-    async fn mutate(
-        &self,
-        _claims: WorkloadClaims,
-        _mutation: ResourceMutation,
-    ) -> Result<MutationResult, Status> {
-        Err(Status::unimplemented(
-            "node control handler is not configured",
-        ))
-    }
-}
-
-#[async_trait]
-impl NodeMetricHandler for UnavailableNodeApiHandler {
-    async fn export_metrics(
-        &self,
-        _claims: WorkloadClaims,
-        _request: metrics::ExportMetricsServiceRequest,
-    ) -> Result<metrics::ExportMetricsServiceResponse, Status> {
-        Err(Status::unimplemented(
-            "OTLP metric handler is not configured",
-        ))
-    }
-}
-
-#[async_trait]
-impl NodeTraceHandler for UnavailableNodeApiHandler {
-    async fn export_traces(
-        &self,
-        _claims: WorkloadClaims,
-        _request: traces::ExportTraceServiceRequest,
-    ) -> Result<traces::ExportTraceServiceResponse, Status> {
-        Err(Status::unimplemented(
-            "OTLP trace handler is not configured",
-        ))
     }
 }
 

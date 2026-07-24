@@ -125,18 +125,20 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
                 otlp_store,
                 factory.status_clock.clone(),
             ));
-            NodeApiServices::with_log_ingest(Arc::new(OtlpLogHandler::new(
-                plan.cluster().cluster_id.clone(),
-                log_store,
-                factory.status_clock.clone(),
-            )))
-            .with_control(Arc::new(StoreNodeControlHandler::new(
-                store.clone(),
-                &plan.cluster().cluster_id,
-                factory.status_clock.clone(),
-            )))
-            .with_metric_ingest(signals.clone())
-            .with_trace_ingest(signals)
+            NodeApiServices::new(
+                Arc::new(StoreNodeControlHandler::new(
+                    store.clone(),
+                    &plan.cluster().cluster_id,
+                    factory.status_clock.clone(),
+                )),
+                Arc::new(OtlpLogHandler::new(
+                    plan.cluster().cluster_id.clone(),
+                    log_store,
+                    factory.status_clock.clone(),
+                )),
+                signals.clone(),
+                signals,
+            )
         }),
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
