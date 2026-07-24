@@ -8,6 +8,7 @@ mod admission;
 mod agent_lifecycle;
 mod agent_network;
 mod agent_role;
+mod agent_tasks;
 mod artifact_replication;
 mod cluster_query_clients;
 mod config_view;

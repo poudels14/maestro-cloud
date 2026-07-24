@@ -6,10 +6,10 @@ use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend,
 };
-use tokio::sync::watch;
 
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::agent_network::{build_bridge_agent, build_firewall_agent, build_mesh_agent};
+use crate::agent_tasks::{AgentTaskInputs, spawn_agent_tasks};
 use crate::artifact_replication::build_artifact_replication_agent;
 use crate::cluster_query_clients;
 use crate::config_view::masked_cluster_config;
@@ -497,157 +497,29 @@ where
     if let Some(error) = publish_store_error {
         return fail_after_registration(runtimes, node_registration, error).await;
     }
-    let (shutdown, bridge_shutdown) = watch::channel(false);
-    let mesh_shutdown = bridge_shutdown.clone();
-    let dns_resource_shutdown = bridge_shutdown.clone();
-    let firewall_shutdown = bridge_shutdown.clone();
-    let dns_server_shutdown = bridge_shutdown.clone();
-    let assignment_shutdown = bridge_shutdown.clone();
-    let artifact_replication_shutdown = bridge_shutdown.clone();
-    let health_shutdown = bridge_shutdown.clone();
-    let log_shutdown = bridge_shutdown.clone();
-    let stats_shutdown = bridge_shutdown.clone();
-    let host_telemetry_shutdown = bridge_shutdown.clone();
-    let node_upgrade_shutdown = bridge_shutdown.clone();
-    let node_registry_shutdown = bridge_shutdown.clone();
-    let api_shutdown = bridge_shutdown.clone();
-    let stats_metric_shutdown = bridge_shutdown.clone();
-    let api_task = tokio::spawn(async move {
-        api_server
-            .serve(api_shutdown)
-            .await
-            .map_err(|error| role_error("serve operator API", error))
-    });
-    let node_registry_task = tokio::spawn(async move {
-        node_registry_agent
-            .run_registered(node_registration, node_registry_shutdown)
-            .await
-            .map_err(|error| role_error("run node registry agent", error))
-    });
-    let artifact_replication_task = tokio::spawn(async move {
-        artifact_replication_agent
-            .run(artifact_replication_shutdown)
-            .await
-            .map_err(|error| role_error("run artifact replication agent", error))
-    });
-    let bridge_task = tokio::spawn(async move {
-        bridge_agent
-            .run(bridge_shutdown)
-            .await
-            .map_err(|error| role_error("run workload bridge agent", error))
-    });
-    let mesh_task = tokio::spawn(async move {
-        mesh_agent
-            .run(mesh_shutdown)
-            .await
-            .map_err(|error| role_error("run mesh agent", error))
-    });
-    let dns_resource_task = tokio::spawn(async move {
-        dns_agent
-            .run(dns_resource_shutdown)
-            .await
-            .map_err(|error| role_error("run DNS resource agent", error))
-    });
-    let firewall_task = tokio::spawn(async move {
-        firewall_agent
-            .run(firewall_shutdown)
-            .await
-            .map_err(|error| role_error("run firewall agent", error))
-    });
-    let dns_server_task = tokio::spawn(async move {
-        dns_server
-            .serve(dns_server_shutdown)
-            .await
-            .map_err(|error| role_error("serve authoritative DNS", error))
-    });
-    let mut tasks = vec![
-        bridge_task,
-        mesh_task,
-        dns_resource_task,
-        firewall_task,
-        dns_server_task,
-        artifact_replication_task,
-        node_registry_task,
-        api_task,
-        tokio::spawn(async move {
-            stats_metric_sampler.run(stats_metric_shutdown).await;
-            Ok(())
-        }),
-    ];
-    if let Some(agent) = assignment_agent {
-        tasks.push(tokio::spawn(async move {
-            agent
-                .run(assignment_shutdown)
-                .await
-                .map_err(|error| role_error("run assignment agent", error))
-        }));
-    }
-    if let Some(agent) = health_agent {
-        tasks.push(tokio::spawn(async move {
-            agent
-                .run(health_shutdown)
-                .await
-                .map_err(|error| role_error("run workload health agent", error))
-        }));
-    }
-    if let Some(agent) = log_agent {
-        tasks.push(tokio::spawn(async move {
-            agent
-                .run(log_shutdown)
-                .await
-                .map_err(|error| role_error("run runtime log agent", error))
-        }));
-    }
-    if let Some(agent) = stats_agent {
-        tasks.push(tokio::spawn(async move {
-            agent
-                .run(stats_shutdown)
-                .await
-                .map_err(|error| role_error("run workload stats agent", error))
-        }));
-    }
-    tasks.push(tokio::spawn(async move {
-        host_telemetry_agent
-            .run(host_telemetry_shutdown)
-            .await
-            .map_err(|error| role_error("run host telemetry agent", error))
-    }));
-    if let Some(agent) = node_upgrade_agent {
-        tasks.push(tokio::spawn(async move {
-            agent
-                .run(node_upgrade_shutdown)
-                .await
-                .map_err(|error| role_error("run node upgrade agent", error))
-        }));
-    }
-    for worker in sink_workers {
-        let sink_shutdown = shutdown.subscribe();
-        tasks.push(tokio::spawn(async move {
-            worker.run(sink_shutdown).await;
-            Ok(())
-        }));
-    }
-    for worker in metric_sink_workers {
-        let sink_shutdown = shutdown.subscribe();
-        tasks.push(tokio::spawn(async move {
-            worker.run(sink_shutdown).await;
-            Ok(())
-        }));
-    }
-    for worker in host_metric_sink_workers {
-        let sink_shutdown = shutdown.subscribe();
-        tasks.push(tokio::spawn(async move {
-            worker.run(sink_shutdown).await;
-            Ok(())
-        }));
-    }
-    if let Some(worker) = log_maintenance {
-        let maintenance_shutdown = shutdown.subscribe();
-        tasks.push(tokio::spawn(async move {
-            worker.run(maintenance_shutdown).await;
-            Ok(())
-        }));
-    }
+    let (shutdown, tasks) = spawn_agent_tasks(AgentTaskInputs {
+        api_server,
+        node_registry_agent,
+        node_registration,
+        artifact_replication_agent,
+        bridge_agent,
+        mesh_agent,
+        dns_agent,
+        firewall_agent,
+        dns_server,
+        stats_metric_sampler,
+        assignment_agent,
+        health_agent,
+        log_agent,
+        stats_agent,
+        host_telemetry_agent,
+        node_upgrade_agent,
+        sink_workers,
+        metric_sink_workers,
+        host_metric_sink_workers,
+        log_maintenance,
+    })
+    .into_parts();
     let owned_runtimes = runtimes.into_owned();
     Ok(Box::new(AgentRoleRuntime::new(
         shutdown,
