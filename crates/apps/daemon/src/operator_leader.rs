@@ -11,13 +11,16 @@ use tokio::sync::watch;
 use upgrade::{NodeUpgradeBackend, StoreNodeUpgradeBackend, StoreNodeUpgradeBackendSettings};
 use webhook::WebhookDeliveryBackend;
 
+use crate::cloudflare_resources::{
+    CLOUDFLARE_MANAGED_OWNER, CLOUDFLARE_SERVICE_ID, CloudflareSystemResources,
+};
 use crate::dns_reconciler::DnsResolverResourceReconciler;
 use crate::dns_resources::DnsResolverSystemResources;
 use crate::operators::OperatorSuite;
+use crate::system_service_reconciler::SystemServiceReconciler;
 use crate::tailscale_reconciler::TailscaleResourceReconciler;
 use crate::tailscale_resources::TailscaleSystemResources;
-use crate::traefik_reconciler::TraefikResourceReconciler;
-use crate::traefik_resources::TraefikSystemResources;
+use crate::traefik_resources::{TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources};
 use crate::{LeaderWorkload, OperatorSettings, RoleError};
 
 /// Side-effect integrations shared by leader-owned operators.
@@ -65,6 +68,7 @@ pub struct OperatorLeaderWorkload {
     timestamp_clock: Arc<dyn TimestampClock>,
     settings: OperatorSettings,
     builds: BuildOperatorBackends,
+    cloudflare: Option<CloudflareSystemResources>,
     dns_resolver: Option<DnsResolverSystemResources>,
     tailscale: Option<TailscaleSystemResources>,
     traefik: Option<TraefikSystemResources>,
@@ -85,6 +89,7 @@ impl OperatorLeaderWorkload {
             timestamp_clock,
             settings,
             builds,
+            cloudflare: None,
             dns_resolver: None,
             tailscale: None,
             traefik: None,
@@ -96,6 +101,14 @@ impl OperatorLeaderWorkload {
         dns_resolver: Option<DnsResolverSystemResources>,
     ) -> Self {
         self.dns_resolver = dns_resolver;
+        self
+    }
+
+    pub(crate) fn with_cloudflare_resources(
+        mut self,
+        cloudflare: Option<CloudflareSystemResources>,
+    ) -> Self {
+        self.cloudflare = cloudflare;
         self
     }
 
@@ -136,17 +149,46 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                     "failed to reconcile DNS resolver resources: {error}"
                 ))
             })?;
-        TraefikResourceReconciler::new(&self.cluster_id, self.traefik.clone())
-            .map_err(|error| {
-                RoleError::new(format!(
-                    "failed to construct Traefik resource reconciler: {error}"
-                ))
-            })?
-            .reconcile(store.as_ref(), self.timestamp_clock.now())
-            .await
-            .map_err(|error| {
-                RoleError::new(format!("failed to reconcile Traefik resources: {error}"))
-            })?;
+        SystemServiceReconciler::new(
+            &self.cluster_id,
+            "Traefik",
+            TRAEFIK_SERVICE_ID,
+            TRAEFIK_MANAGED_OWNER,
+            self.traefik
+                .as_ref()
+                .map(|resources| resources.service.clone()),
+        )
+        .map_err(|error| {
+            RoleError::new(format!(
+                "failed to construct Traefik resource reconciler: {error}"
+            ))
+        })?
+        .reconcile(store.as_ref(), self.timestamp_clock.now())
+        .await
+        .map_err(|error| {
+            RoleError::new(format!("failed to reconcile Traefik resources: {error}"))
+        })?;
+        SystemServiceReconciler::new(
+            &self.cluster_id,
+            "Cloudflare Tunnel",
+            CLOUDFLARE_SERVICE_ID,
+            CLOUDFLARE_MANAGED_OWNER,
+            self.cloudflare
+                .as_ref()
+                .map(|resources| resources.service.clone()),
+        )
+        .map_err(|error| {
+            RoleError::new(format!(
+                "failed to construct Cloudflare Tunnel resource reconciler: {error}"
+            ))
+        })?
+        .reconcile(store.as_ref(), self.timestamp_clock.now())
+        .await
+        .map_err(|error| {
+            RoleError::new(format!(
+                "failed to reconcile Cloudflare Tunnel resources: {error}"
+            ))
+        })?;
         let tailscale = TailscaleResourceReconciler::new(&self.cluster_id, self.tailscale.clone())
             .map_err(|error| {
                 RoleError::new(format!(

@@ -13,7 +13,7 @@ use runtime::{HostPortPublication, PortProtocol};
 
 pub(crate) const TRAEFIK_SERVICE_ID: &str = "maestro-system-traefik";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
-const MANAGED_VALUE: &str = "traefik";
+pub(crate) const TRAEFIK_MANAGED_OWNER: &str = "traefik";
 pub(crate) const TRAEFIK_IMAGE: &str =
     "traefik:v3.6.23@sha256:d85749d4d10d970ed2b3a7cb2406d9b9da1cdd6ea975a39c727aab809d73136a";
 const TRAEFIK_VERSION: &str = "traefik-3.6.23";
@@ -83,7 +83,10 @@ impl TraefikSystemResources {
             meta: ObjectMeta {
                 id: service_id.clone(),
                 labels: BTreeMap::new(),
-                annotations: BTreeMap::from([(managed_annotation(), MANAGED_VALUE.to_owned())]),
+                annotations: BTreeMap::from([(
+                    managed_annotation(),
+                    TRAEFIK_MANAGED_OWNER.to_owned(),
+                )]),
                 revision: ResourceRevision::default(),
                 generation: Generation(1),
                 owner_refs: Vec::new(),
@@ -170,12 +173,6 @@ impl TraefikSystemResources {
             })
             .collect()
     }
-}
-
-pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
-    annotations
-        .get(&managed_annotation())
-        .is_some_and(|value| value == MANAGED_VALUE)
 }
 
 fn managed_annotation() -> AnnotationKey {

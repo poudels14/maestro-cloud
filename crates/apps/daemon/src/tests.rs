@@ -1,5 +1,6 @@
 mod agent_api;
 mod build_backend;
+mod cloudflare_resources;
 mod config_view;
 mod control_plane;
 mod control_plane_resources;

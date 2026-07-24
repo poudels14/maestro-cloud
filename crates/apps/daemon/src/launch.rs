@@ -35,6 +35,7 @@ use webhook::HttpWebhookBackend;
 
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use crate::NodeUpgradeDependencies;
+use crate::cloudflare_resources::CloudflareSystemResources;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::dns_resources::DnsResolverSystemResources;
 use crate::launch_error::{DaemonLaunchError, invalid};
@@ -206,6 +207,12 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         TraefikSystemResources::for_cluster(&cluster, &security)
             .map_err(|error| invalid(format!("invalid Traefik system resources: {error}")))?,
     );
+    let cloudflare_resources =
+        CloudflareSystemResources::from_cluster(&cluster).map_err(|error| {
+            invalid(format!(
+                "invalid Cloudflare Tunnel system resources: {error}"
+            ))
+        })?;
     let system_host_ports = traefik_resources
         .as_ref()
         .map(TraefikSystemResources::host_port_grants)
@@ -220,6 +227,12 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         {
             operator_settings.firewall.host_port_routes = resources.firewall_routes();
         }
+    }
+    if let Some(resources) = &cloudflare_resources {
+        operator_settings
+            .firewall
+            .system_services
+            .insert(resources.service.meta.id.clone());
     }
     operator_settings.preview = configured_preview
         .as_ref()
@@ -260,6 +273,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 webhooks: webhook_backend.clone(),
             },
         )
+        .with_cloudflare_resources(cloudflare_resources)
         .with_tailscale_resources(tailscale_resources)
         .with_dns_resolver_resources(dns_resolver_resources)
         .with_traefik_resources(traefik_resources),

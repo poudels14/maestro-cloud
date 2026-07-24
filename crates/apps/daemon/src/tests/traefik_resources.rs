@@ -15,8 +15,10 @@ use kernel_store::{
 };
 use runtime::{HostPortPublication, PortProtocol};
 
-use crate::traefik_reconciler::TraefikResourceReconciler;
-use crate::traefik_resources::{TRAEFIK_IMAGE, TRAEFIK_SERVICE_ID, TraefikSystemResources};
+use crate::system_service_reconciler::SystemServiceReconciler;
+use crate::traefik_resources::{
+    TRAEFIK_IMAGE, TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources,
+};
 
 use super::cluster_with_nodes;
 
@@ -139,24 +141,42 @@ async fn reconciles_create_update_and_removal_under_one_fence()
     cluster.cluster_id = cluster_id.clone();
     let mut desired = TraefikSystemResources::for_cluster(&cluster, &security())?;
 
-    TraefikResourceReconciler::new(&cluster_id, Some(desired.clone()))?
-        .reconcile(&fenced, Timestamp(10_000))
-        .await?;
+    SystemServiceReconciler::new(
+        &cluster_id,
+        "Traefik",
+        TRAEFIK_SERVICE_ID,
+        TRAEFIK_MANAGED_OWNER,
+        Some(desired.service.clone()),
+    )?
+    .reconcile(&fenced, Timestamp(10_000))
+    .await?;
     let service = read_service(&store, &cluster_id).await?;
     assert_eq!(service.meta.generation.0, 1);
     assert_eq!(service.spec.version, "traefik-3.6.23");
 
     desired.service.spec.version = "traefik-test-update".to_owned();
-    TraefikResourceReconciler::new(&cluster_id, Some(desired))?
-        .reconcile(&fenced, Timestamp(20_000))
-        .await?;
+    SystemServiceReconciler::new(
+        &cluster_id,
+        "Traefik",
+        TRAEFIK_SERVICE_ID,
+        TRAEFIK_MANAGED_OWNER,
+        Some(desired.service),
+    )?
+    .reconcile(&fenced, Timestamp(20_000))
+    .await?;
     let service = read_service(&store, &cluster_id).await?;
     assert_eq!(service.meta.generation.0, 2);
     assert_eq!(service.spec.version, "traefik-test-update");
 
-    TraefikResourceReconciler::new(&cluster_id, None)?
-        .reconcile(&fenced, Timestamp(30_000))
-        .await?;
+    SystemServiceReconciler::new(
+        &cluster_id,
+        "Traefik",
+        TRAEFIK_SERVICE_ID,
+        TRAEFIK_MANAGED_OWNER,
+        None,
+    )?
+    .reconcile(&fenced, Timestamp(30_000))
+    .await?;
     assert_eq!(
         read_service(&store, &cluster_id)
             .await?
