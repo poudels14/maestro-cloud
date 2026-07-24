@@ -70,7 +70,7 @@ where
                 .reconcile_once()
                 .await
                 .map_err(|error| role_error("establish initial firewall snapshot", error))?;
-            let settings = DnsServerSettings::new(std::net::SocketAddr::new(
+            let settings = DnsServerSettings::bridge(std::net::SocketAddr::new(
                 std::net::IpAddr::V4(bridge.desired().gateway),
                 AUTHORITATIVE_DNS_PORT,
             ))

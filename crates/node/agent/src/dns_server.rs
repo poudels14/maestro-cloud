@@ -26,15 +26,15 @@ const EPHEMERAL_BIND_ATTEMPTS: usize = 32;
 /// Stable port exposed only on each node's workload bridge.
 pub const AUTHORITATIVE_DNS_PORT: u16 = 53;
 
-/// Validated bridge-only DNS listener configuration.
+/// Validated DNS listener configuration for a host bridge or isolated container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DnsServerSettings {
     bind_address: SocketAddr,
 }
 
 impl DnsServerSettings {
-    /// Accepts one concrete, non-loopback bridge address and nonzero port.
-    pub fn new(bind_address: SocketAddr) -> Result<Self, DnsServerError> {
+    /// Accepts one concrete, non-loopback host bridge address and nonzero port.
+    pub fn bridge(bind_address: SocketAddr) -> Result<Self, DnsServerError> {
         if bind_address.port() == 0 {
             return Err(DnsServerError::ZeroPort);
         }
@@ -49,13 +49,23 @@ impl DnsServerSettings {
         Ok(Self { bind_address })
     }
 
-    /// Returns the exact bridge socket address to bind for both UDP and TCP.
+    /// Binds all interfaces inside an isolated runtime network namespace.
+    pub fn container(port: u16) -> Result<Self, DnsServerError> {
+        if port == 0 {
+            return Err(DnsServerError::ZeroPort);
+        }
+        Ok(Self {
+            bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+        })
+    }
+
+    /// Returns the exact socket address to bind for both UDP and TCP.
     pub const fn bind_address(self) -> SocketAddr {
         self.bind_address
     }
 }
 
-/// Hickory UDP/TCP server bound to one node bridge address.
+/// Hickory UDP/TCP server bound to one node-scoped address.
 pub struct BoundDnsServer {
     server: Server<HickoryDnsHandler>,
     local_address: SocketAddr,

@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use daemon::{
-    DeadLetterAdminCommand, DeadLetterAdminOutput, LocalLogOptions, administer_dead_letters,
-    launch_daemon, load_launch_config, stream_local_logs,
+    DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand, DeadLetterAdminOutput,
+    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon,
+    load_launch_config, run_dns_resolver, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
 use tokio::io::AsyncWriteExt;
@@ -19,6 +21,28 @@ struct Cli {
 enum DaemonCommand {
     /// Starts the declared node roles from a protected launch document.
     Start { config: PathBuf },
+    /// Runs the internal authoritative resolver role on a delegated runtime network.
+    #[command(hide = true)]
+    Dns {
+        #[arg(long)]
+        cluster_id: kernel_api::ClusterId,
+        #[arg(long)]
+        node_id: kernel_api::NodeId,
+        #[arg(long = "endpoint", required = true)]
+        endpoints: Vec<String>,
+        #[arg(long)]
+        certificate_authority: PathBuf,
+        #[arg(long)]
+        client_certificate: PathBuf,
+        #[arg(long)]
+        client_private_key: PathBuf,
+        #[arg(long)]
+        store_encryption_secret: PathBuf,
+        #[arg(long, default_value_t = DEFAULT_DNS_RESOLVER_PORT)]
+        port: u16,
+        #[arg(long, default_value_t = 30)]
+        resync_seconds: u64,
+    },
     /// Reads logs from the running local node over its authenticated node API.
     Logs {
         /// Protected launch document used to authenticate the local query.
@@ -87,6 +111,30 @@ async fn main() {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         DaemonCommand::Start { config } => start(config).await,
+        DaemonCommand::Dns {
+            cluster_id,
+            node_id,
+            endpoints,
+            certificate_authority,
+            client_certificate,
+            client_private_key,
+            store_encryption_secret,
+            port,
+            resync_seconds,
+        } => {
+            dns(DnsResolverLaunchConfig {
+                cluster_id,
+                node_id,
+                endpoints,
+                certificate_authority,
+                client_certificate,
+                client_private_key,
+                store_encryption_secret,
+                port,
+                resync_interval: Duration::from_secs(resync_seconds),
+            })
+            .await
+        }
         DaemonCommand::Logs {
             config,
             source,
@@ -111,6 +159,23 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let command = admin_command(command)?;
             let output = administer_dead_letters(&config, command).await?;
             write_admin_output(output).await
+        }
+    }
+}
+
+async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let mut running = Box::pin(run_dns_resolver(config, receiver));
+    tokio::select! {
+        signal = shutdown_signal() => {
+            signal?;
+            let _ = shutdown.send(true);
+            running.await?;
+            Ok(())
+        }
+        result = &mut running => {
+            result?;
+            Ok(())
         }
     }
 }

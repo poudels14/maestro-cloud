@@ -16,6 +16,7 @@ mod config_view;
 mod control_plane;
 mod datadog;
 mod dead_letter_admin;
+mod dns_launch;
 mod error;
 mod join_activation;
 mod launch;
@@ -51,6 +52,9 @@ pub use control_plane::{
 pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig};
 pub use dead_letter_admin::{
     DeadLetterAdminCommand, DeadLetterAdminError, DeadLetterAdminOutput, administer_dead_letters,
+};
+pub use dns_launch::{
+    DEFAULT_DNS_RESOLVER_PORT, DnsResolverLaunchConfig, DnsResolverLaunchError, run_dns_resolver,
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{DaemonLaunchConfig, StoreLaunchMode, launch_daemon, load_launch_config};

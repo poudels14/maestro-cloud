@@ -73,16 +73,25 @@ fn dns_server_settings_require_a_concrete_bridge_address() -> Result<(), Box<dyn
         SocketAddr::from(([255, 255, 255, 255], 53)),
     ] {
         assert!(matches!(
-            DnsServerSettings::new(address),
+            DnsServerSettings::bridge(address),
             Err(DnsServerError::UnsafeBindAddress { .. })
         ));
     }
     assert!(matches!(
-        DnsServerSettings::new(SocketAddr::from(([10, 42, 0, 1], 0))),
+        DnsServerSettings::bridge(SocketAddr::from(([10, 42, 0, 1], 0))),
         Err(DnsServerError::ZeroPort)
     ));
-    let valid = DnsServerSettings::new(SocketAddr::from(([10, 42, 0, 1], 53)))?;
+    let valid = DnsServerSettings::bridge(SocketAddr::from(([10, 42, 0, 1], 53)))?;
     assert_eq!(valid.bind_address(), SocketAddr::from(([10, 42, 0, 1], 53)));
+    let container = DnsServerSettings::container(53)?;
+    assert_eq!(
+        container.bind_address(),
+        SocketAddr::from(([0, 0, 0, 0], 53))
+    );
+    assert!(matches!(
+        DnsServerSettings::container(0),
+        Err(DnsServerError::ZeroPort)
+    ));
     Ok(())
 }
 
