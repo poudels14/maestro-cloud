@@ -89,6 +89,8 @@ mod legacy_upload_tests;
 #[cfg(test)]
 mod legacy_webhook_tests;
 #[cfg(test)]
+mod real_etcd_fixture;
+#[cfg(test)]
 mod real_etcd_tests;
 #[cfg(test)]
 mod store_restore_tests;

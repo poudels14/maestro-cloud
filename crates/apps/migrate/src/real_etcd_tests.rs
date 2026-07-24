@@ -1,60 +1,64 @@
-use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::net::{Ipv4Addr, TcpListener};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use cluster::{
-    CertificateValidity, ClusterCertificateAuthority, ClusterPorts, EmbeddedEtcdProvider,
-    EmbeddedEtcdSettings, StoreMember, StoreProvider, StoreProviderConfig, StoreShutdown,
-    StoreStartMode,
-};
-use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
-use kernel_api::{ClusterId, NodeId, NodeRole, ResourceKind, ResourceName, SecretValue};
+use cluster::{EmbeddedEtcdProvider, StoreProvider, StoreShutdown, StoreStartMode};
+use kernel_api::{NodeId, ResourceKind, ResourceName};
 use kernel_store::{Keyspace, Store, TokioClock};
 use serde_json::json;
-use time::{Duration as CertificateDuration, OffsetDateTime};
-use tokio::io::AsyncWriteExt;
+use tokio::task::JoinSet;
 
-use crate::legacy_fixtures::CLUSTER_ID;
-use crate::legacy_tests::{
-    MASTER_SECRET, cutover_service_snapshot, encrypted as encrypted_fixture,
+use crate::legacy_tests::{MASTER_SECRET, encrypted as encrypted_fixture};
+use crate::real_etcd_fixture::{
+    allocate_shared_ports, bind_three_member_topology, cutover_connection, embedded_settings,
+    provider_configs, raw_client, save_native_snapshot, three_member_cutover_snapshot,
 };
 use crate::{
-    CutoverEtcdConnection, CutoverMigration, LegacyEntry, LegacyEtcdSource, LegacySnapshot,
-    MigrationError, MigrationOutcome, MigrationVerification, plan_legacy_snapshot,
-    plan_legacy_store_restore, restore_legacy_store, verify_legacy_store_restore,
+    CutoverMigration, LegacyEtcdSource, MigrationError, MigrationOutcome, MigrationVerification,
+    plan_legacy_snapshot, plan_legacy_store_restore, restore_legacy_store,
+    verify_legacy_store_restore,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[tokio::test]
-#[ignore = "requires MAESTRO_ETCD_BIN, MAESTRO_ETCDUTL_BIN, and MAESTRO_ETCD_TEST_IP"]
-async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestResult {
+#[ignore = "requires MAESTRO_ETCD_BIN, MAESTRO_ETCDUTL_BIN, and MAESTRO_ETCD_TEST_IPS"]
+async fn real_cutover_restores_three_member_encrypted_store() -> TestResult {
     let binary = PathBuf::from(std::env::var("MAESTRO_ETCD_BIN")?);
     let etcdutl_binary = PathBuf::from(std::env::var("MAESTRO_ETCDUTL_BIN")?);
-    let host_address = std::env::var("MAESTRO_ETCD_TEST_IP")?.parse::<Ipv4Addr>()?;
-    if !host_address.is_private() || host_address.is_loopback() {
-        return Err("MAESTRO_ETCD_TEST_IP must be a private non-loopback address".into());
-    }
-
+    let host_addresses = parse_host_addresses(&std::env::var("MAESTRO_ETCD_TEST_IPS")?)?;
+    let bootstrap_address = host_addresses
+        .first()
+        .copied()
+        .ok_or("rehearsal has no bootstrap address")?;
     let directory = tempfile::tempdir()?;
-    let ports = allocate_ports(host_address)?;
-    let config = provider_config(directory.path(), host_address, ports, MASTER_SECRET)?;
-    let endpoint = format!("https://{host_address}:{}", ports.store_client);
-    let connection = cutover_connection(&config, endpoint.clone())?;
+    let ports = allocate_shared_ports(host_addresses)?;
+
+    let source_configs = provider_configs(
+        &directory.path().join("legacy"),
+        host_addresses,
+        ports,
+        MASTER_SECRET,
+    )?;
+    let bootstrap_node = NodeId::new("node-a")?;
+    let source_config = source_configs
+        .get(&bootstrap_node)
+        .cloned()
+        .ok_or("bootstrap provider config is missing")?;
+    let endpoint = format!("https://{bootstrap_address}:{}", ports.store_client);
+    let connection = cutover_connection(&source_config, endpoint.clone())?;
     let provider = EmbeddedEtcdProvider::new(
-        config.clone(),
+        source_config.clone(),
         binary.clone(),
         Arc::new(TokioClock::new()),
         embedded_settings()?,
     )?;
     let runtime = provider.start(StoreStartMode::Bootstrap).await?;
-    let mut raw = raw_client(&config, &endpoint).await?;
+    let mut raw = raw_client(&source_config, &endpoint).await?;
 
-    let snapshot = bind_snapshot_topology(
-        cutover_service_snapshot(vec![
+    let snapshot = bind_three_member_topology(
+        three_member_cutover_snapshot(vec![
             encrypted_fixture(
                 "/maetro/services/api/deploy-1/deploy/env",
                 json!({"PUBLIC_NAME": "api"}),
@@ -64,7 +68,7 @@ async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestRe
                 json!({"TOKEN": "secret"}),
             )?,
         ])?,
-        host_address,
+        host_addresses,
         ports,
     )?;
     for entry in snapshot.entries() {
@@ -103,16 +107,11 @@ async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestRe
             source_sha256: hex::encode(expected_digest),
         }
     );
-    for write in plan.writes() {
-        let key = keyspace.resource(&ResourceKind::new(write.kind().as_str())?, write.id());
-        assert_eq!(
-            store.get(&key).await?.map(|stored| stored.value),
-            Some(write.value().to_vec())
-        );
-    }
+    verify_plan(&plan, &keyspace, store.as_ref()).await?;
     let native_snapshot = directory.path().join("post-migration.db");
     save_native_snapshot(&mut raw, &native_snapshot).await?;
     let restore_plan = plan_legacy_store_restore(&snapshot)?;
+    assert_eq!(restore_plan.members().len(), 3);
 
     raw.put(
         "/maetro/services/api/deployments/history-next-index",
@@ -134,38 +133,48 @@ async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestRe
     runtime.shutdown(StoreShutdown::Immediate).await?;
 
     let restored_root = directory.path().join("rewrite");
-    restore_legacy_store(
-        &restore_plan,
-        &NodeId::new("node-a")?,
-        &native_snapshot,
-        &restored_root,
-        &etcdutl_binary,
-    )?;
-    verify_legacy_store_restore(
-        &restore_plan,
-        &NodeId::new("node-a")?,
-        &native_snapshot,
-        &restored_root,
-    )?;
-
-    let restored_config = provider_config(&restored_root, host_address, ports, MASTER_SECRET)?;
-    let restored_provider = EmbeddedEtcdProvider::new(
-        restored_config,
-        binary,
-        Arc::new(TokioClock::new()),
-        embedded_settings()?,
-    )?;
-    let restored_runtime = restored_provider.start(StoreStartMode::Restart).await?;
-    let restored_store = restored_runtime.store();
-    for write in plan.writes() {
-        let key = keyspace.resource(&ResourceKind::new(write.kind().as_str())?, write.id());
-        assert_eq!(
-            restored_store.get(&key).await?.map(|stored| stored.value),
-            Some(write.value().to_vec())
-        );
+    for node_id in restore_plan.members().keys() {
+        let node_root = restored_root.join(node_id.as_str());
+        restore_legacy_store(
+            &restore_plan,
+            node_id,
+            &native_snapshot,
+            &node_root,
+            &etcdutl_binary,
+        )?;
+        verify_legacy_store_restore(&restore_plan, node_id, &native_snapshot, &node_root)?;
     }
-    drop(restored_store);
-    restored_runtime.shutdown(StoreShutdown::Immediate).await?;
+
+    let restored_configs = provider_configs(&restored_root, host_addresses, ports, MASTER_SECRET)?;
+    let restored_bootstrap_config = restored_configs
+        .get(&bootstrap_node)
+        .cloned()
+        .ok_or("restored bootstrap provider config is missing")?;
+    let mut starts = JoinSet::new();
+    for config in restored_configs.into_values() {
+        let provider = EmbeddedEtcdProvider::new(
+            config,
+            binary.clone(),
+            Arc::new(TokioClock::new()),
+            embedded_settings()?,
+        )?;
+        starts.spawn(async move { provider.start(StoreStartMode::Restart).await });
+    }
+    let mut restored_runtimes = Vec::new();
+    while let Some(started) = starts.join_next().await {
+        restored_runtimes.push(started??);
+    }
+    assert_eq!(restored_runtimes.len(), 3);
+    for restored_runtime in &restored_runtimes {
+        let restored_store = restored_runtime.store();
+        verify_plan(&plan, &keyspace, restored_store.as_ref()).await?;
+    }
+    let mut restored_raw = raw_client(&restored_bootstrap_config, &endpoint).await?;
+    assert_eq!(restored_raw.member_list().await?.members().len(), 3);
+    drop(restored_raw);
+    for restored_runtime in restored_runtimes {
+        restored_runtime.shutdown(StoreShutdown::Immediate).await?;
+    }
     Ok(())
 }
 
@@ -181,212 +190,38 @@ async fn source_matches(
     }
 }
 
-fn provider_config(
-    root: &Path,
-    host_address: Ipv4Addr,
-    ports: ClusterPorts,
-    store_secret: &str,
-) -> Result<StoreProviderConfig, Box<dyn std::error::Error>> {
-    let cluster_id = ClusterId::new(CLUSTER_ID)?;
-    let node_id = NodeId::new("node-a")?;
-    let member = StoreMember {
-        node_id: node_id.clone(),
-        host_address,
-    };
-    let authority = ClusterCertificateAuthority::generate(CLUSTER_ID, certificate_validity()?)?;
-    let security = authority.issue_node_certificate(
-        &node_id,
-        "node-a.internal",
-        host_address,
-        NodeRole::Master,
-        certificate_validity()?,
-    )?;
-    Ok(StoreProviderConfig::new(
-        cluster_id,
-        member.clone(),
-        BTreeMap::from([(node_id, member)]),
-        ports,
-        root.join("store"),
-        SecretValue::new(store_secret),
-        security,
-    )?)
-}
-
-fn bind_snapshot_topology(
-    snapshot: LegacySnapshot,
-    host_address: Ipv4Addr,
-    ports: ClusterPorts,
-) -> Result<LegacySnapshot, Box<dyn std::error::Error>> {
-    let api_port = ports.wireguard;
-    let mut entries = Vec::new();
-    for entry in snapshot.entries() {
-        let mut key = entry.key().to_owned();
-        let mut value = entry.value().to_vec();
-        match entry.key() {
-            "/maetro/system/cluster-meta" => {
-                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
-                set_json(&mut document, "/bootstrapHostIp", json!(host_address))?;
-                set_json(&mut document, "/initialVoterHostIps", json!([host_address]))?;
-                set_json(
-                    &mut document,
-                    "/initialVoterEndpoints",
-                    json!([{
-                        "hostIp": host_address,
-                        "apiPort": api_port,
-                        "gatewayPort": ports.gateway,
-                        "etcdClientPort": ports.store_client,
-                        "etcdPeerPort": ports.store_peer
-                    }]),
-                )?;
-                value = serde_json::to_vec(&document)?;
-            }
-            "/maetro/cluster/node-records/node-a" => {
-                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
-                set_json(
-                    &mut document,
-                    "/lastInfo/clusterHostIp",
-                    json!(host_address),
-                )?;
-                set_json(&mut document, "/lastInfo/clusterApiPort", json!(api_port))?;
-                set_json(
-                    &mut document,
-                    "/lastInfo/clusterGatewayPort",
-                    json!(ports.gateway),
-                )?;
-                value = serde_json::to_vec(&document)?;
-            }
-            candidate if candidate.starts_with("/maetro/cluster/control-addresses/") => {
-                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
-                set_json(&mut document, "/hostIp", json!(host_address))?;
-                set_json(&mut document, "/apiPort", json!(api_port))?;
-                set_json(&mut document, "/gatewayPort", json!(ports.gateway))?;
-                set_json(&mut document, "/etcdClientPort", json!(ports.store_client))?;
-                set_json(&mut document, "/etcdPeerPort", json!(ports.store_peer))?;
-                key = format!(
-                    "/maetro/cluster/control-addresses/{:08x}-{api_port:04x}",
-                    u32::from_be_bytes(host_address.octets())
-                );
-                value = serde_json::to_vec(&document)?;
-            }
-            candidate if candidate.starts_with("/maetro/cluster/voters/") => {
-                let mut document: serde_json::Value = serde_json::from_slice(&value)?;
-                set_json(
-                    &mut document,
-                    "/peerUrls",
-                    json!([format!("https://{host_address}:{}", ports.store_peer)]),
-                )?;
-                set_json(
-                    &mut document,
-                    "/clientUrls",
-                    json!([format!("https://{host_address}:{}", ports.store_client)]),
-                )?;
-                value = serde_json::to_vec(&document)?;
-            }
-            _ => {}
-        }
-        entries.push(LegacyEntry::new(key, value));
+async fn verify_plan(
+    plan: &crate::MigrationPlan,
+    keyspace: &Keyspace,
+    store: &dyn Store,
+) -> TestResult {
+    for write in plan.writes() {
+        let key = keyspace.resource(&ResourceKind::new(write.kind().as_str())?, write.id());
+        assert_eq!(
+            store.get(&key).await?.map(|stored| stored.value),
+            Some(write.value().to_vec())
+        );
     }
-    Ok(LegacySnapshot::new(entries)?)
-}
-
-fn set_json(
-    document: &mut serde_json::Value,
-    pointer: &str,
-    value: serde_json::Value,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let target = document
-        .pointer_mut(pointer)
-        .ok_or_else(|| std::io::Error::other(format!("fixture has no `{pointer}`")))?;
-    *target = value;
     Ok(())
 }
 
-async fn save_native_snapshot(client: &mut Client, path: &Path) -> TestResult {
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let file = options.open(path)?;
-    let mut file = tokio::fs::File::from_std(file);
-    let mut snapshot = client.snapshot().await?;
-    while let Some(chunk) = snapshot.message().await? {
-        file.write_all(chunk.blob()).await?;
-    }
-    file.sync_all().await?;
-    Ok(())
-}
-
-fn embedded_settings() -> Result<EmbeddedEtcdSettings, cluster::StoreProviderError> {
-    EmbeddedEtcdSettings::new(
-        Duration::from_secs(30),
-        Duration::from_secs(2),
-        Duration::from_millis(100),
-        Duration::from_secs(1),
-    )
-}
-
-fn cutover_connection(
-    config: &StoreProviderConfig,
-    endpoint: String,
-) -> Result<CutoverEtcdConnection, Box<dyn std::error::Error>> {
-    let security = config.security();
-    Ok(CutoverEtcdConnection::new(
-        vec![endpoint],
-        security.trust_root_pem.as_bytes().to_vec(),
-        security.identity.certificate_pem.as_bytes().to_vec(),
-        security
-            .identity
-            .private_key_pem
-            .expose()
-            .as_bytes()
-            .to_vec(),
-    )?)
-}
-
-async fn raw_client(
-    config: &StoreProviderConfig,
-    endpoint: &str,
-) -> Result<Client, etcd_client::Error> {
-    let security = config.security();
-    let tls = TlsOptions::new()
-        .ca_certificate(Certificate::from_pem(security.trust_root_pem.as_bytes()))
-        .identity(Identity::from_pem(
-            security.identity.certificate_pem.as_bytes(),
-            security.identity.private_key_pem.expose().as_bytes(),
-        ));
-    Client::connect([endpoint], Some(ConnectOptions::new().with_tls(tls))).await
-}
-
-fn allocate_ports(host_address: Ipv4Addr) -> Result<ClusterPorts, Box<dyn std::error::Error>> {
-    let mut listeners = Vec::new();
-    let mut ports = Vec::new();
-    while ports.len() < 4 {
-        let listener = TcpListener::bind((host_address, 0))?;
-        let port = listener.local_addr()?.port();
-        if !ports.contains(&port) {
-            ports.push(port);
-            listeners.push(listener);
-        }
-    }
-    let [gateway, store_client, store_peer, wireguard]: [u16; 4] = ports
+fn parse_host_addresses(value: &str) -> Result<[Ipv4Addr; 3], Box<dyn std::error::Error>> {
+    let addresses = value
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<Ipv4Addr>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let addresses: [Ipv4Addr; 3] = addresses
         .try_into()
-        .map_err(|_| "failed to allocate rehearsal ports")?;
-    drop(listeners);
-    Ok(ClusterPorts::new(
-        gateway,
-        store_client,
-        store_peer,
-        wireguard,
-    )?)
-}
-
-fn certificate_validity() -> Result<CertificateValidity, Box<dyn std::error::Error>> {
-    let now = OffsetDateTime::now_utc();
-    Ok(CertificateValidity::new(
-        now - CertificateDuration::days(1),
-        now + CertificateDuration::days(3_650),
-    )?)
+        .map_err(|_| "MAESTRO_ETCD_TEST_IPS must contain exactly three addresses")?;
+    if addresses
+        .iter()
+        .any(|address| !address.is_private() || address.is_loopback())
+        || addresses.iter().copied().collect::<BTreeSet<_>>().len() != 3
+    {
+        return Err(
+            "MAESTRO_ETCD_TEST_IPS must contain three unique private non-loopback addresses".into(),
+        );
+    }
+    Ok(addresses)
 }

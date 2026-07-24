@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
-use kernel_store::{Clock, EtcdStore, EtcdTlsConfig, Store, derive_key};
+use kernel_store::{Clock, EtcdStore, EtcdTlsConfig, MonotonicTime, Store, derive_key};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -116,7 +116,13 @@ impl EtcdProcess {
     ) -> Result<(), StoreProviderError> {
         let deadline = clock.now().saturating_add(settings.startup_timeout());
         let mut delay = settings.initial_retry_delay();
+        let mut last_error = "readiness was not observed".to_owned();
         loop {
+            if clock.now() >= deadline {
+                return Err(StoreProviderError::Unavailable {
+                    reason: format!("startup deadline elapsed: {last_error}"),
+                });
+            }
             if let Some(status) =
                 self.child
                     .try_wait()
@@ -133,22 +139,29 @@ impl EtcdProcess {
                 });
             }
 
-            match probe_readiness(
+            let probe_deadline = std::cmp::min(
+                deadline,
+                clock.now().saturating_add(settings.operation_timeout()),
+            );
+            match probe_readiness_before(
                 config,
                 &plan.local_client_url,
                 plan.readiness,
                 settings.operation_timeout(),
+                probe_deadline,
+                clock,
             )
             .await
             {
                 Ok(()) => return Ok(()),
-                Err(error) if clock.now() >= deadline => {
-                    return Err(StoreProviderError::Unavailable {
-                        reason: format!("startup deadline elapsed: {error}"),
-                    });
-                }
-                Err(_) => {
-                    let wake = clock.now().saturating_add(delay);
+                Err(error) => {
+                    last_error = error;
+                    if clock.now() >= deadline {
+                        return Err(StoreProviderError::Unavailable {
+                            reason: format!("startup deadline elapsed: {last_error}"),
+                        });
+                    }
+                    let wake = std::cmp::min(deadline, clock.now().saturating_add(delay));
                     clock.sleep_until(wake).await;
                     delay = delay.saturating_mul(2).min(settings.maximum_retry_delay());
                 }
@@ -306,6 +319,23 @@ async fn probe_readiness(
         .await
         .map_err(|error| format!("linearizable read failed: {error}"))?;
     Ok(())
+}
+
+pub(crate) async fn probe_readiness_before(
+    config: &StoreProviderConfig,
+    endpoint: &str,
+    readiness: EtcdReadiness,
+    operation_timeout: std::time::Duration,
+    deadline: MonotonicTime,
+    clock: &dyn Clock,
+) -> Result<(), String> {
+    tokio::select! {
+        biased;
+        result = probe_readiness(config, endpoint, readiness, operation_timeout) => result,
+        () = clock.sleep_until(deadline) => {
+            Err("readiness probe deadline elapsed".to_owned())
+        }
+    }
 }
 
 fn spawn_log_reader<Reader>(

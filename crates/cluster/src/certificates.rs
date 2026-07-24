@@ -159,7 +159,12 @@ impl ClusterCertificateAuthority {
         )
     }
 
-    pub(crate) fn issue_node_certificate_with_ip_sans(
+    /// Issues one node identity with extra IP subject alternative names.
+    ///
+    /// The primary address remains required. Extra addresses support nodes
+    /// whose authenticated cluster traffic can originate from another local
+    /// interface.
+    pub fn issue_node_certificate_with_ip_sans(
         &self,
         node_id: &NodeId,
         hostname: &str,
