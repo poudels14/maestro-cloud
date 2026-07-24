@@ -4,11 +4,17 @@ use node_fabric::{WORKLOAD_NODE_DIRECTORY, WORKLOAD_TOKEN_HEADER, WorkloadClaims
 use runtime::{MountAccess, MountSource};
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 use tonic::Request;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Endpoint;
 
-use crate::node_api_mount::NodeApiMountManager;
+use crate::node_api_files::{
+    PreparedNodeApiFiles, cleanup_node_api_directory, list_workload_directories,
+    prepare_node_api_files, remove_stale_socket,
+};
+use crate::node_api_mount::{NodeApiFileSystem, NodeApiMountManager};
 use crate::{NodeApiMountError, NodeApiSocketOwner, WorkloadControlAccess};
 
 use super::node_api_support::node_api_services;
@@ -173,6 +179,108 @@ async fn stale_cleanup_stops_only_inactive_workload_servers()
     assert!(!root.join("workload-2").exists());
     manager.cleanup(&workload_id("workload-1")).await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn slow_file_preparation_does_not_block_an_unrelated_workload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("node-api");
+    let owner = current_owner(temporary.path())?;
+    let blocked_workload = workload_id("workload-1");
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let files = Arc::new(BlockingNodeApiFileSystem {
+        blocked_workload: blocked_workload.clone(),
+        started_sender,
+        release_receiver: Mutex::new(Some(release_receiver)),
+    });
+    let manager = Arc::new(NodeApiMountManager::with_file_system(
+        root,
+        Some(node_api_services()),
+        files,
+    )?);
+
+    let blocked_manager = manager.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .ensure(
+                &blocked_workload,
+                owner,
+                claims("workload-1"),
+                WorkloadControlAccess::Denied,
+            )
+            .await
+    });
+    tokio::task::spawn_blocking(move || started_receiver.recv()).await??;
+
+    let unrelated = tokio::time::timeout(
+        Duration::from_secs(2),
+        manager.ensure(
+            &workload_id("workload-2"),
+            owner,
+            claims("workload-2"),
+            WorkloadControlAccess::Denied,
+        ),
+    )
+    .await;
+    release_sender.send(())?;
+    blocked.await??;
+    unrelated.map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "unrelated node API preparation waited for another workload",
+        )
+    })??;
+    manager.shutdown_all().await?;
+    Ok(())
+}
+
+struct BlockingNodeApiFileSystem {
+    blocked_workload: WorkloadId,
+    started_sender: mpsc::SyncSender<()>,
+    release_receiver: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl NodeApiFileSystem for BlockingNodeApiFileSystem {
+    fn prepare(
+        &self,
+        root: &std::path::Path,
+        workload_id: &WorkloadId,
+        owner: NodeApiSocketOwner,
+    ) -> Result<PreparedNodeApiFiles, NodeApiMountError> {
+        if workload_id == &self.blocked_workload {
+            self.started_sender
+                .send(())
+                .map_err(|error| task_failure(error.to_string()))?;
+            self.release_receiver
+                .lock()
+                .map_err(|error| task_failure(error.to_string()))?
+                .take()
+                .ok_or_else(|| task_failure("release receiver was already consumed"))?
+                .recv()
+                .map_err(|error| task_failure(error.to_string()))?;
+        }
+        prepare_node_api_files(root, workload_id, owner)
+    }
+
+    fn remove_stale_socket(&self, socket_path: &std::path::Path) -> Result<(), NodeApiMountError> {
+        remove_stale_socket(socket_path)
+    }
+
+    fn cleanup(&self, directory: &std::path::Path) -> Result<(), NodeApiMountError> {
+        cleanup_node_api_directory(directory)
+    }
+
+    fn list_workloads(&self, root: &std::path::Path) -> Result<Vec<WorkloadId>, NodeApiMountError> {
+        list_workload_directories(root)
+    }
+}
+
+fn task_failure(message: impl Into<String>) -> NodeApiMountError {
+    NodeApiMountError::Task {
+        message: message.into(),
+    }
 }
 
 fn current_owner(path: &std::path::Path) -> std::io::Result<NodeApiSocketOwner> {
