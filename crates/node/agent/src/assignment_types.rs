@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -16,6 +17,8 @@ pub struct AssignmentAgentSettings {
     pub node_id: NodeId,
     /// Node-local runtime bridge and exact host-owned IPAM range.
     pub network: NetworkSpec,
+    /// Resolver address injected into workloads, when the network exposes one.
+    pub dns_server: Option<IpAddr>,
     /// Graceful workload shutdown deadline before forced termination.
     pub stop_timeout: Duration,
     /// Level-triggered full reconciliation interval.
@@ -59,6 +62,7 @@ pub struct AssignmentReconcileReport {
 
 pub(crate) struct ConvergedAssignment {
     pub(crate) handle: WorkloadHandle,
+    pub(crate) workload_address: IpAddr,
     pub(crate) restarted: bool,
 }
 

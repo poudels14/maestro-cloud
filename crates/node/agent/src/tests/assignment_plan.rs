@@ -16,7 +16,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         &cluster_id(),
         &assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {
@@ -32,7 +32,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
     );
     assert_eq!(
         workload.configuration.workload_address,
-        Some(assignment.spec.workload_address)
+        assignment.spec.workload_address
     );
     assert_eq!(workload.configuration.dns_server, Some(dns_server()));
     assert_eq!(workload.image.as_str(), "registry.test/api@sha256:abc");
@@ -72,7 +72,7 @@ fn assignment_plan_preserves_an_explicit_numeric_workload_user()
         &cluster_id(),
         &assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {
@@ -106,7 +106,7 @@ fn assignment_plan_carries_the_http_healthcheck_path_as_observability_metadata()
         &cluster_id(),
         &assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {
@@ -154,7 +154,7 @@ fn assignment_plan_rejects_a_host_volume_owned_by_another_node() {
             &cluster_id(),
             &assignment,
             &deployment,
-            dns_server(),
+            Some(dns_server()),
             Vec::new(),
         ),
         Err(WorkloadPlanError::HostVolumeNodeMismatch { .. })
@@ -175,7 +175,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &cluster_id(),
         &first_assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {
@@ -186,7 +186,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &cluster_id(),
         &first_assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {
@@ -197,7 +197,7 @@ fn assignment_plan_scopes_replica_managed_volumes_to_the_active_rollout_slot()
         &cluster_id(),
         &first_assignment,
         &deployment,
-        dns_server(),
+        Some(dns_server()),
         Vec::new(),
     )?
     else {

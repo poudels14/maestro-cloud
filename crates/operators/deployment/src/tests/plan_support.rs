@@ -133,12 +133,13 @@ pub(super) fn assignment_slot(
             replica_index,
             node_id: NodeId::new("node-1").unwrap(),
             placement_epoch: epoch,
-            workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: None,
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10))),
             conditions: Vec::new(),
         },
     }

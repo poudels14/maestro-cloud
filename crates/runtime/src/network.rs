@@ -59,12 +59,24 @@ impl NetworkCidr {
 pub struct NetworkSpec {
     /// Stable backend network name.
     pub name: String,
-    /// Workload address range.
-    pub range: NetworkCidr,
-    /// Host-side gateway inside the range.
-    pub gateway: IpAddr,
+    /// Backend-specific address ownership and optional managed IPAM state.
+    pub addressing: NetworkAddressing,
     /// Link MTU applied consistently to runtime bridges and workload interfaces.
     pub mtu_bytes: u16,
+}
+
+/// Address ownership for one runtime network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkAddressing {
+    /// Maestro owns the exact range, gateway, and workload reservations.
+    Managed {
+        /// Workload address range.
+        range: NetworkCidr,
+        /// Host-side gateway inside the range.
+        gateway: IpAddr,
+    },
+    /// The runtime owns IPAM and reports an address after attachment.
+    Delegated,
 }
 
 /// Stable handle returned after ensuring a runtime network.
@@ -108,6 +120,36 @@ pub struct AddressLease {
     pub workload_id: WorkloadId,
     /// Allocated cluster-routable address.
     pub address: IpAddr,
+}
+
+/// Address reservation made before a workload is attached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddressReservation {
+    /// Maestro or the provider reserved an exact address.
+    Exact(AddressLease),
+    /// The provider will choose and report the address during attachment.
+    Delegated {
+        /// Workload whose backend-native endpoint will receive the address.
+        workload_id: WorkloadId,
+    },
+}
+
+impl AddressReservation {
+    /// Returns the stable workload that owns this reservation.
+    pub fn workload_id(&self) -> &WorkloadId {
+        match self {
+            Self::Exact(lease) => &lease.workload_id,
+            Self::Delegated { workload_id } => workload_id,
+        }
+    }
+
+    /// Returns the preselected address, or `None` when attachment owns IPAM.
+    pub fn address(&self) -> Option<IpAddr> {
+        match self {
+            Self::Exact(lease) => Some(lease.address),
+            Self::Delegated { .. } => None,
+        }
+    }
 }
 
 /// Current network attachment returned by backend inspection.
@@ -163,7 +205,7 @@ pub enum NetworkProviderError {
     },
 }
 
-/// Runtime-native network lifecycle and host-owned address allocation.
+/// Runtime-native network lifecycle with explicit managed or delegated IPAM.
 #[async_trait]
 pub trait NetworkProvider: Send + Sync {
     /// Creates or idempotently validates a runtime network.
@@ -178,14 +220,14 @@ pub trait NetworkProvider: Send + Sync {
         network: &NetworkHandle,
         workload_id: &WorkloadId,
         request: AddressRequest,
-    ) -> Result<AddressLease, NetworkProviderError>;
+    ) -> Result<AddressReservation, NetworkProviderError>;
 
-    /// Attaches one workload to an allocated address idempotently.
+    /// Attaches one workload to a reservation and reports its observed address.
     async fn attach(
         &self,
         workload: &WorkloadHandle,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        reservation: &AddressReservation,
     ) -> Result<NetworkAttachment, NetworkProviderError>;
 
     /// Detaches one workload without releasing its address reservation.
@@ -201,11 +243,11 @@ pub trait NetworkProvider: Send + Sync {
         workload: &WorkloadHandle,
     ) -> Result<WorkloadNetworkStatus, NetworkProviderError>;
 
-    /// Releases one address only when the stable workload owner matches.
+    /// Releases an owned reservation for one stable workload identity.
     async fn release_address(
         &self,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        workload_id: &WorkloadId,
     ) -> Result<(), NetworkProviderError>;
 }
 

@@ -164,10 +164,14 @@ fn schedule_nodes(
                         && condition.state == ConditionState::True
                 })
         });
+        let network_ready = match node.spec.workload_network_mode {
+            kernel_api::WorkloadNetworkMode::ClusterRouted => mesh_ready,
+            kernel_api::WorkloadNetworkMode::RuntimeDelegated => true,
+        };
         let live = live_nodes.contains(&node.meta.id);
         let state = if explicitly_unschedulable {
             NodeSchedulingState::Unschedulable
-        } else if live && mesh_ready {
+        } else if live && network_ready {
             NodeSchedulingState::Available
         } else {
             NodeSchedulingState::Unavailable
@@ -185,9 +189,8 @@ fn schedule_nodes(
             node_id: node.meta.id.clone(),
             role: node.spec.role,
             labels: node.spec.scheduling_labels.clone(),
-            workload_subnet: network
-                .map(|network| network.spec.workload_subnet.clone())
-                .unwrap_or_default(),
+            workload_network_mode: node.spec.workload_network_mode,
+            workload_subnet: network.map(|network| network.spec.workload_subnet.clone()),
             state,
         });
     }

@@ -307,6 +307,12 @@ fn convert_assignment(
     let deletion_timestamp = status
         .filter(|status| is_terminal(*status))
         .map(|_| Timestamp(legacy.created_at_ms));
+    let workload_address = IpAddr::V4(legacy.container_ip.ok_or_else(|| {
+        invalid_assignment(
+            &legacy.assignment_id,
+            "reserved workload address is missing",
+        )
+    })?);
     Ok(Object {
         meta: ObjectMeta {
             id: assignment_id,
@@ -334,12 +340,7 @@ fn convert_assignment(
             replica_index: legacy.replica_index,
             node_id: parse_node_id(&legacy.node_id, "assignment node id")?,
             placement_epoch: legacy.placement_epoch,
-            workload_address: IpAddr::V4(legacy.container_ip.ok_or_else(|| {
-                invalid_assignment(
-                    &legacy.assignment_id,
-                    "reserved workload address is missing",
-                )
-            })?),
+            workload_address: Some(workload_address),
             replaces_assignment_id: legacy
                 .replaces_assignment_id
                 .as_deref()
@@ -349,6 +350,9 @@ fn convert_assignment(
         status: AssignmentStatus {
             phase: status.map_or(AssignmentPhase::Pending, assignment_phase),
             workload_id,
+            workload_address: status
+                .filter(|status| has_workload(*status))
+                .map(|_| workload_address),
             conditions: Vec::new(),
         },
     })

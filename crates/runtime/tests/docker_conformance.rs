@@ -6,8 +6,9 @@ use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 use runtime::conformance::{WorkloadRuntimeFixture, exercise_workload_runtime};
 #[cfg(all(feature = "docker", feature = "test-util", unix))]
 use runtime::{
-    ArtifactReference, ContainerWorkload, DockerRuntime, ExecMode, ExecRequest,
-    WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
+    AddressRequest, ArtifactReference, ContainerWorkload, DockerRuntime, ExecMode, ExecRequest,
+    NetworkAddressing, NetworkProvider, NetworkSpec, WorkloadConfiguration, WorkloadMetadata,
+    WorkloadRuntime, WorkloadSpec,
 };
 #[cfg(all(feature = "docker", feature = "test-util", unix))]
 use std::collections::BTreeMap;
@@ -44,13 +45,43 @@ async fn docker_backend_passes_workload_runtime_conformance() {
     let streaming_id = format!("docker-streaming-{}", std::process::id());
     let streaming_spec = container_spec(&image, &streaming_id, "docker-streaming");
     let handle = runtime.create(&streaming_spec).await.unwrap();
+    let network_name = format!("maestro-conformance-{}", std::process::id());
+    let network = runtime
+        .ensure_network(&NetworkSpec {
+            name: network_name.clone(),
+            addressing: NetworkAddressing::Delegated,
+            mtu_bytes: 1_500,
+        })
+        .await
+        .unwrap();
+    let reservation = runtime
+        .allocate_address(&network, handle.workload_id(), AddressRequest::Any)
+        .await
+        .unwrap();
+    let attachment = runtime
+        .attach(&handle, &network, &reservation)
+        .await
+        .unwrap();
+    assert!(!attachment.address.is_unspecified());
     runtime.start(&handle).await.unwrap();
     let replacement = DockerRuntime::connect_with_defaults().unwrap();
+    assert_eq!(
+        NetworkProvider::inspect(&replacement, &handle)
+            .await
+            .unwrap()
+            .attachments,
+        vec![attachment]
+    );
     let fixture = running_fixture();
     assert_running_workload_adoptable(&replacement, &handle, &fixture)
         .await
         .unwrap();
     exercise_running_workload(&replacement, &handle, &fixture)
+        .await
+        .unwrap();
+    docker::Docker::connect_with_defaults()
+        .unwrap()
+        .remove_network(&network_name)
         .await
         .unwrap();
 }

@@ -306,6 +306,7 @@ fn node(id: &str, role: NodeRole) -> Result<Node, kernel_api::InvalidIdentifier>
             hostname: format!("{id}.internal"),
             host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             role,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {

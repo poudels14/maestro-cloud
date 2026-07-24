@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 
-use kernel_api::{Assignment, NodeId};
+use kernel_api::{Assignment, NodeId, WorkloadNetworkMode};
 
 use crate::model::{ScheduleNode, UnschedulableReason};
 use crate::plan::PlannedAssignment;
@@ -15,7 +15,7 @@ pub(crate) fn allocate_addresses(
 ) -> Vec<(usize, UnschedulableReason)> {
     let mut used = BTreeMap::<NodeId, BTreeSet<Ipv4Addr>>::new();
     for assignment in current {
-        if let IpAddr::V4(address) = assignment.spec.workload_address {
+        if let Some(IpAddr::V4(address)) = assignment.spec.workload_address {
             used.entry(assignment.spec.node_id.clone())
                 .or_default()
                 .insert(address);
@@ -27,13 +27,22 @@ pub(crate) fn allocate_addresses(
         .map(|node| {
             (
                 node.node_id.clone(),
-                WorkloadSubnet::parse(&node.workload_subnet),
+                node.workload_subnet
+                    .as_deref()
+                    .ok_or(())
+                    .and_then(WorkloadSubnet::parse),
             )
         })
         .collect::<BTreeMap<_, _>>();
     let mut failures = Vec::new();
     for (index, assignment) in assignments.iter_mut().enumerate() {
         if assignment.workload_address.is_some() {
+            continue;
+        }
+        if nodes.iter().any(|node| {
+            node.node_id == assignment.node_id
+                && node.workload_network_mode == WorkloadNetworkMode::RuntimeDelegated
+        }) {
             continue;
         }
         let Some(subnet) = subnets.get(&assignment.node_id) else {
@@ -50,7 +59,7 @@ pub(crate) fn allocate_addresses(
             let text = nodes
                 .iter()
                 .find(|node| node.node_id == assignment.node_id)
-                .map(|node| node.workload_subnet.clone())
+                .and_then(|node| node.workload_subnet.clone())
                 .unwrap_or_default();
             failures.push((
                 index,

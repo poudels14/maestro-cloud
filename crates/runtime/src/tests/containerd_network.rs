@@ -6,7 +6,7 @@ use kernel_api::WorkloadId;
 use crate::containerd_network::{
     TaskAttachment, attachment_plan, host_interface_name, peer_interface_name, task_attachment,
 };
-use crate::{AddressLease, NetworkCidr, NetworkProviderError, NetworkSpec};
+use crate::{AddressLease, NetworkAddressing, NetworkCidr, NetworkProviderError, NetworkSpec};
 
 #[test]
 fn native_attachment_plan_is_stable_bounded_and_mesh_compatible() {
@@ -62,8 +62,10 @@ fn native_attachment_plan_rejects_wrong_owners_and_unsupported_addresses() {
 
     let ipv6 = NetworkSpec {
         name: "maestro0".to_owned(),
-        range: NetworkCidr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 128).unwrap(),
-        gateway: IpAddr::V6(Ipv6Addr::LOCALHOST),
+        addressing: NetworkAddressing::Managed {
+            range: NetworkCidr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 128).unwrap(),
+            gateway: IpAddr::V6(Ipv6Addr::LOCALHOST),
+        },
         mtu_bytes: 1_420,
     };
     let lease = AddressLease {
@@ -107,8 +109,10 @@ fn native_attachment_recreates_exited_tasks_before_entering_their_namespace() {
 fn network_spec() -> NetworkSpec {
     NetworkSpec {
         name: "maestro0".to_owned(),
-        range: NetworkCidr::new(address(0), 24).unwrap(),
-        gateway: address(1),
+        addressing: NetworkAddressing::Managed {
+            range: NetworkCidr::new(address(0), 24).unwrap(),
+            gateway: address(1),
+        },
         mtu_bytes: 1_420,
     }
 }

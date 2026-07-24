@@ -60,8 +60,6 @@ mod docker_config;
 #[cfg(all(feature = "docker", unix))]
 mod docker_network;
 #[cfg(all(feature = "docker", unix))]
-mod docker_network_ipam;
-#[cfg(all(feature = "docker", unix))]
 mod docker_stats;
 #[cfg(all(feature = "docker", unix))]
 mod docker_stream;
@@ -121,8 +119,9 @@ pub use fake::{FakeRuntime, FakeRuntimeCall, FakeRuntimeOperation};
 #[cfg(any(test, feature = "test-util"))]
 pub use fake_network::FakeNetworkProvider;
 pub use network::{
-    AddressLease, AddressRequest, NetworkAttachment, NetworkCidr, NetworkHandle, NetworkProvider,
-    NetworkProviderError, NetworkSpec, WorkloadNetworkStatus,
+    AddressLease, AddressRequest, AddressReservation, NetworkAddressing, NetworkAttachment,
+    NetworkCidr, NetworkHandle, NetworkProvider, NetworkProviderError, NetworkSpec,
+    WorkloadNetworkStatus,
 };
 #[cfg(target_os = "linux")]
 pub use process::ProcessRuntime;

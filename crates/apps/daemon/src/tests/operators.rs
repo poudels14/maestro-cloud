@@ -333,6 +333,7 @@ fn node() -> Result<Node, kernel_api::InvalidIdentifier> {
             hostname: "node-1.internal".to_string(),
             host_address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             role: NodeRole::Master,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {

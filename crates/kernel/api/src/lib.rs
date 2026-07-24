@@ -61,7 +61,7 @@ pub use network::{
 pub use node::{
     ClusterInfo, Node, NodeFirewall, NodeFirewallSpec, NodeFirewallStatus, NodeNetwork,
     NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, NodeTombstone,
-    NodeTombstoneSpec, NodeTombstoneStatus, UnschedulableReplica,
+    NodeTombstoneSpec, NodeTombstoneStatus, UnschedulableReplica, WorkloadNetworkMode,
 };
 pub use resource::Object;
 pub use schema::{
@@ -78,7 +78,7 @@ pub use workload::{
     PlacementHistory, PlacementHistorySpec, PlacementHistoryStatus, PreviewPolicy, ReplicaState,
     ReplicaStateSpec, ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec,
     ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
-    workload_hostname,
+    assignment_workload_address, workload_hostname,
 };
 
 #[cfg(test)]

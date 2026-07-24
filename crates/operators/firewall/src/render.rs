@@ -57,7 +57,12 @@ fn render_node(
                 .system_services
                 .contains(&assignment.spec.service_id)
         })
-        .map(|assignment| assignment.spec.workload_address.to_string())
+        .filter_map(|assignment| {
+            assignment
+                .spec
+                .workload_address
+                .map(|address| address.to_string())
+        })
         .collect::<Vec<_>>();
     renderer.add_set("system_sources_v4", AddressFamily::V4, system_sources);
 
@@ -115,7 +120,12 @@ fn service_sources(assignments: &[&kernel_api::Assignment], service_id: &Service
     assignments
         .iter()
         .filter(|assignment| &assignment.spec.service_id == service_id)
-        .map(|assignment| assignment.spec.workload_address.to_string())
+        .filter_map(|assignment| {
+            assignment
+                .spec
+                .workload_address
+                .map(|address| address.to_string())
+        })
         .collect()
 }
 

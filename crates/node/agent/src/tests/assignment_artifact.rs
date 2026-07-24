@@ -62,10 +62,13 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             node_id: node_id("node-1"),
             network: runtime::NetworkSpec {
                 name: "maestro-node-1".to_owned(),
-                range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24)?,
-                gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                addressing: runtime::NetworkAddressing::Managed {
+                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24)?,
+                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                },
                 mtu_bytes: 1_420,
             },
+            dns_server: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))),
             stop_timeout: Duration::from_secs(5),
             resync_interval: Duration::from_secs(30),
             restart_backoff_base: Duration::from_secs(5),

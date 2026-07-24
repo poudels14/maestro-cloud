@@ -1,29 +1,24 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 use async_trait::async_trait;
 use docker::errors::Error as DockerError;
 use docker::models::{
-    EndpointIpamConfig, EndpointSettings, Ipam, IpamConfig, NetworkConnectRequest,
-    NetworkCreateRequest, NetworkDisconnectRequest, NetworkInspect,
+    EndpointSettings, NetworkConnectRequest, NetworkCreateRequest, NetworkDisconnectRequest,
+    NetworkInspect,
 };
 use kernel_api::WorkloadId;
 
 use crate::docker::DockerRuntime;
-use crate::docker_network_ipam::{
-    cidr_text, gateway_is_usable, lease_is_reserved, parse_cidr, reconcile_network,
-    release_address, reserve_address,
-};
 use crate::docker_support::{container_id, is_conflict, is_not_found};
 use crate::{
-    AddressLease, AddressRequest, NetworkAttachment, NetworkHandle, NetworkProvider,
-    NetworkProviderError, NetworkSpec, WorkloadHandle, WorkloadNetworkStatus,
+    AddressRequest, AddressReservation, NetworkAddressing, NetworkAttachment, NetworkHandle,
+    NetworkProvider, NetworkProviderError, NetworkSpec, WorkloadHandle, WorkloadNetworkStatus,
 };
 
 const NETWORK_MANAGED_LABEL: &str = "com.maestro.network";
-const NETWORK_SUBNET_LABEL: &str = "com.maestro.network-subnet";
-const NETWORK_GATEWAY_LABEL: &str = "com.maestro.network-gateway";
 const NETWORK_MTU_LABEL: &str = "com.maestro.network-mtu";
+const LEGACY_NETWORK_SUBNET_LABEL: &str = "com.maestro.network-subnet";
+const LEGACY_NETWORK_GATEWAY_LABEL: &str = "com.maestro.network-gateway";
 const DOCKER_MTU_OPTION: &str = "com.docker.network.driver.mtu";
 
 #[async_trait]
@@ -54,8 +49,6 @@ impl NetworkProvider for DockerRuntime {
             Err(error) => return Err(network_error(error, &spec.name)),
         };
         validate_existing_network(&inspect, spec)?;
-        let mut state = self.network_state.lock().await;
-        reconcile_network(&mut state, spec, &inspect)?;
         NetworkHandle::new(spec.name.clone())
     }
 
@@ -64,72 +57,56 @@ impl NetworkProvider for DockerRuntime {
         network: &NetworkHandle,
         workload_id: &WorkloadId,
         request: AddressRequest,
-    ) -> Result<AddressLease, NetworkProviderError> {
-        let inspect = self
-            .client
+    ) -> Result<AddressReservation, NetworkProviderError> {
+        self.client
             .inspect_network(network.name(), None)
             .await
             .map_err(|error| network_error(error, network.name()))?;
-        let spec = inspected_network_spec(&inspect)?;
-        let mut state = self.network_state.lock().await;
-        reconcile_network(&mut state, &spec, &inspect)?;
-        reserve_address(&mut state, network.name(), workload_id, request)
+        match request {
+            AddressRequest::Any => Ok(AddressReservation::Delegated {
+                workload_id: workload_id.clone(),
+            }),
+            AddressRequest::Exact(address) => Err(NetworkProviderError::Rejected {
+                message: format!(
+                    "docker network `{}` owns IPAM and cannot reserve `{address}`",
+                    network.name()
+                ),
+            }),
+        }
     }
 
     async fn attach(
         &self,
         workload: &WorkloadHandle,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        reservation: &AddressReservation,
     ) -> Result<NetworkAttachment, NetworkProviderError> {
-        validate_lease(self, network, lease).await?;
+        let AddressReservation::Delegated { workload_id } = reservation else {
+            return Err(NetworkProviderError::Rejected {
+                message: "docker networking requires a delegated address reservation".to_owned(),
+            });
+        };
+        if workload_id != workload.workload_id() {
+            return Err(NetworkProviderError::Rejected {
+                message: "docker network reservation belongs to a different workload".to_owned(),
+            });
+        }
         let inspect = self
             .inspect_container(workload)
             .await
             .map_err(runtime_network_error)?;
         if let Some(attachment) = container_attachment(&inspect, network)? {
-            return matching_attachment(attachment, lease);
+            return Ok(attachment);
         }
-        let endpoint_config = match lease.address {
-            IpAddr::V4(_) => EndpointSettings {
-                ipam_config: Some(EndpointIpamConfig {
-                    ipv4_address: Some(lease.address.to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            IpAddr::V6(_) => EndpointSettings {
-                ipam_config: Some(EndpointIpamConfig {
-                    ipv6_address: Some(lease.address.to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        };
         let request = NetworkConnectRequest {
             container: container_id(workload)
                 .map_err(runtime_network_error)?
                 .to_owned(),
-            endpoint_config: Some(endpoint_config),
+            endpoint_config: Some(EndpointSettings::default()),
         };
         match self.client.connect_network(network.name(), request).await {
-            Ok(()) => Ok(NetworkAttachment {
-                network: network.clone(),
-                address: lease.address,
-                interface_name: None,
-            }),
-            Err(error) if is_conflict(&error) => {
-                let inspect = self
-                    .inspect_container(workload)
-                    .await
-                    .map_err(runtime_network_error)?;
-                let attachment = container_attachment(&inspect, network)?.ok_or(
-                    NetworkProviderError::AddressConflict {
-                        address: lease.address,
-                    },
-                )?;
-                matching_attachment(attachment, lease)
-            }
+            Ok(()) => attached_container(self, workload, network).await,
+            Err(error) if is_conflict(&error) => attached_container(self, workload, network).await,
             Err(error) => Err(network_error(error, network.name())),
         }
     }
@@ -183,34 +160,41 @@ impl NetworkProvider for DockerRuntime {
     async fn release_address(
         &self,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        _workload_id: &WorkloadId,
     ) -> Result<(), NetworkProviderError> {
-        let mut state = self.network_state.lock().await;
-        release_address(&mut state, network.name(), lease)
+        self.client
+            .inspect_network(network.name(), None)
+            .await
+            .map(|_| ())
+            .map_err(|error| network_error(error, network.name()))
     }
 }
 
+async fn attached_container(
+    runtime: &DockerRuntime,
+    workload: &WorkloadHandle,
+    network: &NetworkHandle,
+) -> Result<NetworkAttachment, NetworkProviderError> {
+    let inspect = runtime
+        .inspect_container(workload)
+        .await
+        .map_err(runtime_network_error)?;
+    container_attachment(&inspect, network)?.ok_or_else(|| NetworkProviderError::Unavailable {
+        message: format!(
+            "docker network `{}` attached without reporting an address",
+            network.name()
+        ),
+    })
+}
+
 pub(crate) fn network_create_request(spec: &NetworkSpec) -> NetworkCreateRequest {
-    let subnet = cidr_text(spec.range);
     NetworkCreateRequest {
         name: spec.name.clone(),
         driver: Some("bridge".to_owned()),
         scope: Some("local".to_owned()),
         attachable: Some(true),
-        ipam: Some(Ipam {
-            config: Some(vec![IpamConfig {
-                subnet: Some(subnet.clone()),
-                gateway: Some(spec.gateway.to_string()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        }),
-        enable_ipv4: Some(spec.gateway.is_ipv4()),
-        enable_ipv6: Some(spec.gateway.is_ipv6()),
         labels: Some(HashMap::from([
             (NETWORK_MANAGED_LABEL.to_owned(), "true".to_owned()),
-            (NETWORK_SUBNET_LABEL.to_owned(), subnet),
-            (NETWORK_GATEWAY_LABEL.to_owned(), spec.gateway.to_string()),
             (NETWORK_MTU_LABEL.to_owned(), spec.mtu_bytes.to_string()),
         ])),
         options: Some(HashMap::from([(
@@ -222,14 +206,14 @@ pub(crate) fn network_create_request(spec: &NetworkSpec) -> NetworkCreateRequest
 }
 
 fn validate_spec(spec: &NetworkSpec) -> Result<(), NetworkProviderError> {
-    let gateway_valid = gateway_is_usable(spec.range, spec.gateway);
-    if spec.name.is_empty() || !gateway_valid || spec.mtu_bytes == 0 {
+    if spec.name.is_empty()
+        || spec.mtu_bytes == 0
+        || spec.addressing != NetworkAddressing::Delegated
+    {
         Err(NetworkProviderError::InvalidRange {
             message: format!(
-                "network `{}` gateway `{}` is not a usable address in `{}`",
-                spec.name,
-                spec.gateway,
-                cidr_text(spec.range)
+                "docker network `{}` requires delegated IPAM and a nonzero MTU",
+                spec.name
             ),
         })
     } else {
@@ -237,17 +221,27 @@ fn validate_spec(spec: &NetworkSpec) -> Result<(), NetworkProviderError> {
     }
 }
 
-fn validate_existing_network(
+pub(crate) fn validate_existing_network(
     inspect: &NetworkInspect,
     desired: &NetworkSpec,
 ) -> Result<(), NetworkProviderError> {
-    let actual = inspected_network_spec(inspect)?;
     let managed = inspect
         .labels
         .as_ref()
         .and_then(|labels| labels.get(NETWORK_MANAGED_LABEL))
         .is_some_and(|value| value == "true");
-    if managed && actual == *desired {
+    let name_matches = inspect.name.as_deref() == Some(desired.name.as_str());
+    let driver_matches = inspect.driver.as_deref() == Some("bridge");
+    let mtu_matches = inspect
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(NETWORK_MTU_LABEL))
+        .is_some_and(|value| value == &desired.mtu_bytes.to_string());
+    let delegates_ipam = inspect.labels.as_ref().is_some_and(|labels| {
+        !labels.contains_key(LEGACY_NETWORK_SUBNET_LABEL)
+            && !labels.contains_key(LEGACY_NETWORK_GATEWAY_LABEL)
+    });
+    if managed && name_matches && driver_matches && mtu_matches && delegates_ipam {
         Ok(())
     } else {
         Err(NetworkProviderError::Rejected {
@@ -255,61 +249,6 @@ fn validate_existing_network(
                 "docker network `{}` already exists with different ownership or IPAM",
                 desired.name
             ),
-        })
-    }
-}
-
-fn inspected_network_spec(inspect: &NetworkInspect) -> Result<NetworkSpec, NetworkProviderError> {
-    let name = inspect
-        .name
-        .clone()
-        .ok_or_else(|| malformed_network("name"))?;
-    let config = inspect
-        .ipam
-        .as_ref()
-        .and_then(|ipam| ipam.config.as_ref())
-        .and_then(|configs| configs.first())
-        .ok_or_else(|| malformed_network("IPAM configuration"))?;
-    let subnet = config
-        .subnet
-        .as_deref()
-        .ok_or_else(|| malformed_network("subnet"))?;
-    let gateway = config
-        .gateway
-        .as_deref()
-        .ok_or_else(|| malformed_network("gateway"))?
-        .parse()
-        .map_err(|error| NetworkProviderError::Rejected {
-            message: format!("docker network `{name}` has an invalid gateway: {error}"),
-        })?;
-    let mtu_bytes = inspect
-        .labels
-        .as_ref()
-        .and_then(|labels| labels.get(NETWORK_MTU_LABEL))
-        .ok_or_else(|| malformed_network("MTU label"))?
-        .parse()
-        .map_err(|error| NetworkProviderError::Rejected {
-            message: format!("docker network `{name}` has an invalid MTU: {error}"),
-        })?;
-    Ok(NetworkSpec {
-        name,
-        range: parse_cidr(subnet)?,
-        gateway,
-        mtu_bytes,
-    })
-}
-
-async fn validate_lease(
-    runtime: &DockerRuntime,
-    network: &NetworkHandle,
-    lease: &AddressLease,
-) -> Result<(), NetworkProviderError> {
-    let state = runtime.network_state.lock().await;
-    if lease_is_reserved(&state, network.name(), lease) {
-        Ok(())
-    } else {
-        Err(NetworkProviderError::AddressConflict {
-            address: lease.address,
         })
     }
 }
@@ -354,25 +293,6 @@ fn endpoint_attachment(
             })
         })
         .transpose()
-}
-
-fn matching_attachment(
-    attachment: NetworkAttachment,
-    lease: &AddressLease,
-) -> Result<NetworkAttachment, NetworkProviderError> {
-    if attachment.address == lease.address {
-        Ok(attachment)
-    } else {
-        Err(NetworkProviderError::AddressConflict {
-            address: lease.address,
-        })
-    }
-}
-
-fn malformed_network(field: &str) -> NetworkProviderError {
-    NetworkProviderError::Rejected {
-        message: format!("docker network inspection omitted its {field}"),
-    }
 }
 
 fn network_error(error: DockerError, network: &str) -> NetworkProviderError {

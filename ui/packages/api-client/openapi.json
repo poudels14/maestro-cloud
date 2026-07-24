@@ -211,8 +211,9 @@
             "description": "Service being placed."
           },
           "workloadAddress": {
-            "description": "Cluster-routable address reserved before the workload starts.",
+            "description": "Cluster-routable address reserved before start, or absent for runtime IPAM.",
             "format": "ip",
+            "nullable": true,
             "type": "string"
           }
         },
@@ -221,8 +222,7 @@
           "deploymentId",
           "replicaIndex",
           "nodeId",
-          "placementEpoch",
-          "workloadAddress"
+          "placementEpoch"
         ],
         "type": "object"
       },
@@ -243,6 +243,12 @@
               }
             ],
             "description": "Current runtime phase."
+          },
+          "workloadAddress": {
+            "description": "Address observed after the runtime attached the workload.",
+            "format": "ip",
+            "nullable": true,
+            "type": "string"
           },
           "workloadId": {
             "anyOf": [
@@ -2836,6 +2842,15 @@
             },
             "description": "Arbitrary scheduling labels advertised by the node.",
             "type": "object"
+          },
+          "workloadNetworkMode": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkloadNetworkMode"
+              }
+            ],
+            "default": "clusterRouted",
+            "description": "Workload address ownership and network capability."
           }
         },
         "required": [
@@ -7650,6 +7665,25 @@
       "WorkloadId": {
         "description": "Stable identity of one runtime-managed workload instance.",
         "type": "string"
+      },
+      "WorkloadNetworkMode": {
+        "description": "Ownership of workload addressing and cross-node routing on one node.",
+        "oneOf": [
+          {
+            "description": "Maestro allocates stable addresses from the node's routed subnet.",
+            "enum": [
+              "clusterRouted"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The local runtime assigns addresses that the node agent reports.",
+            "enum": [
+              "runtimeDelegated"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "WorkloadUserSpec": {
         "description": "Numeric runtime identity used for process launch and Unix peer authorization.",

@@ -64,6 +64,7 @@ fn convert_node(node_id: &NodeId, bundle: &NodeBundle) -> Result<Node, LegacyPla
             hostname: info.hostname.clone(),
             host_address: info.cluster_host_ip.into(),
             role: convert_role(info.role),
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: info.labels.clone(),
         },
         status: NodeStatus {

@@ -144,6 +144,31 @@ fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
         plan(ports.input()),
         Err(FirewallPlanError::InvalidPortRange { .. })
     ));
+
+    let mut addressless = World::standard();
+    addressless.assignments[0].spec.workload_address = None;
+    assert!(matches!(
+        plan(addressless.input()),
+        Err(FirewallPlanError::MissingAssignmentAddress { .. })
+    ));
+}
+
+#[test]
+fn runtime_delegated_assignments_are_absent_from_linux_firewall_input() {
+    let mut world = World::standard();
+    let mut delegated = world.assignments.remove(0);
+    delegated.spec.node_id = NodeId::new("mac-dev").unwrap();
+    delegated.spec.workload_address = None;
+    delegated.status.workload_address = Some("192.0.2.10".parse().unwrap());
+    world.assignments.push(delegated);
+
+    let output = plan(world.input()).expect("delegated assignment is capability-gated");
+    assert!(
+        output
+            .rulesets
+            .iter()
+            .all(|ruleset| !ruleset.script.contains("192.0.2.10"))
+    );
 }
 
 pub(super) struct World {
@@ -318,12 +343,13 @@ fn assignment(id: &str, service: &Service, node_id: &str, address: &str) -> Assi
             replica_index: 0,
             node_id: NodeId::new(node_id).unwrap(),
             placement_epoch: 1,
-            workload_address: address.parse::<IpAddr>().unwrap(),
+            workload_address: Some(address.parse::<IpAddr>().unwrap()),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: None,
+            workload_address: address.parse::<IpAddr>().ok(),
             conditions: Vec::new(),
         },
     }

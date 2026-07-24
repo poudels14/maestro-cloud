@@ -198,19 +198,25 @@ fn validate_assignments(
                 service_id: assignment.spec.service_id,
             });
         }
+        let Some(address) = assignment.spec.workload_address else {
+            if nodes.contains_key(&assignment.spec.node_id) {
+                return Err(FirewallPlanError::MissingAssignmentAddress {
+                    assignment_id: assignment.meta.id,
+                    node_id: assignment.spec.node_id,
+                });
+            }
+            continue;
+        };
         let node = nodes.get(&assignment.spec.node_id).ok_or_else(|| {
             FirewallPlanError::MissingAssignmentNode {
                 assignment_id: assignment.meta.id.clone(),
                 node_id: assignment.spec.node_id.clone(),
             }
         })?;
-        if !node
-            .workload_subnet
-            .contains(&assignment.spec.workload_address)
-        {
+        if !node.workload_subnet.contains(&address) {
             return Err(FirewallPlanError::AssignmentAddressOutsideSubnet {
                 assignment_id: assignment.meta.id,
-                address: assignment.spec.workload_address,
+                address,
                 subnet: node.workload_subnet.to_string(),
             });
         }

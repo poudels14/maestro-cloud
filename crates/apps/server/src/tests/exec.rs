@@ -225,12 +225,13 @@ fn assignment(
             replica_index: 0,
             node_id: NodeId::new(node_id)?,
             placement_epoch: 1,
-            workload_address: IpAddr::V4(Ipv4Addr::new(10, 80, 0, 10)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 80, 0, 10))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: Some(WorkloadId::new(assignment_id)?),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 80, 0, 10))),
             conditions: Vec::new(),
         },
     })

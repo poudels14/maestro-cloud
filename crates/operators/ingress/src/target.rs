@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 
 use kernel_api::{
     Assignment, Deployment, DeploymentId, DeploymentPhase, ReplicaState, Service,
-    TrafficGenerationSpec, TrafficRoute, TrafficTarget,
+    TrafficGenerationSpec, TrafficRoute, TrafficTarget, assignment_workload_address,
 };
 
 use crate::IngressPlanError;
@@ -40,17 +40,27 @@ pub(crate) fn desired_spec(
         else {
             return Ok(None);
         };
+        let assignment_count = assignments.len();
         let ports = routes
             .iter()
             .map(|route| route.target_port)
             .collect::<BTreeSet<_>>();
-        assignments
+        let addressed = assignments
             .into_iter()
-            .flat_map(|assignment| {
+            .filter_map(|assignment| {
+                assignment_workload_address(assignment).map(|address| (assignment, address))
+            })
+            .collect::<Vec<_>>();
+        if addressed.len() != assignment_count {
+            return Ok(None);
+        }
+        addressed
+            .into_iter()
+            .flat_map(|(assignment, address)| {
                 ports.iter().map(move |port| TrafficTarget {
                     assignment_id: assignment.meta.id.clone(),
                     node_id: assignment.spec.node_id.clone(),
-                    endpoint: SocketAddr::new(assignment.spec.workload_address, *port),
+                    endpoint: SocketAddr::new(address, *port),
                 })
             })
             .collect()

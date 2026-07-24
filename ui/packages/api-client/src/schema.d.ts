@@ -1356,9 +1356,9 @@ export interface components {
             serviceId: components["schemas"]["ServiceId"];
             /**
              * Format: ip
-             * @description Cluster-routable address reserved before the workload starts.
+             * @description Cluster-routable address reserved before start, or absent for runtime IPAM.
              */
-            workloadAddress: string;
+            workloadAddress?: string | null;
         };
         /** @description Observed workload identity and lifecycle for an assignment. */
         AssignmentStatus: {
@@ -1366,6 +1366,11 @@ export interface components {
             conditions?: components["schemas"]["Condition"][];
             /** @description Current runtime phase. */
             phase: components["schemas"]["AssignmentPhase"];
+            /**
+             * Format: ip
+             * @description Address observed after the runtime attached the workload.
+             */
+            workloadAddress?: string | null;
             /** @description Runtime workload identity created for this assignment. */
             workloadId?: components["schemas"]["WorkloadId"] | (null);
         };
@@ -2116,6 +2121,11 @@ export interface components {
             schedulingLabels?: {
                 [key: string]: string;
             };
+            /**
+             * @description Workload address ownership and network capability.
+             * @default clusterRouted
+             */
+            workloadNetworkMode: components["schemas"]["WorkloadNetworkMode"];
         };
         NodeStatsMap: {
             [key: string]: components["schemas"]["ControllerStatsSnapshot"];
@@ -3470,6 +3480,8 @@ export interface components {
         };
         /** @description Stable identity of one runtime-managed workload instance. */
         WorkloadId: string;
+        /** @description Ownership of workload addressing and cross-node routing on one node. */
+        WorkloadNetworkMode: "clusterRouted" | "runtimeDelegated";
         /** @description Numeric runtime identity used for process launch and Unix peer authorization. */
         WorkloadUserSpec: {
             /**

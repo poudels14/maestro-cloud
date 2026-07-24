@@ -130,6 +130,17 @@ fn temporarily_unready_targets_preserve_the_last_active_generation() {
 }
 
 #[test]
+fn runtime_delegated_assignment_waits_for_an_observed_address() {
+    let mut world = World::ready();
+    world.assignments[0].spec.workload_address = None;
+    world.assignments[0].status.workload_address = None;
+
+    let held = plan(world.input()).expect("hold addressless assignment");
+    assert!(held.create_generations.is_empty());
+    assert!(held.backend_changes[0].active.is_none());
+}
+
+#[test]
 fn service_without_active_deployment_retires_serving_generation() {
     let mut world = World::ready();
     let mut active = plan(world.input()).expect("stage").create_generations[0].clone();
@@ -380,12 +391,13 @@ impl World {
                 replica_index: 0,
                 node_id: NodeId::new("node-1").unwrap(),
                 placement_epoch: 1,
-                workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10)),
+                workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10))),
                 replaces_assignment_id: None,
             },
             status: AssignmentStatus {
                 phase: AssignmentPhase::Running,
                 workload_id: None,
+                workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 10))),
                 conditions: Vec::new(),
             },
         };

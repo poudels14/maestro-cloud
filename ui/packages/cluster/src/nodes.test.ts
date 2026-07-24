@@ -14,7 +14,8 @@ function node(
     spec: {
       hostname,
       hostAddress: id === "node-b" ? "10.0.0.12" : "10.0.0.11",
-      role: id === "node-b" ? "worker" : "master"
+      role: id === "node-b" ? "worker" : "master",
+      workloadNetworkMode: "clusterRouted"
     },
     status: { instanceId: `${id}-instance`, lastSeen, version: "0.5.0", conditions }
   };

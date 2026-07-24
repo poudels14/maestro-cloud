@@ -242,8 +242,8 @@ fn workload_addresses_are_stable_unique_and_do_not_reuse_draining_addresses() {
         .collect::<BTreeSet<_>>();
     assert_eq!(addresses.len(), 2);
     assert!(addresses.iter().all(|address| match address {
-        IpAddr::V4(address) => address.octets()[3] >= 2 && address.octets()[3] < 200,
-        IpAddr::V6(_) => false,
+        Some(IpAddr::V4(address)) => address.octets()[3] >= 2 && address.octets()[3] < 200,
+        Some(IpAddr::V6(_)) | None => false,
     }));
 
     let old = assignment("old", "dep-old", 0, "node-a", 1, [10, 42, 1, 2]);
@@ -252,7 +252,7 @@ fn workload_addresses_are_stable_unique_and_do_not_reuse_draining_addresses() {
     replacement.services[0].groups[0].deployment_id = deployment_id("dep-new");
     assert_eq!(
         plan(replacement).assignments[0].spec.workload_address,
-        IpAddr::V4(Ipv4Addr::new(10, 42, 1, 3))
+        Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 3)))
     );
 }
 
@@ -260,7 +260,7 @@ fn workload_addresses_are_stable_unique_and_do_not_reuse_draining_addresses() {
 fn invalid_and_exhausted_subnets_are_isolated_as_unschedulable() {
     let mut invalid = input(1);
     invalid.nodes.truncate(1);
-    invalid.nodes[0].workload_subnet = "not-a-cidr".to_owned();
+    invalid.nodes[0].workload_subnet = Some("not-a-cidr".to_owned());
     let invalid = plan(invalid);
     assert!(invalid.assignments.is_empty());
     assert!(matches!(
@@ -270,13 +270,26 @@ fn invalid_and_exhausted_subnets_are_isolated_as_unschedulable() {
 
     let mut exhausted = input(1);
     exhausted.nodes.truncate(1);
-    exhausted.nodes[0].workload_subnet = "10.42.1.0/27".to_owned();
+    exhausted.nodes[0].workload_subnet = Some("10.42.1.0/27".to_owned());
     let exhausted = plan(exhausted);
     assert!(exhausted.assignments.is_empty());
     assert!(matches!(
         exhausted.unschedulable[0].reason,
         UnschedulableReason::WorkloadAddressCapacityExhausted { .. }
     ));
+}
+
+#[test]
+fn runtime_delegated_nodes_schedule_without_preselecting_an_address() {
+    let mut delegated = input(1);
+    delegated.nodes.truncate(1);
+    delegated.nodes[0].workload_network_mode = kernel_api::WorkloadNetworkMode::RuntimeDelegated;
+    delegated.nodes[0].workload_subnet = None;
+
+    let planned = plan(delegated);
+    assert!(planned.unschedulable.is_empty());
+    assert_eq!(planned.assignments.len(), 1);
+    assert_eq!(planned.assignments[0].spec.workload_address, None);
 }
 
 fn input(replicas: u32) -> ScheduleInput {
@@ -307,7 +320,8 @@ fn node(id: &str, subnet: &str) -> ScheduleNode {
         node_id: node_id(id),
         role: NodeRole::Hybrid,
         labels: BTreeMap::new(),
-        workload_subnet: subnet.to_owned(),
+        workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
+        workload_subnet: Some(subnet.to_owned()),
         state: NodeSchedulingState::Available,
     }
 }
@@ -338,12 +352,13 @@ fn assignment(
             replica_index,
             node_id: node_id(node),
             placement_epoch,
-            workload_address: IpAddr::V4(Ipv4Addr::from(address)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::from(address))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: None,
+            workload_address: Some(IpAddr::V4(Ipv4Addr::from(address))),
             conditions: Vec::new(),
         },
     }

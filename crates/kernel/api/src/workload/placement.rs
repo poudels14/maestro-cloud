@@ -27,8 +27,9 @@ pub struct AssignmentSpec {
     pub node_id: NodeId,
     /// Monotonic epoch incremented when a slot moves to another node.
     pub placement_epoch: u64,
-    /// Cluster-routable address reserved before the workload starts.
-    pub workload_address: IpAddr,
+    /// Cluster-routable address reserved before start, or absent for runtime IPAM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_address: Option<IpAddr>,
     /// Assignment superseded by this placement, when one is draining.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaces_assignment_id: Option<AssignmentId>,
@@ -59,6 +60,9 @@ pub struct AssignmentStatus {
     /// Runtime workload identity created for this assignment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workload_id: Option<WorkloadId>,
+    /// Address observed after the runtime attached the workload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_address: Option<IpAddr>,
     /// Generic runtime and drain evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
@@ -66,6 +70,14 @@ pub struct AssignmentStatus {
 
 /// A scheduled workload assignment resource.
 pub type Assignment = Object<AssignmentId, AssignmentSpec, AssignmentStatus>;
+
+/// Returns the runtime-observed address, falling back to scheduler-owned IPAM.
+pub fn assignment_workload_address(assignment: &Assignment) -> Option<IpAddr> {
+    assignment
+        .status
+        .workload_address
+        .or(assignment.spec.workload_address)
+}
 
 /// Immutable placement identity retained after an assignment stops.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

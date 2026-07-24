@@ -395,6 +395,7 @@ fn node(id: &str, role: NodeRole) -> Node {
             hostname: format!("{id}.internal"),
             host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             role,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {
@@ -416,12 +417,13 @@ fn assignment(node_id: &str) -> Assignment {
             replica_index: 0,
             node_id: NodeId::new(node_id).unwrap(),
             placement_epoch: 1,
-            workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 2)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 2))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: None,
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 2))),
             conditions: Vec::new(),
         },
     }

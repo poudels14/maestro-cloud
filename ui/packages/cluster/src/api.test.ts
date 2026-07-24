@@ -124,7 +124,12 @@ test("passes node, metrics, and webhook operations to the generated client", asy
 test("selects the newest active upgrade when composing cluster info", async () => {
   const resourceNode = {
     meta: { id: "node-a", generation: 1, revision: 7 },
-    spec: { hostname: "worker-a", hostAddress: "10.0.0.11", role: "worker" },
+    spec: {
+      hostname: "worker-a",
+      hostAddress: "10.0.0.11",
+      role: "worker",
+      workloadNetworkMode: "clusterRouted"
+    },
     status: { instanceId: "instance-a", lastSeen: Date.now(), version: "0.5.0" }
   } satisfies ApiSchemas["Node"];
   const active = upgrade("active", 3, "applying");

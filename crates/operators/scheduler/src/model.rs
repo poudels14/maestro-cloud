@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use kernel_api::{
     Assignment, AssignmentId, ClusterId, DeploymentId, NodeId, NodeRole, PlacementConstraint,
-    ServiceId,
+    ServiceId, WorkloadNetworkMode,
 };
 
 /// One deployment whose replica slots must remain assigned.
@@ -65,8 +65,10 @@ pub struct ScheduleNode {
     pub role: NodeRole,
     /// Scheduling labels copied from the node resource.
     pub labels: std::collections::BTreeMap<String, String>,
-    /// Canonical IPv4 subnet published by the node network resource.
-    pub workload_subnet: String,
+    /// Address ownership advertised by the node.
+    pub workload_network_mode: WorkloadNetworkMode,
+    /// Canonical IPv4 subnet for cluster-routed nodes.
+    pub workload_subnet: Option<String>,
     /// Current placement eligibility derived before invoking the pure planner.
     pub state: NodeSchedulingState,
 }

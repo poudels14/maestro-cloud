@@ -437,10 +437,13 @@ impl PlannedAssignment {
             restart_generation: resource.spec.restart_generation,
             replica_index: resource.spec.replica_index,
             node_id: resource.spec.node_id.clone(),
-            workload_address: match resource.spec.workload_address {
-                IpAddr::V4(address) => Some(address),
-                IpAddr::V6(_) => None,
-            },
+            workload_address: resource
+                .spec
+                .workload_address
+                .and_then(|address| match address {
+                    IpAddr::V4(address) => Some(address),
+                    IpAddr::V6(_) => None,
+                }),
             replaces_assignment_id: resource.spec.replaces_assignment_id.clone(),
             existing: Some(resource),
         }
@@ -450,7 +453,6 @@ impl PlannedAssignment {
         if let Some(resource) = self.existing {
             return Some(resource);
         }
-        let address = self.workload_address?;
         Some(Assignment {
             meta: ObjectMeta {
                 id: self.assignment_id,
@@ -469,12 +471,13 @@ impl PlannedAssignment {
                 replica_index: self.replica_index,
                 node_id: self.node_id,
                 placement_epoch: self.placement_epoch,
-                workload_address: IpAddr::V4(address),
+                workload_address: self.workload_address.map(IpAddr::V4),
                 replaces_assignment_id: self.replaces_assignment_id,
             },
             status: AssignmentStatus {
                 phase: AssignmentPhase::Pending,
                 workload_id: None,
+                workload_address: None,
                 conditions: Vec::new(),
             },
         })

@@ -102,10 +102,14 @@ impl ExitWorld {
                 node_id: node_id(),
                 network: NetworkSpec {
                     name: "maestro-node-1".to_owned(),
-                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
-                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                    addressing: runtime::NetworkAddressing::Managed {
+                        range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24)
+                            .unwrap(),
+                        gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                    },
                     mtu_bytes: 1_420,
                 },
+                dns_server: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))),
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),
@@ -164,12 +168,13 @@ pub fn assignment() -> Assignment {
             replica_index: 0,
             node_id: node_id(),
             placement_epoch: 1,
-            workload_address: WORKLOAD_ADDRESS,
+            workload_address: Some(WORKLOAD_ADDRESS),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Pending,
             workload_id: None,
+            workload_address: None,
             conditions: Vec::new(),
         },
     }

@@ -19,8 +19,8 @@ use kernel_store::{
     Store,
 };
 use runtime::{
-    FakeNetworkProvider, FakeRuntime, FakeRuntimeOperation, NetworkCidr, NetworkProvider,
-    RuntimeError, ShutdownRequest, WorkloadRuntime,
+    FakeNetworkProvider, FakeRuntime, FakeRuntimeOperation, NetworkAddressing, NetworkCidr,
+    NetworkProvider, NetworkSpec, RuntimeError, ShutdownRequest, WorkloadRuntime,
 };
 use tokio::sync::{Notify, watch};
 
@@ -51,6 +51,25 @@ async fn assignment_reconcile_runs_and_re_adopts_one_exactly_addressed_workload(
             .await?
             .len(),
         1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_reconcile_publishes_a_runtime_delegated_address()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut assignment = assignment();
+    assignment.spec.workload_address = None;
+    world.seed(&deployment(), &assignment).await?;
+
+    let report = world.agent_delegated().reconcile_once().await?;
+    assert_eq!(report.running, 1);
+    let stored = world.load_assignment().await?;
+    assert_eq!(stored.spec.workload_address, None);
+    assert_eq!(
+        stored.status.workload_address,
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)))
     );
     Ok(())
 }
@@ -426,12 +445,13 @@ pub(crate) fn assignment() -> Assignment {
             replica_index: 0,
             node_id: node_id("node-1"),
             placement_epoch: 1,
-            workload_address: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 8)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 8))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Pending,
             workload_id: None,
+            workload_address: None,
             conditions: Vec::new(),
         },
     }
@@ -503,6 +523,10 @@ async fn assert_running(world: &World) -> Result<(), Box<dyn std::error::Error>>
         Some("assignment-1")
     );
     assert_eq!(
+        assignment.status.workload_address,
+        assignment.spec.workload_address
+    );
+    assert_eq!(
         assignment
             .status
             .conditions
@@ -541,7 +565,39 @@ impl World {
         self.agent_with_node_api(None)
     }
 
+    fn agent_delegated(&self) -> AssignmentAgent {
+        self.agent_with_network(
+            NetworkSpec {
+                name: "maestro-dev".to_owned(),
+                addressing: NetworkAddressing::Delegated,
+                mtu_bytes: 1_500,
+            },
+            None,
+            None,
+        )
+    }
+
     fn agent_with_node_api(&self, services: Option<NodeApiServices>) -> AssignmentAgent {
+        self.agent_with_network(
+            NetworkSpec {
+                name: "maestro-node-1".to_owned(),
+                addressing: NetworkAddressing::Managed {
+                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
+                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                },
+                mtu_bytes: 1_420,
+            },
+            Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))),
+            services,
+        )
+    }
+
+    fn agent_with_network(
+        &self,
+        network_spec: NetworkSpec,
+        dns_server: Option<IpAddr>,
+        services: Option<NodeApiServices>,
+    ) -> AssignmentAgent {
         let runtime: Arc<dyn WorkloadRuntime> = self.runtime.clone();
         let network: Arc<dyn NetworkProvider> = self.network.clone();
         AssignmentAgent::new(
@@ -551,12 +607,8 @@ impl World {
             AssignmentAgentSettings {
                 cluster_id: cluster_id(),
                 node_id: node_id("node-1"),
-                network: runtime::NetworkSpec {
-                    name: "maestro-node-1".to_owned(),
-                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
-                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
-                    mtu_bytes: 1_420,
-                },
+                network: network_spec,
+                dns_server,
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),

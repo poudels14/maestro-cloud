@@ -280,12 +280,13 @@ fn assignment(id: &str, node: &str, address: [u8; 4]) -> Assignment {
             replica_index: 0,
             node_id: NodeId::new(node).unwrap(),
             placement_epoch: 1,
-            workload_address: IpAddr::V4(Ipv4Addr::from(address)),
+            workload_address: Some(IpAddr::V4(Ipv4Addr::from(address))),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Pending,
             workload_id: None,
+            workload_address: None,
             conditions: Vec::new(),
         },
     }

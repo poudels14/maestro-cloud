@@ -42,6 +42,15 @@ fn incomplete_readiness_preserves_the_last_published_set() {
 }
 
 #[test]
+fn runtime_delegated_assignment_waits_for_an_observed_address() {
+    let mut world = World::ready();
+    world.assignments[0].spec.workload_address = None;
+    world.assignments[0].status.workload_address = None;
+
+    assert_eq!(plan(world.input()).expect("held plan"), Default::default());
+}
+
+#[test]
 fn address_change_increments_generation_and_clears_node_acknowledgements() {
     let mut world = World::ready();
     let mut records = plan(world.input()).unwrap().create_records;
@@ -50,7 +59,8 @@ fn address_change_increments_generation_and_clears_node_acknowledgements() {
         record.status.published_nodes = vec![NodeId::new("node-1").unwrap()];
     }
     world.records = records;
-    world.assignments[0].spec.workload_address = IpAddr::V4(Ipv4Addr::new(10, 42, 1, 99));
+    world.assignments[0].spec.workload_address = Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 99)));
+    world.assignments[0].status.workload_address = Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 99)));
     let output = plan(world.input()).expect("replacement plan");
     assert_eq!(output.replace_records.len(), 2);
     assert!(
@@ -197,12 +207,13 @@ fn assignment(
             replica_index,
             node_id: NodeId::new(format!("node-{replica_index}")).unwrap(),
             placement_epoch: 1,
-            workload_address,
+            workload_address: Some(workload_address),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Running,
             workload_id: None,
+            workload_address: Some(workload_address),
             conditions: Vec::new(),
         },
     }

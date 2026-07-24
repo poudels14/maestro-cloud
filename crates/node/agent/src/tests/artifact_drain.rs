@@ -125,6 +125,7 @@ fn pending_node(node_id: NodeId) -> Result<Node, kernel_api::InvalidIdentifier> 
             hostname: "node-1.internal".to_string(),
             host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             role: NodeRole::Worker,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {

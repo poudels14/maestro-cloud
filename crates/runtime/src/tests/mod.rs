@@ -36,8 +36,6 @@ mod docker_fixture;
 #[cfg(all(feature = "docker", unix))]
 mod docker_network;
 #[cfg(all(feature = "docker", unix))]
-mod docker_network_ipam;
-#[cfg(all(feature = "docker", unix))]
 mod docker_stats;
 #[cfg(all(feature = "docker", unix))]
 mod docker_stream;

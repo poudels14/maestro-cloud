@@ -16,7 +16,10 @@ const RUNTIME_REJECTED_REASON: &str = "RuntimeRejected";
 
 #[derive(Clone, Copy)]
 pub(crate) enum AssignmentOutcome<'a> {
-    Running(&'a WorkloadHandle),
+    Running {
+        handle: &'a WorkloadHandle,
+        workload_address: std::net::IpAddr,
+    },
     Unresolved(&'a ConvergeFailure),
     Stopped,
 }
@@ -153,10 +156,14 @@ pub(crate) fn desired_status(
     outcome: AssignmentOutcome<'_>,
     now: Timestamp,
 ) -> AssignmentStatus {
-    let (phase, workload_id, state, reason, message) = match outcome {
-        AssignmentOutcome::Running(handle) => (
+    let (phase, workload_id, workload_address, state, reason, message) = match outcome {
+        AssignmentOutcome::Running {
+            handle,
+            workload_address,
+        } => (
             AssignmentPhase::Running,
             Some(handle.workload_id().clone()),
+            Some(workload_address),
             ConditionState::True,
             WORKLOAD_RUNNING_REASON,
             "runtime workload is running at its assigned address".to_owned(),
@@ -164,12 +171,14 @@ pub(crate) fn desired_status(
         AssignmentOutcome::Unresolved(failure) => (
             failure.phase,
             assignment.status.workload_id.clone(),
+            assignment.status.workload_address,
             ConditionState::False,
             failure.reason,
             failure.message.clone(),
         ),
         AssignmentOutcome::Stopped => (
             AssignmentPhase::Stopped,
+            None,
             None,
             ConditionState::False,
             "WorkloadRemoved",
@@ -187,6 +196,7 @@ pub(crate) fn desired_status(
     AssignmentStatus {
         phase,
         workload_id,
+        workload_address,
         conditions: vec![Condition {
             condition_type: ConditionType(RUNTIME_READY_CONDITION.to_owned()),
             state,

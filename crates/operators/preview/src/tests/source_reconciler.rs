@@ -448,6 +448,7 @@ fn node() -> Node {
             hostname: "node-1".to_string(),
             host_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             role: NodeRole::Master,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: Default::default(),
         },
         status: NodeStatus {

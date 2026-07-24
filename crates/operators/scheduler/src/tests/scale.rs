@@ -97,7 +97,7 @@ async fn activate_traffic(
                 .map(|assignment| TrafficTarget {
                     assignment_id: assignment.meta.id.clone(),
                     node_id: assignment.spec.node_id.clone(),
-                    endpoint: SocketAddr::new(assignment.spec.workload_address, 8080),
+                    endpoint: SocketAddr::new(assignment.spec.workload_address.unwrap(), 8080),
                 })
                 .collect(),
         },

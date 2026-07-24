@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, ClusterId, Deployment, HealthProbe, NodeId,
-    ReplicaState, ResourceKind, ResourceName,
+    ReplicaState, ResourceKind, ResourceName, assignment_workload_address,
 };
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, StoreError, StoredValue,
@@ -200,7 +200,10 @@ impl HealthAgent {
                 if !self.probe_due(&assignment.meta.id).await {
                     continue;
                 }
-                let target = probe_target(assignment.spec.workload_address, &health_check.probe);
+                let Some(address) = assignment_workload_address(&assignment) else {
+                    continue;
+                };
+                let target = probe_target(address, &health_check.probe);
                 let result = self.prober.probe(&target).await;
                 report.probed = report.probed.saturating_add(1);
                 match result {

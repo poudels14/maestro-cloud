@@ -380,6 +380,7 @@ fn node(id: NodeId) -> Node {
             hostname: id.to_string(),
             host_address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             role: NodeRole::Hybrid,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {

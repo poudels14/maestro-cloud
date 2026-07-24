@@ -97,6 +97,12 @@ pub enum FirewallPlanError {
         assignment_id: AssignmentId,
         node_id: NodeId,
     },
+    /// A cluster-routed assignment omitted its scheduler-owned source address.
+    #[error("Assignment `{assignment_id}` on routed node `{node_id}` has no workload address")]
+    MissingAssignmentAddress {
+        assignment_id: AssignmentId,
+        node_id: NodeId,
+    },
     /// An assignment source address was not owned by its selected node subnet.
     #[error("Assignment `{assignment_id}` address `{address}` is outside node subnet `{subnet}`")]
     AssignmentAddressOutsideSubnet {

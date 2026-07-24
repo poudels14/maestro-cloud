@@ -67,7 +67,13 @@ fn cutover_plan_converts_scheduled_assignment_and_replica_state() -> TestResult 
     assert_eq!(assignment.meta.id.as_str(), "assignment-1");
     assert_eq!(assignment.spec.node_id.as_str(), "node-a");
     assert_eq!(assignment.spec.placement_epoch, 3);
-    assert_eq!(assignment.spec.workload_address.to_string(), "10.42.1.5");
+    assert_eq!(
+        assignment
+            .spec
+            .workload_address
+            .map(|address| address.to_string()),
+        Some("10.42.1.5".to_owned())
+    );
     assert_eq!(assignment.status.phase, AssignmentPhase::Running);
     assert_eq!(
         assignment.status.workload_id.as_ref().map(|id| id.as_str()),

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -14,7 +13,6 @@ use futures_util::StreamExt;
 use kernel_api::{ClusterId, NodeId};
 
 use crate::docker_config::{CLUSTER_LABEL, MANAGED_LABEL, NODE_LABEL, container_config};
-use crate::docker_network_ipam::DockerNetworkState;
 use crate::docker_stats::normalize_stats;
 use crate::docker_stream::{DockerEventStream, DockerExecSession, DockerLogStream, log_since};
 use crate::docker_support::{
@@ -32,7 +30,6 @@ use crate::{
 #[derive(Clone)]
 pub struct DockerRuntime {
     pub(crate) client: Docker,
-    pub(crate) network_state: Arc<tokio::sync::Mutex<DockerNetworkState>>,
 }
 
 impl DockerRuntime {
@@ -47,10 +44,7 @@ impl DockerRuntime {
 
     /// Wraps an existing Bollard client while preserving its connection configuration.
     pub fn new(client: Docker) -> Self {
-        Self {
-            client,
-            network_state: Arc::new(tokio::sync::Mutex::new(DockerNetworkState::default())),
-        }
+        Self { client }
     }
 
     pub(crate) async fn inspect_container(

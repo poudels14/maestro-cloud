@@ -184,6 +184,7 @@ fn settings(instance_id: &str) -> Result<NodeRegistrySettings, Box<dyn std::erro
             hostname: "node-1.internal".to_string(),
             host_address: IpAddr::V4(Ipv4Addr::new(10, 20, 0, 11)),
             role: NodeRole::Worker,
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         instance_id: NodeInstanceId::new(instance_id)?,

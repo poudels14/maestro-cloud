@@ -6,8 +6,8 @@ use kernel_api::{
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, WatchCursor};
 use runtime::{
-    AddressLease, AddressRequest, ArtifactDigest, NetworkHandle, NetworkProvider, RuntimeError,
-    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadState,
+    AddressRequest, ArtifactDigest, NetworkHandle, NetworkProvider, RuntimeError, ShutdownRequest,
+    WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 
 mod watch;
@@ -182,8 +182,14 @@ impl AssignmentAgent {
             };
             match outcome {
                 Ok(converged) => {
-                    self.update_status(assignment, AssignmentOutcome::Running(&converged.handle))
-                        .await?;
+                    self.update_status(
+                        assignment,
+                        AssignmentOutcome::Running {
+                            handle: &converged.handle,
+                            workload_address: converged.workload_address,
+                        },
+                    )
+                    .await?;
                     report.running = report.running.saturating_add(1);
                     if converged.restarted {
                         report.restarted = report.restarted.saturating_add(1);
@@ -292,7 +298,7 @@ impl AssignmentAgent {
             &self.settings.cluster_id,
             assignment,
             deployment,
-            self.settings.network.gateway,
+            self.settings.dns_server,
             additional_mounts,
         )?;
         let handle = self.runtime.create(&spec).await?;
@@ -359,15 +365,15 @@ impl AssignmentAgent {
             before.state,
             WorkloadState::Created | WorkloadState::Stopped
         );
-        let lease = self
+        let request = assignment
+            .spec
+            .workload_address
+            .map_or(AddressRequest::Any, AddressRequest::Exact);
+        let reservation = self
             .network
-            .allocate_address(
-                network,
-                handle.workload_id(),
-                AddressRequest::Exact(assignment.spec.workload_address),
-            )
+            .allocate_address(network, handle.workload_id(), request)
             .await?;
-        self.network.attach(&handle, network, &lease).await?;
+        let attachment = self.network.attach(&handle, network, &reservation).await?;
         if needs_start {
             self.runtime.start(&handle).await?;
         }
@@ -386,7 +392,11 @@ impl AssignmentAgent {
                 .map_err(restart_failure)?,
                 None => false,
             };
-            Ok(ConvergedAssignment { handle, restarted })
+            Ok(ConvergedAssignment {
+                handle,
+                workload_address: attachment.address,
+                restarted,
+            })
         } else {
             Err(ConvergeFailure::pending(
                 RUNTIME_RETRY_REASON,
@@ -413,13 +423,7 @@ impl AssignmentAgent {
         }
         for attachment in attachments {
             self.network
-                .release_address(
-                    &attachment.network,
-                    &AddressLease {
-                        workload_id: handle.workload_id().clone(),
-                        address: attachment.address,
-                    },
-                )
+                .release_address(&attachment.network, handle.workload_id())
                 .await?;
             self.network.detach(handle, &attachment.network).await?;
         }

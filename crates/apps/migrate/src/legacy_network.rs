@@ -160,6 +160,12 @@ fn convert_traffic(
     validate_active_nodes(key_service_id, legacy, &assignments)?;
     for assignment in &assignments {
         validate_ready_replica(resources, assignment)?;
+        if assignment.spec.workload_address.is_none() {
+            return Err(invalid_plan(
+                key_service_id,
+                "traffic assignment has no migrated workload address",
+            ));
+        }
     }
 
     let ports = routes
@@ -169,10 +175,13 @@ fn convert_traffic(
     let targets = assignments
         .iter()
         .flat_map(|assignment| {
-            ports.iter().map(move |port| TrafficTarget {
-                assignment_id: assignment.meta.id.clone(),
-                node_id: assignment.spec.node_id.clone(),
-                endpoint: SocketAddr::new(assignment.spec.workload_address, *port),
+            let address = assignment.spec.workload_address;
+            ports.iter().filter_map(move |port| {
+                address.map(|address| TrafficTarget {
+                    assignment_id: assignment.meta.id.clone(),
+                    node_id: assignment.spec.node_id.clone(),
+                    endpoint: SocketAddr::new(address, *port),
+                })
             })
         })
         .collect();

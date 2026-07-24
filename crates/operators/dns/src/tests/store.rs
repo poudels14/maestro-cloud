@@ -50,7 +50,8 @@ async fn store_controller_atomically_publishes_and_replaces_service_records()
 
     world
         .update::<kernel_api::Assignment>("Assignment", Some("assignment-0"), |assignment| {
-            assignment.spec.workload_address = "10.42.1.99".parse().unwrap();
+            assignment.spec.workload_address = Some("10.42.1.99".parse().unwrap());
+            assignment.status.workload_address = assignment.spec.workload_address;
         })
         .await?;
     let replaced = world.controller.reconcile_once(&world.fenced).await?;

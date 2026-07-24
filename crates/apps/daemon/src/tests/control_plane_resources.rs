@@ -148,12 +148,13 @@ fn workload_assignment(
             replica_index: 0,
             node_id: node_id.clone(),
             placement_epoch: 1,
-            workload_address: IpAddr::V4(workload_address),
+            workload_address: Some(IpAddr::V4(workload_address)),
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {
             phase: AssignmentPhase::Pending,
             workload_id: None,
+            workload_address: None,
             conditions: Vec::new(),
         },
     })

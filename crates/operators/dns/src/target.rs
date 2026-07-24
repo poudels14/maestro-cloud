@@ -3,6 +3,7 @@ use std::net::IpAddr;
 
 use kernel_api::{
     Assignment, DeploymentPhase, DnsRecordSpec, DnsRecordValue, ReplicaState, Service,
+    assignment_workload_address,
 };
 
 use crate::validation::{replica_name, service_name};
@@ -61,9 +62,18 @@ pub(crate) fn desired_specs(
         return Ok(None);
     }
 
-    let mut addresses = slots
+    let addressed = slots
         .values()
-        .map(|assignment| assignment.spec.workload_address)
+        .filter_map(|assignment| {
+            assignment_workload_address(assignment).map(|address| (*assignment, address))
+        })
+        .collect::<Vec<_>>();
+    if addressed.len() != slots.len() {
+        return Ok(None);
+    }
+    let mut addresses = addressed
+        .iter()
+        .map(|(_assignment, address)| *address)
         .collect::<Vec<_>>();
     addresses.sort();
     addresses.dedup();
@@ -97,10 +107,10 @@ pub(crate) fn desired_specs(
             ttl_secs: settings.ttl_secs,
         });
     }
-    for assignment in slots.into_values() {
+    for (assignment, address) in addressed {
         specs.push(DnsRecordSpec {
             name: replica_name(&service.meta.id, assignment.spec.replica_index, cluster_id)?,
-            values: vec![record_value(assignment.spec.workload_address)],
+            values: vec![record_value(address)],
             ttl_secs: settings.ttl_secs,
         });
     }

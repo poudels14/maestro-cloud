@@ -15,7 +15,7 @@ pub use build::{Build, BuildPhase, BuildSpec, BuildStatus};
 pub use placement::{
     Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, PlacementHistory,
     PlacementHistorySpec, PlacementHistoryStatus, ReplicaState, ReplicaStateSpec,
-    ReplicaStateStatus,
+    ReplicaStateStatus, assignment_workload_address,
 };
 
 /// Service annotation containing the immutable Git revision desired by build-watch.

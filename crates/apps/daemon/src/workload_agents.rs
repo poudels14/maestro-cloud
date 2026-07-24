@@ -11,7 +11,7 @@ use node_agent::{
     NodeRegistryAgent, NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings,
     StoreNodeControlHandler, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
 };
-use runtime::{NetworkCidr, NetworkSpec};
+use runtime::{NetworkAddressing, NetworkCidr, NetworkSpec};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
 use crate::control_plane::{DaemonRoleFactory, role_error};
@@ -37,6 +37,7 @@ pub(crate) fn build_node_registry_agent<MeshBackendType, FirewallBackendType, Br
                 hostname: node.hostname.clone(),
                 host_address: node.endpoint.host_address.into(),
                 role: node.role,
+                workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
                 scheduling_labels: Default::default(),
             },
             instance_id: factory.instance_id().clone(),
@@ -94,12 +95,14 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
     })?;
     let network = NetworkSpec {
         name: WORKLOAD_BRIDGE_NAME.to_owned(),
-        range: NetworkCidr::new(
-            IpAddr::V4(node.workload_subnet.network_address()),
-            node.workload_subnet.prefix(),
-        )
-        .map_err(|error| role_error("build workload network range", error))?,
-        gateway: IpAddr::V4(gateway),
+        addressing: NetworkAddressing::Managed {
+            range: NetworkCidr::new(
+                IpAddr::V4(node.workload_subnet.network_address()),
+                node.workload_subnet.prefix(),
+            )
+            .map_err(|error| role_error("build workload network range", error))?,
+            gateway: IpAddr::V4(gateway),
+        },
         mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
     };
     AssignmentAgent::new(
@@ -110,6 +113,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             cluster_id: plan.cluster().cluster_id.clone(),
             node_id: spec.node_id.clone(),
             network,
+            dns_server: Some(IpAddr::V4(gateway)),
             stop_timeout: factory.settings.workload_stop_timeout,
             resync_interval: factory.settings.assignment_resync_interval,
             restart_backoff_base: factory.settings.restart_backoff_base,

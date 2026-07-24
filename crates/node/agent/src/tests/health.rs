@@ -54,12 +54,12 @@ async fn health_reconcile_thresholds_failures_and_resets_on_success()
         prober.targets(),
         vec![
             HealthProbeTarget::Http {
-                address: assignment.spec.workload_address,
+                address: assignment.spec.workload_address.unwrap(),
                 port: 8080,
                 path: "/ready".to_owned(),
             },
             HealthProbeTarget::Http {
-                address: assignment.spec.workload_address,
+                address: assignment.spec.workload_address.unwrap(),
                 port: 8080,
                 path: "/ready".to_owned(),
             },

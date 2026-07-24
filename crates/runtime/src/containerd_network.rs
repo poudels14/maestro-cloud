@@ -9,9 +9,9 @@ use crate::containerd::ContainerdRuntime;
 use crate::containerd_network_linux::LinuxContainerdNetwork;
 use crate::containerd_support::{container_id, task_status};
 use crate::{
-    AddressLease, AddressRequest, NetworkAttachment, NetworkHandle, NetworkProvider,
-    NetworkProviderError, NetworkSpec, RuntimeError, WorkloadHandle, WorkloadNetworkStatus,
-    WorkloadState,
+    AddressLease, AddressRequest, AddressReservation, NetworkAddressing, NetworkAttachment,
+    NetworkCidr, NetworkHandle, NetworkProvider, NetworkProviderError, NetworkSpec, RuntimeError,
+    WorkloadHandle, WorkloadNetworkStatus, WorkloadState,
 };
 
 const CONTAINER_INTERFACE_NAME: &str = "eth0";
@@ -66,17 +66,17 @@ impl NetworkProvider for ContainerdRuntime {
         network: &NetworkHandle,
         workload_id: &WorkloadId,
         request: AddressRequest,
-    ) -> Result<AddressLease, NetworkProviderError> {
+    ) -> Result<AddressReservation, NetworkProviderError> {
         let mut state = self.network_state.lock().await;
         let spec = matching_spec(&state, network)?.clone();
         if let Some((address, _)) = state.owners.iter().find(|(_, owner)| *owner == workload_id) {
             if matches!(request, AddressRequest::Any)
                 || matches!(request, AddressRequest::Exact(expected) if expected == *address)
             {
-                return Ok(AddressLease {
+                return Ok(AddressReservation::Exact(AddressLease {
                     workload_id: workload_id.clone(),
                     address: *address,
-                });
+                }));
             }
             return Err(rejected(format!(
                 "workload `{workload_id}` already reserved `{address}`"
@@ -93,18 +93,23 @@ impl NetworkProvider for ContainerdRuntime {
             return Err(NetworkProviderError::AddressConflict { address });
         }
         state.owners.insert(address, workload_id.clone());
-        Ok(AddressLease {
+        Ok(AddressReservation::Exact(AddressLease {
             workload_id: workload_id.clone(),
             address,
-        })
+        }))
     }
 
     async fn attach(
         &self,
         workload: &WorkloadHandle,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        reservation: &AddressReservation,
     ) -> Result<NetworkAttachment, NetworkProviderError> {
+        let AddressReservation::Exact(lease) = reservation else {
+            return Err(rejected(
+                "containerd networking requires an exact address reservation",
+            ));
+        };
         let spec = {
             let state = self.network_state.lock().await;
             let spec = matching_spec(&state, network)?.clone();
@@ -193,20 +198,18 @@ impl NetworkProvider for ContainerdRuntime {
     async fn release_address(
         &self,
         network: &NetworkHandle,
-        lease: &AddressLease,
+        workload_id: &WorkloadId,
     ) -> Result<(), NetworkProviderError> {
         let mut state = self.network_state.lock().await;
         matching_spec(&state, network)?;
-        match state.owners.get(&lease.address) {
-            Some(owner) if owner == &lease.workload_id => {
-                state.owners.remove(&lease.address);
-                Ok(())
-            }
-            None => Ok(()),
-            Some(_) => Err(NetworkProviderError::AddressConflict {
-                address: lease.address,
-            }),
+        let address = state
+            .owners
+            .iter()
+            .find_map(|(address, owner)| (owner == workload_id).then_some(*address));
+        if let Some(address) = address {
+            state.owners.remove(&address);
         }
+        Ok(())
     }
 }
 
@@ -241,7 +244,8 @@ pub(crate) fn attachment_plan(
         });
     }
     validate_address(spec, lease.address)?;
-    let (IpAddr::V4(address), IpAddr::V4(gateway)) = (lease.address, spec.gateway) else {
+    let (range, gateway) = managed_addressing(spec)?;
+    let (IpAddr::V4(address), IpAddr::V4(gateway)) = (lease.address, gateway) else {
         return Err(rejected("containerd networking requires IPv4"));
     };
     Ok(AttachmentPlan {
@@ -251,7 +255,7 @@ pub(crate) fn attachment_plan(
         container_name: CONTAINER_INTERFACE_NAME.to_owned(),
         address,
         gateway,
-        prefix_length: spec.range.prefix_length(),
+        prefix_length: range.prefix_length(),
         mtu_bytes: spec.mtu_bytes,
     })
 }
@@ -292,12 +296,12 @@ fn validate_spec(spec: &NetworkSpec) -> Result<(), NetworkProviderError> {
                 .to_owned(),
         });
     }
-    let (IpAddr::V4(network), IpAddr::V4(gateway)) = (spec.range.network_address(), spec.gateway)
-    else {
+    let (range, gateway) = managed_addressing(spec)?;
+    let (IpAddr::V4(network), IpAddr::V4(gateway)) = (range.network_address(), gateway) else {
         return Err(rejected("containerd networking requires IPv4"));
     };
-    let broadcast = broadcast(network, spec.range.prefix_length());
-    if !spec.range.contains(spec.gateway) || gateway == network || gateway == broadcast {
+    let broadcast = broadcast(network, range.prefix_length());
+    if !range.contains(IpAddr::V4(gateway)) || gateway == network || gateway == broadcast {
         Err(NetworkProviderError::InvalidRange {
             message: format!("gateway `{gateway}` is not usable in `{}`", spec.name),
         })
@@ -308,15 +312,16 @@ fn validate_spec(spec: &NetworkSpec) -> Result<(), NetworkProviderError> {
 
 fn validate_address(spec: &NetworkSpec, address: IpAddr) -> Result<(), NetworkProviderError> {
     validate_spec(spec)?;
+    let (range, gateway) = managed_addressing(spec)?;
     let (IpAddr::V4(network), IpAddr::V4(gateway), IpAddr::V4(address_v4)) =
-        (spec.range.network_address(), spec.gateway, address)
+        (range.network_address(), gateway, address)
     else {
         return Err(rejected("containerd networking requires IPv4"));
     };
-    if spec.range.contains(address)
+    if range.contains(address)
         && address_v4 != network
         && address_v4 != gateway
-        && address_v4 != broadcast(network, spec.range.prefix_length())
+        && address_v4 != broadcast(network, range.prefix_length())
     {
         Ok(())
     } else {
@@ -330,7 +335,8 @@ fn first_available(
     spec: &NetworkSpec,
     owners: &BTreeMap<IpAddr, WorkloadId>,
 ) -> Result<IpAddr, NetworkProviderError> {
-    let IpAddr::V4(network) = spec.range.network_address() else {
+    let (range, _gateway) = managed_addressing(spec)?;
+    let IpAddr::V4(network) = range.network_address() else {
         return Err(rejected("containerd networking requires IPv4"));
     };
     let mut candidate = u32::from(network).saturating_add(1);
@@ -345,6 +351,15 @@ fn first_available(
         "containerd network `{}` has no free address",
         spec.name
     )))
+}
+
+fn managed_addressing(spec: &NetworkSpec) -> Result<(NetworkCidr, IpAddr), NetworkProviderError> {
+    match spec.addressing {
+        NetworkAddressing::Managed { range, gateway } => Ok((range, gateway)),
+        NetworkAddressing::Delegated => Err(rejected(
+            "containerd networking cannot delegate address management",
+        )),
+    }
 }
 
 fn broadcast(network: Ipv4Addr, prefix_length: u8) -> Ipv4Addr {

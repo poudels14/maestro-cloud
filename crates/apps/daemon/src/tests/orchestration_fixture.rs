@@ -69,6 +69,7 @@ pub(super) fn node(id: &NodeId, index: u8) -> Result<Node, kernel_api::InvalidId
             } else {
                 NodeRole::Worker
             },
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             scheduling_labels: BTreeMap::new(),
         },
         status: NodeStatus {

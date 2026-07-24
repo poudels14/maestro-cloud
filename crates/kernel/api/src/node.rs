@@ -63,6 +63,17 @@ impl NodeRole {
     }
 }
 
+/// Ownership of workload addressing and cross-node routing on one node.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkloadNetworkMode {
+    /// Maestro allocates stable addresses from the node's routed subnet.
+    #[default]
+    ClusterRouted,
+    /// The local runtime assigns addresses that the node agent reports.
+    RuntimeDelegated,
+}
+
 /// Desired identity and connectivity of a cluster node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +84,9 @@ pub struct NodeSpec {
     pub host_address: IpAddr,
     /// Scheduling and control-plane capability.
     pub role: NodeRole,
+    /// Workload address ownership and network capability.
+    #[serde(default)]
+    pub workload_network_mode: WorkloadNetworkMode,
     /// Arbitrary scheduling labels advertised by the node.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scheduling_labels: BTreeMap<String, String>,
